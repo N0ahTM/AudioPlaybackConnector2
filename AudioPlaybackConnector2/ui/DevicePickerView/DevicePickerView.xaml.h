@@ -5,7 +5,8 @@
 class DeviceManager;
 
 namespace winrt::Microsoft::UI::Xaml { struct RoutedEventArgs; }
-namespace winrt::Microsoft::UI::Xaml::Controls { struct SelectionChangedEventArgs; }
+namespace winrt::Microsoft::UI::Xaml::Controls { struct SelectionChangedEventArgs; struct ListViewItem; }
+namespace winrt::Windows::Devices::Enumeration { struct DeviceInformation; struct DeviceInformationCollection; }
 
 namespace winrt::AudioPlaybackConnector2::implementation
 {
@@ -19,6 +20,10 @@ namespace winrt::AudioPlaybackConnector2::implementation
     private:
         void OnCloseClicked(winrt::Windows::Foundation::IInspectable const&, winrt::Microsoft::UI::Xaml::RoutedEventArgs const&);
         void OnDeviceSelected(winrt::Windows::Foundation::IInspectable const&, winrt::Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const&);
+
+        void ApplyDeviceResults(winrt::Windows::Devices::Enumeration::DeviceInformationCollection const& devices, bool listWasEmpty, uint64_t requestId);
+        void OnDeviceEnumerationFailed(bool listWasEmpty, uint64_t requestId);
+        winrt::Microsoft::UI::Xaml::Controls::ListViewItem BuildDeviceListItem(winrt::Windows::Devices::Enumeration::DeviceInformation const& dev);
 
         std::weak_ptr<DeviceManager> m_manager;
         std::function<void()> m_onClose;

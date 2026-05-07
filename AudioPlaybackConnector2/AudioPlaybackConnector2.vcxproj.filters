@@ -1,0 +1,178 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ApplicationDefinition Include="ui\App\App.xaml">
+      <Filter>UI\App</Filter>
+    </ApplicationDefinition>
+  </ItemGroup>
+  <ItemGroup>
+    <Page Include="ui\MainWindow\MainWindow.xaml">
+      <Filter>UI\MainWindow</Filter>
+    </Page>
+    <Page Include="ui\SettingsWindow\SettingsWindow.xaml">
+      <Filter>UI\SettingsWindow</Filter>
+    </Page>
+    <Page Include="ui\DevicePickerView\DevicePickerView.xaml">
+      <Filter>UI\DevicePickerView</Filter>
+    </Page>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\pch.cpp">
+      <Filter>src</Filter>
+    </ClCompile>
+    <ClCompile Include="$(GeneratedFilesDir)module.g.cpp">
+      <Filter>Generated Files</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\StringResources.cpp">
+      <Filter>src\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\ThemeHelper.cpp">
+      <Filter>src\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\Settings.cpp">
+      <Filter>src\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\DeviceManager.cpp">
+      <Filter>src\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\TrayIcon.cpp">
+      <Filter>src\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\TrayContextMenu.cpp">
+      <Filter>src\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\App\App.xaml.cpp">
+      <Filter>UI\App</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\MainWindow\MainWindow.xaml.cpp">
+      <Filter>UI\MainWindow</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\SettingsWindow\SettingsWindow.xaml.cpp">
+      <Filter>UI\SettingsWindow</Filter>
+    </ClCompile>
+    <ClCompile Include="ui\DevicePickerView\DevicePickerView.xaml.cpp">
+      <Filter>UI\DevicePickerView</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\pch.h">
+      <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="include\util\Util.hpp">
+      <Filter>include\util</Filter>
+    </ClInclude>
+    <ClInclude Include="include\core\StringResources.hpp">
+      <Filter>include\core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\core\ThemeHelper.hpp">
+      <Filter>include\core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\core\Settings.hpp">
+      <Filter>include\core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\core\DeviceManager.hpp">
+      <Filter>include\core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\ui\TrayIcon.hpp">
+      <Filter>include\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="include\ui\TrayContextMenu.hpp">
+      <Filter>include\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="ui\App\App.xaml.h">
+      <Filter>UI\App</Filter>
+    </ClInclude>
+    <ClInclude Include="ui\MainWindow\MainWindow.xaml.h">
+      <Filter>UI\MainWindow</Filter>
+    </ClInclude>
+    <ClInclude Include="ui\SettingsWindow\SettingsWindow.xaml.h">
+      <Filter>UI\SettingsWindow</Filter>
+    </ClInclude>
+    <ClInclude Include="ui\DevicePickerView\DevicePickerView.xaml.h">
+      <Filter>UI\DevicePickerView</Filter>
+    </ClInclude>
+    <ClInclude Include="res\resource.h">
+      <Filter>res</Filter>
+    </ClInclude>
+    <ClInclude Include="res\targetver.h">
+      <Filter>res</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <Midl Include="ui\MainWindow\MainWindow.idl">
+      <Filter>UI\MainWindow</Filter>
+    </Midl>
+    <Midl Include="ui\SettingsWindow\SettingsWindow.idl">
+      <Filter>UI\SettingsWindow</Filter>
+    </Midl>
+    <Midl Include="ui\DevicePickerView\DevicePickerView.idl">
+      <Filter>UI\DevicePickerView</Filter>
+    </Midl>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="src">
+      <UniqueIdentifier>{a1b2c3d4-e5f6-7890-abcd-ef1234567890}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\core">
+      <UniqueIdentifier>{a1b2c3d4-e5f6-7890-abcd-ef1234567891}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\ui">
+      <UniqueIdentifier>{a1b2c3d4-e5f6-7890-abcd-ef1234567892}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include">
+      <UniqueIdentifier>{b2c3d4e5-f6a7-8901-bcde-f12345678901}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include\core">
+      <UniqueIdentifier>{b2c3d4e5-f6a7-8901-bcde-f12345678902}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include\ui">
+      <UniqueIdentifier>{b2c3d4e5-f6a7-8901-bcde-f12345678903}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include\util">
+      <UniqueIdentifier>{b2c3d4e5-f6a7-8901-bcde-f12345678904}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="res">
+      <UniqueIdentifier>{c3d4e5f6-a7b8-9012-cdef-123456789012}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Generated Files">
+      <UniqueIdentifier>{d4e5f6a7-b8c9-0123-defa-234567890123}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="UI">
+      <UniqueIdentifier>{e5f6a7b8-c9d0-1234-efab-345678901234}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="UI\App">
+      <UniqueIdentifier>{e5f6a7b8-c9d0-1234-efab-345678901235}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="UI\MainWindow">
+      <UniqueIdentifier>{e5f6a7b8-c9d0-1234-efab-345678901236}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="UI\SettingsWindow">
+      <UniqueIdentifier>{e5f6a7b8-c9d0-1234-efab-345678901237}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="UI\DevicePickerView">
+      <UniqueIdentifier>{e5f6a7b8-c9d0-1234-efab-345678901238}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <Text Include="res\readme.txt">
+      <Filter>res</Filter>
+    </Text>
+  </ItemGroup>
+  <ItemGroup>
+    <Manifest Include="res\app.manifest">
+      <Filter>res</Filter>
+    </Manifest>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="packages.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <Natvis Include="$(MSBuildThisFileDirectory)..\..\natvis\wil.natvis" />
+    <Natvis Include="$(MSBuildThisFileDirectory)..\..\natvis\wil.natstepfilter" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="res\AudioPlaybackConnector2.rc">
+      <Filter>res</Filter>
+    </ResourceCompile>
+  </ItemGroup>
+</Project>

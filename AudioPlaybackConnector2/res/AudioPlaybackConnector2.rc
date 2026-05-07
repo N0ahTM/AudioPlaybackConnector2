@@ -1,0 +1,53 @@
+#include <resource.h>
+#include <targetver.h>
+
+#define APSTUDIO_READONLY_SYMBOLS
+#include <windows.h>
+#undef APSTUDIO_READONLY_SYMBOLS
+
+LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 1,0,0,0
+ PRODUCTVERSION 1,0,0,0
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS 0x40004L
+ FILETYPE 0x1L
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040004b0"
+        BEGIN
+            VALUE "CompanyName", "Noah Meyer"
+            VALUE "FileDescription", "AudioPlaybackConnector2"
+            VALUE "FileVersion", "1.0.0.0"
+            VALUE "InternalName", "AudioPlaybackConnector2.exe"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Noah Meyer"
+            VALUE "OriginalFilename", "AudioPlaybackConnector2.exe"
+            VALUE "ProductName", "AudioPlaybackConnector2"
+            VALUE "ProductVersion", "1.0.0.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x400, 1200
+    END
+END
+
+IDI_APP           ICON    "app.ico"
+IDB_TRAY_ICON     RCDATA  "tray_icon.bmp"
+
+IDR_STRINGS_EN    JSON    "strings/en.json"
+IDR_STRINGS_DE    JSON    "strings/de.json"
+IDR_STRINGS_FR    JSON    "strings/fr.json"
+IDR_STRINGS_ES    JSON    "strings/es.json"
+IDR_STRINGS_JA    JSON    "strings/ja.json"
+IDR_STRINGS_KO    JSON    "strings/ko.json"
+IDR_STRINGS_ZH_HANS JSON "strings/zh_hans.json"
+IDR_STRINGS_ZH_HANT JSON "strings/zh_hant.json"

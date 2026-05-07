@@ -1,0 +1,68 @@
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      # Opt-in to Node.js 24 early to silence deprecation warnings from
+      # actions/checkout@v4 and microsoft/setup-msbuild@v2 until they publish
+      # updated runners.
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Check C++ formatting
+      shell: pwsh
+      run: |
+        $files = git ls-files -- 'AudioPlaybackConnector2/*.hpp' 'AudioPlaybackConnector2/*.cpp'
+        clang-format --dry-run --Werror $files
+
+    - name: Restore NuGet packages
+      run: msbuild AudioPlaybackConnector2.slnx -t:restore -p:RestorePackagesConfig=true
+
+    - name: Build (Release, x64)
+      run: >
+        msbuild AudioPlaybackConnector2.slnx
+        /p:Configuration=Release
+        /p:Platform=x64
+        /p:AppxPackageSigningEnabled=false
+        /p:RunCodeAnalysis=true
+        /p:EnableMicrosoftCodeAnalysis=true
+        /t:Rebuild
+        /m
+
+    - name: Install CppCheck
+      run: choco install cppcheck --no-progress -y
+
+    - name: Run CppCheck
+      run: >
+        cppcheck
+        --enable=all
+        --error-exitcode=1
+        --suppress=missingIncludeSystem
+        --suppress=unmatchedSuppression
+        --inline-suppr
+        --std=c++23
+        -I AudioPlaybackConnector2/include
+        -I AudioPlaybackConnector2/src
+        -I AudioPlaybackConnector2/ui
+        AudioPlaybackConnector2/src
+        AudioPlaybackConnector2/ui
+
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AudioPlaybackConnector2-x64-Release
+        path: x64/Release/AudioPlaybackConnector2.exe
+        if-no-files-found: error

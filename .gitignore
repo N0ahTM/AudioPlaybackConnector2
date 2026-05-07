@@ -1,0 +1,150 @@
+# =============================================================================
+# Git Ignore Rules for AudioPlaybackConnector2
+# =============================================================================
+# This project is a C++ /Win32 desktop application packaged with MSIX,
+# built with Visual Studio and the Windows App SDK.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 1. Visual Studio & IDE Cache / User-Specific Files
+# -----------------------------------------------------------------------------
+
+# Visual Studio solution-wide cache folder (IntelliSense, browsing DB, etc.)
+.vs/
+
+# Visual Studio user-specific options and window layouts
+*.suo
+*.user
+*.userprefs
+*.usertasks
+
+# Visual C++ database files (IntelliSense, browse info)
+*.db
+*.opendb
+*.aps
+*.ncb
+*.sdf
+*.cachefile
+
+# Visual Studio code-workspaces
+*.code-workspace
+
+# -----------------------------------------------------------------------------
+# 2. Build Output Folders
+# -----------------------------------------------------------------------------
+
+# Platform-specific output directories at the solution level
+x64/
+x86/
+ARM64/
+ARM/
+Win32/
+
+# Platform-specific output directories inside projects (recursive)
+**/x64/
+**/x86/
+**/ARM64/
+**/ARM/
+**/Win32/
+
+# Configuration folders (Debug / Release)
+**/Debug/
+**/Release/
+
+# MSBuild project-specific intermediate output folders
+# (These are the cryptic hashed folders like AudioPla.ce789cd7/)
+**/*.*.*/
+
+# -----------------------------------------------------------------------------
+# 3. C++ Compilation Artifacts
+# -----------------------------------------------------------------------------
+
+# Object files and precompiled headers
+*.obj
+*.pch
+*.gch
+
+# Incremental link files and program databases
+*.ilk
+*.pdb
+*.ipdb
+*.iobj
+
+# Compiled binaries
+*.exe
+*.dll
+*.lib
+*.exp
+*.res
+
+# Build logs, timestamps, and incremental build state
+*.tlog
+*.lastbuildstate
+*.recipe
+*.idb
+*.manifest
+*.embed.manifest
+*.embed.manifest.res
+
+# -----------------------------------------------------------------------------
+# 4. C++/WinRT & XAML Generated Code
+# -----------------------------------------------------------------------------
+
+# WinRT projection headers and XAML-compiled sources are regenerated
+# automatically by the C++/WinRT toolchain and XAML compiler.
+**/Generated Files/
+
+# -----------------------------------------------------------------------------
+# 5. MSIX Packaging Outputs
+# -----------------------------------------------------------------------------
+
+# Sideloading / Store upload packages
+**/AppPackages/
+
+# Bundle artifacts created during packaging
+**/BundleArtifacts/
+
+# MSIX project intermediate files
+**/obj/
+**/bin/
+
+# Package manifest backups or auto-generated items
+*_StoreKey.pfx
+*_TemporaryKey.pfx
+
+# -----------------------------------------------------------------------------
+# 6. NuGet Packages (Restored Automatically)
+# -----------------------------------------------------------------------------
+
+# NuGet packages are restored by MSBuild/NuGet and should not be committed.
+# If you need to pin a specific package version, use packages.lock.json
+# and commit that instead.
+packages/
+
+# (Optional) Uncomment the next line if you want to track the lock file:
+# !packages.lock.json
+
+# -----------------------------------------------------------------------------
+# 7. Temporary & System Files
+# -----------------------------------------------------------------------------
+
+# Windows thumbnail cache
+Thumbs.db
+
+# macOS Finder metadata
+.DS_Store
+
+# Vim / Emacs / other editor swap files
+*~
+*.swp
+*.swo
+*.tmp
+*.temp
+
+# -----------------------------------------------------------------------------
+# 8. Static Analysis & Logs (Generated)
+# -----------------------------------------------------------------------------
+
+# Auto-generated static analysis reports
+static_analysis_log.txt
+

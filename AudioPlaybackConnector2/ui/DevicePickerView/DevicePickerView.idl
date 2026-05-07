@@ -1,0 +1,8 @@
+namespace AudioPlaybackConnector2
+{
+    [default_interface]
+    runtimeclass DevicePickerView : Microsoft.UI.Xaml.Controls.UserControl
+    {
+        DevicePickerView();
+    }
+}

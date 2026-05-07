@@ -1,0 +1,11 @@
+<Solution>
+  <Configurations>
+    <Platform Name="ARM64" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="AudioPlaybackConnector2 (Package)/AudioPlaybackConnector2 (Package).wapproj" Type="c7167f0d-bc9f-4e6e-afe1-012c56b48db5">
+    <Deploy />
+  </Project>
+  <Project Path="AudioPlaybackConnector2/AudioPlaybackConnector2.vcxproj" Id="ce789cd7-3a08-4b7d-9425-fe92984a66f9" />
+</Solution>

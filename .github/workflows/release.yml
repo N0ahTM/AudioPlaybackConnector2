@@ -1,0 +1,84 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Extract version from tag
+      id: version
+      shell: pwsh
+      run: |
+        $semver = "${{ github.ref_name }}".TrimStart('v')
+        $quad   = "$semver.0"
+        "SEMVER=$semver" >> $env:GITHUB_OUTPUT
+        "VERSION=$quad"  >> $env:GITHUB_OUTPUT
+
+    - name: Patch version into RC and appxmanifest
+      shell: pwsh
+      run: |
+        $v  = "${{ steps.version.outputs.VERSION }}"
+        $rc = $v -replace '\.', ','
+
+        $rcPath = "AudioPlaybackConnector2/res/AudioPlaybackConnector2.rc"
+        $content = Get-Content $rcPath -Raw
+        $content = $content -replace 'FILEVERSION \d+,\d+,\d+,\d+',   "FILEVERSION $rc"
+        $content = $content -replace 'PRODUCTVERSION \d+,\d+,\d+,\d+', "PRODUCTVERSION $rc"
+        $content = $content -replace '"FileVersion",\s*"[\d.]+"',   "`"FileVersion`", `"$v`""
+        $content = $content -replace '"ProductVersion",\s*"[\d.]+"', "`"ProductVersion`", `"$v`""
+        Set-Content $rcPath $content
+
+        $manifestPath = 'AudioPlaybackConnector2 (Package)/Package.appxmanifest'
+        $content = Get-Content $manifestPath -Raw
+        $content = $content -replace 'Version="[\d.]+"', "Version=`"$v`""
+        Set-Content $manifestPath $content
+
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Restore NuGet packages
+      run: msbuild AudioPlaybackConnector2.slnx -t:restore -p:RestorePackagesConfig=true
+
+    - name: Build MSIX (Release, x64)
+      run: >
+        msbuild AudioPlaybackConnector2.slnx
+        /p:Configuration=Release
+        /p:Platform=x64
+        /p:AppxPackageSigningEnabled=false
+        /p:UapAppxPackageBuildMode=SideloadOnly
+        /p:AppxBundle=Never
+        /t:Rebuild
+        /m
+
+    - name: Locate MSIX
+      id: msix
+      shell: pwsh
+      run: |
+        $file = Get-ChildItem -Path 'AudioPlaybackConnector2 (Package)/AppPackages' `
+                              -Recurse -Filter '*.msix' |
+                Where-Object { $_.Name -notmatch 'Dependencies' } |
+                Select-Object -First 1
+        if (-not $file) { throw "MSIX not found" }
+        "PATH=$($file.FullName)" >> $env:GITHUB_OUTPUT
+        "NAME=$($file.Name)"     >> $env:GITHUB_OUTPUT
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        name: v${{ steps.version.outputs.SEMVER }}
+        body: |
+          See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for what's new.
+
+          **Installation:** Download the `.msix` file, right-click → Install (requires Developer Mode or a trusted certificate).
+        files: ${{ steps.msix.outputs.PATH }}
+        fail_on_unmatched_files: true

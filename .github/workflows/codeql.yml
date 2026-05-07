@@ -1,0 +1,46 @@
+name: CodeQL Analysis
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  analyze:
+    name: Analyze (C++)
+    runs-on: windows-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v3
+      with:
+        languages: cpp
+        queries: security-and-quality
+
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Restore NuGet packages
+      run: msbuild AudioPlaybackConnector2.slnx -t:restore -p:RestorePackagesConfig=true
+
+    - name: Build for CodeQL
+      run: >
+        msbuild AudioPlaybackConnector2.slnx
+        /p:Configuration=Release
+        /p:Platform=x64
+        /p:AppxPackageSigningEnabled=false
+        /t:Rebuild
+        /m
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
+      with:
+        category: /language:cpp

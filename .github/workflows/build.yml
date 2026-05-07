@@ -32,7 +32,6 @@ jobs:
         /p:Platform=x64
         /p:AppxPackageSigningEnabled=false
         /t:Rebuild
-        /m
 
     - name: Upload build artifact
       uses: actions/upload-artifact@v4

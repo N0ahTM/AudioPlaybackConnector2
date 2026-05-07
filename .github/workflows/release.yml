@@ -58,7 +58,6 @@ jobs:
         /p:UapAppxPackageBuildMode=SideloadOnly
         /p:AppxBundle=Never
         /t:Rebuild
-        /m
 
     - name: Locate MSIX
       id: msix

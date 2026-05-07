@@ -1,2 +1,15 @@
 paths-ignore:
+  # Generated code (C++/WinRT)
   - '**/Generated Files/**'
+  # External NuGet packages
+  - '**/packages/**'
+  # External dependencies (if present)
+  - '**/vcpkg_installed/**'
+  - '**/external/**'
+  - '**/third_party/**'
+  # Build artifacts
+  - '**/bin/**'
+  - '**/obj/**'
+  - '**/x64/**'
+  - '**/Debug/**'
+  - '**/Release/**'

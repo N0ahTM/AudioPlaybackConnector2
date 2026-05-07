@@ -37,5 +37,5 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: AudioPlaybackConnector2-x64-Release
-        path: x64/Release/AudioPlaybackConnector2.exe
+        path: x64/Release/AudioPlaybackConnector2/AudioPlaybackConnector2.exe
         if-no-files-found: error

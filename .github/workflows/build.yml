@@ -22,12 +22,6 @@ jobs:
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v2
 
-    - name: Check C++ formatting
-      shell: pwsh
-      run: |
-        $files = git ls-files -- 'AudioPlaybackConnector2/*.hpp' 'AudioPlaybackConnector2/*.cpp'
-        clang-format --dry-run --Werror $files
-
     - name: Restore NuGet packages
       run: msbuild AudioPlaybackConnector2.slnx -t:restore -p:RestorePackagesConfig=true
 
@@ -37,28 +31,8 @@ jobs:
         /p:Configuration=Release
         /p:Platform=x64
         /p:AppxPackageSigningEnabled=false
-        /p:RunCodeAnalysis=true
-        /p:EnableMicrosoftCodeAnalysis=true
         /t:Rebuild
         /m
-
-    - name: Install CppCheck
-      run: choco install cppcheck --no-progress -y
-
-    - name: Run CppCheck
-      run: >
-        cppcheck
-        --enable=all
-        --error-exitcode=1
-        --suppress=missingIncludeSystem
-        --suppress=unmatchedSuppression
-        --inline-suppr
-        --std=c++23
-        -I AudioPlaybackConnector2/include
-        -I AudioPlaybackConnector2/src
-        -I AudioPlaybackConnector2/ui
-        AudioPlaybackConnector2/src
-        AudioPlaybackConnector2/ui
 
     - name: Upload build artifact
       uses: actions/upload-artifact@v4

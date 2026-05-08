@@ -1,0 +1,3 @@
+// Informational: cppcheck limits branch analysis by default.
+// Use --check-level=exhaustive to lift the limit (slower).
+normalCheckLevelMaxBranches

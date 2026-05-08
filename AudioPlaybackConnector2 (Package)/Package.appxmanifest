@@ -9,7 +9,7 @@
 
   <Identity
     Name="12144NoahMeyer.AudioPlaybackConnector2"
-    Publisher="CN=3784F101-6355-463B-A35E-41BD0A95071B"
+    Publisher="CN=test"
     Version="1.0.0.0" />
 
   <Properties>

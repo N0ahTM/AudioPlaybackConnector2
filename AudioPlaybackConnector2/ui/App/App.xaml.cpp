@@ -64,7 +64,10 @@ winrt::AudioPlaybackConnector2::implementation::App::~App() {
 
 void winrt::AudioPlaybackConnector2::implementation::App::OnLaunched([[maybe_unused]] LaunchActivatedEventArgs const& e) {
     DebugTrace(L"[App] OnLaunched started");
+    SetupMainWindow();
+}
 
+void winrt::AudioPlaybackConnector2::implementation::App::SetupMainWindow() {
     m_mainWindow = make<MainWindow>();
     m_dispatcherQueue = m_mainWindow.DispatcherQueue();
 
@@ -95,67 +98,71 @@ void winrt::AudioPlaybackConnector2::implementation::App::OnLaunched([[maybe_unu
     // Loaded fires after the element is added to the visual tree and XamlRoot
     // has been assigned, which is required for MenuFlyout anchoring.
     root.Loaded([this, root](auto&, auto&) {
-        if (m_hwnd) {
-            DebugTrace(L"[App] Grid.Loaded fired again, ignoring (already initialized)");
-            return;
-        }
-        DebugTrace(L"[App] Grid.Loaded - beginning initialization");
-
-        m_hwnd = util::GetWindowHandle(m_mainWindow);
-        if (!m_hwnd) {
-            DebugTrace(L"[App] ERROR: GetWindowHandle returned null!");
-            return;
-        }
-        DebugTrace(L"[App] MainWindow HWND = 0x{0:X}", reinterpret_cast<uintptr_t>(m_hwnd));
-
-        auto exStyle = GetWindowLongPtr(m_hwnd, GWL_EXSTYLE);
-        SetWindowLongPtr(m_hwnd, GWL_EXSTYLE, exStyle | WS_EX_TOOLWINDOW);
-        ShowWindow(m_hwnd, SW_SHOWNA);
-        root.Opacity(1);
-        DebugTrace(L"[App] MainWindow moved off-screen (toolwindow, showna)");
-
-        SetWindowSubclass(m_hwnd, SubclassProc, 1, reinterpret_cast<DWORD_PTR>(this));
-        DebugTrace(L"[App] Window subclass installed");
-
-        m_settings = std::make_unique<::Settings>();
-        m_settings->Load(GetModuleHandleW(nullptr));
-        DebugTrace(L"[App] Settings loaded");
-
-        {
-            auto locked = m_settings->LockSharedData();
-            StringResources::Instance().Initialize(GetModuleHandleW(nullptr), locked->Language);
-        }
-        DebugTrace(L"[App] StringResources initialized");
-
-        Gdiplus::GdiplusStartupInput gdiplusStartupInput;
-        if (Gdiplus::GdiplusStartup(&m_gdiplusToken, &gdiplusStartupInput, nullptr) != Gdiplus::Ok) {
-            DebugTrace(L"[App] ERROR: GdiplusStartup failed");
-            return;
-        }
-        DebugTrace(L"[App] GDI+ initialized");
-        auto gdiplusGuard = wil::scope_exit([this]() {
-            if (m_gdiplusToken) {
-                Gdiplus::GdiplusShutdown(m_gdiplusToken);
-                m_gdiplusToken = 0;
-            }
-        });
-
-        InitializeTray();
-        InitializeDeviceManager();
-        InitializeContextMenu();
-        PreloadDevicePicker();
-        SetupDeviceEvents();
-        TryAutoReconnect();
-
-        gdiplusGuard.release();
-
-        s_wmTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
-        UpdateTrayTooltip();
-        DebugTrace(L"[App] Initialization complete");
+        OnMainWindowLoaded(root);
     });
 
     m_mainWindow.Activate();
     DebugTrace(L"[App] MainWindow.Activate() called");
+}
+
+void winrt::AudioPlaybackConnector2::implementation::App::OnMainWindowLoaded(Controls::Grid const& root) {
+    if (m_hwnd) {
+        DebugTrace(L"[App] Grid.Loaded fired again, ignoring (already initialized)");
+        return;
+    }
+    DebugTrace(L"[App] Grid.Loaded - beginning initialization");
+
+    m_hwnd = util::GetWindowHandle(m_mainWindow);
+    if (!m_hwnd) {
+        DebugTrace(L"[App] ERROR: GetWindowHandle returned null!");
+        return;
+    }
+    DebugTrace(L"[App] MainWindow HWND = 0x{0:X}", reinterpret_cast<uintptr_t>(m_hwnd));
+
+    auto exStyle = GetWindowLongPtr(m_hwnd, GWL_EXSTYLE);
+    SetWindowLongPtr(m_hwnd, GWL_EXSTYLE, exStyle | WS_EX_TOOLWINDOW);
+    ShowWindow(m_hwnd, SW_SHOWNA);
+    root.Opacity(1);
+    DebugTrace(L"[App] MainWindow moved off-screen (toolwindow, showna)");
+
+    SetWindowSubclass(m_hwnd, SubclassProc, 1, reinterpret_cast<DWORD_PTR>(this));
+    DebugTrace(L"[App] Window subclass installed");
+
+    m_settings = std::make_unique<::Settings>();
+    m_settings->Load(GetModuleHandleW(nullptr));
+    DebugTrace(L"[App] Settings loaded");
+
+    {
+        auto locked = m_settings->LockSharedData();
+        StringResources::Instance().Initialize(GetModuleHandleW(nullptr), locked->Language);
+    }
+    DebugTrace(L"[App] StringResources initialized");
+
+    Gdiplus::GdiplusStartupInput gdiplusStartupInput;
+    if (Gdiplus::GdiplusStartup(&m_gdiplusToken, &gdiplusStartupInput, nullptr) != Gdiplus::Ok) {
+        DebugTrace(L"[App] ERROR: GdiplusStartup failed");
+        return;
+    }
+    DebugTrace(L"[App] GDI+ initialized");
+    auto gdiplusGuard = wil::scope_exit([this]() {
+        if (m_gdiplusToken) {
+            Gdiplus::GdiplusShutdown(m_gdiplusToken);
+            m_gdiplusToken = 0;
+        }
+    });
+
+    InitializeTray();
+    InitializeDeviceManager();
+    InitializeContextMenu();
+    PreloadDevicePicker();
+    SetupDeviceEvents();
+    TryAutoReconnect();
+
+    gdiplusGuard.release();
+
+    s_wmTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
+    UpdateTrayTooltip();
+    DebugTrace(L"[App] Initialization complete");
 }
 
 /*------------------------------------------------------------------------------------------------------------------*/
@@ -185,9 +192,7 @@ void winrt::AudioPlaybackConnector2::implementation::App::InitializeDeviceManage
         if (!self || self->m_exiting.load() || !self->m_settings) return false;
         auto locked = self->m_settings->LockSharedData();
         if (locked->GlobalAutoReconnect) return true;
-        for (const auto& d : locked->Devices)
-            if (d.Id == id && d.AutoReconnect) return true;
-        return false;
+        return std::any_of(locked->Devices.begin(), locked->Devices.end(), [&](const auto& d) { return d.Id == id && d.AutoReconnect; });
     });
     m_deviceManager->StartDeviceWatcher();
     DebugTrace(L"[App] DeviceManager initialized and watcher started");
@@ -213,17 +218,20 @@ void winrt::AudioPlaybackConnector2::implementation::App::InitializeContextMenu(
     DebugTrace(L"[App] Grid.XamlRoot() is valid");
 
     m_contextMenu = std::make_unique<TrayContextMenu>();
-    m_contextMenu->Initialize(root, [this]() { ShowSettingsWindow(); }, []() {
-            auto op = winrt::Windows::System::Launcher::LaunchUriAsync(winrt::Windows::Foundation::Uri(L"ms-settings:bluetooth"));
-            op.Completed([](auto const& sender, auto const&) {
-                if (!sender.GetResults()) {
-                    DebugTrace(L"[App] LaunchUriAsync(ms-settings:bluetooth) failed");
-                }
-            }); }, [this]() { ExitApplication(); }, [this]() {
+    m_contextMenu->Initialize(root, [this]() { ShowSettingsWindow(); }, [this]() { LaunchBluetoothSettings(); }, [this]() { ExitApplication(); }, [this]() {
             if (m_hwnd && IsWindow(m_hwnd)) {
                 SetWindowPos(m_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             } });
     DebugTrace(L"[App] TrayContextMenu initialized");
+}
+
+void winrt::AudioPlaybackConnector2::implementation::App::LaunchBluetoothSettings() {
+    auto op = winrt::Windows::System::Launcher::LaunchUriAsync(winrt::Windows::Foundation::Uri(L"ms-settings:bluetooth"));
+    op.Completed([](auto const& sender, auto const&) {
+        if (!sender.GetResults()) {
+            DebugTrace(L"[App] LaunchUriAsync(ms-settings:bluetooth) failed");
+        }
+    });
 }
 
 void winrt::AudioPlaybackConnector2::implementation::App::RunOnUIThread(std::function<void()> work) {
@@ -347,12 +355,9 @@ void winrt::AudioPlaybackConnector2::implementation::App::TryAutoReconnect() {
         bool shouldReconnect = false;
         {
             auto locked = m_settings->LockSharedData();
-            for (const auto& d : locked->Devices) {
-                if (d.Id == id) {
-                    shouldReconnect = globalAutoReconnect || d.AutoReconnect;
-                    break;
-                }
-            }
+            auto it = std::find_if(locked->Devices.begin(), locked->Devices.end(), [&](const auto& d) { return d.Id == id; });
+            if (it != locked->Devices.end())
+                shouldReconnect = globalAutoReconnect || it->AutoReconnect;
         }
         if (shouldReconnect) {
             DebugTrace(L"[App] Auto-reconnecting to: {0}", id);
@@ -364,6 +369,32 @@ void winrt::AudioPlaybackConnector2::implementation::App::TryAutoReconnect() {
 /*------------------------------------------------------------------------------------------------------------------*/
 /*//////// Tray Actions /////////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------------*/
+
+std::optional<POINT> winrt::AudioPlaybackConnector2::implementation::App::CalculateSettingsWindowPosition() const {
+    if (!m_trayIcon) return std::nullopt;
+    auto rect = m_trayIcon->GetIconRect();
+    if (!rect) return std::nullopt;
+
+    RECT rcWork{};
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &rcWork, 0);
+
+    int x = rect->right - c_settingsWindowWidth; // right-align to icon
+    int y = rect->bottom;                        // below the icon
+
+    // Keep within horizontal work area bounds.
+    if (x < rcWork.left) x = rcWork.left;
+    if (x + c_settingsWindowWidth > rcWork.right) x = rcWork.right - c_settingsWindowWidth;
+
+    // If it doesn't fit below the taskbar, open above the icon.
+    if (y + c_settingsWindowHeight > rcWork.bottom)
+        y = rect->top - c_settingsWindowHeight;
+
+    // Final safety fallback.
+    if (y < rcWork.top)
+        y = rcWork.bottom - c_settingsWindowHeight;
+
+    return POINT{x, y};
+}
 
 void winrt::AudioPlaybackConnector2::implementation::App::ShowSettingsWindow() {
     DebugTrace(L"[App] ShowSettingsWindow()");
@@ -380,37 +411,11 @@ void winrt::AudioPlaybackConnector2::implementation::App::ShowSettingsWindow() {
     try {
         m_settingsWindow = winrt::AudioPlaybackConnector2::SettingsWindow();
 
-        // Calculate position relative to tray icon before styling is applied.
-        int targetX = INT_MIN;
-        int targetY = INT_MIN;
-        if (m_trayIcon) {
-            auto rect = m_trayIcon->GetIconRect();
-            if (rect) {
-                RECT rcWork{};
-                SystemParametersInfoW(SPI_GETWORKAREA, 0, &rcWork, 0);
-
-                targetX = rect->right - c_settingsWindowWidth; // right-align to icon
-                targetY = rect->bottom;                        // below the icon
-
-                // Keep within horizontal work area bounds.
-                if (targetX < rcWork.left) targetX = rcWork.left;
-                if (targetX + c_settingsWindowWidth > rcWork.right) targetX = rcWork.right - c_settingsWindowWidth;
-
-                // If it doesn't fit below the taskbar, open above the icon.
-                if (targetY + c_settingsWindowHeight > rcWork.bottom) {
-                    targetY = rect->top - c_settingsWindowHeight;
-                }
-
-                // Final safety fallback.
-                if (targetY < rcWork.top) {
-                    targetY = rcWork.bottom - c_settingsWindowHeight;
-                }
-            }
-        }
-
         auto impl = m_settingsWindow.as<winrt::AudioPlaybackConnector2::implementation::SettingsWindow>();
-        if (impl && targetX != INT_MIN) {
-            impl->SetTargetPosition(targetX, targetY);
+        if (impl) {
+            if (auto pos = CalculateSettingsWindowPosition()) {
+                impl->SetTargetPosition(pos->x, pos->y);
+            }
         }
 
         // Move off-screen BEFORE Activate() so the window never appears
@@ -544,6 +549,66 @@ void winrt::AudioPlaybackConnector2::implementation::App::PreloadDevicePicker() 
     }
 }
 
+void winrt::AudioPlaybackConnector2::implementation::App::StripFlyoutPresenterStyle(winrt::Microsoft::UI::Xaml::DependencyObject const& content) {
+    try {
+        auto parent = winrt::Microsoft::UI::Xaml::Media::VisualTreeHelper::GetParent(content);
+        while (parent) {
+            auto presenter = parent.try_as<Controls::FlyoutPresenter>();
+            if (presenter) {
+                presenter.Background(nullptr);
+                presenter.BorderBrush(nullptr);
+                presenter.BorderThickness({0});
+                presenter.Padding({0});
+                presenter.MinWidth(0);
+                presenter.MinHeight(0);
+                break;
+            }
+            parent = winrt::Microsoft::UI::Xaml::Media::VisualTreeHelper::GetParent(parent);
+        }
+    } catch (...) {
+    }
+}
+
+// Create a fresh Flyout each time to avoid WinUI 3 reuse exceptions.
+// The DevicePickerView (expensive) is reused; the Flyout (cheap) is recreated.
+Controls::Flyout winrt::AudioPlaybackConnector2::implementation::App::CreatePickerFlyout() {
+    Controls::Flyout flyout;
+    flyout.ShouldConstrainToRootBounds(false);
+    flyout.Content(m_devicePickerView);
+
+    flyout.Opened([this](auto&, auto&) {
+        if (m_pickerFlyout) {
+            StripFlyoutPresenterStyle(m_pickerFlyout.Content().as<winrt::Microsoft::UI::Xaml::DependencyObject>());
+        }
+    });
+
+    flyout.Closing([this](auto&, auto&) {
+        try {
+            // Cancel any in-flight device enumeration before detaching.
+            if (m_devicePickerView) {
+                auto impl = m_devicePickerView.as<winrt::AudioPlaybackConnector2::implementation::DevicePickerView>();
+                impl->CancelLoadDevices();
+            }
+            // Detach the reusable view before the flyout closes so WinUI 3
+            // does not touch (and potentially dispose) our cached content.
+            if (m_pickerFlyout) {
+                m_pickerFlyout.Content(nullptr);
+            }
+        } catch (...) {
+        }
+    });
+
+    flyout.Closed([this](auto&, auto&) {
+        DebugTrace(L"[App] Picker flyout closed");
+        if (m_hwnd && IsWindow(m_hwnd)) {
+            SetWindowPos(m_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+        m_pickerFlyout = nullptr;
+    });
+
+    return flyout;
+}
+
 void winrt::AudioPlaybackConnector2::implementation::App::OnTrayIconLeftClick() {
     DebugTrace(L"[App] OnTrayIconLeftClick()");
 
@@ -571,56 +636,8 @@ void winrt::AudioPlaybackConnector2::implementation::App::OnTrayIconLeftClick() 
         impl->LoadDevices();
     }
 
-    // Create a fresh Flyout each time to avoid WinUI 3 reuse exceptions.
-    // The DevicePickerView (expensive) is reused; the Flyout (cheap) is recreated.
-    m_pickerFlyout = Controls::Flyout();
-    m_pickerFlyout.ShouldConstrainToRootBounds(false);
-    m_pickerFlyout.Content(m_devicePickerView);
+    m_pickerFlyout = CreatePickerFlyout();
 
-    m_pickerFlyout.Opened([this](auto&, auto&) {
-        try {
-            auto content = m_pickerFlyout.Content();
-            auto parent = winrt::Microsoft::UI::Xaml::Media::VisualTreeHelper::GetParent(content);
-            while (parent) {
-                auto presenter = parent.try_as<Controls::FlyoutPresenter>();
-                if (presenter) {
-                    presenter.Background(nullptr);
-                    presenter.BorderBrush(nullptr);
-                    presenter.BorderThickness({0});
-                    presenter.Padding({0});
-                    presenter.MinWidth(0);
-                    presenter.MinHeight(0);
-                    break;
-                }
-                parent = winrt::Microsoft::UI::Xaml::Media::VisualTreeHelper::GetParent(parent);
-            }
-        } catch (...) {
-        }
-    });
-
-    m_pickerFlyout.Closing([this](auto&, auto&) {
-        try {
-            // Cancel any in-flight device enumeration before detaching.
-            if (m_devicePickerView) {
-                auto impl = m_devicePickerView.as<winrt::AudioPlaybackConnector2::implementation::DevicePickerView>();
-                impl->CancelLoadDevices();
-            }
-            // Detach the reusable view before the flyout closes so WinUI 3
-            // does not touch (and potentially dispose) our cached content.
-            if (m_pickerFlyout) {
-                m_pickerFlyout.Content(nullptr);
-            }
-        } catch (...) {
-        }
-    });
-
-    m_pickerFlyout.Closed([this](auto&, auto&) {
-        DebugTrace(L"[App] Picker flyout closed");
-        if (m_hwnd && IsWindow(m_hwnd)) {
-            SetWindowPos(m_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-        }
-        m_pickerFlyout = nullptr;
-    });
     POINT pt{rect->left, rect->top};
     ScreenToClient(m_hwnd, &pt);
     auto dpi = GetDpiForWindow(m_hwnd);
@@ -759,12 +776,9 @@ void winrt::AudioPlaybackConnector2::implementation::App::OnDeviceConnected(winr
     {
         auto locked = m_settings->LockSharedData();
         bool autoReconnect = locked->GlobalAutoReconnect;
-        for (const auto& d : locked->Devices) {
-            if (d.Id == id) {
-                autoReconnect = autoReconnect || d.AutoReconnect;
-                break;
-            }
-        }
+        auto it = std::find_if(locked->Devices.begin(), locked->Devices.end(), [&](const auto& d) { return d.Id == id; });
+        if (it != locked->Devices.end())
+            autoReconnect = autoReconnect || it->AutoReconnect;
         m_deviceManager->SetAutoReconnect(id, autoReconnect);
     }
 
@@ -783,12 +797,9 @@ void winrt::AudioPlaybackConnector2::implementation::App::OnDeviceDisconnected(w
     winrt::hstring deviceName = id;
     {
         auto locked = m_settings->LockSharedData();
-        for (const auto& d : locked->Devices) {
-            if (d.Id == id) {
-                deviceName = winrt::hstring(d.Name);
-                break;
-            }
-        }
+        auto it = std::find_if(locked->Devices.begin(), locked->Devices.end(), [&](const auto& d) { return d.Id == id; });
+        if (it != locked->Devices.end())
+            deviceName = winrt::hstring(it->Name);
     }
 
     if (m_trayIcon) {
@@ -815,12 +826,9 @@ void winrt::AudioPlaybackConnector2::implementation::App::OnAutoReconnectTrigger
     winrt::hstring deviceName = id;
     {
         auto locked = m_settings->LockSharedData();
-        for (const auto& d : locked->Devices) {
-            if (d.Id == id) {
-                deviceName = winrt::hstring(d.Name);
-                break;
-            }
-        }
+        auto it = std::find_if(locked->Devices.begin(), locked->Devices.end(), [&](const auto& d) { return d.Id == id; });
+        if (it != locked->Devices.end())
+            deviceName = winrt::hstring(it->Name);
     }
 
     if (m_trayIcon) {

@@ -59,20 +59,23 @@ void SettingsWindow::RootGrid_Loaded(IInspectable const&, RoutedEventArgs const&
         auto app = App::GetInstance();
         if (!app) return;
         bool enabled = s.template as<ToggleSwitch>().IsOn();
-        auto locked = app->GetSettings().LockExclusiveData();
-        locked->GlobalAutoReconnect = enabled;
-        if (auto manager = app->GetDeviceManager()) {
-            for (const auto& c : manager->GetConnectedDevices()) {
-                bool autoReconnect = enabled;
-                for (const auto& d : locked->Devices) {
-                    if (d.Id == c.Device.Id()) {
-                        autoReconnect = autoReconnect || d.AutoReconnect;
-                        break;
+        {
+            auto locked = app->GetSettings().LockExclusiveData();
+            locked->GlobalAutoReconnect = enabled;
+            if (auto manager = app->GetDeviceManager()) {
+                for (const auto& c : manager->GetConnectedDevices()) {
+                    bool autoReconnect = enabled;
+                    for (const auto& d : locked->Devices) {
+                        if (d.Id == c.Device.Id()) {
+                            autoReconnect = autoReconnect || d.AutoReconnect;
+                            break;
+                        }
                     }
+                    manager->SetAutoReconnect(c.Device.Id(), autoReconnect);
                 }
-                manager->SetAutoReconnect(c.Device.Id(), autoReconnect);
             }
         }
+        app->GetSettings().Save(GetModuleHandleW(nullptr));
     });
 
     // Show cached value immediately; async init below corrects it from the actual task state.
@@ -311,12 +314,15 @@ void SettingsWindow::RebuildDeviceList() {
             auto app = App::GetInstance();
             if (!app) return;
             bool on = s.template as<ToggleSwitch>().IsOn();
-            auto locked = app->GetSettings().LockExclusiveData();
-            for (auto& d : locked->Devices)
-                if (d.Id == id) d.AutoReconnect = on;
-            if (auto manager = app->GetDeviceManager()) {
-                manager->SetAutoReconnect(winrt::hstring(id), locked->GlobalAutoReconnect || on);
+            {
+                auto locked = app->GetSettings().LockExclusiveData();
+                for (auto& d : locked->Devices)
+                    if (d.Id == id) d.AutoReconnect = on;
+                if (auto manager = app->GetDeviceManager()) {
+                    manager->SetAutoReconnect(winrt::hstring(id), locked->GlobalAutoReconnect || on);
+                }
             }
+            app->GetSettings().Save(GetModuleHandleW(nullptr));
         });
         Grid::SetColumn(toggle, 1);
 
@@ -331,6 +337,7 @@ void SettingsWindow::RebuildDeviceList() {
                 auto& vec = locked->Devices;
                 vec.erase(std::remove_if(vec.begin(), vec.end(), [&](auto& d) { return d.Id == id; }), vec.end());
             }
+            app->GetSettings().Save(GetModuleHandleW(nullptr));
             RebuildDeviceList();
         });
         Grid::SetColumn(forgetBtn, 2);

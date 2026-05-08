@@ -1,4 +1,3 @@
-// cppcheck-suppress-file syntaxError
 #pragma once
 
 #include <ui/App/App.xaml.g.h>

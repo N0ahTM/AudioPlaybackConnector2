@@ -162,7 +162,7 @@ AppPackages/
 Every push and pull request is checked by GitHub Actions for:
 
 - **clang-format** compliance (`--dry-run --Werror`)
-- **CppCheck** static analysis (`--enable=all`)
+- **CppCheck** static analysis (`--enable=warning,performance,portability`)
 - Clean **Release/x64** build with `/W4 /WX`
 - **CodeQL** security analysis
 

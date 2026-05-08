@@ -54,7 +54,10 @@ void DevicePickerView::LoadDevices() {
     auto weak = get_weak();
 
     if (m_findAllOp) {
-        try { m_findAllOp.Cancel(); } catch (...) {}
+        try {
+            m_findAllOp.Cancel();
+        } catch (...) {
+        }
     }
 
     m_findAllOp = winrt::Windows::Devices::Enumeration::DeviceInformation::FindAllAsync(selector);
@@ -99,7 +102,10 @@ void DevicePickerView::CancelLoadDevices() {
     ++m_loadDevicesRequestId;
     m_isLoadingDevices.store(false);
     if (m_findAllOp) {
-        try { m_findAllOp.Cancel(); } catch (...) {}
+        try {
+            m_findAllOp.Cancel();
+        } catch (...) {
+        }
         m_findAllOp = nullptr;
     }
 }

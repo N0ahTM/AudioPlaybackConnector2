@@ -18,6 +18,21 @@ using namespace winrt::Microsoft::UI::Xaml;
 using namespace winrt::Microsoft::UI::Xaml::Controls;
 using namespace winrt::Microsoft::UI::Windowing;
 
+namespace {
+std::wstring BuildVersionText() {
+    std::wstring label(_("About_Version"));
+    try {
+        auto version = winrt::Windows::ApplicationModel::Package::Current().Id().Version();
+        auto versionText = version.Revision == 0
+                               ? std::format(L"{}.{}.{}", version.Major, version.Minor, version.Build)
+                               : std::format(L"{}.{}.{}.{}", version.Major, version.Minor, version.Build, version.Revision);
+        return std::format(L"{} {}", label, versionText);
+    } catch (...) {
+        return label;
+    }
+}
+} // namespace
+
 namespace winrt::AudioPlaybackConnector2::implementation {
 
 /*------------------------------------------------------------------------------------------------------------------*/
@@ -43,7 +58,7 @@ void SettingsWindow::RootGrid_Loaded(IInspectable const&, RoutedEventArgs const&
     StartWithWindowsLabel().Text(winrt::hstring(_("Settings_StartWithWindows")));
     StartWithWindowsDesc().Text(winrt::hstring(_("Settings_StartWithWindows_Desc")));
     AppHeader().Text(winrt::hstring(_("Settings_App")));
-    VersionText().Text(winrt::hstring(_("About_Version")));
+    VersionText().Text(winrt::hstring(BuildVersionText()));
     CopyrightText().Text(winrt::hstring(_("About_Copyright")));
 
     auto app = App::GetInstance();

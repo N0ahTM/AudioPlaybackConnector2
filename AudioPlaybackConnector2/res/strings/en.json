@@ -26,7 +26,7 @@
   "Disconnect": "Disconnect",
   "Reconnect": "Reconnect",
   "Reconnecting": "Reconnecting",
-  "About_Version": "Version 1.0.0",
+  "About_Version": "Version",
   "About_Copyright": "Copyright (C) 2026 Noah Meyer",
   "Notification_Connected": "{0} connected",
   "Notification_Disconnected": "{0} disconnected",

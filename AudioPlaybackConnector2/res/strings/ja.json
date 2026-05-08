@@ -26,7 +26,7 @@
   "Disconnect": "切断",
   "Reconnect": "再接続",
   "Reconnecting": "再接続中",
-  "About_Version": "バージョン 1.0.0",
+  "About_Version": "バージョン",
   "About_Copyright": "Copyright (C) 2026 Noah Meyer",
   "Notification_Connected": "{0} が接続されました",
   "Notification_Disconnected": "{0} の接続が切断されました",

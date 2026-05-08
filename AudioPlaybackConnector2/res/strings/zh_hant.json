@@ -26,7 +26,7 @@
   "Disconnect": "斷開連線",
   "Reconnect": "重新連線",
   "Reconnecting": "正在重新連線",
-  "About_Version": "版本 1.0.0",
+  "About_Version": "版本",
   "About_Copyright": "版權所有 (C) 2026 Noah Meyer",
   "Notification_Connected": "{0} 已連線",
   "Notification_Disconnected": "{0} 已斷線",

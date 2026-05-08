@@ -128,7 +128,7 @@
                             FontWeight="SemiBold"
                             Text="App" />
 
-                        <TextBlock x:Name="VersionText" Text="Version 1.0.0" />
+                        <TextBlock x:Name="VersionText" Text="Version" />
 
                         <TextBlock
                             x:Name="CopyrightText"

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-09
+
 ### Added
 - Windows App SDK toast notifications for app start, connection, disconnection, auto-reconnect, and reconnect failure events.
 - Notification actions to retry or reconnect devices directly from supported toast notifications.
@@ -61,6 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-language support for 8 locales: English, German, French, Spanish, Japanese, Korean, Chinese Simplified, Chinese Traditional.
 - CI/CD workflows: build (with clang-format and CppCheck), CodeQL analysis, and automated MSIX releases on version tags.
 
-[Unreleased]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/N0ahTM/AudioPlaybackConnector2/releases/tag/v0.1.0

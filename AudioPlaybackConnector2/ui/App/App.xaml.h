@@ -89,6 +89,7 @@ private:
 
     std::unique_ptr<NotificationService> m_notificationService;
     std::unique_ptr<TrayController> m_trayController;
+    wil::unique_handle m_singleInstanceMutex;
     static inline UINT s_wmTaskbarCreated = 0;
     static constexpr UINT_PTR c_timerAnimation = 0x41504332;
     ULONG_PTR m_gdiplusToken = 0;

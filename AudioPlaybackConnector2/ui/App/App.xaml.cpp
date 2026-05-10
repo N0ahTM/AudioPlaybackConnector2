@@ -53,6 +53,11 @@ winrt::AudioPlaybackConnector2::implementation::App::~App() {
 /*------------------------------------------------------------------------------------------------------------------*/
 
 void winrt::AudioPlaybackConnector2::implementation::App::OnLaunched([[maybe_unused]] LaunchActivatedEventArgs const& e) {
+    m_singleInstanceMutex.reset(CreateMutexW(nullptr, TRUE, L"AudioPlaybackConnector2_SingleInstance_v2"));
+    if (!m_singleInstanceMutex || GetLastError() == ERROR_ALREADY_EXISTS) {
+        ExitProcess(0);
+        return;
+    }
     DebugTrace(L"[App] OnLaunched started");
     SetupMainWindow();
 }
@@ -337,10 +342,11 @@ void winrt::AudioPlaybackConnector2::implementation::App::SetupDeviceEvents() {
                     self->m_trayController->SetState(TrayIconState::Connected);
                 } else if (!status.empty()) {
                     KillTimer(self->m_hwnd, c_timerAnimation);
-                    self->m_trayController->SetState(TrayIconState::Error);
+                    self->m_trayController->SetState(self->m_deviceManager->HasConnections() ? TrayIconState::Connected : TrayIconState::Error);
+                    self->m_trayController->UpdateTooltipFromConnections();
                 } else {
                     KillTimer(self->m_hwnd, c_timerAnimation);
-                    self->m_trayController->SetState(TrayIconState::Idle);
+                    self->m_trayController->SetState(self->m_deviceManager->HasConnections() ? TrayIconState::Connected : TrayIconState::Idle);
                     self->m_trayController->UpdateTooltipFromConnections();
                 }
             });
@@ -537,7 +543,7 @@ void winrt::AudioPlaybackConnector2::implementation::App::OnConnectionError(winr
     if (m_exiting.load()) return;
     DebugTrace(L"[App] OnConnectionError: {0} - {1}", std::wstring(id), std::wstring(msg));
     if (m_trayController) {
-        std::wstring tip = std::wstring(_("AppName")) + L"\n" + msg.c_str();
+        std::wstring tip = std::wstring(_("AppName")) + L"\n" + std::wstring(msg);
         m_trayController->UpdateTooltip(tip);
     }
 }

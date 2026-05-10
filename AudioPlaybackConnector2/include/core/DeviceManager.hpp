@@ -75,6 +75,9 @@ private:
     bool IsConnectAttemptCurrent(winrt::hstring const& deviceId, std::size_t attemptId) const;
     void OnConnectionStateChanged(winrt::Windows::Media::Audio::AudioPlaybackConnection sender, winrt::Windows::Foundation::IInspectable);
     void ScheduleReconnect(winrt::hstring deviceId);
+    void StartConnectionHeartbeat();
+    void StopConnectionHeartbeat();
+    void LogConnectionSnapshot(winrt::hstring const& reason) const;
     void OnDeviceAdded(winrt::Windows::Devices::Enumeration::DeviceWatcher sender, winrt::Windows::Devices::Enumeration::DeviceInformation args);
     void OnDeviceRemoved(winrt::Windows::Devices::Enumeration::DeviceWatcher sender, winrt::Windows::Devices::Enumeration::DeviceInformationUpdate args);
 
@@ -99,4 +102,5 @@ private:
     winrt::Windows::Devices::Enumeration::DeviceWatcher m_watcher{nullptr};
     winrt::event_token m_watcherAddedToken{};
     winrt::event_token m_watcherRemovedToken{};
+    winrt::Windows::System::Threading::ThreadPoolTimer m_heartbeatTimer{nullptr};
 };

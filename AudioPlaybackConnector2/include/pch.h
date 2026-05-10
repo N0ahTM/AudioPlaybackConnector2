@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <format>
 #include <limits>
+#include <tuple>
 
 #ifndef _DEBUG
 #define RESULT_DIAGNOSTICS_LEVEL 1

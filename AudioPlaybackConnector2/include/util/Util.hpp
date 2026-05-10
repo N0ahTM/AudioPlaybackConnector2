@@ -1,5 +1,8 @@
 #pragma once
 
+#include <chrono>
+#include <tuple>
+
 /*------------------------------------------------------------------------------------------------------------------*/
 /*//////// Event Template ////////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------------*/
@@ -32,6 +35,7 @@ public:
 
     template <typename... CallArgs>
     void operator()(CallArgs&&... args) const {
+        auto snapshot = std::make_tuple(std::decay_t<CallArgs>(std::forward<CallArgs>(args))...);
         std::vector<std::shared_ptr<Handler>> copy;
         {
             auto guard = m_lock.lock_shared();
@@ -41,7 +45,10 @@ public:
             }
         }
         for (auto& h : copy) {
-            (*h)(args...);
+            std::apply([&](auto const&... values) {
+                (*h)(values...);
+            },
+                       snapshot);
         }
     }
 
@@ -124,6 +131,74 @@ inline HWND GetWindowHandle(winrt::Microsoft::UI::Xaml::Window const& window) {
     return hwnd;
 }
 
+inline std::filesystem::path GetLogPath() {
+    std::wstring base(MAX_PATH, L'\0');
+    DWORD len = GetEnvironmentVariableW(L"LOCALAPPDATA", base.data(), static_cast<DWORD>(base.size()));
+    if (len == 0 || len >= base.size()) {
+        base.assign(MAX_PATH, L'\0');
+        len = GetTempPathW(static_cast<DWORD>(base.size()), base.data());
+    }
+    if (len == 0 || len >= base.size()) return {};
+
+    base.resize(len);
+    auto dir = std::filesystem::path(base) / L"AudioPlaybackConnector2";
+    CreateDirectoryW(dir.c_str(), nullptr);
+    return dir / L"AudioPlaybackConnector2.log";
+}
+
+inline void RotateLogIfNeeded(std::filesystem::path const& path) noexcept {
+    WIN32_FILE_ATTRIBUTE_DATA data{};
+    if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &data)) return;
+
+    ULARGE_INTEGER size{};
+    size.HighPart = data.nFileSizeHigh;
+    size.LowPart = data.nFileSizeLow;
+    constexpr ULONGLONG c_maxLogBytes = 2ull * 1024ull * 1024ull;
+    if (size.QuadPart < c_maxLogBytes) return;
+
+    auto backup = path;
+    backup += L".1";
+    DeleteFileW(backup.c_str());
+    MoveFileExW(path.c_str(), backup.c_str(), MOVEFILE_REPLACE_EXISTING);
+}
+
+inline void WriteLogLine(std::wstring_view message) noexcept {
+    static std::mutex s_logMutex;
+    std::scoped_lock lock(s_logMutex);
+
+    try {
+        auto path = GetLogPath();
+        if (path.empty()) return;
+        RotateLogIfNeeded(path);
+
+        SYSTEMTIME st{};
+        GetLocalTime(&st);
+        auto line = std::format(L"{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03} [T:{}] {}\r\n",
+                                st.wYear,
+                                st.wMonth,
+                                st.wDay,
+                                st.wHour,
+                                st.wMinute,
+                                st.wSecond,
+                                st.wMilliseconds,
+                                GetCurrentThreadId(),
+                                message);
+        auto utf8 = Utf16ToUtf8(line);
+        wil::unique_hfile file(CreateFileW(path.c_str(),
+                                           FILE_APPEND_DATA,
+                                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                           nullptr,
+                                           OPEN_ALWAYS,
+                                           FILE_ATTRIBUTE_NORMAL,
+                                           nullptr));
+        if (!file) return;
+
+        DWORD written = 0;
+        WriteFile(file.get(), utf8.data(), static_cast<DWORD>(utf8.size()), &written, nullptr);
+    } catch (...) {
+    }
+}
+
 } // namespace util
 
 /* Window Constants */
@@ -135,19 +210,19 @@ inline constexpr int32_t c_settingsWindowHeight = 580;
 /* Debug Logging */
 /*------------------------------------------------------------------------------------------------------------------*/
 
-#ifdef _DEBUG
 inline void DebugTrace(std::wstring_view message) {
+    util::WriteLogLine(message);
+#ifdef _DEBUG
     OutputDebugStringW(std::wstring(message).c_str());
     OutputDebugStringW(L"\n");
+#endif
 }
 template <typename... Args>
 inline void DebugTrace(std::wstring_view fmt, Args&&... args) {
     auto msg = std::vformat(fmt, std::make_wformat_args(args...));
+    util::WriteLogLine(msg);
+#ifdef _DEBUG
     OutputDebugStringW(msg.c_str());
     OutputDebugStringW(L"\n");
-}
-#else
-inline void DebugTrace(std::wstring_view) {}
-template <typename... Args>
-inline void DebugTrace(std::wstring_view, Args&&...) {}
 #endif
+}

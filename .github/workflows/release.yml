@@ -46,18 +46,29 @@ jobs:
         $manifest.Save($writer)
         $writer.Close()
 
+    - name: Decode signing certificate
+      id: cert
+      shell: pwsh
+      run: |
+        $certPath = "$env:TEMP\AudioPlaybackConnector2.pfx"
+        $bytes = [Convert]::FromBase64String("${{ secrets.SIGNING_CERTIFICATE_PFX }}")
+        [IO.File]::WriteAllBytes($certPath, $bytes)
+        "CERT_PATH=$certPath" >> $env:GITHUB_OUTPUT
+
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@v2
 
     - name: Restore NuGet packages
       run: msbuild AudioPlaybackConnector2.slnx -t:restore -p:RestorePackagesConfig=true
 
-    - name: Build MSIX (Release, x64)
+    - name: Build signed MSIX (Release, x64)
       run: >
         msbuild AudioPlaybackConnector2.slnx
         /p:Configuration=Release
         /p:Platform=x64
-        /p:AppxPackageSigningEnabled=false
+        /p:AppxPackageSigningEnabled=true
+        /p:PackageCertificateKeyFile=${{ steps.cert.outputs.CERT_PATH }}
+        /p:PackageCertificatePassword=${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
         /p:UapAppxPackageBuildMode=SideloadOnly
         /p:AppxBundle=Never
         /t:Rebuild
@@ -81,6 +92,19 @@ jobs:
         body: |
           See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for what's new.
 
-          **Installation:** Download the `.msix` file, right-click → Install (requires Developer Mode or a trusted certificate).
-        files: ${{ steps.msix.outputs.PATH }}
+          **Installation:** Download both the `.cer` and `.msix` files from the assets below.
+
+          1. Install the certificate:
+             ```powershell
+             Import-Certificate -FilePath ".\AudioPlaybackConnector2.cer" -CertStoreLocation "Cert:\LocalMachine\Root"
+             ```
+          2. Install the MSIX package:
+             ```powershell
+             Add-AppxPackage -Path ".\AudioPlaybackConnector2.msix"
+             ```
+
+          > Releases are signed with a self-signed certificate. A free open-source code-signing certificate has been requested but approval may take some time.
+        files: |
+          ${{ steps.msix.outputs.PATH }}
+          certs/AudioPlaybackConnector2.cer
         fail_on_unmatched_files: true

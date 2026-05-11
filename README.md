@@ -53,9 +53,32 @@ Inspired by the original [AudioPlaybackConnector](https://github.com/ysc3839/Aud
 
 ## Installation
 
-Download the latest MSIX package from the GitHub Releases page.
+There are exactly two supported ways to install and use AudioPlaybackConnector2.
 
-Install it with PowerShell:
+### Option 1: Build from Source (Recommended for Developers)
+
+1. Open `AudioPlaybackConnector2.slnx` in Visual Studio 2022.
+2. Select `Release | x64`.
+3. Build the solution or the packaging project.
+4. Run the app directly from the build output or install the generated MSIX locally.
+
+Local builds use a temporary developer certificate, so no manual certificate installation is required.
+
+### Option 2: Install the Released MSIX Package (End Users)
+
+Each GitHub Release contains two files: a `.cer` certificate and a `.msix` package.
+
+**Step 1 — Install the certificate**
+
+Right-click the `.cer` file and select **Install Certificate**, or run PowerShell as Administrator:
+
+```powershell
+Import-Certificate -FilePath ".\AudioPlaybackConnector2.cer" -CertStoreLocation "Cert:\LocalMachine\Root"
+```
+
+> **Note:** If you prefer to trust the certificate only for your user account, use `Cert:\CurrentUser\TrustedPeople` instead of `Cert:\LocalMachine\Root`.
+
+**Step 2 — Install the MSIX package**
 
 ```powershell
 Add-AppxPackage -Path ".\AudioPlaybackConnector2.msix"
@@ -64,6 +87,14 @@ Add-AppxPackage -Path ".\AudioPlaybackConnector2.msix"
 After installation, start **AudioPlaybackConnector2** from the Start Menu.
 
 The app runs in the system tray and does not open a normal main window.
+
+---
+
+### Signing & Certificates
+
+Releases are currently signed with a self-signed certificate. This is why you must install the `.cer` file before the `.msix` — Windows blocks installation of packages from untrusted publishers.
+
+> **Disclaimer:** I have applied for a free open-source code-signing certificate. Approval and provisioning may take some time. Until then, the self-signed certificate is the only way to distribute installable MSIX packages.
 
 ---
 

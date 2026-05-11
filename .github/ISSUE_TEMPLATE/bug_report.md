@@ -26,6 +26,7 @@ labels: bug
 
 - **Windows version:** <!-- e.g. Windows 11 23H2, Build 22631.xxx -->
 - **App version:** <!-- shown in Settings → About, or the MSIX version -->
+- **Installation method:** <!-- Built from source / MSIX + .cer -->
 - **Bluetooth adapter:** <!-- optional, manufacturer + model if known -->
 
 ## Additional Context

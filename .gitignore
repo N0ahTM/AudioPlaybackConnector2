@@ -113,6 +113,9 @@ Win32/
 *_StoreKey.pfx
 *_TemporaryKey.pfx
 
+# Explicitly allow the public release certificate
+!certs/*.cer
+
 # -----------------------------------------------------------------------------
 # 6. NuGet Packages (Restored Automatically)
 # -----------------------------------------------------------------------------

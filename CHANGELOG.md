@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Reusable self-signed certificate for all MSIX releases.
+- Public `.cer` file attached to every GitHub Release so users can trust the certificate before installing the MSIX.
+
+### Changed
+- Updated installation instructions to reflect the two supported paths: build from source, or install `.cer` then `.msix`.
+- Updated `Package.appxmanifest` publisher identity to `CN=AudioPlaybackConnector2` to match the release signing certificate.
+- Release pipeline now signs MSIX packages using the repository's self-signed certificate instead of building unsigned packages.
+
 ## [0.3.0] - 2026-05-09
 
 ### Added

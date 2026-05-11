@@ -56,6 +56,9 @@ jobs:
     - name: Restore NuGet packages
       run: msbuild AudioPlaybackConnector2.slnx -t:restore -p:RestorePackagesConfig=true
 
+    # CI builds the .exe only; MSIX signing is intentionally disabled here because
+    # this workflow does not produce release artifacts. Release signing happens
+    # in release.yml using the repository's self-signed certificate.
     - name: Build (Release, x64)
       run: >
         msbuild AudioPlaybackConnector2.slnx

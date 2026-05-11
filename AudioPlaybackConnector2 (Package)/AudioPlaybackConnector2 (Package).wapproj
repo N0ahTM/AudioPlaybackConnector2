@@ -50,7 +50,7 @@
     <AppxBundlePlatforms>x86|x64|arm64</AppxBundlePlatforms>
     <AppInstallerUri>https://github.com/N0ahTM/AudioPlaybackConnector2/releases</AppInstallerUri>
     <HoursBetweenUpdateChecks>168</HoursBetweenUpdateChecks>
-    <PackageCertificateThumbprint>6DB1DB06485BC3CF74FA5A44CB00844217D2A653</PackageCertificateThumbprint>
+    <PackageCertificateThumbprint>CFF0DF8009F8FF2F844F9B733571C1A1E577FB9C</PackageCertificateThumbprint>
     <GenerateTemporaryStoreCertificate>True</GenerateTemporaryStoreCertificate>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">

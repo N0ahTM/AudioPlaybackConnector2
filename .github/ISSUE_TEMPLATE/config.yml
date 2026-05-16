@@ -1,5 +1,1 @@
 blank_issues_enabled: false
-contact_links:
-  - name: Security Vulnerability
-    url: https://github.com/nmstorbeck/AudioPlaybackConnector2/blob/main/SECURITY.md
-    about: Please report security vulnerabilities privately — see SECURITY.md

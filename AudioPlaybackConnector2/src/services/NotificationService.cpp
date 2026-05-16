@@ -10,7 +10,7 @@ namespace AppNotifications = winrt::Microsoft::Windows::AppNotifications;
 
 namespace {
 
-static std::wstring ReplacePlaceholders(std::wstring_view templateStr, std::wstring_view replacement) {
+std::wstring ReplacePlaceholders(std::wstring_view templateStr, std::wstring_view replacement) {
     std::wstring result;
     size_t pos = 0;
     while (pos < templateStr.size()) {
@@ -26,11 +26,11 @@ static std::wstring ReplacePlaceholders(std::wstring_view templateStr, std::wstr
     return result;
 }
 
-static std::wstring NotificationText(std::string_view key, std::wstring_view replacement = {}) {
+std::wstring NotificationText(std::string_view key, std::wstring_view replacement = {}) {
     return ReplacePlaceholders(std::wstring(_(key)), replacement);
 }
 
-static std::wstring XmlEscape(std::wstring_view value) {
+std::wstring XmlEscape(std::wstring_view value) {
     std::wstring result;
     result.reserve(value.size());
     for (auto ch : value) {
@@ -46,11 +46,11 @@ static std::wstring XmlEscape(std::wstring_view value) {
     return result;
 }
 
-static winrt::hstring ToastArguments(std::wstring_view action, winrt::hstring const& deviceId) {
+winrt::hstring ToastArguments(std::wstring_view action, winrt::hstring const& deviceId) {
     return winrt::hstring(L"action=") + winrt::hstring(action) + L"&deviceId=" + winrt::Windows::Foundation::Uri::EscapeComponent(deviceId);
 }
 
-static std::wstring UrlDecodeComponent(std::wstring_view value) {
+std::wstring UrlDecodeComponent(std::wstring_view value) {
     std::wstring normalized(value);
     std::replace(normalized.begin(), normalized.end(), L'+', L' ');
 
@@ -61,7 +61,7 @@ static std::wstring UrlDecodeComponent(std::wstring_view value) {
     }
 }
 
-static std::unordered_map<std::wstring, std::wstring> ParseToastArgumentString(winrt::hstring const& rawArguments) {
+std::unordered_map<std::wstring, std::wstring> ParseToastArgumentString(winrt::hstring const& rawArguments) {
     std::unordered_map<std::wstring, std::wstring> result;
     std::wstring_view raw(rawArguments.c_str(), rawArguments.size());
 
@@ -88,34 +88,34 @@ static std::unordered_map<std::wstring, std::wstring> ParseToastArgumentString(w
     return result;
 }
 
-static std::optional<std::wstring> FindToastArgument(std::unordered_map<std::wstring, std::wstring> const& arguments, std::wstring_view key) {
+std::optional<std::wstring> FindToastArgument(std::unordered_map<std::wstring, std::wstring> const& arguments, std::wstring_view key) {
     auto it = arguments.find(std::wstring(key));
     if (it == arguments.end() || it->second.empty()) return std::nullopt;
     return it->second;
 }
 
-static std::wstring_view AsView(winrt::hstring const& value) {
+std::wstring_view AsView(winrt::hstring const& value) {
     return std::wstring_view(value.c_str(), value.size());
 }
 
-static winrt::Windows::Foundation::DateTime ExpirationFromNow(std::chrono::seconds seconds) {
+winrt::Windows::Foundation::DateTime ExpirationFromNow(std::chrono::seconds seconds) {
     return winrt::clock::now() + seconds;
 }
 
-static bool IsPackagedProcess() {
+bool IsPackagedProcess() {
     UINT32 length = 0;
     const auto result = GetCurrentPackageFullName(&length, nullptr);
     return result != APPMODEL_ERROR_NO_PACKAGE;
 }
 
-static std::wstring BuildToastXml(std::wstring_view title,
-                                  std::wstring_view body,
-                                  std::wstring_view caption,
-                                  std::wstring_view actionText,
-                                  winrt::hstring const& actionArgs,
-                                  std::wstring_view appLogoOverride,
-                                  std::wstring_view audioXml,
-                                  std::wstring_view duration = {}) {
+std::wstring BuildToastXml(std::wstring_view title,
+                           std::wstring_view body,
+                           std::wstring_view caption,
+                           std::wstring_view actionText,
+                           winrt::hstring const& actionArgs,
+                           std::wstring_view appLogoOverride,
+                           std::wstring_view audioXml,
+                           std::wstring_view duration = {}) {
     std::wstring xml = L"<toast";
     if (!duration.empty()) {
         xml += L" duration=\"";

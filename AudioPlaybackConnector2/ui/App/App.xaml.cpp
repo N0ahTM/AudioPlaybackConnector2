@@ -150,7 +150,20 @@ void winrt::AudioPlaybackConnector2::implementation::App::OnMainWindowLoaded(Con
     InitializeTray();
     InitializeNotifications();
     SetupDeviceEvents();
-    if (m_notificationService) {
+    bool willAutoReconnect = false;
+    {
+        auto locked = m_settings->LockSharedData();
+        bool globalAutoReconnect = locked->GlobalAutoReconnect;
+        for (const auto& id : locked->LastConnectedIds) {
+            auto it = std::find_if(locked->Devices.begin(), locked->Devices.end(), [&](const auto& d) { return d.Id == id; });
+            if (it != locked->Devices.end() && (globalAutoReconnect || it->AutoReconnect)) {
+                willAutoReconnect = true;
+                break;
+            }
+        }
+    }
+
+    if (m_notificationService && !willAutoReconnect) {
         m_notificationService->ShowAppStarted();
     }
     TryAutoReconnect();

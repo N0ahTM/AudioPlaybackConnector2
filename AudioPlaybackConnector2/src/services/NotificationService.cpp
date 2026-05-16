@@ -271,7 +271,7 @@ void NotificationService::ShowAppStarted() {
     auto title = NotificationText("Notification_AppStarted_Title");
     auto body = NotificationText("Notification_AppStarted_Body");
     auto xml = BuildToastXml(title, body, L"", L"", L"", L"ms-appx:///Images/ToastInfo.png", L"<audio silent=\"true\"/>");
-    ShowToastOrFallback(xml, L"appStarted", ExpirationFromNow(std::chrono::minutes(1)), std::wstring(_("AppName")), body, FallbackNotificationType::Info);
+    ShowToastOrFallback(xml, L"appStarted", ExpirationFromNow(std::chrono::seconds(7)), std::wstring(_("AppName")), body, FallbackNotificationType::Info);
 }
 
 void NotificationService::ShowDeviceConnected(winrt::hstring const& id, winrt::hstring const& deviceName) {

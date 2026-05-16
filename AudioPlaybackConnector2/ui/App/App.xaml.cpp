@@ -155,7 +155,7 @@ void winrt::AudioPlaybackConnector2::implementation::App::OnMainWindowLoaded(Con
         auto locked = m_settings->LockSharedData();
         bool globalAutoReconnect = locked->GlobalAutoReconnect;
         for (const auto& id : locked->LastConnectedIds) {
-            auto it = std::find_if(locked->Devices.begin(), locked->Devices.end(), [&](const auto& d) { return d.Id == id; });
+            auto it = std::ranges::find_if(locked->Devices, [&](const auto& d) { return d.Id == id; });
             if (it != locked->Devices.end() && (globalAutoReconnect || it->AutoReconnect)) {
                 willAutoReconnect = true;
                 break;
@@ -238,7 +238,7 @@ void winrt::AudioPlaybackConnector2::implementation::App::InitializeDeviceManage
         if (!self || self->m_exiting.load() || !self->m_settings) return false;
         auto locked = self->m_settings->LockSharedData();
         if (locked->GlobalAutoReconnect) return true;
-        return std::any_of(locked->Devices.begin(), locked->Devices.end(), [&](const auto& d) { return d.Id == id && d.AutoReconnect; });
+        return std::ranges::any_of(locked->Devices, [&](const auto& d) { return d.Id == id && d.AutoReconnect; });
     });
     m_deviceManager->StartDeviceWatcher();
     DebugTrace(L"[App] DeviceManager initialized and watcher started");
@@ -247,7 +247,7 @@ void winrt::AudioPlaybackConnector2::implementation::App::InitializeDeviceManage
 winrt::hstring winrt::AudioPlaybackConnector2::implementation::App::ResolveKnownDeviceName(winrt::hstring const& id) const {
     if (!m_settings) return id;
     auto locked = m_settings->LockSharedData();
-    auto it = std::find_if(locked->Devices.begin(), locked->Devices.end(), [&](const auto& device) { return device.Id == id; });
+    auto it = std::ranges::find_if(locked->Devices, [&](const auto& device) { return device.Id == id; });
     if (it != locked->Devices.end()) return winrt::hstring(it->Name);
     return id;
 }
@@ -267,7 +267,7 @@ void winrt::AudioPlaybackConnector2::implementation::App::TryAutoReconnect() {
     }
 
     for (const auto& id : lastConnectedIds) {
-        auto device = std::find_if(devices.begin(), devices.end(), [&](const auto& knownDevice) { return knownDevice.Id == id; });
+        auto device = std::ranges::find_if(devices, [&](const auto& knownDevice) { return knownDevice.Id == id; });
         if (device != devices.end() && (globalAutoReconnect || device->AutoReconnect)) {
             DebugTrace(L"[App] Auto-reconnecting to: {0}", id);
             m_deviceManager->ConnectAsync(winrt::hstring(id));
@@ -512,7 +512,7 @@ void winrt::AudioPlaybackConnector2::implementation::App::OnDeviceConnected(winr
     bool addedNew = false;
     {
         auto locked = m_settings->LockExclusiveData();
-        bool alreadyKnown = std::any_of(locked->Devices.begin(), locked->Devices.end(), [&](const auto& d) { return d.Id == id; });
+        bool alreadyKnown = std::ranges::any_of(locked->Devices, [&](const auto& d) { return d.Id == id; });
         if (!alreadyKnown) {
             DeviceSettings newDevice;
             newDevice.Id = std::wstring(id);
@@ -531,7 +531,7 @@ void winrt::AudioPlaybackConnector2::implementation::App::OnDeviceConnected(winr
     {
         auto locked = m_settings->LockSharedData();
         bool autoReconnect = locked->GlobalAutoReconnect;
-        auto it = std::find_if(locked->Devices.begin(), locked->Devices.end(), [&](const auto& d) { return d.Id == id; });
+        auto it = std::ranges::find_if(locked->Devices, [&](const auto& d) { return d.Id == id; });
         if (it != locked->Devices.end())
             autoReconnect = autoReconnect || it->AutoReconnect;
         m_deviceManager->SetAutoReconnect(id, autoReconnect);

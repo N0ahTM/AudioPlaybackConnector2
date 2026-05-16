@@ -350,7 +350,7 @@ void SettingsWindow::RebuildDeviceList() {
             {
                 auto locked = app->GetSettings().LockExclusiveData();
                 auto& vec = locked->Devices;
-                vec.erase(std::remove_if(vec.begin(), vec.end(), [&](auto& d) { return d.Id == id; }), vec.end());
+                std::erase_if(vec, [&](auto const& d) { return d.Id == id; });
             }
             app->GetSettings().Save(GetModuleHandleW(nullptr));
             RebuildDeviceList();

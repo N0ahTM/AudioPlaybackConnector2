@@ -30,7 +30,7 @@ public:
 
     void operator-=(HandlerId id) {
         auto guard = m_lock.lock_exclusive();
-        m_handlers.erase(std::remove_if(m_handlers.begin(), m_handlers.end(), [id](const auto& pair) { return pair.first == id; }), m_handlers.end());
+        std::erase_if(m_handlers, [id](const auto& pair) { return pair.first == id; });
     }
 
     template <typename... CallArgs>

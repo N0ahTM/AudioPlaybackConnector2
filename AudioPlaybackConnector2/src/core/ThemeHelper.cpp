@@ -53,5 +53,5 @@ ThemeHelper::ThemeChangedToken ThemeHelper::AddThemeChangedHandler(ThemeChangedH
 
 void ThemeHelper::RemoveThemeChangedHandler(ThemeChangedToken token) {
     auto guard = s_lock.lock_exclusive();
-    s_handlers.erase(std::remove_if(s_handlers.begin(), s_handlers.end(), [token](auto const& handler) { return handler.first == token; }), s_handlers.end());
+    std::erase_if(s_handlers, [token](auto const& handler) { return handler.first == token; });
 }

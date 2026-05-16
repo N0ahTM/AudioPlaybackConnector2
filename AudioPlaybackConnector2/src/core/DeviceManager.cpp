@@ -264,7 +264,7 @@ std::vector<DeviceConnectionInfo> DeviceManager::GetConnectedDevices() const {
 
 bool DeviceManager::HasConnections() const {
     auto guard = m_lock.lock_shared();
-    return std::any_of(m_connections.begin(), m_connections.end(), [](auto const& entry) { return entry.second.IsOpen; });
+    return std::ranges::any_of(m_connections, [](auto const& entry) { return entry.second.IsOpen; });
 }
 
 void DeviceManager::StartConnectionHeartbeat() {
@@ -760,9 +760,7 @@ void DeviceManager::OnDeviceRemoved(winrt::Windows::Devices::Enumeration::Device
         auto guard = m_lock.lock_exclusive();
         if (m_watcherStopping) return;
 
-        m_deviceCache.erase(
-            std::remove_if(m_deviceCache.begin(), m_deviceCache.end(), [&](auto const& cached) { return cached.Id() == args.Id(); }),
-            m_deviceCache.end());
+        std::erase_if(m_deviceCache, [&](auto const& cached) { return cached.Id() == args.Id(); });
 
         connectedDeviceRemoved =
             m_connections.count(args.Id()) > 0 &&

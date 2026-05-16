@@ -7,14 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-16
+
+### Added
+- Dedicated asynchronous logger with queued background writes, cached log path resolution, and log rotation.
+- Shared connection failure reporting in `DeviceManager` so connection errors consistently emit retryable UI state and clean up failed connection objects.
+
+### Changed
+- Suppress the app-started notification when startup auto-reconnect is about to run.
+- Shortened the app-started notification lifetime to reduce stale notification clutter.
+- Start connection heartbeat logging only after a successful connection and stop it when the final active connection is removed.
+- Reset tray click debounce state during tray teardown.
+- Modernized internal container cleanup and lookup code.
+- Cleaned up notification helper declarations and tray debounce ownership.
+
+### Fixed
+- Reduced startup and reconnect notification spam.
+- Avoided unnecessary heartbeat logging while no device is connected.
+- Made connection failure cleanup more consistent across timeout, system-denied, unknown, and exception paths.
+
+## [0.4.0] - 2026-05-11
+
 ### Added
 - Reusable self-signed certificate for all MSIX releases.
 - Public `.cer` file attached to every GitHub Release so users can trust the certificate before installing the MSIX.
+- Single-instance launch guard to prevent multiple tray app instances from running at the same time.
+- Persistent diagnostic logging with rotating log files under the user's local app data directory.
+- Periodic connection snapshot logging to help troubleshoot connection and auto-reconnect state.
 
 ### Changed
 - Updated installation instructions to reflect the two supported paths: build from source, or install `.cer` then `.msix`.
 - Updated `Package.appxmanifest` publisher identity to `CN=AudioPlaybackConnector2` to match the release signing certificate.
 - Release pipeline now signs MSIX packages using the repository's self-signed certificate instead of building unsigned packages.
+- Updated the GitHub Release body to include certificate installation instructions.
+- Updated README presentation and installation guidance.
+- Updated the bug report template to capture the installation method.
+- Clarified in CI that regular builds intentionally skip MSIX signing and release signing happens in the release workflow.
+- Updated `.gitignore` so the public release certificate can be committed while private signing keys stay ignored.
+- Reconnect now closes the previous audio connection on a background thread before opening a replacement connection.
+- Device connection callbacks now use weak references and attempt checks to avoid stale callbacks acting on replaced connections.
+- Device events now snapshot arguments before invoking handlers.
+
+### Fixed
+- Fixed reconnect races where an old Bluetooth connection close could immediately close a newly opened connection.
+- Fixed stale `Closed` callbacks triggering unexpected disconnect and auto-reconnect cycles.
+- Fixed duplicate connection attempts by closing superseded connection objects.
+- Fixed tray icon state so errors or disconnects do not show idle/error when another device is still connected.
+- Fixed unknown exception paths in connect and reconnect flows so the picker shows a retryable error state.
+- Fixed pending reconnect cancellation state when manual reconnect or watcher restart happens.
 
 ## [0.3.0] - 2026-05-09
 
@@ -72,7 +112,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-language support for 8 locales: English, German, French, Spanish, Japanese, Korean, Chinese Simplified, Chinese Traditional.
 - CI/CD workflows: build (with clang-format and CppCheck), CodeQL analysis, and automated MSIX releases on version tags.
 
-[Unreleased]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/N0ahTM/AudioPlaybackConnector2/releases/tag/v0.1.0

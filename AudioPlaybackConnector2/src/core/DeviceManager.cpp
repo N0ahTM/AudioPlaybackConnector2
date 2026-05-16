@@ -53,7 +53,6 @@ void DeviceManager::StartDeviceWatcher() {
         m_watcherAddedToken = m_watcher.Added([this](auto sender, auto args) { OnDeviceAdded(sender, args); });
         m_watcherRemovedToken = m_watcher.Removed([this](auto sender, auto args) { OnDeviceRemoved(sender, args); });
         m_watcher.Start();
-        StartConnectionHeartbeat();
         DebugTrace(L"[DeviceManager] DeviceWatcher started");
     } catch (...) {
         DebugTrace(L"[DeviceManager] StartDeviceWatcher ERROR: failed to create or start watcher");
@@ -390,6 +389,7 @@ void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason)
     DebugTrace(L"[DeviceManager] Disconnect requested: id={0} reason={1}", std::wstring(deviceId), reasonName(reason));
 
     bool autoReconnect = false;
+    bool noActiveConnections = false;
     winrt::Windows::Media::Audio::AudioPlaybackConnection connection{nullptr};
     winrt::event_token stateChangedToken{};
     {
@@ -401,6 +401,7 @@ void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason)
         stateChangedToken = iter->second.StateChangedToken;
         autoReconnect = iter->second.AutoReconnect;
         m_connections.erase(iter);
+        noActiveConnections = m_connections.empty();
         ++m_connectAttemptIds[deviceId];
         m_disconnectingIds.insert(deviceId);
         if (reason == DisconnectReason::UserInitiated) {
@@ -408,6 +409,9 @@ void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason)
             m_reconnectAttempts.erase(deviceId);
         }
     }
+
+    if (noActiveConnections)
+        StopConnectionHeartbeat();
 
     // Revoke the StateChanged token so the zombie cannot fire events at us.
     if (connection && stateChangedToken.value != 0) {
@@ -579,7 +583,7 @@ winrt::Windows::Foundation::IAsyncAction DeviceManager::ConnectInternalAsync(win
                 DeviceConnected(deviceId);
                 DeviceStatusChanged(deviceId, winrt::hstring(_("Connected")), winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::ShowDisconnectButton);
                 LogConnectionSnapshot(L"open-success");
-
+                StartConnectionHeartbeat();
                 break;
             }
             case winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResultStatus::RequestTimedOut:

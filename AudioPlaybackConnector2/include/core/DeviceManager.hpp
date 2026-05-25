@@ -39,9 +39,13 @@ public:
 
     void StartDeviceWatcher();
     void StopDeviceWatcher();
+    void ShutdownForProcessExit() noexcept;
+    void SuspendForPowerTransition() noexcept;
+    void ResumeAfterPowerTransition();
     void CancelPendingReconnects();
     void SetAutoReconnectPredicate(AutoReconnectPredicate pred);
     winrt::Windows::Foundation::IAsyncAction ConnectAsync(winrt::hstring deviceId);
+    void ConnectDetached(winrt::hstring deviceId);
     winrt::fire_and_forget ReconnectAsync(winrt::hstring deviceId);
     void Disconnect(winrt::hstring deviceId);
     void SetAutoReconnect(winrt::hstring deviceId, bool enabled);
@@ -89,6 +93,7 @@ private:
     std::unordered_map<winrt::hstring, DeviceConnectionInfo> m_connections;
     std::unordered_set<winrt::hstring> m_disconnectingIds;
     std::unordered_set<winrt::hstring> m_reconnectingIds;
+    std::unordered_set<winrt::hstring> m_connectingIds;
     std::vector<winrt::Windows::Media::Audio::AudioPlaybackConnection> m_zombieConnections;
     std::vector<winrt::Windows::Devices::Enumeration::DeviceInformation> m_deviceCache;
     AutoReconnectPredicate m_autoReconnectPred;
@@ -98,6 +103,8 @@ private:
     std::unordered_map<winrt::hstring, std::size_t> m_connectAttemptIds;
     bool m_watcherStopping = false;
     bool m_allReconnectsCancelled = false;
+    bool m_powerTransitionSuspended = false;
+    bool m_shutdownForProcessExit = false;
 
     winrt::Windows::Devices::Enumeration::DeviceWatcher m_watcher{nullptr};
     winrt::event_token m_watcherAddedToken{};

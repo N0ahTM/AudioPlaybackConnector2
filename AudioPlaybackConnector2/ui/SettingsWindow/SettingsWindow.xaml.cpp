@@ -74,20 +74,22 @@ void SettingsWindow::RootGrid_Loaded(IInspectable const&, RoutedEventArgs const&
         auto app = App::GetInstance();
         if (!app) return;
         bool enabled = s.template as<ToggleSwitch>().IsOn();
+        std::vector<DeviceSettings> devices;
         {
             auto locked = app->GetSettings().LockExclusiveData();
             locked->GlobalAutoReconnect = enabled;
-            if (auto manager = app->GetDeviceManager()) {
-                for (const auto& c : manager->GetConnectedDevices()) {
-                    bool autoReconnect = enabled;
-                    for (const auto& d : locked->Devices) {
-                        if (d.Id == c.Device.Id()) {
-                            autoReconnect = autoReconnect || d.AutoReconnect;
-                            break;
-                        }
+            devices = locked->Devices;
+        }
+        if (auto manager = app->GetDeviceManager()) {
+            for (const auto& c : manager->GetConnectedDevices()) {
+                bool autoReconnect = enabled;
+                for (const auto& d : devices) {
+                    if (d.Id == c.Device.Id()) {
+                        autoReconnect = autoReconnect || d.AutoReconnect;
+                        break;
                     }
-                    manager->SetAutoReconnect(c.Device.Id(), autoReconnect);
                 }
+                manager->SetAutoReconnect(c.Device.Id(), autoReconnect);
             }
         }
         app->GetSettings().Save(GetModuleHandleW(nullptr));
@@ -102,7 +104,12 @@ void SettingsWindow::RootGrid_Loaded(IInspectable const&, RoutedEventArgs const&
     StartWithWindowsToggle().OnContent(box_value(L""));
     SyncStartupTaskStateAsync();
 
-    StartWithWindowsToggle().Toggled({this, &SettingsWindow::StartWithWindowsToggle_Toggled});
+    auto weak = get_weak();
+    StartWithWindowsToggle().Toggled([weak](auto const& sender, auto const& args) {
+        if (auto self = weak.get()) {
+            self->StartWithWindowsToggle_Toggled(sender, args);
+        }
+    });
 
     RebuildDeviceList();
 
@@ -329,13 +336,15 @@ void SettingsWindow::RebuildDeviceList() {
             auto app = App::GetInstance();
             if (!app) return;
             bool on = s.template as<ToggleSwitch>().IsOn();
+            bool globalAutoReconnect = false;
             {
                 auto locked = app->GetSettings().LockExclusiveData();
                 for (auto& d : locked->Devices)
                     if (d.Id == id) d.AutoReconnect = on;
-                if (auto manager = app->GetDeviceManager()) {
-                    manager->SetAutoReconnect(winrt::hstring(id), locked->GlobalAutoReconnect || on);
-                }
+                globalAutoReconnect = locked->GlobalAutoReconnect;
+            }
+            if (auto manager = app->GetDeviceManager()) {
+                manager->SetAutoReconnect(winrt::hstring(id), globalAutoReconnect || on);
             }
             app->GetSettings().Save(GetModuleHandleW(nullptr));
         });
@@ -344,7 +353,8 @@ void SettingsWindow::RebuildDeviceList() {
         auto forgetBtn = Button();
         forgetBtn.MinWidth(80);
         forgetBtn.Content(box_value(winrt::hstring(_("Device_Forget"))));
-        forgetBtn.Click([id = dev.Id, this](auto, auto) {
+        auto weak = get_weak();
+        forgetBtn.Click([id = dev.Id, weak](auto, auto) {
             auto app = App::GetInstance();
             if (!app) return;
             {
@@ -353,7 +363,9 @@ void SettingsWindow::RebuildDeviceList() {
                 std::erase_if(vec, [&](auto const& d) { return d.Id == id; });
             }
             app->GetSettings().Save(GetModuleHandleW(nullptr));
-            RebuildDeviceList();
+            if (auto self = weak.get()) {
+                self->RebuildDeviceList();
+            }
         });
         Grid::SetColumn(forgetBtn, 2);
 

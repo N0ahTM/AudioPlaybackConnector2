@@ -1,10 +1,13 @@
 #pragma once
 
+#include <functional>
+#include <memory>
+
 /*------------------------------------------------------------------------------------------------------------------*/
 /*//////// Notification Service //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------------*/
 
-class NotificationService {
+class NotificationService : public std::enable_shared_from_this<NotificationService> {
 public:
     /* Notification Types */
     /*------------------------------------------------------------------------------------------------------------------*/
@@ -16,8 +19,8 @@ public:
     /* Callback Types */
     /*------------------------------------------------------------------------------------------------------------------*/
 
-    using ReconnectRequestedCallback = std::move_only_function<void(winrt::hstring deviceId)>;
-    using FallbackNotificationCallback = std::move_only_function<void(std::wstring const& title, std::wstring const& body, FallbackNotificationType type)>;
+    using ReconnectRequestedCallback = std::function<void(winrt::hstring deviceId)>;
+    using FallbackNotificationCallback = std::function<void(std::wstring const& title, std::wstring const& body, FallbackNotificationType type)>;
 
     /* Lifecycle */
     /*------------------------------------------------------------------------------------------------------------------*/
@@ -70,4 +73,6 @@ private:
     ReconnectRequestedCallback m_reconnectCallback;
     FallbackNotificationCallback m_fallbackNotifier;
     bool m_notificationsRegistered = false;
+    bool m_isTearingDown = false;
+    mutable wil::srwlock m_lock;
 };

@@ -20,8 +20,17 @@ namespace winrt::AudioPlaybackConnector2::implementation {
 DevicePickerView::DevicePickerView() {
     InitializeComponent();
     BackdropElement().SystemBackdrop(Media::MicaBackdrop());
-    CloseButton().Click({this, &DevicePickerView::OnCloseClicked});
-    DeviceList().SelectionChanged({this, &DevicePickerView::OnDeviceSelected});
+    auto weak = get_weak();
+    CloseButton().Click([weak](auto const& sender, auto const& args) {
+        if (auto self = weak.get()) {
+            self->OnCloseClicked(sender, args);
+        }
+    });
+    DeviceList().SelectionChanged([weak](auto const& sender, auto const& args) {
+        if (auto self = weak.get()) {
+            self->OnDeviceSelected(sender, args);
+        }
+    });
 }
 
 /*------------------------------------------------------------------------------------------------------------------*/

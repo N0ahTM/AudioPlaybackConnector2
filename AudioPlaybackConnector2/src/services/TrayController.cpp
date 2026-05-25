@@ -24,7 +24,7 @@ TrayController::~TrayController() {
 /*------------------------------------------------------------------------------------------------------------------*/
 
 void TrayController::Initialize(HWND hwnd, winrt::Microsoft::UI::Xaml::Window mainWindow) {
-    m_isTearingDown = false;
+    m_isTearingDown.store(false);
     m_hwnd = hwnd;
     m_mainWindow = mainWindow;
     m_lastLeftClickTick = 0;
@@ -34,22 +34,25 @@ void TrayController::Initialize(HWND hwnd, winrt::Microsoft::UI::Xaml::Window ma
     m_trayIcon->Initialize(m_hwnd, m_trayCallbackMsg);
     DebugTrace(L"[TrayController] TrayIcon initialized");
 
-    m_themeChangedToken = ThemeHelper::AddThemeChangedHandler([this]() {
-        if (m_isTearingDown || !m_trayIcon) return;
+    auto weak = weak_from_this();
+    m_themeChangedToken = ThemeHelper::AddThemeChangedHandler([weak]() {
+        auto self = weak.lock();
+        if (!self || self->m_isTearingDown.load() || !self->m_trayIcon) return;
         DebugTrace(L"[TrayController] System theme changed");
-        m_trayIcon->UpdateTheme();
+        self->m_trayIcon->UpdateTheme();
     });
 
     auto root = m_mainWindow.Content().as<Controls::Grid>();
     if (root && root.XamlRoot()) {
         m_contextMenu = std::make_unique<TrayContextMenu>();
-        m_contextMenu->Initialize(root, [this]() {
-            if (!m_isTearingDown && m_showSettingsCallback) m_showSettingsCallback(); }, [this]() {
-            if (!m_isTearingDown) LaunchBluetoothSettings(); }, [this]() {
-            if (!m_isTearingDown && m_exitCallback) m_exitCallback(); }, [this]() {
-            if (m_isTearingDown) return;
-            if (m_hwnd && IsWindow(m_hwnd)) {
-                SetWindowPos(m_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        m_contextMenu->Initialize(root, [weak]() {
+            if (auto self = weak.lock(); self && !self->m_isTearingDown.load() && self->m_showSettingsCallback) self->m_showSettingsCallback(); }, [weak]() {
+            if (auto self = weak.lock(); self && !self->m_isTearingDown.load()) self->LaunchBluetoothSettings(); }, [weak]() {
+            if (auto self = weak.lock(); self && !self->m_isTearingDown.load() && self->m_exitCallback) self->m_exitCallback(); }, [weak]() {
+            auto self = weak.lock();
+            if (!self || self->m_isTearingDown.load()) return;
+            if (self->m_hwnd && IsWindow(self->m_hwnd)) {
+                SetWindowPos(self->m_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             } });
         DebugTrace(L"[TrayController] TrayContextMenu initialized");
     }
@@ -60,11 +63,16 @@ void TrayController::SetDeviceManager(std::shared_ptr<DeviceManager> deviceManag
 }
 
 void TrayController::Teardown() noexcept {
-    m_isTearingDown = true;
+    m_isTearingDown.store(true);
     if (m_themeChangedToken) {
         ThemeHelper::RemoveThemeChangedHandler(m_themeChangedToken);
         m_themeChangedToken = 0;
     }
+    m_showSettingsCallback = nullptr;
+    m_exitCallback = nullptr;
+    m_connectCallback = nullptr;
+    m_disconnectCallback = nullptr;
+    m_reconnectCallback = nullptr;
     if (m_trayIcon) {
         m_trayIcon->Remove();
         m_trayIcon.reset();
@@ -95,7 +103,7 @@ void TrayController::SetCallbacks(ShowSettingsCallback showSettings, ExitCallbac
 /*------------------------------------------------------------------------------------------------------------------*/
 
 void TrayController::ShowTrayMenu() {
-    if (m_isTearingDown) return;
+    if (m_isTearingDown.load()) return;
     DebugTrace(L"[TrayController] OnTrayIconRightClick()");
     if (!m_contextMenu) {
         DebugTrace(L"[TrayController] ERROR: m_contextMenu is null");
@@ -122,7 +130,7 @@ void TrayController::ShowTrayMenu() {
 }
 
 void TrayController::ShowDevicePicker() {
-    if (m_isTearingDown) return;
+    if (m_isTearingDown.load()) return;
     DebugTrace(L"[TrayController] OnTrayIconLeftClick()");
 
     auto rect = m_trayIcon->GetIconRect();
@@ -224,7 +232,7 @@ std::optional<POINT> TrayController::GetSettingsWindowPosition() const {
 }
 
 void TrayController::HandleTrayMessage([[maybe_unused]] WPARAM wParam, LPARAM lParam) {
-    if (m_isTearingDown) return;
+    if (m_isTearingDown.load()) return;
     auto loword = LOWORD(lParam);
 
     constexpr ULONGLONG c_clickDebounceMs = 200;
@@ -290,19 +298,25 @@ void TrayController::EnsureDevicePickerViewCreated() {
 
     m_devicePickerView = winrt::AudioPlaybackConnector2::DevicePickerView();
     auto impl = m_devicePickerView.as<winrt::AudioPlaybackConnector2::implementation::DevicePickerView>();
-    impl->Initialize(m_deviceManager, [this]() {
-            if (!m_isTearingDown && m_pickerFlyout) m_pickerFlyout.Hide(); }, [this](winrt::hstring id) {
-            if (m_isTearingDown) return;
+    auto weak = weak_from_this();
+    impl->Initialize(m_deviceManager, [weak]() {
+            auto self = weak.lock();
+            if (self && !self->m_isTearingDown.load() && self->m_pickerFlyout) self->m_pickerFlyout.Hide(); }, [weak](winrt::hstring id) {
+            auto self = weak.lock();
+            if (!self || self->m_isTearingDown.load()) return;
             DebugTrace(L"[TrayController] User selected device: {0}", std::wstring(id));
-            if (m_connectCallback) m_connectCallback(id);
-            if (m_pickerFlyout) m_pickerFlyout.Hide(); }, [this](winrt::hstring id) {
-            if (m_isTearingDown) return;
+            if (self->m_connectCallback) self->m_connectCallback(id);
+            if (self->m_pickerFlyout) self->m_pickerFlyout.Hide(); }, [weak](winrt::hstring id) {
+            auto self = weak.lock();
+            if (!self || self->m_isTearingDown.load()) return;
             DebugTrace(L"[TrayController] User disconnected device: {0}", std::wstring(id));
-            if (m_pickerFlyout) m_pickerFlyout.Hide();
-            if (m_disconnectCallback) m_disconnectCallback(id); }, [this](winrt::hstring id) {
-            if (m_isTearingDown) return;
+            if (self->m_pickerFlyout) self->m_pickerFlyout.Hide();
+            if (self->m_disconnectCallback) self->m_disconnectCallback(id); }, [weak](winrt::hstring id) {
+            auto self = weak.lock();
+            if (!self || self->m_isTearingDown.load()) return;
             DebugTrace(L"[TrayController] User reconnected device: {0}", std::wstring(id));
-            if (m_reconnectCallback) m_reconnectCallback(id); });
+            if (self->m_reconnectCallback) self->m_reconnectCallback(id);
+            if (self->m_pickerFlyout) self->m_pickerFlyout.Hide(); });
 }
 
 void TrayController::PreloadDevicePicker() {
@@ -344,33 +358,37 @@ Controls::Flyout TrayController::CreatePickerFlyout() {
     flyout.ShouldConstrainToRootBounds(false);
     flyout.Content(m_devicePickerView);
 
-    flyout.Opened([this](auto&, auto&) {
-        if (!m_isTearingDown && m_pickerFlyout) {
-            StripFlyoutPresenterStyle(m_pickerFlyout.Content().as<winrt::Microsoft::UI::Xaml::DependencyObject>());
+    auto weak = weak_from_this();
+    flyout.Opened([weak](auto&, auto&) {
+        auto self = weak.lock();
+        if (self && !self->m_isTearingDown.load() && self->m_pickerFlyout) {
+            StripFlyoutPresenterStyle(self->m_pickerFlyout.Content().as<winrt::Microsoft::UI::Xaml::DependencyObject>());
         }
     });
 
-    flyout.Closing([this](auto&, auto&) {
+    flyout.Closing([weak](auto&, auto&) {
         try {
-            if (m_isTearingDown) return;
-            if (m_devicePickerView) {
-                auto impl = m_devicePickerView.as<winrt::AudioPlaybackConnector2::implementation::DevicePickerView>();
+            auto self = weak.lock();
+            if (!self || self->m_isTearingDown.load()) return;
+            if (self->m_devicePickerView) {
+                auto impl = self->m_devicePickerView.as<winrt::AudioPlaybackConnector2::implementation::DevicePickerView>();
                 impl->CancelLoadDevices();
             }
-            if (m_pickerFlyout) {
-                m_pickerFlyout.Content(nullptr);
+            if (self->m_pickerFlyout) {
+                self->m_pickerFlyout.Content(nullptr);
             }
         } catch (...) {
         }
     });
 
-    flyout.Closed([this](auto&, auto&) {
-        if (m_isTearingDown) return;
+    flyout.Closed([weak](auto&, auto&) {
+        auto self = weak.lock();
+        if (!self || self->m_isTearingDown.load()) return;
         DebugTrace(L"[TrayController] Picker flyout closed");
-        if (m_hwnd && IsWindow(m_hwnd)) {
-            SetWindowPos(m_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        if (self->m_hwnd && IsWindow(self->m_hwnd)) {
+            SetWindowPos(self->m_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         }
-        m_pickerFlyout = nullptr;
+        self->m_pickerFlyout = nullptr;
     });
 
     return flyout;

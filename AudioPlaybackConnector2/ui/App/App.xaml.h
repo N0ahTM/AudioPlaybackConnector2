@@ -49,6 +49,9 @@ private:
     void SetupDeviceEvents();
     void TeardownDeviceEvents();
     void TryAutoReconnect();
+    void SaveLastConnectedDevices();
+    void HandlePowerSuspend();
+    void HandlePowerResume();
     [[nodiscard]] winrt::hstring ResolveKnownDeviceName(winrt::hstring const& id) const;
 
     /*------------------------------------------------------------------------------------------------------------------*/
@@ -87,13 +90,15 @@ private:
     std::size_t m_autoReconnectFailedToken = 0;
     std::size_t m_deviceStatusChangedToken = 0;
 
-    std::unique_ptr<NotificationService> m_notificationService;
-    std::unique_ptr<TrayController> m_trayController;
+    std::shared_ptr<NotificationService> m_notificationService;
+    std::shared_ptr<TrayController> m_trayController;
     wil::unique_handle m_singleInstanceMutex;
     static inline UINT s_wmTaskbarCreated = 0;
     static constexpr UINT_PTR c_timerAnimation = 0x41504332;
     ULONG_PTR m_gdiplusToken = 0;
     bool m_notificationsAvailable = false;
     std::atomic<bool> m_exiting = false;
+    bool m_powerSuspended = false;
+    winrt::Windows::System::Threading::ThreadPoolTimer m_resumeReconnectTimer{nullptr};
 };
 } // namespace winrt::AudioPlaybackConnector2::implementation

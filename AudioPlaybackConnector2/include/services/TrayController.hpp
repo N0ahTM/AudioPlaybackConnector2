@@ -6,6 +6,7 @@
 
 #include <functional>
 #include <memory>
+#include <atomic>
 
 class DeviceManager;
 
@@ -13,7 +14,7 @@ class DeviceManager;
 /*//////// Tray Controller ////////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------------*/
 
-class TrayController {
+class TrayController : public std::enable_shared_from_this<TrayController> {
 public:
     /* Callback Types */
     /*------------------------------------------------------------------------------------------------------------------*/
@@ -95,5 +96,5 @@ private:
     ULONGLONG m_lastLeftClickTick = 0;
     ULONGLONG m_lastRightClickTick = 0;
     bool m_devicePickerPreloaded = false;
-    bool m_isTearingDown = false;
+    std::atomic_bool m_isTearingDown = false;
 };

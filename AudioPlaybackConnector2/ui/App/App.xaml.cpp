@@ -12,6 +12,8 @@
 #include <core/StringResources.hpp>
 #include <util/Util.hpp>
 
+#include <utility>
+
 using namespace winrt;
 using namespace winrt::Microsoft::UI::Xaml;
 
@@ -19,6 +21,8 @@ using namespace winrt::Microsoft::UI::Xaml;
 /*------------------------------------------------------------------------------------------------------------------*/
 
 namespace {
+constexpr std::chrono::seconds c_resumeReconnectDelay{10};
+
 TrayNotificationType ToTrayNotificationType(NotificationService::FallbackNotificationType type) {
     switch (type) {
         case NotificationService::FallbackNotificationType::Warning: return TrayNotificationType::Warning;
@@ -42,7 +46,32 @@ winrt::AudioPlaybackConnector2::implementation::App::App() {
 }
 
 winrt::AudioPlaybackConnector2::implementation::App::~App() {
+    m_exiting.store(true);
+    auto resumeTimer = std::exchange(m_resumeReconnectTimer, nullptr);
+    if (resumeTimer) {
+        try {
+            resumeTimer.Cancel();
+        } catch (...) {
+        }
+    }
     TeardownDeviceEvents();
+    if (m_hwnd) {
+        try {
+            KillTimer(m_hwnd, c_timerAnimation);
+            RemoveWindowSubclass(m_hwnd, SubclassProc, 1);
+        } catch (...) {
+        }
+    }
+    if (m_trayController) {
+        m_trayController->Teardown();
+    }
+    if (m_notificationService) {
+        m_notificationService->Teardown();
+    }
+    if (m_deviceManager) {
+        m_deviceManager->ShutdownForProcessExit();
+        m_deviceManager.reset();
+    }
     m_notificationService.reset();
     m_trayController.reset();
     s_instance.store(nullptr);
@@ -92,8 +121,11 @@ void winrt::AudioPlaybackConnector2::implementation::App::SetupMainWindow() {
     // Use Grid.Loaded instead of Window.Activated.
     // Loaded fires after the element is added to the visual tree and XamlRoot
     // has been assigned, which is required for MenuFlyout anchoring.
-    root.Loaded([this, root](auto&, auto&) {
-        OnMainWindowLoaded(root);
+    auto weak = get_weak();
+    root.Loaded([weak, root](auto&, auto&) {
+        if (auto self = weak.get()) {
+            self->OnMainWindowLoaded(root);
+        }
     });
 
     m_mainWindow.Activate();
@@ -150,6 +182,8 @@ void winrt::AudioPlaybackConnector2::implementation::App::OnMainWindowLoaded(Con
     InitializeTray();
     InitializeNotifications();
     SetupDeviceEvents();
+    m_deviceManager->StartDeviceWatcher();
+    DebugTrace(L"[App] Device watcher started");
     bool willAutoReconnect = false;
     {
         auto locked = m_settings->LockSharedData();
@@ -181,7 +215,7 @@ void winrt::AudioPlaybackConnector2::implementation::App::OnMainWindowLoaded(Con
 
 void winrt::AudioPlaybackConnector2::implementation::App::InitializeTray() {
     DebugTrace(L"[App] InitializeTray()");
-    m_trayController = std::make_unique<TrayController>();
+    m_trayController = std::make_shared<TrayController>();
     m_trayController->Initialize(m_hwnd, m_mainWindow);
     m_trayController->SetDeviceManager(m_deviceManager);
     auto weak = get_weak();
@@ -193,7 +227,7 @@ void winrt::AudioPlaybackConnector2::implementation::App::InitializeTray() {
             if (auto self = weak.get()) self->ExitApplication();
         },
         [weak](winrt::hstring id) {
-            if (auto self = weak.get(); self && self->m_deviceManager) self->m_deviceManager->ConnectAsync(id);
+            if (auto self = weak.get(); self && self->m_deviceManager) self->m_deviceManager->ConnectDetached(id);
         },
         [weak](winrt::hstring id) {
             if (auto self = weak.get(); self && self->m_deviceManager) self->m_deviceManager->Disconnect(id);
@@ -207,7 +241,7 @@ void winrt::AudioPlaybackConnector2::implementation::App::InitializeTray() {
 
 void winrt::AudioPlaybackConnector2::implementation::App::InitializeNotifications() {
     DebugTrace(L"[App] InitializeNotifications()");
-    m_notificationService = std::make_unique<NotificationService>();
+    m_notificationService = std::make_shared<NotificationService>();
     auto weak = get_weak();
     m_notificationService->SetReconnectCallback([weak](winrt::hstring deviceId) {
         if (auto self = weak.get()) {
@@ -240,8 +274,7 @@ void winrt::AudioPlaybackConnector2::implementation::App::InitializeDeviceManage
         if (locked->GlobalAutoReconnect) return true;
         return std::ranges::any_of(locked->Devices, [&](const auto& d) { return d.Id == id && d.AutoReconnect; });
     });
-    m_deviceManager->StartDeviceWatcher();
-    DebugTrace(L"[App] DeviceManager initialized and watcher started");
+    DebugTrace(L"[App] DeviceManager initialized");
 }
 
 winrt::hstring winrt::AudioPlaybackConnector2::implementation::App::ResolveKnownDeviceName(winrt::hstring const& id) const {
@@ -270,8 +303,97 @@ void winrt::AudioPlaybackConnector2::implementation::App::TryAutoReconnect() {
         auto device = std::ranges::find_if(devices, [&](const auto& knownDevice) { return knownDevice.Id == id; });
         if (device != devices.end() && (globalAutoReconnect || device->AutoReconnect)) {
             DebugTrace(L"[App] Auto-reconnecting to: {0}", id);
-            m_deviceManager->ConnectAsync(winrt::hstring(id));
+            m_deviceManager->ConnectDetached(winrt::hstring(id));
         }
+    }
+}
+
+void winrt::AudioPlaybackConnector2::implementation::App::SaveLastConnectedDevices() {
+    try {
+        if (!m_settings || !m_deviceManager) return;
+
+        auto connected = m_deviceManager->GetConnectedDevices();
+        {
+            auto locked = m_settings->LockExclusiveData();
+            locked->LastConnectedIds.clear();
+            for (const auto& c : connected) {
+                try {
+                    if (c.Device) {
+                        locked->LastConnectedIds.push_back(std::wstring(c.Device.Id()));
+                    }
+                } catch (...) {
+                }
+            }
+        }
+        m_settings->Save(GetModuleHandleW(nullptr));
+    } catch (...) {
+        DebugTrace(L"[App] SaveLastConnectedDevices ERROR: ignored exception");
+    }
+}
+
+void winrt::AudioPlaybackConnector2::implementation::App::HandlePowerSuspend() {
+    try {
+        if (m_exiting.load() || m_powerSuspended) return;
+        m_powerSuspended = true;
+        DebugTrace(L"[App] Power suspend detected");
+
+        auto timer = std::exchange(m_resumeReconnectTimer, nullptr);
+        if (timer) {
+            try {
+                timer.Cancel();
+            } catch (...) {
+            }
+        }
+
+        SaveLastConnectedDevices();
+        if (m_deviceManager) {
+            m_deviceManager->SuspendForPowerTransition();
+        }
+    } catch (...) {
+        DebugTrace(L"[App] HandlePowerSuspend ERROR: ignored exception");
+    }
+}
+
+void winrt::AudioPlaybackConnector2::implementation::App::HandlePowerResume() {
+    try {
+        if (m_exiting.load()) return;
+
+        if (m_powerSuspended) {
+            m_powerSuspended = false;
+            DebugTrace(L"[App] Power resume detected");
+        } else {
+            // Some systems may surface resume without a matching suspend
+            // callback. Treat this as a recovery point anyway.
+            DebugTrace(L"[App] Power resume detected without prior suspend; running recovery");
+        }
+
+        if (m_deviceManager) {
+            m_deviceManager->ResumeAfterPowerTransition();
+        }
+
+        auto existingTimer = std::exchange(m_resumeReconnectTimer, nullptr);
+        if (existingTimer) {
+            try {
+                existingTimer.Cancel();
+            } catch (...) {
+            }
+        }
+
+        auto weak = get_weak();
+        m_resumeReconnectTimer = winrt::Windows::System::Threading::ThreadPoolTimer::CreateTimer(
+            [weak](auto) {
+                if (auto self = weak.get()) {
+                    self->RunOnUIThread([weak]() {
+                        if (auto self = weak.get()) {
+                            self->m_resumeReconnectTimer = nullptr;
+                            self->TryAutoReconnect();
+                        }
+                    });
+                }
+            },
+            c_resumeReconnectDelay);
+    } catch (...) {
+        DebugTrace(L"[App] HandlePowerResume ERROR: ignored exception");
     }
 }
 
@@ -350,9 +472,9 @@ void winrt::AudioPlaybackConnector2::implementation::App::SetupDeviceEvents() {
                             break;
                         }
                     }
-                    if (!isStillConnected) return;
                     KillTimer(self->m_hwnd, c_timerAnimation);
-                    self->m_trayController->SetState(TrayIconState::Connected);
+                    self->m_trayController->SetState(isStillConnected || self->m_deviceManager->HasConnections() ? TrayIconState::Connected : TrayIconState::Idle);
+                    self->m_trayController->UpdateTooltipFromConnections();
                 } else if (!status.empty()) {
                     KillTimer(self->m_hwnd, c_timerAnimation);
                     self->m_trayController->SetState(self->m_deviceManager->HasConnections() ? TrayIconState::Connected : TrayIconState::Error);
@@ -396,6 +518,7 @@ void winrt::AudioPlaybackConnector2::implementation::App::TeardownDeviceEvents()
 }
 
 void winrt::AudioPlaybackConnector2::implementation::App::ShowSettingsWindow() {
+    if (m_exiting.load()) return;
     DebugTrace(L"[App] ShowSettingsWindow()");
     if (m_settingsWindow) {
         auto hwnd = util::GetWindowHandle(m_settingsWindow);
@@ -432,11 +555,14 @@ void winrt::AudioPlaybackConnector2::implementation::App::ShowSettingsWindow() {
             ShowWindow(hwnd, SW_HIDE);
         }
 
-        m_settingsWindow.Closed([this](auto&, auto&) {
+        auto weak = get_weak();
+        m_settingsWindow.Closed([weak](auto&, auto&) {
+            auto self = weak.get();
+            if (!self) return;
             DebugTrace(L"[App] SettingsWindow closed");
-            m_settingsWindow = nullptr;
-            if (m_settings) {
-                m_settings->Save(GetModuleHandleW(nullptr));
+            self->m_settingsWindow = nullptr;
+            if (self->m_settings) {
+                self->m_settings->Save(GetModuleHandleW(nullptr));
             }
         });
         DebugTrace(L"[App] SettingsWindow created off-screen (hidden until ready)");
@@ -450,23 +576,38 @@ void winrt::AudioPlaybackConnector2::implementation::App::ExitApplication() {
     if (m_exiting.exchange(true)) return;
     DebugTrace(L"[App] ExitApplication() started");
 
+    auto resumeTimer = std::exchange(m_resumeReconnectTimer, nullptr);
+    if (resumeTimer) {
+        try {
+            resumeTimer.Cancel();
+        } catch (...) {
+        }
+    }
+
+    TeardownDeviceEvents();
+
+    if (m_hwnd) {
+        try {
+            KillTimer(m_hwnd, c_timerAnimation);
+            RemoveWindowSubclass(m_hwnd, SubclassProc, 1);
+        } catch (...) {
+        }
+    }
+
+    if (m_trayController) {
+        m_trayController->Teardown();
+    }
+
+    if (m_notificationService) {
+        m_notificationService->Teardown();
+    }
+
+    SaveLastConnectedDevices();
+
     if (m_deviceManager) {
-        m_deviceManager->StopDeviceWatcher();
-        m_deviceManager->CancelPendingReconnects();
+        m_deviceManager->ShutdownForProcessExit();
     }
     m_notificationService.reset();
-
-    // Don't synchronously Close() connections on exit – that can block the UI thread.
-    // The OS will clean up the underlying Bluetooth handles when the process terminates.
-    if (m_settings && m_deviceManager) {
-        {
-            auto locked = m_settings->LockExclusiveData();
-            locked->LastConnectedIds.clear();
-            for (const auto& c : m_deviceManager->GetConnectedDevices())
-                locked->LastConnectedIds.push_back(std::wstring(c.Device.Id()));
-        }
-        m_settings->Save(GetModuleHandleW(nullptr));
-    }
 
     m_trayController.reset();
     if (m_gdiplusToken) {
@@ -481,10 +622,9 @@ void winrt::AudioPlaybackConnector2::implementation::App::ExitApplication() {
         }
     }
 
-    if (m_hwnd) {
-        RemoveWindowSubclass(m_hwnd, SubclassProc, 1);
+    if (m_mainWindow) {
+        m_mainWindow.Close();
     }
-    m_mainWindow.Close();
     DebugTrace(L"[App] ExitApplication() complete");
 }
 
@@ -584,6 +724,7 @@ void winrt::AudioPlaybackConnector2::implementation::App::OnAutoReconnectFailed(
 LRESULT CALLBACK winrt::AudioPlaybackConnector2::implementation::App::SubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR dwRefData) {
     auto* app = reinterpret_cast<App*>(dwRefData);
     if (!app) return DefSubclassProc(hwnd, msg, wParam, lParam);
+    if (app->m_exiting.load()) return DefSubclassProc(hwnd, msg, wParam, lParam);
 
     if (app->m_trayController && msg == app->m_trayController->TrayCallbackMessage()) {
         app->m_trayController->HandleTrayMessage(wParam, lParam);
@@ -593,6 +734,20 @@ LRESULT CALLBACK winrt::AudioPlaybackConnector2::implementation::App::SubclassPr
     if (msg == WM_SETTINGCHANGE) {
         ThemeHelper::OnSettingChange(hwnd, lParam);
         return 0;
+    }
+
+    if (msg == WM_POWERBROADCAST) {
+        switch (wParam) {
+            case PBT_APMSUSPEND:
+                app->HandlePowerSuspend();
+                return TRUE;
+            case PBT_APMRESUMEAUTOMATIC:
+            case PBT_APMRESUMESUSPEND:
+                app->HandlePowerResume();
+                return TRUE;
+            default:
+                break;
+        }
     }
 
     if (msg == WM_TIMER && wParam == c_timerAnimation && app->m_trayController) {

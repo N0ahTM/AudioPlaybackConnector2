@@ -45,10 +45,13 @@ public:
             }
         }
         for (auto& h : copy) {
-            std::apply([&](auto const&... values) {
-                (*h)(values...);
-            },
-                       snapshot);
+            try {
+                std::apply([&](auto const&... values) {
+                    (*h)(values...);
+                },
+                           snapshot);
+            } catch (...) {
+            }
         }
     }
 

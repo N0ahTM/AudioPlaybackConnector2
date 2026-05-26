@@ -7,9 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-05-26
+
+### Added
+- Crash handling with structured crash report logging for unexpected process failures.
+- Extended diagnostic logging around reconnect/state transitions to simplify root-cause analysis.
+- Refreshed app icon and packaged tile/logo assets.
+
 ### Changed
 - Documented the required Windows App SDK 2.0 runtime and WinAppRuntime.Singleton setup for MSIX installs and Visual Studio source builds.
 - Updated release notes guidance to mention Windows App SDK runtime dependencies before MSIX installation.
+- Updated source-build package manifest version handling and refreshed README media/docs details.
+- Improved theme and notification handling during system power and session state transitions.
+
+### Fixed
+- Fixed a crash after unexpected Bluetooth disconnect followed by auto-reconnect by hardening reconnect/lifecycle handling (`#4`).
+- Improved bitmap/HICON resource handling in tray icon rendering to avoid invalid memory/resource lifetime behavior.
 
 ## [0.4.1] - 2026-05-16
 
@@ -116,7 +129,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-language support for 8 locales: English, German, French, Spanish, Japanese, Korean, Chinese Simplified, Chinese Traditional.
 - CI/CD workflows: build (with clang-format and CppCheck), CodeQL analysis, and automated MSIX releases on version tags.
 
-[Unreleased]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.2.0...v0.3.0

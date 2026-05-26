@@ -22,6 +22,7 @@ static Gdiplus::Color GetSystemBrushColor(const wchar_t* resourceKey) {
 static HICON CreateHIconFromBitmap(Gdiplus::Bitmap& bitmap) {
     int w = bitmap.GetWidth();
     int h = bitmap.GetHeight();
+    if (w <= 0 || h <= 0) return nullptr;
 
     // Use BITMAPV5HEADER with explicit alpha mask so CreateIconIndirect
     // preserves per-pixel alpha. A black 1bpp mask tells Windows to use
@@ -59,13 +60,38 @@ static HICON CreateHIconFromBitmap(Gdiplus::Bitmap& bitmap) {
     auto cleanupMask = wil::scope_exit([&]() { SelectObject(maskDC.get(), oldMask); });
     THROW_LAST_ERROR_IF(!PatBlt(maskDC.get(), 0, 0, w, h, BLACKNESS));
 
-    // Copy ARGB pixels from GDI+ bitmap
+    // Copy ARGB pixels from GDI+ bitmap.
+    // GDI+ may expose a stride that does not match width*4, so copy row-by-row.
     Gdiplus::Rect rect(0, 0, w, h);
     Gdiplus::BitmapData bitmapData;
     Gdiplus::Status status = bitmap.LockBits(&rect, Gdiplus::ImageLockModeRead, PixelFormat32bppARGB, &bitmapData);
     if (status != Gdiplus::Ok) return nullptr;
     auto cleanupBits = wil::scope_exit([&]() { bitmap.UnlockBits(&bitmapData); });
-    memcpy(dibBits, bitmapData.Scan0, static_cast<size_t>(w) * h * 4);
+
+    if (!bitmapData.Scan0) return nullptr;
+    const int sourceStride = bitmapData.Stride;
+    if (sourceStride == 0) return nullptr;
+
+    const size_t rowBytes = static_cast<size_t>(w) * 4;
+    const auto srcBase = static_cast<std::byte const*>(bitmapData.Scan0);
+    auto dstBase = static_cast<std::byte*>(dibBits);
+
+    if (sourceStride > 0) {
+        if (static_cast<size_t>(sourceStride) < rowBytes) return nullptr;
+        for (int y = 0; y < h; ++y) {
+            auto const* srcRow = srcBase + static_cast<size_t>(y) * static_cast<size_t>(sourceStride);
+            auto* dstRow = dstBase + static_cast<size_t>(y) * rowBytes;
+            memcpy(dstRow, srcRow, rowBytes);
+        }
+    } else {
+        const size_t strideAbs = static_cast<size_t>(-sourceStride);
+        if (strideAbs < rowBytes) return nullptr;
+        for (int y = 0; y < h; ++y) {
+            auto const* srcRow = srcBase + static_cast<size_t>(h - 1 - y) * strideAbs;
+            auto* dstRow = dstBase + static_cast<size_t>(y) * rowBytes;
+            memcpy(dstRow, srcRow, rowBytes);
+        }
+    }
 
     ICONINFO ii = {};
     ii.fIcon = TRUE;

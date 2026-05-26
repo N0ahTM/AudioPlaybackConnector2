@@ -514,6 +514,13 @@ bool DeviceManager::HasConnections() const {
     return std::ranges::any_of(m_connections, [](auto const& entry) { return entry.second.IsOpen; });
 }
 
+bool DeviceManager::IsDeviceBusy(winrt::hstring const& deviceId) const {
+    auto guard = m_lock.lock_shared();
+    return m_connectingIds.count(deviceId) > 0 ||
+           m_reconnectingIds.count(deviceId) > 0 ||
+           m_disconnectingIds.count(deviceId) > 0;
+}
+
 void DeviceManager::StartConnectionHeartbeat() {
     if (m_heartbeatTimer) return;
 

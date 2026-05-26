@@ -179,11 +179,12 @@ ListViewItem DevicePickerView::BuildDeviceListItem(winrt::Windows::Devices::Enum
     infoPanel.Orientation(Orientation::Horizontal);
     infoPanel.HorizontalAlignment(HorizontalAlignment::Right);
     infoPanel.VerticalAlignment(VerticalAlignment::Center);
-    infoPanel.Spacing(4);
+    infoPanel.Spacing(6);
     Grid::SetColumn(infoPanel, 1);
 
     auto manager = m_manager.lock();
     bool isConnected = false;
+    bool isBusy = false;
     if (manager) {
         for (const auto& c : manager->GetConnectedDevices()) {
             if (c.Device.Id() == dev.Id()) {
@@ -191,6 +192,19 @@ ListViewItem DevicePickerView::BuildDeviceListItem(winrt::Windows::Devices::Enum
                 break;
             }
         }
+        isBusy = manager->IsDeviceBusy(dev.Id());
+    }
+
+    if (isBusy) {
+        item.IsEnabled(false);
+        item.Opacity(0.6);
+
+        auto busyRing = ProgressRing();
+        busyRing.Width(14);
+        busyRing.Height(14);
+        busyRing.IsActive(true);
+        busyRing.VerticalAlignment(VerticalAlignment::Center);
+        infoPanel.Children().Append(busyRing);
     }
 
     if (isConnected) {
@@ -203,6 +217,7 @@ ListViewItem DevicePickerView::BuildDeviceListItem(winrt::Windows::Devices::Enum
         reconnectBtn.BorderThickness({0});
         reconnectBtn.Padding({5, 1, 5, 1});
         reconnectBtn.VerticalAlignment(VerticalAlignment::Center);
+        reconnectBtn.IsEnabled(!isBusy);
 
         auto reconnectText = TextBlock();
         reconnectText.Text(winrt::hstring(_("Reconnect")));
@@ -220,6 +235,7 @@ ListViewItem DevicePickerView::BuildDeviceListItem(winrt::Windows::Devices::Enum
         disconnectBtn.BorderThickness({0});
         disconnectBtn.Padding({5, 1, 5, 1});
         disconnectBtn.VerticalAlignment(VerticalAlignment::Center);
+        disconnectBtn.IsEnabled(!isBusy);
 
         auto disconnectText = TextBlock();
         disconnectText.Text(winrt::hstring(_("Disconnect")));
@@ -266,6 +282,7 @@ void DevicePickerView::OnDeviceSelected(winrt::Windows::Foundation::IInspectable
 
     auto manager = m_manager.lock();
     if (manager) {
+        if (manager->IsDeviceBusy(id)) return;
         for (const auto& c : manager->GetConnectedDevices()) {
             if (c.Device.Id() == id) return;
         }

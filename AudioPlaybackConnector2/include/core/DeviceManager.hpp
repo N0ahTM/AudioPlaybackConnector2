@@ -53,6 +53,7 @@ public:
 
     std::vector<DeviceConnectionInfo> GetConnectedDevices() const;
     bool HasConnections() const;
+    bool IsDeviceBusy(winrt::hstring const& deviceId) const;
 
     /*------------------------------------------------------------------------------------------------------------------*/
     /*//////// Events ////////////////////////////////////////////////////////////////////////////////////////////////*/

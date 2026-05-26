@@ -286,24 +286,12 @@ winrt::Windows::Foundation::IAsyncAction DeviceManager::ConnectAsync(winrt::hstr
             m_connectingIds.insert(deviceId);
         }
         DebugTrace(L"[DeviceManager] ConnectAsync requested: {0}", std::wstring(deviceId));
-        // Check cache first to avoid an expensive FindAllAsync scan.
-        winrt::Windows::Devices::Enumeration::DeviceInformation cachedDevice{nullptr};
+
+        // ID-only cache (no DeviceInformation caching anymore to avoid lifetime issues).
+        bool knownDeviceId = false;
         {
             auto guard = m_lock.lock_shared();
-            for (auto const& cached : m_deviceCache) {
-                if (cached.Id() == deviceId) {
-                    cachedDevice = cached;
-                    break;
-                }
-            }
-        }
-        if (cachedDevice) {
-            co_await ConnectInternalAsync(cachedDevice);
-            {
-                auto guard = m_lock.lock_exclusive();
-                m_connectingIds.erase(deviceId);
-            }
-            co_return;
+            knownDeviceId = m_deviceCache.count(deviceId) > 0;
         }
 
         auto selector = winrt::Windows::Media::Audio::AudioPlaybackConnection::GetDeviceSelector();
@@ -324,12 +312,12 @@ winrt::Windows::Foundation::IAsyncAction DeviceManager::ConnectAsync(winrt::hstr
             }
         }
 
-        // Refresh cache with the latest device enumeration snapshot.
+        // Refresh cache using IDs only.
         {
-            std::vector<winrt::Windows::Devices::Enumeration::DeviceInformation> refreshed;
-            refreshed.reserve(devices.Size());
+            std::unordered_set<winrt::hstring> refreshed;
+            refreshed.reserve(static_cast<size_t>(devices.Size()));
             for (auto const& device : devices) {
-                refreshed.push_back(device);
+                refreshed.insert(device.Id());
             }
             auto guard = m_lock.lock_exclusive();
             m_deviceCache = std::move(refreshed);
@@ -342,6 +330,10 @@ winrt::Windows::Foundation::IAsyncAction DeviceManager::ConnectAsync(winrt::hstr
                 m_connectingIds.erase(deviceId);
             }
             co_return;
+        }
+
+        if (knownDeviceId) {
+            DebugTrace(L"[DeviceManager] ConnectAsync known ID no longer present after refresh: {0}", std::wstring(deviceId));
         }
 
         bool reportFailure = false;
@@ -1066,14 +1058,7 @@ void DeviceManager::OnDeviceAdded(winrt::Windows::Devices::Enumeration::DeviceWa
         auto guard = m_lock.lock_exclusive();
         if (m_shutdownForProcessExit) return;
         if (m_watcherStopping) return;
-        bool exists = false;
-        for (auto const& cached : m_deviceCache) {
-            if (cached.Id() == args.Id()) {
-                exists = true;
-                break;
-            }
-        }
-        if (!exists) m_deviceCache.push_back(args);
+        m_deviceCache.insert(args.Id());
         pred = m_autoReconnectPred;
     }
 
@@ -1090,7 +1075,7 @@ void DeviceManager::OnDeviceRemoved(winrt::Windows::Devices::Enumeration::Device
         if (m_shutdownForProcessExit) return;
         if (m_watcherStopping) return;
 
-        std::erase_if(m_deviceCache, [&](auto const& cached) { return cached.Id() == args.Id(); });
+        m_deviceCache.erase(args.Id());
 
         connectedDeviceRemoved =
             m_connections.count(args.Id()) > 0 &&

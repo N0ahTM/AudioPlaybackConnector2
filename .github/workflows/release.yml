@@ -5,18 +5,18 @@ on:
     tags:
       - 'v[0-9]*'
 
+env:
+  APPINSTALLER_URL: https://n0ahtm.github.io/AudioPlaybackConnector2/AudioPlaybackConnector2.appinstaller
+
 jobs:
-  release:
+  build-release:
     runs-on: windows-latest
     permissions:
       contents: write
       pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    env:
-      APPINSTALLER_URL: https://n0ahtm.github.io/AudioPlaybackConnector2/AudioPlaybackConnector2.appinstaller
+    outputs:
+      semver: ${{ steps.version.outputs.SEMVER }}
+      version: ${{ steps.version.outputs.VERSION }}
 
     steps:
     - name: Checkout
@@ -27,31 +27,13 @@ jobs:
       shell: pwsh
       run: |
         $semver = "${{ github.ref_name }}".TrimStart('v')
-        $quad   = "$semver.0"
+        $quad = "$semver.0"
         "SEMVER=$semver" >> $env:GITHUB_OUTPUT
-        "VERSION=$quad"  >> $env:GITHUB_OUTPUT
+        "VERSION=$quad" >> $env:GITHUB_OUTPUT
 
-    - name: Patch version into RC and appxmanifest
+    - name: Patch version into package metadata
       shell: pwsh
-      run: |
-        $v  = "${{ steps.version.outputs.VERSION }}"
-        $rc = $v -replace '\.', ','
-
-        $rcPath = "AudioPlaybackConnector2/res/AudioPlaybackConnector2.rc"
-        $content = Get-Content $rcPath -Raw
-        $content = $content -replace 'FILEVERSION \d+,\d+,\d+,\d+',   "FILEVERSION $rc"
-        $content = $content -replace 'PRODUCTVERSION \d+,\d+,\d+,\d+', "PRODUCTVERSION $rc"
-        $content = $content -replace '"FileVersion",\s*"[\d.]+"',   "`"FileVersion`", `"$v`""
-        $content = $content -replace '"ProductVersion",\s*"[\d.]+"', "`"ProductVersion`", `"$v`""
-        Set-Content $rcPath $content -Encoding utf8
-
-        $manifestPath = 'AudioPlaybackConnector2 (Package)/Package.appxmanifest'
-        [xml]$manifest = Get-Content $manifestPath -Raw
-        $manifest.Package.Identity.Version = $v
-        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-        $writer = New-Object System.IO.StreamWriter($manifestPath, $false, $utf8NoBom)
-        $manifest.Save($writer)
-        $writer.Close()
+      run: ./scripts/release/update-package-version.ps1 -Version '${{ steps.version.outputs.VERSION }}'
 
     - name: Decode signing certificate
       id: cert
@@ -83,64 +65,20 @@ jobs:
     - name: Locate MSIX
       id: msix
       shell: pwsh
-      run: |
-        $file = Get-ChildItem -Path 'AudioPlaybackConnector2 (Package)/AppPackages' `
-                              -Recurse -Filter '*.msix' |
-                Where-Object { $_.Name -notmatch 'Dependencies' } |
-                Select-Object -First 1
-        if (-not $file) { throw "MSIX not found" }
-        $assetName = "AudioPlaybackConnector2_${{ steps.version.outputs.VERSION }}_x64.msix"
-        $assetPath = Join-Path $env:RUNNER_TEMP $assetName
-        Copy-Item -LiteralPath $file.FullName -Destination $assetPath -Force
-        "PATH=$assetPath" >> $env:GITHUB_OUTPUT
-        "NAME=$assetName" >> $env:GITHUB_OUTPUT
+      run: ./scripts/release/locate-msix.ps1 -Version '${{ steps.version.outputs.VERSION }}'
 
     - name: Generate App Installer feed
       id: appinstaller
       shell: pwsh
       run: |
-        [xml]$manifest = Get-Content 'AudioPlaybackConnector2 (Package)/Package.appxmanifest' -Raw
-        $identity = $manifest.Package.Identity
-        [xml]$project = Get-Content 'AudioPlaybackConnector2 (Package)/AudioPlaybackConnector2 (Package).wapproj' -Raw
-        $namespaceManager = New-Object System.Xml.XmlNamespaceManager($project.NameTable)
-        $namespaceManager.AddNamespace('msb', 'http://schemas.microsoft.com/developer/msbuild/2003')
-        $hoursNode = $project.SelectSingleNode('//msb:HoursBetweenUpdateChecks', $namespaceManager)
-        if (-not $hoursNode) {
-          $hoursNode = $project.SelectSingleNode('//*[local-name()="HoursBetweenUpdateChecks"]')
-        }
-        $hoursBetweenUpdateChecks = if ($hoursNode -and -not [string]::IsNullOrWhiteSpace($hoursNode.InnerText)) {
-          $hoursNode.InnerText.Trim()
-        } else {
-          '24'
-        }
         $msixUrl = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/${{ steps.msix.outputs.NAME }}"
-        $path = Join-Path $env:RUNNER_TEMP 'AudioPlaybackConnector2.appinstaller'
+        $outputPath = Join-Path $env:RUNNER_TEMP 'AudioPlaybackConnector2.appinstaller'
+        ./scripts/release/generate-appinstaller.ps1 `
+          -MsixUrl $msixUrl `
+          -AppInstallerUrl $env:APPINSTALLER_URL `
+          -OutputPath $outputPath
 
-        $content = @"
-        <?xml version="1.0" encoding="utf-8"?>
-        <AppInstaller
-            xmlns="http://schemas.microsoft.com/appx/appinstaller/2017/2"
-            xmlns:s4="http://schemas.microsoft.com/appx/appinstaller/2018"
-            Version="$($identity.Version)"
-            Uri="$env:APPINSTALLER_URL">
-          <MainPackage
-              Name="$($identity.Name)"
-              Publisher="$($identity.Publisher)"
-              Version="$($identity.Version)"
-              ProcessorArchitecture="x64"
-              Uri="$msixUrl" />
-          <UpdateSettings>
-            <OnLaunch HoursBetweenUpdateChecks="$hoursBetweenUpdateChecks" />
-            <s4:AutomaticBackgroundTask />
-          </UpdateSettings>
-        </AppInstaller>
-        "@
-
-        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-        [System.IO.File]::WriteAllText($path, $content.TrimStart(), $utf8NoBom)
-        "PATH=$path" >> $env:GITHUB_OUTPUT
-
-    - name: Create GitHub Release
+    - name: Create draft GitHub Release
       uses: softprops/action-gh-release@v2
       with:
         name: v${{ steps.version.outputs.SEMVER }}
@@ -176,7 +114,7 @@ jobs:
           certs/AudioPlaybackConnector2.cer
         fail_on_unmatched_files: true
 
-    - name: Publish App Installer feed to GitHub Pages
+    - name: Stage App Installer feed for GitHub Pages
       shell: pwsh
       run: |
         New-Item -ItemType Directory -Path pages -Force | Out-Null
@@ -190,40 +128,41 @@ jobs:
       with:
         path: pages
 
+  deploy-pages:
+    runs-on: ubuntu-latest
+    needs: build-release
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
     - name: Deploy GitHub Pages
       id: deployment
       uses: actions/deploy-pages@v4
 
+  publish-release:
+    runs-on: ubuntu-latest
+    needs:
+      - build-release
+      - deploy-pages
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+
     - name: Verify published App Installer feed
       shell: pwsh
-      run: |
-        $expectedVersion = "${{ steps.version.outputs.VERSION }}"
-        $verified = $false
-
-        for ($attempt = 1; $attempt -le 6; $attempt++) {
-          try {
-            $response = Invoke-WebRequest -Uri $env:APPINSTALLER_URL -UseBasicParsing -TimeoutSec 30 -ErrorAction Stop
-            [xml]$feed = $response.Content
-            $actualVersion = $feed.DocumentElement.GetAttribute('Version')
-            if ($actualVersion -eq $expectedVersion) {
-              $verified = $true
-              break
-            }
-
-            Write-Warning "App Installer feed version is '$actualVersion', expected '$expectedVersion'."
-          } catch {
-            Write-Warning "App Installer feed check failed on attempt ${attempt}: $($_.Exception.Message)"
-          }
-
-          Start-Sleep -Seconds 10
-        }
-
-        if (-not $verified) {
-          throw "Published App Installer feed did not match version $expectedVersion."
-        }
+      run: >
+        ./scripts/release/verify-appinstaller-feed.ps1
+        -AppInstallerUrl '${{ env.APPINSTALLER_URL }}'
+        -ExpectedVersion '${{ needs.build-release.outputs.version }}'
 
     - name: Publish GitHub Release
-      shell: pwsh
       env:
         GH_TOKEN: ${{ github.token }}
       run: gh release edit "${{ github.ref_name }}" --repo "${{ github.repository }}" --draft=false

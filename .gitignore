@@ -50,6 +50,8 @@ Win32/
 # Configuration folders (Debug / Release)
 **/Debug/
 **/Release/
+!scripts/release/
+!scripts/release/*.ps1
 
 # MSBuild project-specific intermediate output folders
 # (These are the cryptic hashed folders like AudioPla.ce789cd7/)

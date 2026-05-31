@@ -34,7 +34,7 @@ std::wstring_view OpenResultStatusName(winrt::Windows::Media::Audio::AudioPlayba
 /*//////// Constructors / Destructor /////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-DeviceManager::DeviceManager() : m_discoveryService(std::make_unique<DeviceDiscoveryService>()) {}
+DeviceManager::DeviceManager() : m_discoveryService(std::make_shared<DeviceDiscoveryService>()) {}
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
@@ -334,7 +334,7 @@ void DeviceManager::ConnectDetached(winrt::hstring deviceId) {
     }(std::move(weak), std::move(deviceId));
 }
 
-winrt::fire_and_forget DeviceManager::ReconnectAsync(winrt::hstring deviceId) {
+winrt::Windows::Foundation::IAsyncAction DeviceManager::ReconnectAsync(winrt::hstring deviceId) {
     auto lifetime = shared_from_this();
     try {
         if (deviceId.empty()) co_return;
@@ -444,6 +444,15 @@ winrt::fire_and_forget DeviceManager::ReconnectAsync(winrt::hstring deviceId) {
     }
     DeviceActivityChanged(deviceId);
     co_return;
+}
+
+void DeviceManager::ReconnectDetached(winrt::hstring deviceId) {
+    auto weak = weak_from_this();
+    [](std::weak_ptr<DeviceManager> weak, winrt::hstring id) -> winrt::fire_and_forget {
+        if (auto self = weak.lock()) {
+            co_await self->ReconnectAsync(id);
+        }
+    }(std::move(weak), std::move(deviceId));
 }
 
 void DeviceManager::Disconnect(winrt::hstring deviceId) {

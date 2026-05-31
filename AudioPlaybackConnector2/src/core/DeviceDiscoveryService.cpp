@@ -18,12 +18,19 @@ void DeviceDiscoveryService::Start() {
     if (m_watcher) return;
 
     try {
+        auto weak = weak_from_this();
         auto selector = winrt::Windows::Media::Audio::AudioPlaybackConnection::GetDeviceSelector();
         m_watcher = winrt::Windows::Devices::Enumeration::DeviceInformation::CreateWatcher(selector);
-        m_watcherAddedToken =
-            m_watcher.Added([this](auto const& sender, auto const& args) { OnDeviceAdded(sender, args); });
-        m_watcherRemovedToken =
-            m_watcher.Removed([this](auto const& sender, auto const& args) { OnDeviceRemoved(sender, args); });
+        m_watcherAddedToken = m_watcher.Added([weak](auto const& sender, auto const& args) {
+            if (auto self = weak.lock()) {
+                self->OnDeviceAdded(sender, args);
+            }
+        });
+        m_watcherRemovedToken = m_watcher.Removed([weak](auto const& sender, auto const& args) {
+            if (auto self = weak.lock()) {
+                self->OnDeviceRemoved(sender, args);
+            }
+        });
         m_watcher.Start();
         DebugTrace(L"[DeviceDiscoveryService] DeviceWatcher started");
     } catch (winrt::hresult_error const& ex) {

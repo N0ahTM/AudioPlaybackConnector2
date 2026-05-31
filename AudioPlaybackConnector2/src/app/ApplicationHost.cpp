@@ -237,7 +237,7 @@ void ApplicationHost::InitializeTray() {
             if (auto self = weak.lock(); self && self->m_deviceManager) self->m_deviceManager->Disconnect(id);
         },
         [weak](winrt::hstring id) {
-            if (auto self = weak.lock(); self && self->m_deviceManager) self->m_deviceManager->ReconnectAsync(id);
+            if (auto self = weak.lock(); self && self->m_deviceManager) self->m_deviceManager->ReconnectDetached(id);
         },
         [weak]() {
             if (auto self = weak.lock()) self->ToggleLastConnectedDeviceFromTray();
@@ -255,7 +255,7 @@ void ApplicationHost::InitializeNotifications() {
             self->RunOnUIThread([weak, deviceId = std::move(deviceId)]() mutable {
                 if (auto self = weak.lock()) {
                     if (self->m_exiting.load() || !self->m_deviceManager) return;
-                    self->m_deviceManager->ReconnectAsync(deviceId);
+                    self->m_deviceManager->ReconnectDetached(deviceId);
                 }
             });
         }

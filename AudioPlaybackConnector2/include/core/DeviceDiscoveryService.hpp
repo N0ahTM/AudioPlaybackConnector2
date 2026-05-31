@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <unordered_set>
 #include <util/Util.hpp>
 
@@ -7,7 +8,7 @@
 /*//////// Device Discovery Service //////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-class DeviceDiscoveryService {
+class DeviceDiscoveryService : public std::enable_shared_from_this<DeviceDiscoveryService> {
 public:
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Type Aliases //////////////////////////////////////////////////////////////////////////////////////*/

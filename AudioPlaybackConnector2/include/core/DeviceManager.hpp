@@ -3,6 +3,7 @@
 #include <core/DeviceDiscoveryService.hpp>
 #include <core/DeviceSessionStore.hpp>
 #include <core/ReconnectController.hpp>
+#include <memory>
 #include <string>
 #include <unordered_set>
 #include <util/Util.hpp>
@@ -41,7 +42,8 @@ public:
     void SetAutoReconnectPredicate(AutoReconnectPredicate pred);
     winrt::Windows::Foundation::IAsyncAction ConnectAsync(winrt::hstring deviceId);
     void ConnectDetached(winrt::hstring deviceId);
-    winrt::fire_and_forget ReconnectAsync(winrt::hstring deviceId);
+    winrt::Windows::Foundation::IAsyncAction ReconnectAsync(winrt::hstring deviceId);
+    void ReconnectDetached(winrt::hstring deviceId);
     void Disconnect(winrt::hstring deviceId);
     void SetAutoReconnect(winrt::hstring deviceId, bool enabled);
     winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
@@ -98,7 +100,7 @@ private:
     bool m_powerTransitionSuspended = false;
     bool m_shutdownForProcessExit = false;
 
-    std::unique_ptr<DeviceDiscoveryService> m_discoveryService;
+    std::shared_ptr<DeviceDiscoveryService> m_discoveryService;
     std::size_t m_discoveryDeviceAddedToken = 0;
     std::size_t m_discoveryDeviceRemovedToken = 0;
     winrt::Windows::System::Threading::ThreadPoolTimer m_heartbeatTimer{nullptr};

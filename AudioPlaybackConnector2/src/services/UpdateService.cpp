@@ -2,9 +2,12 @@
 #include <services/UpdateService.hpp>
 
 namespace {
-constexpr std::wstring_view c_latestReleaseApiUrl = L"https://api.github.com/repos/N0ahTM/AudioPlaybackConnector2/releases/latest";
-constexpr std::wstring_view c_latestReleasePageUrl = L"https://github.com/N0ahTM/AudioPlaybackConnector2/releases/latest";
-constexpr std::wstring_view c_appInstallerUrl = L"https://n0ahtm.github.io/AudioPlaybackConnector2/AudioPlaybackConnector2.appinstaller";
+constexpr std::wstring_view c_latestReleaseApiUrl =
+    L"https://api.github.com/repos/N0ahTM/AudioPlaybackConnector2/releases/latest";
+constexpr std::wstring_view c_latestReleasePageUrl =
+    L"https://github.com/N0ahTM/AudioPlaybackConnector2/releases/latest";
+constexpr std::wstring_view c_appInstallerUrl =
+    L"https://n0ahtm.github.io/AudioPlaybackConnector2/AudioPlaybackConnector2.appinstaller";
 
 struct ParsedVersion {
     std::array<uint64_t, 4> Parts{};
@@ -70,7 +73,8 @@ std::wstring FormatVersion(ParsedVersion const& version) {
 std::wstring ReadString(winrt::Windows::Data::Json::JsonObject const& json, winrt::hstring const& key) {
     if (!json.HasKey(key)) return {};
     auto value = json.Lookup(key);
-    return value.ValueType() == winrt::Windows::Data::Json::JsonValueType::String ? std::wstring(value.GetString()) : std::wstring{};
+    return value.ValueType() == winrt::Windows::Data::Json::JsonValueType::String ? std::wstring(value.GetString())
+                                                                                  : std::wstring{};
 }
 } // namespace
 
@@ -111,7 +115,8 @@ UpdateCheckResult UpdateService::CheckForUpdates() {
 
         auto currentVersion = ParsePackageVersion(winrt::Windows::ApplicationModel::Package::Current().Id().Version());
         result.LatestVersion = FormatVersion(latestVersion);
-        result.Status = CompareVersions(latestVersion, currentVersion) > 0 ? UpdateCheckStatus::UpdateAvailable : UpdateCheckStatus::UpToDate;
+        result.Status = CompareVersions(latestVersion, currentVersion) > 0 ? UpdateCheckStatus::UpdateAvailable
+                                                                           : UpdateCheckStatus::UpToDate;
         return result;
     } catch (winrt::hresult_error const& ex) {
         result.ErrorMessage = std::format(L"0x{:08X} {}", static_cast<uint32_t>(ex.code()), std::wstring(ex.message()));
@@ -151,19 +156,25 @@ winrt::fire_and_forget UpdateService::LaunchAppInstallerAsync() {
         std::wstring protocolUri = L"ms-appinstaller:?source=";
         protocolUri += escapedUrl.c_str();
 
-        if (co_await winrt::Windows::System::Launcher::LaunchUriAsync(winrt::Windows::Foundation::Uri(winrt::hstring(protocolUri)))) {
+        if (co_await winrt::Windows::System::Launcher::LaunchUriAsync(
+                winrt::Windows::Foundation::Uri(winrt::hstring(protocolUri)))) {
             co_return;
         }
     } catch (winrt::hresult_error const& ex) {
-        DebugTrace(L"[UpdateService] Failed to launch App Installer protocol URI: 0x{0:X} {1}", static_cast<uint32_t>(ex.code()), ex.message());
+        DebugTrace(L"[UpdateService] Failed to launch App Installer protocol URI: 0x{0:X} {1}",
+                   static_cast<uint32_t>(ex.code()),
+                   ex.message());
     } catch (...) {
         DebugTrace(L"[UpdateService] Failed to launch App Installer protocol URI: unknown exception");
     }
 
     try {
-        co_await winrt::Windows::System::Launcher::LaunchUriAsync(winrt::Windows::Foundation::Uri(winrt::hstring(c_appInstallerUrl)));
+        co_await winrt::Windows::System::Launcher::LaunchUriAsync(
+            winrt::Windows::Foundation::Uri(winrt::hstring(c_appInstallerUrl)));
     } catch (winrt::hresult_error const& ex) {
-        DebugTrace(L"[UpdateService] Failed to launch appinstaller URI: 0x{0:X} {1}", static_cast<uint32_t>(ex.code()), ex.message());
+        DebugTrace(L"[UpdateService] Failed to launch appinstaller URI: 0x{0:X} {1}",
+                   static_cast<uint32_t>(ex.code()),
+                   ex.message());
     } catch (...) {
         DebugTrace(L"[UpdateService] Failed to launch appinstaller URI: unknown exception");
     }
@@ -171,9 +182,12 @@ winrt::fire_and_forget UpdateService::LaunchAppInstallerAsync() {
 
 winrt::fire_and_forget UpdateService::LaunchReleasePageAsync(std::wstring releaseUrl) {
     try {
-        co_await winrt::Windows::System::Launcher::LaunchUriAsync(winrt::Windows::Foundation::Uri(winrt::hstring(std::move(releaseUrl))));
+        co_await winrt::Windows::System::Launcher::LaunchUriAsync(
+            winrt::Windows::Foundation::Uri(winrt::hstring(std::move(releaseUrl))));
     } catch (winrt::hresult_error const& ex) {
-        DebugTrace(L"[UpdateService] Failed to launch release URI: 0x{0:X} {1}", static_cast<uint32_t>(ex.code()), ex.message());
+        DebugTrace(L"[UpdateService] Failed to launch release URI: 0x{0:X} {1}",
+                   static_cast<uint32_t>(ex.code()),
+                   ex.message());
     } catch (...) {
         DebugTrace(L"[UpdateService] Failed to launch release URI: unknown exception");
     }

@@ -3,9 +3,9 @@
 #include <core/StringResources.hpp>
 #include <util/Util.hpp>
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Public Interface /////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 void TrayContextMenu::Initialize(winrt::Microsoft::UI::Xaml::FrameworkElement anchor,
                                  std::function<void()> onSettings,
@@ -29,14 +29,18 @@ void TrayContextMenu::Initialize(winrt::Microsoft::UI::Xaml::FrameworkElement an
     FontIcon settingsIcon;
     settingsIcon.Glyph(L"\xE713");
     settingsItem.Icon(settingsIcon);
-    settingsItem.Click([onSettings](auto, auto) { if (onSettings) onSettings(); });
+    settingsItem.Click([onSettings](auto, auto) {
+        if (onSettings) onSettings();
+    });
 
     MenuFlyoutItem btItem;
     btItem.Text(winrt::hstring(_("BluetoothSettings")));
     FontIcon btIcon;
     btIcon.Glyph(L"\xE702");
     btItem.Icon(btIcon);
-    btItem.Click([onBluetooth](auto, auto) { if (onBluetooth) onBluetooth(); });
+    btItem.Click([onBluetooth](auto, auto) {
+        if (onBluetooth) onBluetooth();
+    });
 
     MenuFlyoutSeparator sep;
 
@@ -45,7 +49,9 @@ void TrayContextMenu::Initialize(winrt::Microsoft::UI::Xaml::FrameworkElement an
     FontIcon exitIcon;
     exitIcon.Glyph(L"\xE8BB");
     exitItem.Icon(exitIcon);
-    exitItem.Click([onExit](auto, auto) { if (onExit) onExit(); });
+    exitItem.Click([onExit](auto, auto) {
+        if (onExit) onExit();
+    });
 
     menu.Items().Append(settingsItem);
     menu.Items().Append(btItem);

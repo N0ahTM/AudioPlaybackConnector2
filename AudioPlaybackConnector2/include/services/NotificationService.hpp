@@ -5,27 +5,29 @@
 #include <memory>
 #include <vector>
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Notification Service //////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Notification Service //////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 class NotificationService : public std::enable_shared_from_this<NotificationService> {
 public:
-    /* Notification Types */
-    /*------------------------------------------------------------------------------------------------------------------*/
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Notification Types ////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
 
-    enum class FallbackNotificationType { Info,
-                                          Warning,
-                                          Error };
+    enum class FallbackNotificationType { Info, Warning, Error };
 
-    /* Callback Types */
-    /*------------------------------------------------------------------------------------------------------------------*/
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Callback Types ////////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
 
     using ReconnectRequestedCallback = std::function<void(winrt::hstring deviceId)>;
-    using FallbackNotificationCallback = std::function<void(std::wstring const& title, std::wstring const& body, FallbackNotificationType type)>;
+    using FallbackNotificationCallback =
+        std::function<void(std::wstring const& title, std::wstring const& body, FallbackNotificationType type)>;
 
-    /* Lifecycle */
-    /*------------------------------------------------------------------------------------------------------------------*/
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Lifecycle /////////////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
 
     NotificationService() = default;
     ~NotificationService();
@@ -38,14 +40,16 @@ public:
     [[nodiscard]] bool Initialize(winrt::hstring const& appName, winrt::Windows::Foundation::Uri const& logoUri);
     void Teardown() noexcept;
 
-    /* Callbacks */
-    /*------------------------------------------------------------------------------------------------------------------*/
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Callbacks /////////////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
 
     void SetReconnectCallback(ReconnectRequestedCallback callback);
     void SetFallbackNotifier(FallbackNotificationCallback callback);
 
-    /* Notifications */
-    /*------------------------------------------------------------------------------------------------------------------*/
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Notifications /////////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
 
     void ShowAppStarted();
     void ShowDeviceConnected(winrt::hstring const& id, winrt::hstring const& deviceName);
@@ -54,11 +58,13 @@ public:
     void ShowAutoReconnectFailed(winrt::hstring const& id, winrt::hstring const& deviceName);
     void ShowUpdateAvailable(std::wstring const& latestVersion);
 
-    void OnNotificationInvoked(winrt::Microsoft::Windows::AppNotifications::AppNotificationActivatedEventArgs const& args);
+    void
+    OnNotificationInvoked(winrt::Microsoft::Windows::AppNotifications::AppNotificationActivatedEventArgs const& args);
 
 private:
-    /* Internal Helpers */
-    /*------------------------------------------------------------------------------------------------------------------*/
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Internal Helpers //////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
 
     struct StatusNotificationTagReservation {
         std::vector<winrt::hstring> TagsToRemove;
@@ -82,10 +88,13 @@ private:
                                    std::wstring const& fallbackTitle,
                                    std::wstring const& fallbackBody,
                                    FallbackNotificationType fallbackType);
-    void ShowFallbackNotification(std::wstring const& fallbackTitle, std::wstring const& fallbackBody, FallbackNotificationType fallbackType);
+    void ShowFallbackNotification(std::wstring const& fallbackTitle,
+                                  std::wstring const& fallbackBody,
+                                  FallbackNotificationType fallbackType);
 
-    /* Member Variables */
-    /*------------------------------------------------------------------------------------------------------------------*/
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
 
     winrt::Microsoft::Windows::AppNotifications::AppNotificationManager m_notificationManager{nullptr};
     winrt::event_token m_notificationInvokedToken{};

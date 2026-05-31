@@ -13,9 +13,9 @@ using namespace winrt::Microsoft::UI::Xaml;
 using namespace winrt::Microsoft::UI::Xaml::Controls;
 
 namespace winrt::AudioPlaybackConnector2::implementation {
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Constructors / Destructor ////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Constructors / Destructor /////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 DevicePickerView::DevicePickerView() {
     InitializeComponent();
@@ -33,11 +33,15 @@ DevicePickerView::DevicePickerView() {
     });
 }
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Public Interface /////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
-void DevicePickerView::Initialize(std::shared_ptr<DeviceManager> manager, std::function<void()> onClose, std::function<void(winrt::hstring)> onDeviceSelected, std::function<void(winrt::hstring)> onDeviceDisconnect, std::function<void(winrt::hstring)> onDeviceReconnect) {
+void DevicePickerView::Initialize(std::shared_ptr<DeviceManager> manager,
+                                  std::function<void()> onClose,
+                                  std::function<void(winrt::hstring)> onDeviceSelected,
+                                  std::function<void(winrt::hstring)> onDeviceDisconnect,
+                                  std::function<void(winrt::hstring)> onDeviceReconnect) {
     m_manager = manager;
     m_onClose = std::move(onClose);
     m_onDeviceSelected = std::move(onDeviceSelected);
@@ -83,13 +87,15 @@ void DevicePickerView::LoadDevices() {
         m_findAllOp = winrt::Windows::Devices::Enumeration::DeviceInformation::FindAllAsync(selector);
     }
 
-    winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection> pendingOp{nullptr};
+    winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
+        pendingOp{nullptr};
     {
         std::lock_guard lock(m_findAllOpMutex);
         pendingOp = m_findAllOp;
     }
 
-    pendingOp.Completed([weak, dispatcher, listWasEmpty, requestId](auto const& sender, winrt::Windows::Foundation::AsyncStatus status) {
+    pendingOp.Completed([weak, dispatcher, listWasEmpty, requestId](auto const& sender,
+                                                                    winrt::Windows::Foundation::AsyncStatus status) {
         if (auto self = weak.get()) {
             std::lock_guard lock(self->m_findAllOpMutex);
             if (self->m_activeLoadRequestId.load() != requestId) {
@@ -110,8 +116,7 @@ void DevicePickerView::LoadDevices() {
         try {
             auto devices = sender.GetResults();
             bool enqueued = dispatcher.TryEnqueue([weak, devices, listWasEmpty, requestId]() {
-                if (auto self = weak.get())
-                    self->ApplyDeviceResults(devices, listWasEmpty, requestId);
+                if (auto self = weak.get()) self->ApplyDeviceResults(devices, listWasEmpty, requestId);
             });
             if (!enqueued) {
                 DebugTrace(L"[DevicePickerView] ERROR: failed to marshal ApplyDeviceResults to UI thread");
@@ -126,8 +131,7 @@ void DevicePickerView::LoadDevices() {
         } catch (...) {
             DebugTrace(L"[DevicePickerView] ERROR: FindAllAsync failed");
             bool enqueued = dispatcher.TryEnqueue([weak, listWasEmpty, requestId]() {
-                if (auto self = weak.get())
-                    self->OnDeviceEnumerationFailed(listWasEmpty, requestId);
+                if (auto self = weak.get()) self->OnDeviceEnumerationFailed(listWasEmpty, requestId);
             });
             if (!enqueued) {
                 DebugTrace(L"[DevicePickerView] ERROR: failed to marshal OnDeviceEnumerationFailed to UI thread");
@@ -166,11 +170,14 @@ void DevicePickerView::RefreshDeviceStates() {
     RebuildDeviceListFromCache();
 }
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Private Helpers /////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Private Helpers ///////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
-void DevicePickerView::ApplyDeviceResults(winrt::Windows::Devices::Enumeration::DeviceInformationCollection const& devices, bool listWasEmpty, uint64_t requestId) {
+void DevicePickerView::ApplyDeviceResults(
+    winrt::Windows::Devices::Enumeration::DeviceInformationCollection const& devices,
+    bool listWasEmpty,
+    uint64_t requestId) {
     if (m_loadDevicesRequestId.load() != requestId) return;
     if (m_activeLoadRequestId.load() != requestId) return;
     if (m_loadDevicesCancelled) {
@@ -327,16 +334,18 @@ ListViewItem DevicePickerView::BuildDeviceListItem(winrt::Windows::Devices::Enum
     return item;
 }
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Event Handlers ///////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Event Handlers ////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
-void DevicePickerView::OnCloseClicked(winrt::Windows::Foundation::IInspectable const&, winrt::Microsoft::UI::Xaml::RoutedEventArgs const&) {
+void DevicePickerView::OnCloseClicked(winrt::Windows::Foundation::IInspectable const&,
+                                      winrt::Microsoft::UI::Xaml::RoutedEventArgs const&) {
     m_loadDevicesCancelled.store(true);
     if (m_onClose) m_onClose();
 }
 
-void DevicePickerView::OnDeviceSelected(winrt::Windows::Foundation::IInspectable const&, winrt::Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const&) {
+void DevicePickerView::OnDeviceSelected(winrt::Windows::Foundation::IInspectable const&,
+                                        winrt::Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const&) {
     if (m_suppressSelectionChanged.load()) return;
     auto selected = DeviceList().SelectedItem();
     if (!selected) return;

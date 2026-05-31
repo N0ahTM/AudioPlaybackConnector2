@@ -12,7 +12,7 @@ AllowShortLoopsOnASingleLine: false
 BinPackArguments: false
 BinPackParameters: false
 BreakBeforeBraces: Attach
-ColumnLimit: 0
+ColumnLimit: 120
 IndentCaseLabels: true
 IndentWidth: 4
 NamespaceIndentation: None

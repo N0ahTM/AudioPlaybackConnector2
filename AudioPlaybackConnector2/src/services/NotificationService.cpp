@@ -8,8 +8,9 @@
 
 namespace AppNotifications = winrt::Microsoft::Windows::AppNotifications;
 
-/* Helpers */
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Helpers ///////////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 namespace {
 
@@ -53,7 +54,8 @@ std::wstring XmlEscape(std::wstring_view value) {
 }
 
 winrt::hstring ToastArguments(std::wstring_view action, winrt::hstring const& deviceId = {}) {
-    auto arguments = winrt::hstring(L"action=") + winrt::Windows::Foundation::Uri::EscapeComponent(winrt::hstring(action));
+    auto arguments =
+        winrt::hstring(L"action=") + winrt::Windows::Foundation::Uri::EscapeComponent(winrt::hstring(action));
     if (!deviceId.empty()) {
         arguments = arguments + L"&deviceId=" + winrt::Windows::Foundation::Uri::EscapeComponent(deviceId);
     }
@@ -98,7 +100,8 @@ std::unordered_map<std::wstring, std::wstring> ParseToastArgumentString(winrt::h
     return result;
 }
 
-std::optional<std::wstring> FindToastArgument(std::unordered_map<std::wstring, std::wstring> const& arguments, std::wstring_view key) {
+std::optional<std::wstring> FindToastArgument(std::unordered_map<std::wstring, std::wstring> const& arguments,
+                                              std::wstring_view key) {
     auto it = arguments.find(std::wstring(key));
     if (it == arguments.end() || it->second.empty()) return std::nullopt;
     return it->second;
@@ -166,17 +169,17 @@ std::wstring BuildToastXml(std::wstring_view title,
 
 } // namespace
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Constructors / Destructor //////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Constructors / Destructor /////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 NotificationService::~NotificationService() {
     Teardown();
 }
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Lifecycle //////////////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Lifecycle /////////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 bool NotificationService::Initialize(winrt::hstring const& appName, winrt::Windows::Foundation::Uri const& logoUri) {
     try {
@@ -213,7 +216,9 @@ bool NotificationService::Initialize(winrt::hstring const& appName, winrt::Windo
         DebugTrace(L"[NotificationService] AppNotificationManager registered");
         return true;
     } catch (winrt::hresult_error const& ex) {
-        DebugTrace(L"[NotificationService] AppNotificationManager registration failed: 0x{0:X} {1}", static_cast<uint32_t>(ex.code()), ex.message());
+        DebugTrace(L"[NotificationService] AppNotificationManager registration failed: 0x{0:X} {1}",
+                   static_cast<uint32_t>(ex.code()),
+                   ex.message());
         Teardown();
         return false;
     } catch (...) {
@@ -249,9 +254,9 @@ void NotificationService::Teardown() noexcept {
     }
 }
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Callbacks //////////////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Callbacks /////////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 void NotificationService::SetReconnectCallback(ReconnectRequestedCallback callback) {
     auto guard = m_lock.lock_exclusive();
@@ -263,9 +268,9 @@ void NotificationService::SetFallbackNotifier(FallbackNotificationCallback callb
     m_fallbackNotifier = std::move(callback);
 }
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Internal Helpers //////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Internal Helpers //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 NotificationService::StatusNotificationTagReservation NotificationService::ReserveStatusNotificationTag() {
     auto guard = m_lock.lock_exclusive();
@@ -332,7 +337,9 @@ winrt::fire_and_forget NotificationService::ShowToastOrFallbackAsync(std::wstrin
         notificationManager.Show(notification);
         co_return;
     } catch (winrt::hresult_error const& ex) {
-        DebugTrace(L"[NotificationService] AppNotificationManager.Show failed: 0x{0:X} {1}", static_cast<uint32_t>(ex.code()), ex.message());
+        DebugTrace(L"[NotificationService] AppNotificationManager.Show failed: 0x{0:X} {1}",
+                   static_cast<uint32_t>(ex.code()),
+                   ex.message());
     } catch (...) {
         DebugTrace(L"[NotificationService] AppNotificationManager.Show failed: unknown exception");
     }
@@ -359,7 +366,9 @@ void NotificationService::ShowStatusToastOrFallback(std::wstring const& xml,
                              fallbackType);
 }
 
-void NotificationService::ShowFallbackNotification(std::wstring const& fallbackTitle, std::wstring const& fallbackBody, FallbackNotificationType fallbackType) {
+void NotificationService::ShowFallbackNotification(std::wstring const& fallbackTitle,
+                                                   std::wstring const& fallbackBody,
+                                                   FallbackNotificationType fallbackType) {
     FallbackNotificationCallback fallbackNotifier;
     {
         auto guard = m_lock.lock_shared();
@@ -372,14 +381,15 @@ void NotificationService::ShowFallbackNotification(std::wstring const& fallbackT
     }
 }
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Show Notifications ////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Show Notifications ////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 void NotificationService::ShowAppStarted() {
     auto title = NotificationText("Notification_AppStarted_Title");
     auto body = NotificationText("Notification_AppStarted_Body");
-    auto xml = BuildToastXml(title, body, L"", L"", L"", L"ms-appx:///Images/ToastInfo.png", L"<audio silent=\"true\"/>");
+    auto xml =
+        BuildToastXml(title, body, L"", L"", L"", L"ms-appx:///Images/ToastInfo.png", L"<audio silent=\"true\"/>");
     ShowStatusToastOrFallback(xml,
                               ExpirationFromNow(std::chrono::seconds(7)),
                               std::wstring(_("AppName")),
@@ -478,9 +488,9 @@ void NotificationService::ShowUpdateAvailable(std::wstring const& latestVersion)
                               FallbackNotificationType::Info);
 }
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Event Handler //////////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Event Handler /////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 void NotificationService::OnNotificationInvoked(AppNotifications::AppNotificationActivatedEventArgs const& args) {
     try {
@@ -502,17 +512,22 @@ void NotificationService::OnNotificationInvoked(AppNotifications::AppNotificatio
         }
 
         if (!deviceId) {
-            DebugTrace(L"[NotificationService] App notification invoked without deviceId: {0}", std::wstring(args.Argument()));
+            DebugTrace(L"[NotificationService] App notification invoked without deviceId: {0}",
+                       std::wstring(args.Argument()));
             return;
         }
 
-        DebugTrace(L"[NotificationService] App notification invoked: action={0}, deviceId={1}", action.value_or(L""), *deviceId);
+        DebugTrace(L"[NotificationService] App notification invoked: action={0}, deviceId={1}",
+                   action.value_or(L""),
+                   *deviceId);
 
         if (action && (*action == L"reconnect" || *action == L"retry") && reconnectCallback) {
             reconnectCallback(winrt::hstring(*deviceId));
         }
     } catch (winrt::hresult_error const& ex) {
-        DebugTrace(L"[NotificationService] App notification activation failed: 0x{0:X} {1}", static_cast<uint32_t>(ex.code()), ex.message());
+        DebugTrace(L"[NotificationService] App notification activation failed: 0x{0:X} {1}",
+                   static_cast<uint32_t>(ex.code()),
+                   ex.message());
     } catch (...) {
         DebugTrace(L"[NotificationService] App notification activation failed: unknown exception");
     }

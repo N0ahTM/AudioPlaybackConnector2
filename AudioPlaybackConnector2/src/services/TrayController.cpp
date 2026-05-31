@@ -9,9 +9,9 @@ using namespace winrt;
 using namespace winrt::Microsoft::UI::Xaml;
 using namespace winrt::Microsoft::UI::Xaml::Controls;
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Constructors / Destructor //////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Constructors / Destructor /////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 TrayController::TrayController() = default;
 
@@ -19,9 +19,9 @@ TrayController::~TrayController() {
     Teardown();
 }
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Lifecycle //////////////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Lifecycle /////////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 void TrayController::Initialize(HWND hwnd, winrt::Microsoft::UI::Xaml::Window mainWindow) {
     m_isTearingDown.store(false);
@@ -47,15 +47,26 @@ void TrayController::Initialize(HWND hwnd, winrt::Microsoft::UI::Xaml::Window ma
     auto root = m_mainWindow.Content().as<Controls::Grid>();
     if (root && root.XamlRoot()) {
         m_contextMenu = std::make_unique<TrayContextMenu>();
-        m_contextMenu->Initialize(root, [weak]() {
-            if (auto self = weak.lock(); self && !self->m_isTearingDown.load() && self->m_showSettingsCallback) self->m_showSettingsCallback(); }, [weak]() {
-            if (auto self = weak.lock(); self && !self->m_isTearingDown.load()) self->LaunchBluetoothSettings(); }, [weak]() {
-            if (auto self = weak.lock(); self && !self->m_isTearingDown.load() && self->m_exitCallback) self->m_exitCallback(); }, [weak]() {
-            auto self = weak.lock();
-            if (!self || self->m_isTearingDown.load()) return;
-            if (self->m_hwnd && IsWindow(self->m_hwnd)) {
-                SetWindowPos(self->m_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-            } });
+        m_contextMenu->Initialize(
+            root,
+            [weak]() {
+                if (auto self = weak.lock(); self && !self->m_isTearingDown.load() && self->m_showSettingsCallback)
+                    self->m_showSettingsCallback();
+            },
+            [weak]() {
+                if (auto self = weak.lock(); self && !self->m_isTearingDown.load()) self->LaunchBluetoothSettings();
+            },
+            [weak]() {
+                if (auto self = weak.lock(); self && !self->m_isTearingDown.load() && self->m_exitCallback)
+                    self->m_exitCallback();
+            },
+            [weak]() {
+                auto self = weak.lock();
+                if (!self || self->m_isTearingDown.load()) return;
+                if (self->m_hwnd && IsWindow(self->m_hwnd)) {
+                    SetWindowPos(self->m_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                }
+            });
         DebugTrace(L"[TrayController] TrayContextMenu initialized");
     }
 }
@@ -98,11 +109,16 @@ void TrayController::Teardown() noexcept {
     m_lastLeftDoubleClickTick = 0;
 }
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Callbacks //////////////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Callbacks /////////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
-void TrayController::SetCallbacks(ShowSettingsCallback showSettings, ExitCallback exit, DeviceActionCallback connect, DeviceActionCallback disconnect, DeviceActionCallback reconnect, ToggleDeviceCallback toggleDevice) {
+void TrayController::SetCallbacks(ShowSettingsCallback showSettings,
+                                  ExitCallback exit,
+                                  DeviceActionCallback connect,
+                                  DeviceActionCallback disconnect,
+                                  DeviceActionCallback reconnect,
+                                  ToggleDeviceCallback toggleDevice) {
     m_showSettingsCallback = std::move(showSettings);
     m_exitCallback = std::move(exit);
     m_connectCallback = std::move(connect);
@@ -111,9 +127,9 @@ void TrayController::SetCallbacks(ShowSettingsCallback showSettings, ExitCallbac
     m_toggleDeviceCallback = std::move(toggleDevice);
 }
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Actions ////////////////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Actions ///////////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 void TrayController::ShowTrayMenu() {
     if (m_isTearingDown.load()) return;
@@ -333,18 +349,15 @@ void TrayController::HandleTrayMessage([[maybe_unused]] WPARAM wParam, LPARAM lP
         case NIN_BALLOONSHOW:
         case NIN_BALLOONHIDE:
         case NIN_BALLOONTIMEOUT:
-        case NIN_BALLOONUSERCLICK:
-            break;
+        case NIN_BALLOONUSERCLICK: break;
 
-        default:
-            DebugTrace(L"[TrayController] Unhandled tray message: 0x{0:X}", loword);
-            break;
+        default: DebugTrace(L"[TrayController] Unhandled tray message: 0x{0:X}", loword); break;
     }
 }
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Internal Helpers //////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Internal Helpers //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 void TrayController::EnsureDevicePickerViewCreated() {
     if (m_devicePickerView) {
@@ -364,24 +377,33 @@ void TrayController::EnsureDevicePickerViewCreated() {
     m_devicePickerView = winrt::AudioPlaybackConnector2::DevicePickerView();
     auto impl = m_devicePickerView.as<winrt::AudioPlaybackConnector2::implementation::DevicePickerView>();
     auto weak = weak_from_this();
-    impl->Initialize(m_deviceManager, [weak]() {
+    impl->Initialize(
+        m_deviceManager,
+        [weak]() {
             auto self = weak.lock();
-            if (self && !self->m_isTearingDown.load() && self->m_pickerFlyout) self->m_pickerFlyout.Hide(); }, [weak](winrt::hstring id) {
+            if (self && !self->m_isTearingDown.load() && self->m_pickerFlyout) self->m_pickerFlyout.Hide();
+        },
+        [weak](winrt::hstring id) {
             auto self = weak.lock();
             if (!self || self->m_isTearingDown.load()) return;
             DebugTrace(L"[TrayController] User selected device: {0}", std::wstring(id));
             if (self->m_connectCallback) self->m_connectCallback(id);
-            if (self->m_pickerFlyout) self->m_pickerFlyout.Hide(); }, [weak](winrt::hstring id) {
+            if (self->m_pickerFlyout) self->m_pickerFlyout.Hide();
+        },
+        [weak](winrt::hstring id) {
             auto self = weak.lock();
             if (!self || self->m_isTearingDown.load()) return;
             DebugTrace(L"[TrayController] User disconnected device: {0}", std::wstring(id));
             if (self->m_pickerFlyout) self->m_pickerFlyout.Hide();
-            if (self->m_disconnectCallback) self->m_disconnectCallback(id); }, [weak](winrt::hstring id) {
+            if (self->m_disconnectCallback) self->m_disconnectCallback(id);
+        },
+        [weak](winrt::hstring id) {
             auto self = weak.lock();
             if (!self || self->m_isTearingDown.load()) return;
             DebugTrace(L"[TrayController] User reconnected device: {0}", std::wstring(id));
             if (self->m_reconnectCallback) self->m_reconnectCallback(id);
-            if (self->m_pickerFlyout) self->m_pickerFlyout.Hide(); });
+            if (self->m_pickerFlyout) self->m_pickerFlyout.Hide();
+        });
 }
 
 void TrayController::PreloadDevicePicker() {
@@ -429,7 +451,8 @@ Controls::Flyout TrayController::CreatePickerFlyout() {
         auto self = weak.lock();
         if (self && !self->m_isTearingDown.load() && self->m_pickerFlyout) {
             self->m_pickerFlyoutState.store(PickerFlyoutState::Open);
-            StripFlyoutPresenterStyle(self->m_pickerFlyout.Content().as<winrt::Microsoft::UI::Xaml::DependencyObject>());
+            StripFlyoutPresenterStyle(
+                self->m_pickerFlyout.Content().as<winrt::Microsoft::UI::Xaml::DependencyObject>());
         }
     });
 
@@ -439,7 +462,8 @@ Controls::Flyout TrayController::CreatePickerFlyout() {
             if (!self || self->m_isTearingDown.load()) return;
             self->m_pickerFlyoutState.store(PickerFlyoutState::Closing);
             if (self->m_devicePickerView) {
-                auto impl = self->m_devicePickerView.as<winrt::AudioPlaybackConnector2::implementation::DevicePickerView>();
+                auto impl =
+                    self->m_devicePickerView.as<winrt::AudioPlaybackConnector2::implementation::DevicePickerView>();
                 impl->CancelLoadDevices();
             }
             if (self->m_pickerFlyout) {
@@ -478,11 +502,9 @@ std::optional<POINT> TrayController::CalculateSettingsWindowPosition() const {
     if (x < rcWork.left) x = rcWork.left;
     if (x + c_settingsWindowWidth > rcWork.right) x = rcWork.right - c_settingsWindowWidth;
 
-    if (y + c_settingsWindowHeight > rcWork.bottom)
-        y = rect->top - c_settingsWindowHeight;
+    if (y + c_settingsWindowHeight > rcWork.bottom) y = rect->top - c_settingsWindowHeight;
 
-    if (y < rcWork.top)
-        y = rcWork.bottom - c_settingsWindowHeight;
+    if (y < rcWork.top) y = rcWork.bottom - c_settingsWindowHeight;
 
     return POINT{x, y};
 }
@@ -496,7 +518,8 @@ void TrayController::OnTrayIconDoubleClick() {
 }
 
 void TrayController::LaunchBluetoothSettings() {
-    auto op = winrt::Windows::System::Launcher::LaunchUriAsync(winrt::Windows::Foundation::Uri(L"ms-settings:bluetooth"));
+    auto op =
+        winrt::Windows::System::Launcher::LaunchUriAsync(winrt::Windows::Foundation::Uri(L"ms-settings:bluetooth"));
     op.Completed([](auto const& sender, auto const&) {
         if (!sender.GetResults()) {
             DebugTrace(L"[TrayController] LaunchUriAsync(ms-settings:bluetooth) failed");

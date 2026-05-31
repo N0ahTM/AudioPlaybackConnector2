@@ -24,9 +24,10 @@ std::wstring BuildVersionText() {
     std::wstring label(_("About_Version"));
     try {
         auto version = winrt::Windows::ApplicationModel::Package::Current().Id().Version();
-        auto versionText = version.Revision == 0
-                               ? std::format(L"{}.{}.{}", version.Major, version.Minor, version.Build)
-                               : std::format(L"{}.{}.{}.{}", version.Major, version.Minor, version.Build, version.Revision);
+        auto versionText =
+            version.Revision == 0
+                ? std::format(L"{}.{}.{}", version.Major, version.Minor, version.Build)
+                : std::format(L"{}.{}.{}.{}", version.Major, version.Minor, version.Build, version.Revision);
         return std::format(L"{} {}", label, versionText);
     } catch (...) {
         return label;
@@ -52,16 +53,15 @@ std::wstring ReplacePlaceholders(std::wstring_view templateStr, std::wstring_vie
 
 namespace winrt::AudioPlaybackConnector2::implementation {
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Constructors / Destructor ////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Constructors / Destructor /////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
-SettingsWindow::SettingsWindow() {
-}
+SettingsWindow::SettingsWindow() {}
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Event Handlers ///////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Event Handlers ////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 void SettingsWindow::RootGrid_Loaded(IInspectable const&, RoutedEventArgs const&) {
     // Localize static text before the window becomes visible.
@@ -225,7 +225,8 @@ void SettingsWindow::ShowUpdateCheckResult(UpdateCheckResult const& result) {
         case UpdateCheckStatus::UpdateAvailable:
             UpdateInfoBar().Severity(InfoBarSeverity::Informational);
             UpdateInfoBar().Title(winrt::hstring(_("Settings_UpdateAvailable_Title")));
-            UpdateInfoBar().Message(winrt::hstring(ReplacePlaceholders(_("Settings_UpdateAvailable_Message"), result.LatestVersion)));
+            UpdateInfoBar().Message(
+                winrt::hstring(ReplacePlaceholders(_("Settings_UpdateAvailable_Message"), result.LatestVersion)));
             OpenAppInstallerButton().Visibility(Visibility::Visible);
             break;
         case UpdateCheckStatus::UpToDate:
@@ -237,18 +238,17 @@ void SettingsWindow::ShowUpdateCheckResult(UpdateCheckResult const& result) {
         default:
             UpdateInfoBar().Severity(InfoBarSeverity::Error);
             UpdateInfoBar().Title(winrt::hstring(_("Settings_UpdateFailed_Title")));
-            UpdateInfoBar().Message(result.ErrorMessage.empty()
-                                        ? winrt::hstring(_("Settings_UpdateFailed_Message"))
-                                        : winrt::hstring(result.ErrorMessage));
+            UpdateInfoBar().Message(result.ErrorMessage.empty() ? winrt::hstring(_("Settings_UpdateFailed_Message"))
+                                                                : winrt::hstring(result.ErrorMessage));
             break;
     }
 
     UpdateInfoBar().IsOpen(true);
 }
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Startup Integration //////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Startup Integration ///////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 winrt::fire_and_forget SettingsWindow::SyncStartupTaskStateAsync() {
     auto lifetime = get_strong();
@@ -256,7 +256,8 @@ winrt::fire_and_forget SettingsWindow::SyncStartupTaskStateAsync() {
     auto requestId = m_startupRequestId.load();
 
     try {
-        auto task = co_await winrt::Windows::ApplicationModel::StartupTask::GetAsync(L"AudioPlaybackConnector2StartupTask");
+        auto task =
+            co_await winrt::Windows::ApplicationModel::StartupTask::GetAsync(L"AudioPlaybackConnector2StartupTask");
         bool enabled = (task.State() == winrt::Windows::ApplicationModel::StartupTaskState::Enabled ||
                         task.State() == winrt::Windows::ApplicationModel::StartupTaskState::EnabledByPolicy);
 
@@ -284,7 +285,8 @@ winrt::fire_and_forget SettingsWindow::ApplyStartWithWindowsAsync(bool on) {
     bool revertToggle = false;
 
     try {
-        auto task = co_await winrt::Windows::ApplicationModel::StartupTask::GetAsync(L"AudioPlaybackConnector2StartupTask");
+        auto task =
+            co_await winrt::Windows::ApplicationModel::StartupTask::GetAsync(L"AudioPlaybackConnector2StartupTask");
         bool currentlyEnabled = (task.State() == winrt::Windows::ApplicationModel::StartupTaskState::Enabled ||
                                  task.State() == winrt::Windows::ApplicationModel::StartupTaskState::EnabledByPolicy);
         if (on == currentlyEnabled) {
@@ -354,9 +356,9 @@ winrt::fire_and_forget SettingsWindow::ApplyStartWithWindowsAsync(bool on) {
     }
 }
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Private Implementation ///////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Private Implementation ////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 void SettingsWindow::RebuildDeviceList() {
     DevicesPanel().Children().Clear();
@@ -459,9 +461,9 @@ void SettingsWindow::RebuildDeviceList() {
     }
 }
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Public Interface /////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 void SettingsWindow::SetTargetPosition(int32_t x, int32_t y) {
     m_targetX = x;

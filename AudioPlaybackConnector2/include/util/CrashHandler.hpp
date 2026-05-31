@@ -8,14 +8,15 @@
 namespace util {
 namespace crash {
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Private Interface ///////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Private Interface /////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 namespace details {
 
-/* Variables */
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Variables /////////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 inline constexpr DWORD c_exceptionCodeTerminate = 0xE0000001;
 inline constexpr DWORD c_exceptionCodeInvalidParameter = 0xE0000002;
@@ -29,8 +30,9 @@ inline std::terminate_handler g_previousTerminate = nullptr;
 inline _invalid_parameter_handler g_previousInvalidParameter = nullptr;
 inline void (*g_previousSigAbrtHandler)(int) = nullptr;
 
-/* Getter / Setter */
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Getter / Setter ///////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 inline std::wstring SafeResource(std::string_view key, std::wstring_view fallback) {
     auto value = _(key);
@@ -40,8 +42,9 @@ inline std::wstring SafeResource(std::string_view key, std::wstring_view fallbac
     return std::wstring(fallback);
 }
 
-/* Controller */
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Controller ////////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 inline std::wstring BuildTimestampForFilename() {
     SYSTEMTIME st{};
@@ -76,10 +79,8 @@ inline std::wstring UrlEncode(std::wstring_view text) {
     encoded.reserve(utf8.size() * 3);
     static constexpr char hex[] = "0123456789ABCDEF";
     for (unsigned char ch : utf8) {
-        if ((ch >= 'a' && ch <= 'z') ||
-            (ch >= 'A' && ch <= 'Z') ||
-            (ch >= '0' && ch <= '9') ||
-            ch == '-' || ch == '_' || ch == '.' || ch == '~') {
+        if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' ||
+            ch == '_' || ch == '.' || ch == '~') {
             encoded.push_back(static_cast<char>(ch));
         } else {
             encoded.push_back('%');
@@ -100,9 +101,9 @@ inline void ReplaceAll(std::wstring& value, std::wstring_view needle, std::wstri
     }
 }
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Environment / Metadata //////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Environment / Metadata ////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 inline std::wstring GetWindowsVersionString() {
     DWORD major = 0;
@@ -139,8 +140,10 @@ inline std::wstring GetAppVersionString() {
     using GetFileVersionInfoWFn = BOOL(WINAPI*)(LPCWSTR, DWORD, DWORD, LPVOID);
     using VerQueryValueWFn = BOOL(WINAPI*)(LPCVOID, LPCWSTR, LPVOID*, PUINT);
 
-    auto getFileVersionInfoSize = reinterpret_cast<GetFileVersionInfoSizeWFn>(GetProcAddress(versionDll, "GetFileVersionInfoSizeW"));
-    auto getFileVersionInfo = reinterpret_cast<GetFileVersionInfoWFn>(GetProcAddress(versionDll, "GetFileVersionInfoW"));
+    auto getFileVersionInfoSize =
+        reinterpret_cast<GetFileVersionInfoSizeWFn>(GetProcAddress(versionDll, "GetFileVersionInfoSizeW"));
+    auto getFileVersionInfo =
+        reinterpret_cast<GetFileVersionInfoWFn>(GetProcAddress(versionDll, "GetFileVersionInfoW"));
     auto verQueryValue = reinterpret_cast<VerQueryValueWFn>(GetProcAddress(versionDll, "VerQueryValueW"));
     if (!getFileVersionInfoSize || !getFileVersionInfo || !verQueryValue) {
         return L"unknown";
@@ -157,8 +160,8 @@ inline std::wstring GetAppVersionString() {
 
     VS_FIXEDFILEINFO* fixedInfo = nullptr;
     UINT fixedInfoLen = 0;
-    if (!verQueryValue(versionData.data(), L"\\", reinterpret_cast<void**>(&fixedInfo), &fixedInfoLen) ||
-        !fixedInfo || fixedInfoLen < sizeof(VS_FIXEDFILEINFO)) {
+    if (!verQueryValue(versionData.data(), L"\\", reinterpret_cast<void**>(&fixedInfo), &fixedInfoLen) || !fixedInfo ||
+        fixedInfoLen < sizeof(VS_FIXEDFILEINFO)) {
         return L"unknown";
     }
 
@@ -169,18 +172,13 @@ inline std::wstring GetAppVersionString() {
                        LOWORD(fixedInfo->dwFileVersionLS));
 }
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Artifact Writers ///////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Artifact Writers //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 inline void WriteUtf8File(std::filesystem::path const& path, std::wstring_view contents) {
-    auto file = CreateFileW(path.c_str(),
-                            GENERIC_WRITE,
-                            FILE_SHARE_READ,
-                            nullptr,
-                            CREATE_ALWAYS,
-                            FILE_ATTRIBUTE_NORMAL,
-                            nullptr);
+    auto file = CreateFileW(
+        path.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE) return;
     wil::unique_hfile handle(file);
 
@@ -224,7 +222,8 @@ inline std::wstring ReadLogTail(std::filesystem::path const& logPath, std::size_
 
     std::string bytes(static_cast<std::size_t>(bytesToRead), '\0');
     DWORD bytesRead = 0;
-    if (!ReadFile(handle.get(), bytes.data(), static_cast<DWORD>(bytes.size()), &bytesRead, nullptr) || bytesRead == 0) {
+    if (!ReadFile(handle.get(), bytes.data(), static_cast<DWORD>(bytes.size()), &bytesRead, nullptr) ||
+        bytesRead == 0) {
         return {};
     }
     bytes.resize(bytesRead);
@@ -258,13 +257,8 @@ inline MiniDumpWriteResult WriteMiniDump(wchar_t const* dumpPath, EXCEPTION_POIN
     auto fn = reinterpret_cast<MiniDumpWriteDumpFn>(GetProcAddress(dbghelp, "MiniDumpWriteDump"));
     if (!fn) return {false, GetLastError()};
 
-    auto dumpFile = CreateFileW(dumpPath,
-                                GENERIC_WRITE,
-                                FILE_SHARE_READ,
-                                nullptr,
-                                CREATE_ALWAYS,
-                                FILE_ATTRIBUTE_NORMAL,
-                                nullptr);
+    auto dumpFile =
+        CreateFileW(dumpPath, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (dumpFile == INVALID_HANDLE_VALUE) return {false, GetLastError()};
     wil::unique_hfile dumpHandle(dumpFile);
 
@@ -273,11 +267,8 @@ inline MiniDumpWriteResult WriteMiniDump(wchar_t const* dumpPath, EXCEPTION_POIN
     mei.ExceptionPointers = exceptionPointers;
     mei.ClientPointers = FALSE;
 
-    auto dumpType = static_cast<MINIDUMP_TYPE>(
-        MiniDumpWithThreadInfo |
-        MiniDumpWithUnloadedModules |
-        MiniDumpWithIndirectlyReferencedMemory |
-        MiniDumpScanMemory);
+    auto dumpType = static_cast<MINIDUMP_TYPE>(MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules |
+                                               MiniDumpWithIndirectlyReferencedMemory | MiniDumpScanMemory);
 
     auto ok = fn(GetCurrentProcess(),
                  GetCurrentProcessId(),
@@ -296,55 +287,53 @@ inline MiniDumpWriteResult WriteMiniDump(std::filesystem::path const& dumpPath, 
     return WriteMiniDump(dumpPath.c_str(), exceptionPointers);
 }
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// User Reporting //////////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// User Reporting ////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
-inline std::wstring BuildIssueUrl(DWORD exceptionCode, std::filesystem::path const& reportPath, std::filesystem::path const& dumpPath) {
+inline std::wstring
+BuildIssueUrl(DWORD exceptionCode, std::filesystem::path const& reportPath, std::filesystem::path const& dumpPath) {
     constexpr std::wstring_view c_issueBase = L"https://github.com/N0ahTM/AudioPlaybackConnector2/issues/new";
     auto title = std::format(L"Crash: 0x{:08X} in AudioPlaybackConnector2", exceptionCode);
-    auto body = std::format(
-        L"## Crash report\r\n"
-        L"- Exception code: `0x{:08X}`\r\n"
-        L"- App version: `{}`\r\n"
-        L"- Windows version: `{}`\r\n"
-        L"- Process id: `{}`\r\n"
-        L"\r\n"
-        L"## Local artifacts\r\n"
-        L"- Crash report: `{}`\r\n"
-        L"- Minidump: `{}`\r\n"
-        L"- App log: `{}`\r\n"
-        L"\r\n"
-        L"## What happened\r\n"
-        L"<!-- Bitte kurz beschreiben, was direkt vor dem Absturz passiert ist. -->\r\n",
-        exceptionCode,
-        GetAppVersionString(),
-        GetWindowsVersionString(),
-        GetCurrentProcessId(),
-        reportPath.wstring(),
-        dumpPath.wstring(),
-        GetCachedLogPath().wstring());
+    auto body = std::format(L"## Crash report\r\n"
+                            L"- Exception code: `0x{:08X}`\r\n"
+                            L"- App version: `{}`\r\n"
+                            L"- Windows version: `{}`\r\n"
+                            L"- Process id: `{}`\r\n"
+                            L"\r\n"
+                            L"## Local artifacts\r\n"
+                            L"- Crash report: `{}`\r\n"
+                            L"- Minidump: `{}`\r\n"
+                            L"- App log: `{}`\r\n"
+                            L"\r\n"
+                            L"## What happened\r\n"
+                            L"<!-- Bitte kurz beschreiben, was direkt vor dem Absturz passiert ist. -->\r\n",
+                            exceptionCode,
+                            GetAppVersionString(),
+                            GetWindowsVersionString(),
+                            GetCurrentProcessId(),
+                            reportPath.wstring(),
+                            dumpPath.wstring(),
+                            GetCachedLogPath().wstring());
 
-    return std::format(L"{}?title={}&body={}",
-                       c_issueBase,
-                       UrlEncode(title),
-                       UrlEncode(body));
+    return std::format(L"{}?title={}&body={}", c_issueBase, UrlEncode(title), UrlEncode(body));
 }
 
-inline void ShowCrashDialogAndOfferIssue(DWORD exceptionCode, std::filesystem::path const& reportPath, std::filesystem::path const& dumpPath) {
+inline void ShowCrashDialogAndOfferIssue(DWORD exceptionCode,
+                                         std::filesystem::path const& reportPath,
+                                         std::filesystem::path const& dumpPath) {
     auto title = SafeResource("CrashDialogTitle", L"AudioPlaybackConnector2 crashed");
     auto body = SafeResource(
         "CrashDialogBody",
-        L"AudioPlaybackConnector2 crashed unexpectedly.\n\nError code: 0x{0:08X}\nCrash report: {1}\nMinidump: {2}\n\nYes = Open prefilled GitHub issue\nNo = Open crash folder\nCancel = Close");
+        L"AudioPlaybackConnector2 crashed unexpectedly.\n\nError code: 0x{0:08X}\nCrash report: {1}\nMinidump: "
+        L"{2}\n\nYes = Open prefilled GitHub issue\nNo = Open crash folder\nCancel = Close");
     auto exceptionCodeString = std::format(L"{:08X}", exceptionCode);
     ReplaceAll(body, L"{0:08X}", exceptionCodeString);
     ReplaceAll(body, L"{1}", reportPath.wstring());
     ReplaceAll(body, L"{2}", dumpPath.wstring());
 
-    int result = MessageBoxW(nullptr,
-                             body.c_str(),
-                             title.c_str(),
-                             MB_YESNOCANCEL | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
+    int result = MessageBoxW(
+        nullptr, body.c_str(), title.c_str(), MB_YESNOCANCEL | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
     if (result == IDYES) {
         auto issueUrl = BuildIssueUrl(exceptionCode, reportPath, dumpPath);
         ShellExecuteW(nullptr, L"open", issueUrl.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
@@ -356,11 +345,12 @@ inline void ShowCrashDialogAndOfferIssue(DWORD exceptionCode, std::filesystem::p
     }
 }
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Crash Processing ///////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Crash Processing //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
-inline void PersistCrashArtifacts(DWORD exceptionCode, EXCEPTION_POINTERS* exceptionPointers, std::wstring_view originLabel) {
+inline void
+PersistCrashArtifacts(DWORD exceptionCode, EXCEPTION_POINTERS* exceptionPointers, std::wstring_view originLabel) {
     auto crashDir = GetCrashDirectory();
     auto timestamp = BuildTimestampForFilename();
     auto reportPath = crashDir.empty() ? std::filesystem::path{} : (crashDir / std::format(L"Crash_{}.txt", timestamp));
@@ -393,7 +383,9 @@ inline void PersistCrashArtifacts(DWORD exceptionCode, EXCEPTION_POINTERS* excep
         GetWindowsVersionString(),
         util::GetModuleFsPath(nullptr).wstring(),
         GetCachedLogPath().wstring(),
-        dumpResult.Success ? dumpPath.wstring() : std::format(L"<failed (GetLastError={} / 0x{:08X})>", dumpResult.ErrorCode, dumpResult.ErrorCode));
+        dumpResult.Success
+            ? dumpPath.wstring()
+            : std::format(L"<failed (GetLastError={} / 0x{:08X})>", dumpResult.ErrorCode, dumpResult.ErrorCode));
 
     auto logTail = ReadLogTail(GetCachedLogPath(), 16 * 1024);
     if (!logTail.empty()) {
@@ -467,7 +459,9 @@ inline bool BuildCrashDumpPath(wchar_t* outPath, std::size_t outPathCount) noexc
                       st.wMilliseconds) > 0;
 }
 
-inline void PersistCrashArtifactsMinimal(DWORD exceptionCode, EXCEPTION_POINTERS* exceptionPointers, std::wstring_view originLabel) noexcept {
+inline void PersistCrashArtifactsMinimal(DWORD exceptionCode,
+                                         EXCEPTION_POINTERS* exceptionPointers,
+                                         std::wstring_view originLabel) noexcept {
     wchar_t origin[64]{};
     if (originLabel.empty()) {
         (void)wcscpy_s(origin, _countof(origin), L"unknown");
@@ -502,7 +496,8 @@ inline void PersistCrashArtifactsMinimal(DWORD exceptionCode, EXCEPTION_POINTERS
     OutputDebugStringW(debugLine);
 }
 
-inline void HandleFatalCrash(DWORD exceptionCode, EXCEPTION_POINTERS* exceptionPointers, std::wstring_view originLabel) {
+inline void
+HandleFatalCrash(DWORD exceptionCode, EXCEPTION_POINTERS* exceptionPointers, std::wstring_view originLabel) {
     DWORD safeExitCode = exceptionCode != 0 ? exceptionCode : 0xE0000000;
     g_lastExceptionCode.store(safeExitCode, std::memory_order_relaxed);
 
@@ -517,9 +512,9 @@ inline void HandleFatalCrash(DWORD exceptionCode, EXCEPTION_POINTERS* exceptionP
     TerminateProcess(GetCurrentProcess(), safeExitCode);
 }
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Exception Handlers //////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Exception Handlers ////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 inline LONG WINAPI VectoredHandler(PEXCEPTION_POINTERS exceptionPointers) {
     if (!exceptionPointers || !exceptionPointers->ExceptionRecord) {
@@ -527,9 +522,7 @@ inline LONG WINAPI VectoredHandler(PEXCEPTION_POINTERS exceptionPointers) {
     }
 
     auto const code = exceptionPointers->ExceptionRecord->ExceptionCode;
-    if (code == STATUS_HEAP_CORRUPTION ||
-        code == STATUS_STACK_BUFFER_OVERRUN ||
-        code == STATUS_ACCESS_VIOLATION ||
+    if (code == STATUS_HEAP_CORRUPTION || code == STATUS_STACK_BUFFER_OVERRUN || code == STATUS_ACCESS_VIOLATION ||
         code == STATUS_ILLEGAL_INSTRUCTION) {
         HandleFatalCrash(code, exceptionPointers, L"VectoredException");
     }
@@ -560,9 +553,9 @@ inline void SignalAbortHandler(int signalValue) {
 
 } // namespace details
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Public Interface ////////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 inline void InstallCrashHandlers() {
     bool expected = false;

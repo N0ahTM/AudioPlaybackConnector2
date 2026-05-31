@@ -4,8 +4,9 @@
 #include <util/Util.hpp>
 #include <resource.h>
 
-/* Helpers */
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Helpers ///////////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 static Gdiplus::Color GetSystemBrushColor(const wchar_t* resourceKey) {
     try {
@@ -121,9 +122,9 @@ static std::unique_ptr<Gdiplus::Bitmap> LoadBitmapResource(HINSTANCE hInst, int 
     return bitmap;
 }
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Public Interface /////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 void TrayIcon::Initialize(HWND hwnd, UINT callbackMessage) {
     m_hwnd = hwnd;
@@ -218,9 +219,9 @@ void TrayIcon::Remove() {
     Shell_NotifyIconW(NIM_DELETE, &m_nid);
 }
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Private Implementation ///////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Private Implementation ////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 void TrayIcon::CreateAllIcons() {
     auto baseImage = LoadBitmapResource(GetModuleHandleW(nullptr), IDB_TRAY_ICON);
@@ -292,7 +293,9 @@ void TrayIcon::RefreshIcon() {
         case TrayIconState::Idle: hIcon = m_hIdle[sizeIdx].get(); break;
         case TrayIconState::Connected: hIcon = m_hConnected[sizeIdx].get(); break;
         case TrayIconState::Error: hIcon = m_hError[sizeIdx].get(); break;
-        case TrayIconState::Connecting: hIcon = connectingFrame ? m_hConnecting2[sizeIdx].get() : m_hConnecting1[sizeIdx].get(); break;
+        case TrayIconState::Connecting:
+            hIcon = connectingFrame ? m_hConnecting2[sizeIdx].get() : m_hConnecting1[sizeIdx].get();
+            break;
     }
     m_nid.hIcon = hIcon;
     Shell_NotifyIconW(NIM_MODIFY, &m_nid);
@@ -322,15 +325,14 @@ wil::unique_hicon TrayIcon::CreateIconFromImage(Gdiplus::Bitmap& source, int siz
         attrs.SetColorMatrix(&matrix, Gdiplus::ColorMatrixFlagsDefault, Gdiplus::ColorAdjustTypeBitmap);
 
         Gdiplus::RectF destRect(0.0f, 0.0f, static_cast<Gdiplus::REAL>(size), static_cast<Gdiplus::REAL>(size));
-        graphics.DrawImage(
-            &source,
-            destRect,
-            0.0f,
-            0.0f,
-            static_cast<Gdiplus::REAL>(source.GetWidth()),
-            static_cast<Gdiplus::REAL>(source.GetHeight()),
-            Gdiplus::UnitPixel,
-            &attrs);
+        graphics.DrawImage(&source,
+                           destRect,
+                           0.0f,
+                           0.0f,
+                           static_cast<Gdiplus::REAL>(source.GetWidth()),
+                           static_cast<Gdiplus::REAL>(source.GetHeight()),
+                           Gdiplus::UnitPixel,
+                           &attrs);
     }
 
     HICON hIcon = CreateHIconFromBitmap(bitmap);

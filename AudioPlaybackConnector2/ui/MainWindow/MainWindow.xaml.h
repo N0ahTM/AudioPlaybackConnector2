@@ -9,6 +9,5 @@ struct MainWindow : MainWindowT<MainWindow> {
 } // namespace winrt::AudioPlaybackConnector2::implementation
 
 namespace winrt::AudioPlaybackConnector2::factory_implementation {
-struct MainWindow : MainWindowT<MainWindow, implementation::MainWindow> {
-};
+struct MainWindow : MainWindowT<MainWindow, implementation::MainWindow> {};
 } // namespace winrt::AudioPlaybackConnector2::factory_implementation

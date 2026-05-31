@@ -4,9 +4,9 @@
 #include <unordered_set>
 #include <util/Util.hpp>
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Device Connection Info ////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Device Connection Info ////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 struct DeviceConnectionInfo {
     winrt::Windows::Devices::Enumeration::DeviceInformation Device{nullptr};
@@ -16,28 +16,29 @@ struct DeviceConnectionInfo {
     bool IsOpen = false;
 };
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Device Manager ////////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Device Manager ////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 class DeviceManager : public std::enable_shared_from_this<DeviceManager> {
 public:
-    /*------------------------------------------------------------------------------------------------------------------*/
-    /*//////// Type Aliases //////////////////////////////////////////////////////////////////////////////////////////*/
-    /*------------------------------------------------------------------------------------------------------------------*/
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Type Aliases //////////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
 
     using DeviceConnectedEvent = Event<winrt::hstring>;
     using DeviceDisconnectedEvent = Event<winrt::hstring>;
     using ConnectionErrorEvent = Event<winrt::hstring, winrt::hstring>;
-    using DeviceStatusEvent = Event<winrt::hstring, winrt::hstring, winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions>;
+    using DeviceStatusEvent =
+        Event<winrt::hstring, winrt::hstring, winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions>;
     using DeviceActivityEvent = Event<winrt::hstring>;
     using AutoReconnectTriggeredEvent = Event<winrt::hstring>;
     using AutoReconnectFailedEvent = Event<winrt::hstring>;
     using AutoReconnectPredicate = std::function<bool(winrt::hstring const&)>;
 
-    /*------------------------------------------------------------------------------------------------------------------*/
-    /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////////*/
-    /*------------------------------------------------------------------------------------------------------------------*/
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
 
     void StartDeviceWatcher();
     void StopDeviceWatcher();
@@ -57,9 +58,9 @@ public:
     bool HasBusyOperations() const;
     bool IsDeviceBusy(winrt::hstring const& deviceId) const;
 
-    /*------------------------------------------------------------------------------------------------------------------*/
-    /*//////// Events ////////////////////////////////////////////////////////////////////////////////////////////////*/
-    /*------------------------------------------------------------------------------------------------------------------*/
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Events ////////////////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
 
     DeviceConnectedEvent DeviceConnected;
     DeviceDisconnectedEvent DeviceDisconnected;
@@ -70,29 +71,31 @@ public:
     AutoReconnectFailedEvent AutoReconnectFailed;
 
 private:
-    /*------------------------------------------------------------------------------------------------------------------*/
-    /*//////// Private Implementation ////////////////////////////////////////////////////////////////////////////////*/
-    /*------------------------------------------------------------------------------------------------------------------*/
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Private Implementation ////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
 
-    winrt::Windows::Foundation::IAsyncAction ConnectInternalAsync(winrt::Windows::Devices::Enumeration::DeviceInformation device);
-    enum class DisconnectReason { UserInitiated,
-                                  Unexpected,
-                                  Cleanup };
+    winrt::Windows::Foundation::IAsyncAction
+    ConnectInternalAsync(winrt::Windows::Devices::Enumeration::DeviceInformation device);
+    enum class DisconnectReason { UserInitiated, Unexpected, Cleanup };
 
     void ReportConnectionFailure(winrt::hstring const& deviceId, winrt::hstring const& message, bool cleanupConnection);
     void Disconnect(winrt::hstring deviceId, DisconnectReason reason);
     bool IsConnectAttemptCurrent(winrt::hstring const& deviceId, std::size_t attemptId) const;
-    void OnConnectionStateChanged(winrt::Windows::Media::Audio::AudioPlaybackConnection sender, winrt::Windows::Foundation::IInspectable);
+    void OnConnectionStateChanged(winrt::Windows::Media::Audio::AudioPlaybackConnection sender,
+                                  winrt::Windows::Foundation::IInspectable);
     void ScheduleReconnect(winrt::hstring deviceId);
     void StartConnectionHeartbeat();
     void StopConnectionHeartbeat();
     void LogConnectionSnapshot(winrt::hstring const& reason) const;
-    void OnDeviceAdded(winrt::Windows::Devices::Enumeration::DeviceWatcher sender, winrt::Windows::Devices::Enumeration::DeviceInformation args);
-    void OnDeviceRemoved(winrt::Windows::Devices::Enumeration::DeviceWatcher sender, winrt::Windows::Devices::Enumeration::DeviceInformationUpdate args);
+    void OnDeviceAdded(winrt::Windows::Devices::Enumeration::DeviceWatcher sender,
+                       winrt::Windows::Devices::Enumeration::DeviceInformation args);
+    void OnDeviceRemoved(winrt::Windows::Devices::Enumeration::DeviceWatcher sender,
+                         winrt::Windows::Devices::Enumeration::DeviceInformationUpdate args);
 
-    /*------------------------------------------------------------------------------------------------------------------*/
-    /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////////*/
-    /*------------------------------------------------------------------------------------------------------------------*/
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
 
     mutable wil::srwlock m_lock;
     std::unordered_map<winrt::hstring, DeviceConnectionInfo> m_connections;

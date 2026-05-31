@@ -2,27 +2,27 @@
 #include <core/Settings.hpp>
 #include <util/Util.hpp>
 
-/* Helpers */
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Helpers ///////////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 namespace {
 bool GetOptionalBoolean(winrt::Windows::Data::Json::JsonObject const& json, winrt::hstring const& key, bool fallback) {
     if (!json.HasKey(key)) return fallback;
     auto value = json.Lookup(key);
-    return value.ValueType() == winrt::Windows::Data::Json::JsonValueType::Boolean
-               ? value.GetBoolean()
-               : fallback;
+    return value.ValueType() == winrt::Windows::Data::Json::JsonValueType::Boolean ? value.GetBoolean() : fallback;
 }
 
-winrt::hstring GetOptionalString(winrt::Windows::Data::Json::JsonObject const& json, winrt::hstring const& key, winrt::hstring const& fallback) {
+winrt::hstring GetOptionalString(winrt::Windows::Data::Json::JsonObject const& json,
+                                 winrt::hstring const& key,
+                                 winrt::hstring const& fallback) {
     if (!json.HasKey(key)) return fallback;
     auto value = json.Lookup(key);
-    return value.ValueType() == winrt::Windows::Data::Json::JsonValueType::String
-               ? value.GetString()
-               : fallback;
+    return value.ValueType() == winrt::Windows::Data::Json::JsonValueType::String ? value.GetString() : fallback;
 }
 
-int64_t GetOptionalInt64(winrt::Windows::Data::Json::JsonObject const& json, winrt::hstring const& key, int64_t fallback) {
+int64_t
+GetOptionalInt64(winrt::Windows::Data::Json::JsonObject const& json, winrt::hstring const& key, int64_t fallback) {
     if (!json.HasKey(key)) return fallback;
     auto value = json.Lookup(key);
     return value.ValueType() == winrt::Windows::Data::Json::JsonValueType::Number
@@ -30,25 +30,25 @@ int64_t GetOptionalInt64(winrt::Windows::Data::Json::JsonObject const& json, win
                : fallback;
 }
 
-winrt::Windows::Data::Json::JsonArray GetOptionalArray(winrt::Windows::Data::Json::JsonObject const& json, winrt::hstring const& key) {
+winrt::Windows::Data::Json::JsonArray GetOptionalArray(winrt::Windows::Data::Json::JsonObject const& json,
+                                                       winrt::hstring const& key) {
     if (!json.HasKey(key)) return nullptr;
     auto value = json.Lookup(key);
-    return value.ValueType() == winrt::Windows::Data::Json::JsonValueType::Array
-               ? value.GetArray()
-               : nullptr;
+    return value.ValueType() == winrt::Windows::Data::Json::JsonValueType::Array ? value.GetArray() : nullptr;
 }
 } // namespace
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Public Interface /////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 void Settings::Load(HINSTANCE hInst) {
     try {
         auto path = GetPath(hInst);
         if (!std::filesystem::exists(path)) return;
 
-        wil::unique_hfile hFile(CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+        wil::unique_hfile hFile(CreateFileW(
+            path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
         if (!hFile) return;
 
         std::string buf;
@@ -79,8 +79,7 @@ void Settings::Load(HINSTANCE hInst) {
         {
             auto lang = GetOptionalString(json, L"language", L"system");
             language = lang.empty() ? L"system" : std::wstring(lang);
-            if (language == L"en" && PRIMARYLANGID(GetUserDefaultUILanguage()) != LANG_ENGLISH)
-                language = L"system";
+            if (language == L"en" && PRIMARYLANGID(GetUserDefaultUILanguage()) != LANG_ENGLISH) language = L"system";
         }
 
         if (auto array = GetOptionalArray(json, L"devices")) {
@@ -133,11 +132,16 @@ void Settings::Save(HINSTANCE hInst) {
         }
 
         winrt::Windows::Data::Json::JsonObject json;
-        json.Insert(L"globalAutoReconnect", winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.GlobalAutoReconnect));
-        json.Insert(L"startWithWindows", winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.StartWithWindows));
+        json.Insert(L"globalAutoReconnect",
+                    winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.GlobalAutoReconnect));
+        json.Insert(L"startWithWindows",
+                    winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.StartWithWindows));
         json.Insert(L"language", winrt::Windows::Data::Json::JsonValue::CreateStringValue(snapshot.Language));
-        json.Insert(L"lastUpdateCheckUnixSeconds", winrt::Windows::Data::Json::JsonValue::CreateNumberValue(static_cast<double>(snapshot.LastUpdateCheckUnixSeconds)));
-        json.Insert(L"lastNotifiedUpdateVersion", winrt::Windows::Data::Json::JsonValue::CreateStringValue(snapshot.LastNotifiedUpdateVersion));
+        json.Insert(L"lastUpdateCheckUnixSeconds",
+                    winrt::Windows::Data::Json::JsonValue::CreateNumberValue(
+                        static_cast<double>(snapshot.LastUpdateCheckUnixSeconds)));
+        json.Insert(L"lastNotifiedUpdateVersion",
+                    winrt::Windows::Data::Json::JsonValue::CreateStringValue(snapshot.LastNotifiedUpdateVersion));
 
         winrt::Windows::Data::Json::JsonArray devArr;
         for (const auto& d : snapshot.Devices) {
@@ -162,10 +166,12 @@ void Settings::Save(HINSTANCE hInst) {
         // Delete the temp file if any step below throws before the atomic rename.
         auto cleanupTmp = wil::scope_exit([&tmp]() { DeleteFileW(tmp.c_str()); });
 
-        wil::unique_hfile hFile(CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr));
+        wil::unique_hfile hFile(
+            CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr));
         THROW_LAST_ERROR_IF(!hFile);
         DWORD written = 0;
-        THROW_IF_WIN32_BOOL_FALSE(WriteFile(hFile.get(), utf8.data(), static_cast<DWORD>(utf8.size()), &written, nullptr));
+        THROW_IF_WIN32_BOOL_FALSE(
+            WriteFile(hFile.get(), utf8.data(), static_cast<DWORD>(utf8.size()), &written, nullptr));
         THROW_HR_IF(E_FAIL, written != utf8.size());
         hFile.reset();
 
@@ -180,9 +186,9 @@ void Settings::Save(HINSTANCE hInst) {
     }
 }
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Private Implementation ///////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Private Implementation ////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 std::filesystem::path Settings::GetPath(HINSTANCE hInst) const {
     try {
@@ -190,7 +196,9 @@ std::filesystem::path Settings::GetPath(HINSTANCE hInst) const {
         return std::filesystem::path(std::wstring(localFolder.Path())) / c_fileName;
     } catch (...) {
         wchar_t* localAppData = nullptr;
-        auto freeEnv = wil::scope_exit([&]() { if (localAppData) free(localAppData); });
+        auto freeEnv = wil::scope_exit([&]() {
+            if (localAppData) free(localAppData);
+        });
         if (_wdupenv_s(&localAppData, nullptr, L"LOCALAPPDATA") == 0 && localAppData && *localAppData) {
             auto dir = std::filesystem::path(localAppData) / L"AudioPlaybackConnector2";
             std::error_code ec;

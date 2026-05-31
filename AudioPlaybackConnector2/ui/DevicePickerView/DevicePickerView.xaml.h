@@ -21,19 +21,28 @@ struct DeviceInformationCollection;
 namespace winrt::AudioPlaybackConnector2::implementation {
 struct DevicePickerView : DevicePickerViewT<DevicePickerView> {
     DevicePickerView();
-    void Initialize(std::shared_ptr<DeviceManager> manager, std::function<void()> onClose, std::function<void(winrt::hstring)> onDeviceSelected, std::function<void(winrt::hstring)> onDeviceDisconnect = nullptr, std::function<void(winrt::hstring)> onDeviceReconnect = nullptr);
+    void Initialize(std::shared_ptr<DeviceManager> manager,
+                    std::function<void()> onClose,
+                    std::function<void(winrt::hstring)> onDeviceSelected,
+                    std::function<void(winrt::hstring)> onDeviceDisconnect = nullptr,
+                    std::function<void(winrt::hstring)> onDeviceReconnect = nullptr);
     void LoadDevices();
     void CancelLoadDevices();
     void RefreshDeviceStates();
 
 private:
-    void OnCloseClicked(winrt::Windows::Foundation::IInspectable const&, winrt::Microsoft::UI::Xaml::RoutedEventArgs const&);
-    void OnDeviceSelected(winrt::Windows::Foundation::IInspectable const&, winrt::Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const&);
+    void OnCloseClicked(winrt::Windows::Foundation::IInspectable const&,
+                        winrt::Microsoft::UI::Xaml::RoutedEventArgs const&);
+    void OnDeviceSelected(winrt::Windows::Foundation::IInspectable const&,
+                          winrt::Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const&);
 
-    void ApplyDeviceResults(winrt::Windows::Devices::Enumeration::DeviceInformationCollection const& devices, bool listWasEmpty, uint64_t requestId);
+    void ApplyDeviceResults(winrt::Windows::Devices::Enumeration::DeviceInformationCollection const& devices,
+                            bool listWasEmpty,
+                            uint64_t requestId);
     void OnDeviceEnumerationFailed(bool listWasEmpty, uint64_t requestId);
     void RebuildDeviceListFromCache();
-    winrt::Microsoft::UI::Xaml::Controls::ListViewItem BuildDeviceListItem(winrt::Windows::Devices::Enumeration::DeviceInformation const& dev);
+    winrt::Microsoft::UI::Xaml::Controls::ListViewItem
+    BuildDeviceListItem(winrt::Windows::Devices::Enumeration::DeviceInformation const& dev);
 
     std::weak_ptr<DeviceManager> m_manager;
     std::function<void()> m_onClose;
@@ -46,12 +55,12 @@ private:
     std::atomic<uint64_t> m_loadDevicesRequestId = 0;
     std::atomic<uint64_t> m_activeLoadRequestId = 0;
     mutable std::mutex m_findAllOpMutex;
-    winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection> m_findAllOp{nullptr};
+    winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
+        m_findAllOp{nullptr};
     std::vector<winrt::Windows::Devices::Enumeration::DeviceInformation> m_devices;
 };
 } // namespace winrt::AudioPlaybackConnector2::implementation
 
 namespace winrt::AudioPlaybackConnector2::factory_implementation {
-struct DevicePickerView : DevicePickerViewT<DevicePickerView, implementation::DevicePickerView> {
-};
+struct DevicePickerView : DevicePickerViewT<DevicePickerView, implementation::DevicePickerView> {};
 } // namespace winrt::AudioPlaybackConnector2::factory_implementation

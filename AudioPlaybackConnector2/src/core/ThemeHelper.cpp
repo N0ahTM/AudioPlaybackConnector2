@@ -1,17 +1,19 @@
 #include <pch.h>
 #include <core/ThemeHelper.hpp>
 
-/* Member Variables */
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 wil::srwlock ThemeHelper::s_lock;
-std::vector<std::pair<ThemeHelper::ThemeChangedToken, std::shared_ptr<ThemeHelper::HandlerState>>> ThemeHelper::s_handlers;
+std::vector<std::pair<ThemeHelper::ThemeChangedToken, std::shared_ptr<ThemeHelper::HandlerState>>>
+    ThemeHelper::s_handlers;
 ThemeHelper::ThemeChangedToken ThemeHelper::s_nextToken = 1;
 std::optional<Theme> ThemeHelper::s_lastTheme;
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Public Interface /////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 Theme ThemeHelper::GetSystemTheme() {
     DWORD value = 0, cb = sizeof(value);
@@ -26,7 +28,8 @@ Theme ThemeHelper::GetSystemTheme() {
 }
 
 void ThemeHelper::OnSettingChange(HWND, LPARAM lParam) {
-    if (lParam && CompareStringOrdinal(reinterpret_cast<LPCWCH>(lParam), -1, L"ImmersiveColorSet", -1, TRUE) == CSTR_EQUAL) {
+    if (lParam &&
+        CompareStringOrdinal(reinterpret_cast<LPCWCH>(lParam), -1, L"ImmersiveColorSet", -1, TRUE) == CSTR_EQUAL) {
         auto theme = GetSystemTheme();
 
         std::vector<std::shared_ptr<HandlerState>> copy;

@@ -3,23 +3,22 @@
 #include <chrono>
 #include <tuple>
 
-/*------------------------------------------------------------------------------------------------------------------*/
-/*//////// Event Template ////////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Event Template ////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
-template <typename... Args>
-class Event {
+template <typename... Args> class Event {
 public:
-    /*------------------------------------------------------------------------------------------------------------------*/
-    /*//////// Type Aliases //////////////////////////////////////////////////////////////////////////////////////////*/
-    /*------------------------------------------------------------------------------------------------------------------*/
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Type Aliases //////////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
 
     using Handler = std::function<void(Args...)>;
     using HandlerId = std::size_t;
 
-    /*------------------------------------------------------------------------------------------------------------------*/
-    /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////////*/
-    /*------------------------------------------------------------------------------------------------------------------*/
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
 
     HandlerId operator+=(Handler handler) {
         auto guard = m_lock.lock_exclusive();
@@ -33,8 +32,7 @@ public:
         std::erase_if(m_handlers, [id](const auto& pair) { return pair.first == id; });
     }
 
-    template <typename... CallArgs>
-    void operator()(CallArgs&&... args) const {
+    template <typename... CallArgs> void operator()(CallArgs&&... args) const {
         static_assert(sizeof...(CallArgs) == sizeof...(Args), "Event argument count mismatch");
         auto snapshot = std::tuple<std::decay_t<Args>...>(std::forward<CallArgs>(args)...);
         std::vector<std::shared_ptr<Handler>> copy;
@@ -47,10 +45,7 @@ public:
         }
         for (auto& h : copy) {
             try {
-                std::apply([&](auto const&... values) {
-                    (*h)(values...);
-                },
-                           snapshot);
+                std::apply([&](auto const&... values) { (*h)(values...); }, snapshot);
             } catch (...) {
             }
         }
@@ -62,17 +57,18 @@ public:
     }
 
 private:
-    /*------------------------------------------------------------------------------------------------------------------*/
-    /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////////*/
-    /*------------------------------------------------------------------------------------------------------------------*/
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
 
     mutable wil::srwlock m_lock;
     std::vector<std::pair<HandlerId, std::shared_ptr<Handler>>> m_handlers;
     HandlerId m_nextId = 1;
 };
 
-/* String Helpers */
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// String Helpers ////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 namespace util {
 
@@ -81,10 +77,13 @@ inline std::wstring Utf8ToUtf16(std::string_view utf8) {
     if (utf8.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
         throw std::length_error("String too long for MultiByteToWideChar");
     }
-    const int len = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
+    const int len =
+        MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
     THROW_LAST_ERROR_IF(len == 0);
     std::wstring out(len, L'\0');
-    THROW_LAST_ERROR_IF(0 == MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8.data(), static_cast<int>(utf8.size()), out.data(), len));
+    THROW_LAST_ERROR_IF(
+        0 == MultiByteToWideChar(
+                 CP_UTF8, MB_ERR_INVALID_CHARS, utf8.data(), static_cast<int>(utf8.size()), out.data(), len));
     return out;
 }
 
@@ -93,10 +92,18 @@ inline std::string Utf16ToUtf8(std::wstring_view utf16) {
     if (utf16.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
         throw std::length_error("String too long for WideCharToMultiByte");
     }
-    const int len = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, utf16.data(), static_cast<int>(utf16.size()), nullptr, 0, nullptr, nullptr);
+    const int len = WideCharToMultiByte(
+        CP_UTF8, WC_ERR_INVALID_CHARS, utf16.data(), static_cast<int>(utf16.size()), nullptr, 0, nullptr, nullptr);
     THROW_LAST_ERROR_IF(len == 0);
     std::string out(len, '\0');
-    THROW_LAST_ERROR_IF(0 == WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, utf16.data(), static_cast<int>(utf16.size()), out.data(), len, nullptr, nullptr));
+    THROW_LAST_ERROR_IF(0 == WideCharToMultiByte(CP_UTF8,
+                                                 WC_ERR_INVALID_CHARS,
+                                                 utf16.data(),
+                                                 static_cast<int>(utf16.size()),
+                                                 out.data(),
+                                                 len,
+                                                 nullptr,
+                                                 nullptr));
     return out;
 }
 
@@ -137,8 +144,9 @@ inline HWND GetWindowHandle(winrt::Microsoft::UI::Xaml::Window const& window) {
 
 } // namespace util
 
-/* Window Constants */
-/*------------------------------------------------------------------------------------------------------------------*/
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Window Constants //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 inline constexpr int32_t c_settingsWindowWidth = 540;
 inline constexpr int32_t c_settingsWindowHeight = 580;

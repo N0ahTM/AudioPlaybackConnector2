@@ -169,6 +169,7 @@
     <ClCompile Include="src\services\UpdateService.cpp" />
     <ClCompile Include="src\ui\TrayIcon.cpp" />
     <ClCompile Include="src\ui\TrayContextMenu.cpp" />
+    <ClCompile Include="src\util\Logger.cpp" />
     <ClCompile Include="ui\DevicePickerView\DevicePickerView.xaml.cpp">
       <DependentUpon>ui\DevicePickerView\DevicePickerView.xaml</DependentUpon>
     </ClCompile>

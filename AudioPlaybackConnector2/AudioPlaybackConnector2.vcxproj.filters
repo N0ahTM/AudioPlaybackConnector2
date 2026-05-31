@@ -50,6 +50,9 @@
     <ClCompile Include="src\ui\TrayContextMenu.cpp">
       <Filter>src\ui</Filter>
     </ClCompile>
+    <ClCompile Include="src\util\Logger.cpp">
+      <Filter>src\util</Filter>
+    </ClCompile>
     <ClCompile Include="ui\App\App.xaml.cpp">
       <Filter>UI\App</Filter>
     </ClCompile>
@@ -142,6 +145,9 @@
     </Filter>
     <Filter Include="src\ui">
       <UniqueIdentifier>{a1b2c3d4-e5f6-7890-abcd-ef1234567892}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="src\util">
+      <UniqueIdentifier>{a1b2c3d4-e5f6-7890-abcd-ef1234567893}</UniqueIdentifier>
     </Filter>
     <Filter Include="include">
       <UniqueIdentifier>{b2c3d4e5-f6a7-8901-bcde-f12345678901}</UniqueIdentifier>

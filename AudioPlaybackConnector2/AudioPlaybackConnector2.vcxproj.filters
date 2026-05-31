@@ -26,6 +26,9 @@
     <ClCompile Include="src\app\SingleInstanceGuard.cpp">
       <Filter>src\app</Filter>
     </ClCompile>
+    <ClCompile Include="src\app\StartupUpdateCoordinator.cpp">
+      <Filter>src\app</Filter>
+    </ClCompile>
     <ClCompile Include="src\core\StringResources.cpp">
       <Filter>src\core</Filter>
     </ClCompile>
@@ -92,6 +95,9 @@
       <Filter>include</Filter>
     </ClInclude>
     <ClInclude Include="include\app\SingleInstanceGuard.hpp">
+      <Filter>include\app</Filter>
+    </ClInclude>
+    <ClInclude Include="include\app\StartupUpdateCoordinator.hpp">
       <Filter>include\app</Filter>
     </ClInclude>
     <ClInclude Include="include\util\Logger.hpp">

@@ -4,6 +4,7 @@
 #include <SettingsWindow/SettingsWindow.xaml.h>
 #include <DevicePickerView/DevicePickerView.xaml.h>
 
+#include <app/StartupUpdateCoordinator.hpp>
 #include <ui/TrayIcon.hpp>
 #include <ui/TrayContextMenu.hpp>
 #include <core/DeviceManager.hpp>
@@ -11,7 +12,6 @@
 #include <core/ThemeHelper.hpp>
 #include <core/StringResources.hpp>
 #include <services/SettingsController.hpp>
-#include <services/UpdateService.hpp>
 #include <util/CrashHandler.hpp>
 #include <util/Util.hpp>
 
@@ -26,12 +26,6 @@ using namespace winrt::Microsoft::UI::Xaml;
 
 namespace {
 constexpr std::chrono::seconds c_resumeReconnectDelay{10};
-constexpr std::chrono::seconds c_startupUpdateCheckInterval{std::chrono::hours{24}};
-
-int64_t UnixNowSeconds() {
-    return std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch())
-        .count();
-}
 
 TrayNotificationType ToTrayNotificationType(NotificationService::FallbackNotificationType type) {
     switch (type) {
@@ -461,45 +455,9 @@ void winrt::AudioPlaybackConnector2::implementation::App::HandlePowerResume() {
 winrt::fire_and_forget winrt::AudioPlaybackConnector2::implementation::App::CheckForUpdatesOnStartupAsync() {
     auto lifetime = get_strong();
     auto* settings = m_settings.get();
-    if (m_exiting.load() || !settings) co_return;
-
-    const auto now = UnixNowSeconds();
-    bool shouldCheck = false;
-    {
-        auto locked = settings->LockExclusiveData();
-        shouldCheck = locked->LastUpdateCheckUnixSeconds <= 0 ||
-                      now - locked->LastUpdateCheckUnixSeconds >= c_startupUpdateCheckInterval.count();
-        if (shouldCheck) {
-            locked->LastUpdateCheckUnixSeconds = now;
-        }
-    }
-
-    if (!shouldCheck) co_return;
-    if (m_exiting.load()) co_return;
-    settings->Save(GetModuleHandleW(nullptr));
-
-    winrt::apartment_context ui;
-    auto result = co_await UpdateService::CheckForUpdatesAsync();
-    co_await ui;
-
-    settings = m_settings.get();
     auto notificationService = m_notificationService;
     if (m_exiting.load() || !settings || !notificationService) co_return;
-    if (result.Status != UpdateCheckStatus::UpdateAvailable || result.LatestVersion.empty()) co_return;
-
-    bool shouldNotify = false;
-    {
-        auto locked = settings->LockExclusiveData();
-        if (locked->LastNotifiedUpdateVersion != result.LatestVersion) {
-            locked->LastNotifiedUpdateVersion = result.LatestVersion;
-            shouldNotify = true;
-        }
-    }
-
-    if (!shouldNotify) co_return;
-    if (m_exiting.load()) co_return;
-    settings->Save(GetModuleHandleW(nullptr));
-    notificationService->ShowUpdateAvailable(result.LatestVersion);
+    co_await StartupUpdateCoordinator::CheckForUpdatesAsync(*settings, notificationService, m_exiting);
 }
 
 void winrt::AudioPlaybackConnector2::implementation::App::RunOnUIThread(std::function<void()> work) {

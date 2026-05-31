@@ -51,56 +51,28 @@ void DetachConnectionForProcessExit(winrt::Windows::Media::Audio::AudioPlaybackC
 } // namespace
 
 /*------------------------------------------------------------------------------------------------------------*/
+/*//////// Constructors / Destructor /////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
+DeviceManager::DeviceManager() : m_discoveryService(std::make_unique<DeviceDiscoveryService>()) {}
+
+/*------------------------------------------------------------------------------------------------------------*/
 /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
 void DeviceManager::StartDeviceWatcher() {
-    if (m_watcher) return;
-    try {
-        {
-            auto guard = m_lock.lock_exclusive();
-            if (m_shutdownForProcessExit) return;
-            m_allReconnectsCancelled = false;
-        }
-        auto selector = winrt::Windows::Media::Audio::AudioPlaybackConnection::GetDeviceSelector();
-        m_watcher = winrt::Windows::Devices::Enumeration::DeviceInformation::CreateWatcher(selector);
-        auto weak = weak_from_this();
-        m_watcherAddedToken = m_watcher.Added([weak](auto sender, auto args) {
-            if (auto self = weak.lock()) {
-                self->OnDeviceAdded(sender, args);
-            }
-        });
-        m_watcherRemovedToken = m_watcher.Removed([weak](auto sender, auto args) {
-            if (auto self = weak.lock()) {
-                self->OnDeviceRemoved(sender, args);
-            }
-        });
-        m_watcher.Start();
-        DebugTrace(L"[DeviceManager] DeviceWatcher started");
-    } catch (...) {
-        DebugTrace(L"[DeviceManager] StartDeviceWatcher ERROR: failed to create or start watcher");
+    {
+        auto guard = m_lock.lock_exclusive();
+        if (m_shutdownForProcessExit) return;
+        m_allReconnectsCancelled = false;
     }
+    EnsureDiscoveryEventHandlers();
+    m_discoveryService->Start();
 }
 
 void DeviceManager::StopDeviceWatcher() {
     StopConnectionHeartbeat();
-    if (!m_watcher) return;
-    {
-        auto guard = m_lock.lock_exclusive();
-        m_watcherStopping = true;
-    }
-    try {
-        m_watcher.Stop();
-        m_watcher.Added(std::exchange(m_watcherAddedToken, {}));
-        m_watcher.Removed(std::exchange(m_watcherRemovedToken, {}));
-    } catch (...) {
-        DebugTrace(L"[DeviceManager] StopDeviceWatcher ERROR: failed to stop watcher or revoke token");
-    }
-    m_watcher = nullptr;
-    {
-        auto guard = m_lock.lock_exclusive();
-        m_watcherStopping = false;
-    }
+    if (m_discoveryService) m_discoveryService->Stop();
 }
 
 void DeviceManager::ShutdownForProcessExit() noexcept {
@@ -140,7 +112,6 @@ void DeviceManager::ShutdownForProcessExit() noexcept {
 
             m_connections.clear();
             m_zombieConnections.clear();
-            m_deviceCache.clear();
             m_disconnectingIds.clear();
             m_reconnectingIds.clear();
             m_connectingIds.clear();
@@ -149,6 +120,9 @@ void DeviceManager::ShutdownForProcessExit() noexcept {
             m_reconnectAttempts.clear();
             m_connectAttemptIds.clear();
             m_autoReconnectPred = nullptr;
+        }
+        if (m_discoveryService) {
+            m_discoveryService->ClearCache();
         }
 
         if (!connections.empty()) {
@@ -296,13 +270,9 @@ winrt::Windows::Foundation::IAsyncAction DeviceManager::ConnectAsync(winrt::hstr
 
         // ID-only cache (no DeviceInformation caching anymore to avoid lifetime issues).
         bool knownDeviceId = false;
-        {
-            auto guard = m_lock.lock_shared();
-            knownDeviceId = m_deviceCache.count(deviceIdKey) > 0;
-        }
+        knownDeviceId = m_discoveryService && m_discoveryService->ContainsDeviceId(deviceIdKey);
 
-        auto selector = winrt::Windows::Media::Audio::AudioPlaybackConnection::GetDeviceSelector();
-        auto devices = co_await winrt::Windows::Devices::Enumeration::DeviceInformation::FindAllAsync(selector);
+        auto devices = co_await m_discoveryService->RefreshAsync();
         {
             auto guard = m_lock.lock_exclusive();
             if (m_shutdownForProcessExit) {
@@ -317,17 +287,6 @@ winrt::Windows::Foundation::IAsyncAction DeviceManager::ConnectAsync(winrt::hstr
                 targetDevice = device;
                 break;
             }
-        }
-
-        // Refresh cache using IDs only.
-        {
-            std::unordered_set<std::wstring> refreshed;
-            refreshed.reserve(static_cast<size_t>(devices.Size()));
-            for (auto const& device : devices) {
-                refreshed.insert(std::wstring(device.Id()));
-            }
-            auto guard = m_lock.lock_exclusive();
-            m_deviceCache = std::move(refreshed);
         }
 
         if (targetDevice) {
@@ -602,12 +561,11 @@ void DeviceManager::LogConnectionSnapshot(winrt::hstring const& reason) const {
 
     std::vector<Snapshot> snapshots;
     bool allReconnectsCancelled = false;
-    std::size_t deviceCacheSize = 0;
+    std::size_t deviceCacheSize = m_discoveryService ? m_discoveryService->CacheSize() : 0;
     {
         auto guard = m_lock.lock_shared();
         snapshots.reserve(m_connections.size());
         allReconnectsCancelled = m_allReconnectsCancelled;
-        deviceCacheSize = m_deviceCache.size();
         for (auto const& [id, info] : m_connections) {
             Snapshot snapshot;
             snapshot.Id = id;
@@ -991,6 +949,26 @@ bool DeviceManager::IsConnectAttemptCurrent(winrt::hstring const& deviceId, std:
     return attempt != m_connectAttemptIds.end() && attempt->second == attemptId;
 }
 
+void DeviceManager::EnsureDiscoveryEventHandlers() {
+    if (m_discoveryDeviceAddedToken && m_discoveryDeviceRemovedToken) return;
+
+    auto weak = weak_from_this();
+    if (!m_discoveryDeviceAddedToken) {
+        m_discoveryDeviceAddedToken = m_discoveryService->DeviceAdded += [weak](auto device) {
+            if (auto self = weak.lock()) {
+                self->OnDeviceAdded(device);
+            }
+        };
+    }
+    if (!m_discoveryDeviceRemovedToken) {
+        m_discoveryDeviceRemovedToken = m_discoveryService->DeviceRemoved += [weak](auto device) {
+            if (auto self = weak.lock()) {
+                self->OnDeviceRemoved(device);
+            }
+        };
+    }
+}
+
 void DeviceManager::OnConnectionStateChanged(winrt::Windows::Media::Audio::AudioPlaybackConnection sender,
                                              winrt::Windows::Foundation::IInspectable) {
     {
@@ -1121,14 +1099,11 @@ void DeviceManager::ScheduleReconnect(winrt::hstring deviceId) {
     }
 }
 
-void DeviceManager::OnDeviceAdded(winrt::Windows::Devices::Enumeration::DeviceWatcher,
-                                  winrt::Windows::Devices::Enumeration::DeviceInformation args) {
+void DeviceManager::OnDeviceAdded(winrt::Windows::Devices::Enumeration::DeviceInformation args) {
     AutoReconnectPredicate pred;
     {
         auto guard = m_lock.lock_exclusive();
         if (m_shutdownForProcessExit) return;
-        if (m_watcherStopping) return;
-        m_deviceCache.insert(std::wstring(args.Id()));
         pred = m_autoReconnectPred;
     }
 
@@ -1138,15 +1113,11 @@ void DeviceManager::OnDeviceAdded(winrt::Windows::Devices::Enumeration::DeviceWa
     }
 }
 
-void DeviceManager::OnDeviceRemoved(winrt::Windows::Devices::Enumeration::DeviceWatcher,
-                                    winrt::Windows::Devices::Enumeration::DeviceInformationUpdate args) {
+void DeviceManager::OnDeviceRemoved(winrt::Windows::Devices::Enumeration::DeviceInformationUpdate args) {
     bool connectedDeviceRemoved = false;
     {
         auto guard = m_lock.lock_exclusive();
         if (m_shutdownForProcessExit) return;
-        if (m_watcherStopping) return;
-
-        m_deviceCache.erase(std::wstring(args.Id()));
 
         connectedDeviceRemoved = m_connections.count(args.Id()) > 0 && m_disconnectingIds.count(args.Id()) == 0 &&
                                  m_reconnectingIds.count(args.Id()) == 0;

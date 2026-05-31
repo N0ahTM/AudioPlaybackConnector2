@@ -1,5 +1,6 @@
 #pragma once
 
+#include <core/DeviceDiscoveryService.hpp>
 #include <string>
 #include <unordered_set>
 #include <util/Util.hpp>
@@ -40,6 +41,7 @@ public:
     /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
+    DeviceManager();
     void StartDeviceWatcher();
     void StopDeviceWatcher();
     void ShutdownForProcessExit() noexcept;
@@ -88,10 +90,9 @@ private:
     void StartConnectionHeartbeat();
     void StopConnectionHeartbeat();
     void LogConnectionSnapshot(winrt::hstring const& reason) const;
-    void OnDeviceAdded(winrt::Windows::Devices::Enumeration::DeviceWatcher sender,
-                       winrt::Windows::Devices::Enumeration::DeviceInformation args);
-    void OnDeviceRemoved(winrt::Windows::Devices::Enumeration::DeviceWatcher sender,
-                         winrt::Windows::Devices::Enumeration::DeviceInformationUpdate args);
+    void EnsureDiscoveryEventHandlers();
+    void OnDeviceAdded(winrt::Windows::Devices::Enumeration::DeviceInformation args);
+    void OnDeviceRemoved(winrt::Windows::Devices::Enumeration::DeviceInformationUpdate args);
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
@@ -103,19 +104,17 @@ private:
     std::unordered_set<winrt::hstring> m_reconnectingIds;
     std::unordered_set<winrt::hstring> m_connectingIds;
     std::vector<winrt::Windows::Media::Audio::AudioPlaybackConnection> m_zombieConnections;
-    std::unordered_set<std::wstring> m_deviceCache;
     AutoReconnectPredicate m_autoReconnectPred;
     std::unordered_set<winrt::hstring> m_cancelledReconnectIds;
     std::unordered_map<winrt::hstring, std::size_t> m_reconnectTimerCounts;
     std::unordered_map<winrt::hstring, std::size_t> m_reconnectAttempts;
     std::unordered_map<std::wstring, std::size_t> m_connectAttemptIds;
-    bool m_watcherStopping = false;
     bool m_allReconnectsCancelled = false;
     bool m_powerTransitionSuspended = false;
     bool m_shutdownForProcessExit = false;
 
-    winrt::Windows::Devices::Enumeration::DeviceWatcher m_watcher{nullptr};
-    winrt::event_token m_watcherAddedToken{};
-    winrt::event_token m_watcherRemovedToken{};
+    std::unique_ptr<DeviceDiscoveryService> m_discoveryService;
+    std::size_t m_discoveryDeviceAddedToken = 0;
+    std::size_t m_discoveryDeviceRemovedToken = 0;
     winrt::Windows::System::Threading::ThreadPoolTimer m_heartbeatTimer{nullptr};
 };

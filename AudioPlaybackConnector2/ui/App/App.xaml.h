@@ -1,6 +1,7 @@
 #pragma once
 
 #include <app/SingleInstanceGuard.hpp>
+#include <app/PowerTransitionCoordinator.hpp>
 #include <ui/App/App.xaml.g.h>
 
 #include <services/NotificationService.hpp>
@@ -106,7 +107,6 @@ private:
     ULONG_PTR m_gdiplusToken = 0;
     bool m_notificationsAvailable = false;
     std::atomic<bool> m_exiting = false;
-    bool m_powerSuspended = false;
-    winrt::Windows::System::Threading::ThreadPoolTimer m_resumeReconnectTimer{nullptr};
+    PowerTransitionCoordinator m_powerTransitionCoordinator{m_exiting};
 };
 } // namespace winrt::AudioPlaybackConnector2::implementation

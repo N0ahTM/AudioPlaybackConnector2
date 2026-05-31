@@ -25,8 +25,6 @@ using namespace winrt::Microsoft::UI::Xaml;
 /*------------------------------------------------------------------------------------------------------------*/
 
 namespace {
-constexpr std::chrono::seconds c_resumeReconnectDelay{10};
-
 TrayNotificationType ToTrayNotificationType(NotificationService::FallbackNotificationType type) {
     switch (type) {
         case NotificationService::FallbackNotificationType::Warning: return TrayNotificationType::Warning;
@@ -52,13 +50,7 @@ winrt::AudioPlaybackConnector2::implementation::App::App() {
 
 winrt::AudioPlaybackConnector2::implementation::App::~App() {
     m_exiting.store(true);
-    auto resumeTimer = std::exchange(m_resumeReconnectTimer, nullptr);
-    if (resumeTimer) {
-        try {
-            resumeTimer.Cancel();
-        } catch (...) {
-        }
-    }
+    m_powerTransitionCoordinator.Cancel();
     TeardownDeviceEvents();
     if (m_hwnd) {
         try {
@@ -387,69 +379,27 @@ void winrt::AudioPlaybackConnector2::implementation::App::SaveLastConnectedDevic
 }
 
 void winrt::AudioPlaybackConnector2::implementation::App::HandlePowerSuspend() {
-    try {
-        if (m_exiting.load() || m_powerSuspended) return;
-        m_powerSuspended = true;
-        DebugTrace(L"[App] Power suspend detected");
-
-        auto timer = std::exchange(m_resumeReconnectTimer, nullptr);
-        if (timer) {
-            try {
-                timer.Cancel();
-            } catch (...) {
+    auto weak = get_weak();
+    m_powerTransitionCoordinator.HandleSuspend(
+        [weak]() {
+            if (auto self = weak.get()) {
+                self->SaveLastConnectedDevices();
             }
-        }
-
-        SaveLastConnectedDevices();
-        if (m_deviceManager) {
-            m_deviceManager->SuspendForPowerTransition();
-        }
-    } catch (...) {
-        DebugTrace(L"[App] HandlePowerSuspend ERROR: ignored exception");
-    }
+        },
+        m_deviceManager);
 }
 
 void winrt::AudioPlaybackConnector2::implementation::App::HandlePowerResume() {
-    try {
-        if (m_exiting.load()) return;
-
-        if (m_powerSuspended) {
-            m_powerSuspended = false;
-            DebugTrace(L"[App] Power resume detected");
-        } else {
-            // Some systems may surface resume without a matching suspend
-            // callback. Treat this as a recovery point anyway.
-            DebugTrace(L"[App] Power resume detected without prior suspend; running recovery");
-        }
-
-        if (m_deviceManager) {
-            m_deviceManager->ResumeAfterPowerTransition();
-        }
-
-        auto existingTimer = std::exchange(m_resumeReconnectTimer, nullptr);
-        if (existingTimer) {
-            try {
-                existingTimer.Cancel();
-            } catch (...) {
-            }
-        }
-
-        auto weak = get_weak();
-        m_resumeReconnectTimer = winrt::Windows::System::Threading::ThreadPoolTimer::CreateTimer(
-            [weak](auto) {
+    auto weak = get_weak();
+    m_powerTransitionCoordinator.HandleResume(m_deviceManager, [weak]() {
+        if (auto self = weak.get()) {
+            self->RunOnUIThread([weak]() {
                 if (auto self = weak.get()) {
-                    self->RunOnUIThread([weak]() {
-                        if (auto self = weak.get()) {
-                            self->m_resumeReconnectTimer = nullptr;
-                            self->TryAutoReconnect();
-                        }
-                    });
+                    self->TryAutoReconnect();
                 }
-            },
-            c_resumeReconnectDelay);
-    } catch (...) {
-        DebugTrace(L"[App] HandlePowerResume ERROR: ignored exception");
-    }
+            });
+        }
+    });
 }
 
 winrt::fire_and_forget winrt::AudioPlaybackConnector2::implementation::App::CheckForUpdatesOnStartupAsync() {
@@ -659,13 +609,7 @@ void winrt::AudioPlaybackConnector2::implementation::App::ExitApplication() {
     if (m_exiting.exchange(true)) return;
     DebugTrace(L"[App] ExitApplication() started");
 
-    auto resumeTimer = std::exchange(m_resumeReconnectTimer, nullptr);
-    if (resumeTimer) {
-        try {
-            resumeTimer.Cancel();
-        } catch (...) {
-        }
-    }
+    m_powerTransitionCoordinator.Cancel();
 
     TeardownDeviceEvents();
 

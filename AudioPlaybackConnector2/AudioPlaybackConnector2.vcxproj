@@ -123,6 +123,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\pch.h" />
+    <ClInclude Include="include\app\PowerTransitionCoordinator.hpp" />
     <ClInclude Include="include\app\SingleInstanceGuard.hpp" />
     <ClInclude Include="include\app\StartupUpdateCoordinator.hpp" />
     <ClInclude Include="include\util\Logger.hpp" />
@@ -167,6 +168,7 @@
     <ClCompile Include="src\pch.cpp">
       <PrecompiledHeader>Create</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="src\app\PowerTransitionCoordinator.cpp" />
     <ClCompile Include="src\app\SingleInstanceGuard.cpp" />
     <ClCompile Include="src\app\StartupUpdateCoordinator.cpp" />
     <ClCompile Include="src\core\StringResources.cpp" />

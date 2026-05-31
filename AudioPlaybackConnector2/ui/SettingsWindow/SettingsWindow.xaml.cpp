@@ -27,7 +27,15 @@ std::wstring BuildVersionText() {
                 ? std::format(L"{}.{}.{}", version.Major, version.Minor, version.Build)
                 : std::format(L"{}.{}.{}.{}", version.Major, version.Minor, version.Build, version.Revision);
         return std::format(L"{} {}", label, versionText);
+    } catch (winrt::hresult_error const& ex) {
+        DebugTrace(
+            L"[SettingsWindow] BuildVersionText failed: 0x{0:08X} {1}", static_cast<uint32_t>(ex.code()), ex.message());
+        return label;
+    } catch (std::exception const& ex) {
+        DebugTrace(L"[SettingsWindow] BuildVersionText failed: {0}", util::Utf8ToUtf16(ex.what()));
+        return label;
     } catch (...) {
+        DebugTrace(L"[SettingsWindow] BuildVersionText failed: unknown exception");
         return label;
     }
 }
@@ -250,7 +258,14 @@ winrt::fire_and_forget SettingsWindow::SyncStartupTaskStateAsync() {
         if (auto settingsController = m_settingsController) {
             settingsController->SetStartWithWindows(enabled);
         }
+    } catch (winrt::hresult_error const& ex) {
+        DebugTrace(L"[SettingsWindow] SyncStartupTaskStateAsync failed: 0x{0:08X} {1}",
+                   static_cast<uint32_t>(ex.code()),
+                   ex.message());
+    } catch (std::exception const& ex) {
+        DebugTrace(L"[SettingsWindow] SyncStartupTaskStateAsync failed: {0}", util::Utf8ToUtf16(ex.what()));
     } catch (...) {
+        DebugTrace(L"[SettingsWindow] SyncStartupTaskStateAsync failed: unknown exception");
     }
 }
 
@@ -300,7 +315,16 @@ winrt::fire_and_forget SettingsWindow::ApplyStartWithWindowsAsync(bool on) {
         if (auto settingsController = m_settingsController) {
             settingsController->SetStartWithWindows(on);
         }
+    } catch (winrt::hresult_error const& ex) {
+        DebugTrace(L"[SettingsWindow] ApplyStartWithWindowsAsync failed: 0x{0:08X} {1}",
+                   static_cast<uint32_t>(ex.code()),
+                   ex.message());
+        revertToggle = true;
+    } catch (std::exception const& ex) {
+        DebugTrace(L"[SettingsWindow] ApplyStartWithWindowsAsync failed: {0}", util::Utf8ToUtf16(ex.what()));
+        revertToggle = true;
     } catch (...) {
+        DebugTrace(L"[SettingsWindow] ApplyStartWithWindowsAsync failed: unknown exception");
         revertToggle = true;
     }
 

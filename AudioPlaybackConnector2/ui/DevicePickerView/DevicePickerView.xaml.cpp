@@ -79,8 +79,15 @@ void DevicePickerView::LoadDevices() {
         if (m_findAllOp) {
             try {
                 m_findAllOp.Cancel();
+            } catch (winrt::hresult_error const& ex) {
+                DebugTrace(L"[DevicePickerView] ERROR: cancelling previous FindAllAsync failed: 0x{0:08X} {1}",
+                           static_cast<uint32_t>(ex.code()),
+                           ex.message());
+            } catch (std::exception const& ex) {
+                DebugTrace(L"[DevicePickerView] ERROR: cancelling previous FindAllAsync failed: {0}",
+                           util::Utf8ToUtf16(ex.what()));
             } catch (...) {
-                DebugTrace(L"[DevicePickerView] ERROR: cancelling previous FindAllAsync failed");
+                DebugTrace(L"[DevicePickerView] ERROR: cancelling previous FindAllAsync failed: unknown exception");
             }
             m_findAllOp = nullptr;
         }
@@ -113,6 +120,21 @@ void DevicePickerView::LoadDevices() {
             }
             return;
         }
+        auto enqueueFailure = [&]() {
+            bool enqueued = dispatcher.TryEnqueue([weak, listWasEmpty, requestId]() {
+                if (auto self = weak.get()) self->OnDeviceEnumerationFailed(listWasEmpty, requestId);
+            });
+            if (!enqueued) {
+                DebugTrace(L"[DevicePickerView] ERROR: failed to marshal OnDeviceEnumerationFailed to UI thread");
+                if (auto self = weak.get()) {
+                    if (self->m_loadDevicesRequestId.load() == requestId) {
+                        ++self->m_loadDevicesRequestId;
+                        self->m_isLoadingDevices.store(false);
+                        self->m_activeLoadRequestId.store(0);
+                    }
+                }
+            }
+        };
         try {
             auto devices = sender.GetResults();
             bool enqueued = dispatcher.TryEnqueue([weak, devices, listWasEmpty, requestId]() {
@@ -128,21 +150,17 @@ void DevicePickerView::LoadDevices() {
                     }
                 }
             }
+        } catch (winrt::hresult_error const& ex) {
+            DebugTrace(L"[DevicePickerView] ERROR: FindAllAsync failed: 0x{0:08X} {1}",
+                       static_cast<uint32_t>(ex.code()),
+                       ex.message());
+            enqueueFailure();
+        } catch (std::exception const& ex) {
+            DebugTrace(L"[DevicePickerView] ERROR: FindAllAsync failed: {0}", util::Utf8ToUtf16(ex.what()));
+            enqueueFailure();
         } catch (...) {
-            DebugTrace(L"[DevicePickerView] ERROR: FindAllAsync failed");
-            bool enqueued = dispatcher.TryEnqueue([weak, listWasEmpty, requestId]() {
-                if (auto self = weak.get()) self->OnDeviceEnumerationFailed(listWasEmpty, requestId);
-            });
-            if (!enqueued) {
-                DebugTrace(L"[DevicePickerView] ERROR: failed to marshal OnDeviceEnumerationFailed to UI thread");
-                if (auto self = weak.get()) {
-                    if (self->m_loadDevicesRequestId.load() == requestId) {
-                        ++self->m_loadDevicesRequestId;
-                        self->m_isLoadingDevices.store(false);
-                        self->m_activeLoadRequestId.store(0);
-                    }
-                }
-            }
+            DebugTrace(L"[DevicePickerView] ERROR: FindAllAsync failed: unknown exception");
+            enqueueFailure();
         }
     });
 }
@@ -157,8 +175,16 @@ void DevicePickerView::CancelLoadDevices() {
         if (m_findAllOp) {
             try {
                 m_findAllOp.Cancel();
+            } catch (winrt::hresult_error const& ex) {
+                DebugTrace(L"[DevicePickerView] ERROR: CancelLoadDevices failed to cancel FindAllAsync: 0x{0:08X} {1}",
+                           static_cast<uint32_t>(ex.code()),
+                           ex.message());
+            } catch (std::exception const& ex) {
+                DebugTrace(L"[DevicePickerView] ERROR: CancelLoadDevices failed to cancel FindAllAsync: {0}",
+                           util::Utf8ToUtf16(ex.what()));
             } catch (...) {
-                DebugTrace(L"[DevicePickerView] ERROR: CancelLoadDevices failed to cancel FindAllAsync");
+                DebugTrace(
+                    L"[DevicePickerView] ERROR: CancelLoadDevices failed to cancel FindAllAsync: unknown exception");
             }
             m_findAllOp = nullptr;
         }

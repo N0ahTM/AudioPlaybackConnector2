@@ -53,6 +53,9 @@
     <ClCompile Include="src\util\Logger.cpp">
       <Filter>src\util</Filter>
     </ClCompile>
+    <ClCompile Include="src\util\CrashHandler.cpp">
+      <Filter>src\util</Filter>
+    </ClCompile>
     <ClCompile Include="ui\App\App.xaml.cpp">
       <Filter>UI\App</Filter>
     </ClCompile>

@@ -2,6 +2,7 @@
 
 #include <core/DeviceDiscoveryService.hpp>
 #include <core/DeviceSessionStore.hpp>
+#include <core/ReconnectController.hpp>
 #include <string>
 #include <unordered_set>
 #include <util/Util.hpp>
@@ -89,12 +90,9 @@ private:
 
     mutable wil::srwlock m_lock;
     DeviceSessionStore m_sessions;
+    ReconnectController m_reconnectController;
     AutoReconnectPredicate m_autoReconnectPred;
-    std::unordered_set<winrt::hstring> m_cancelledReconnectIds;
-    std::unordered_map<winrt::hstring, std::size_t> m_reconnectTimerCounts;
-    std::unordered_map<winrt::hstring, std::size_t> m_reconnectAttempts;
     std::unordered_map<std::wstring, std::size_t> m_connectAttemptIds;
-    bool m_allReconnectsCancelled = false;
     bool m_powerTransitionSuspended = false;
     bool m_shutdownForProcessExit = false;
 

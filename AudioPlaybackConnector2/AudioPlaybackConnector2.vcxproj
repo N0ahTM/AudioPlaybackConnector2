@@ -131,6 +131,7 @@
     <ClInclude Include="include\core\AudioConnectionService.hpp" />
     <ClInclude Include="include\core\DeviceDiscoveryService.hpp" />
     <ClInclude Include="include\core\DeviceSessionStore.hpp" />
+    <ClInclude Include="include\core\ReconnectController.hpp" />
     <ClInclude Include="include\core\DeviceManager.hpp" />
     <ClInclude Include="include\services\NotificationService.hpp" />
     <ClInclude Include="include\services\SettingsController.hpp" />
@@ -170,6 +171,7 @@
     <ClCompile Include="src\core\AudioConnectionService.cpp" />
     <ClCompile Include="src\core\DeviceDiscoveryService.cpp" />
     <ClCompile Include="src\core\DeviceSessionStore.cpp" />
+    <ClCompile Include="src\core\ReconnectController.cpp" />
     <ClCompile Include="src\core\DeviceManager.cpp" />
     <ClCompile Include="src\services\NotificationService.cpp" />
     <ClCompile Include="src\services\SettingsController.cpp" />

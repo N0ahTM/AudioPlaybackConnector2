@@ -216,13 +216,15 @@ bool NotificationService::Initialize(winrt::hstring const& appName, winrt::Windo
         DebugTrace(L"[NotificationService] AppNotificationManager registered");
         return true;
     } catch (winrt::hresult_error const& ex) {
-        DebugTrace(L"[NotificationService] AppNotificationManager registration failed: 0x{0:X} {1}",
-                   static_cast<uint32_t>(ex.code()),
-                   ex.message());
+        util::DebugTraceException(L"[NotificationService] AppNotificationManager registration failed", ex);
+        Teardown();
+        return false;
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[NotificationService] AppNotificationManager registration failed", ex);
         Teardown();
         return false;
     } catch (...) {
-        DebugTrace(L"[NotificationService] AppNotificationManager registration failed: unknown exception");
+        util::DebugTraceUnknownException(L"[NotificationService] AppNotificationManager registration failed");
         Teardown();
         return false;
     }
@@ -337,11 +339,11 @@ winrt::fire_and_forget NotificationService::ShowToastOrFallbackAsync(std::wstrin
         notificationManager.Show(notification);
         co_return;
     } catch (winrt::hresult_error const& ex) {
-        DebugTrace(L"[NotificationService] AppNotificationManager.Show failed: 0x{0:X} {1}",
-                   static_cast<uint32_t>(ex.code()),
-                   ex.message());
+        util::DebugTraceException(L"[NotificationService] AppNotificationManager.Show failed", ex);
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[NotificationService] AppNotificationManager.Show failed", ex);
     } catch (...) {
-        DebugTrace(L"[NotificationService] AppNotificationManager.Show failed: unknown exception");
+        util::DebugTraceUnknownException(L"[NotificationService] AppNotificationManager.Show failed");
     }
 
     if (IsStatusNotificationGenerationCurrent(generation)) {
@@ -525,10 +527,10 @@ void NotificationService::OnNotificationInvoked(AppNotifications::AppNotificatio
             reconnectCallback(winrt::hstring(*deviceId));
         }
     } catch (winrt::hresult_error const& ex) {
-        DebugTrace(L"[NotificationService] App notification activation failed: 0x{0:X} {1}",
-                   static_cast<uint32_t>(ex.code()),
-                   ex.message());
+        util::DebugTraceException(L"[NotificationService] App notification activation failed", ex);
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[NotificationService] App notification activation failed", ex);
     } catch (...) {
-        DebugTrace(L"[NotificationService] App notification activation failed: unknown exception");
+        util::DebugTraceUnknownException(L"[NotificationService] App notification activation failed");
     }
 }

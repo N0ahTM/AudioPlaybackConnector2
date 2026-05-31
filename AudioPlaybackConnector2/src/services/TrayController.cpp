@@ -184,10 +184,20 @@ void TrayController::ShowDevicePicker() {
     m_pickerFlyoutState.store(PickerFlyoutState::Opening);
     try {
         m_pickerFlyout = CreatePickerFlyout();
+    } catch (winrt::hresult_error const& ex) {
+        m_pickerFlyoutState.store(PickerFlyoutState::Closed);
+        m_pickerFlyout = nullptr;
+        util::DebugTraceException(L"[TrayController] ERROR: failed to create picker flyout", ex);
+        return;
+    } catch (std::exception const& ex) {
+        m_pickerFlyoutState.store(PickerFlyoutState::Closed);
+        m_pickerFlyout = nullptr;
+        util::DebugTraceException(L"[TrayController] ERROR: failed to create picker flyout", ex);
+        return;
     } catch (...) {
         m_pickerFlyoutState.store(PickerFlyoutState::Closed);
         m_pickerFlyout = nullptr;
-        DebugTrace(L"[TrayController] ERROR: failed to create picker flyout");
+        util::DebugTraceUnknownException(L"[TrayController] ERROR: failed to create picker flyout");
         return;
     }
 
@@ -212,10 +222,18 @@ void TrayController::ShowDevicePicker() {
     options.Position(point);
     try {
         m_pickerFlyout.ShowAt(root, options);
+    } catch (winrt::hresult_error const& ex) {
+        m_pickerFlyoutState.store(PickerFlyoutState::Closed);
+        m_pickerFlyout = nullptr;
+        util::DebugTraceException(L"[TrayController] ERROR: failed to show picker flyout", ex);
+    } catch (std::exception const& ex) {
+        m_pickerFlyoutState.store(PickerFlyoutState::Closed);
+        m_pickerFlyout = nullptr;
+        util::DebugTraceException(L"[TrayController] ERROR: failed to show picker flyout", ex);
     } catch (...) {
         m_pickerFlyoutState.store(PickerFlyoutState::Closed);
         m_pickerFlyout = nullptr;
-        DebugTrace(L"[TrayController] ERROR: failed to show picker flyout");
+        util::DebugTraceUnknownException(L"[TrayController] ERROR: failed to show picker flyout");
     }
 }
 
@@ -251,8 +269,12 @@ void TrayController::RefreshDevicePickerState() {
     try {
         auto impl = m_devicePickerView.as<winrt::AudioPlaybackConnector2::implementation::DevicePickerView>();
         impl->RefreshDeviceStates();
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(L"[TrayController] ERROR: failed to refresh picker device state", ex);
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[TrayController] ERROR: failed to refresh picker device state", ex);
     } catch (...) {
-        DebugTrace(L"[TrayController] ERROR: failed to refresh picker device state");
+        util::DebugTraceUnknownException(L"[TrayController] ERROR: failed to refresh picker device state");
     }
 }
 
@@ -436,8 +458,12 @@ void TrayController::StripFlyoutPresenterStyle(winrt::Microsoft::UI::Xaml::Depen
             }
             parent = winrt::Microsoft::UI::Xaml::Media::VisualTreeHelper::GetParent(parent);
         }
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(L"[TrayController] ERROR: StripFlyoutPresenterStyle failed", ex);
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[TrayController] ERROR: StripFlyoutPresenterStyle failed", ex);
     } catch (...) {
-        DebugTrace(L"[TrayController] ERROR: StripFlyoutPresenterStyle failed");
+        util::DebugTraceUnknownException(L"[TrayController] ERROR: StripFlyoutPresenterStyle failed");
     }
 }
 
@@ -469,8 +495,12 @@ Controls::Flyout TrayController::CreatePickerFlyout() {
             if (self->m_pickerFlyout) {
                 self->m_pickerFlyout.Content(nullptr);
             }
+        } catch (winrt::hresult_error const& ex) {
+            util::DebugTraceException(L"[TrayController] ERROR: Picker flyout closing handler failed", ex);
+        } catch (std::exception const& ex) {
+            util::DebugTraceException(L"[TrayController] ERROR: Picker flyout closing handler failed", ex);
         } catch (...) {
-            DebugTrace(L"[TrayController] ERROR: Picker flyout closing handler failed");
+            util::DebugTraceUnknownException(L"[TrayController] ERROR: Picker flyout closing handler failed");
         }
     });
 

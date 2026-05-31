@@ -89,7 +89,11 @@ bool IsTrustedReleasePageUrl(std::wstring_view value) {
     try {
         winrt::Windows::Foundation::Uri uri{winrt::hstring(value)};
         return uri.SchemeName() == L"https" && _wcsicmp(uri.Host().c_str(), L"github.com") == 0;
-    } catch (...) {
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(L"[UpdateService] Release URL validation failed", ex);
+        return false;
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[UpdateService] Release URL validation failed", ex);
         return false;
     }
 }
@@ -225,7 +229,11 @@ std::wstring UpdateService::CurrentVersionString() {
     try {
         auto version = winrt::Windows::ApplicationModel::Package::Current().Id().Version();
         return FormatVersion(ParsePackageVersion(version));
-    } catch (...) {
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(L"[UpdateService] CurrentVersionString failed", ex);
+        return {};
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[UpdateService] CurrentVersionString failed", ex);
         return {};
     }
 }
@@ -253,22 +261,22 @@ winrt::fire_and_forget UpdateService::LaunchAppInstallerAsync() {
             co_return;
         }
     } catch (winrt::hresult_error const& ex) {
-        DebugTrace(L"[UpdateService] Failed to launch App Installer protocol URI: 0x{0:X} {1}",
-                   static_cast<uint32_t>(ex.code()),
-                   ex.message());
+        util::DebugTraceException(L"[UpdateService] Failed to launch App Installer protocol URI", ex);
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[UpdateService] Failed to launch App Installer protocol URI", ex);
     } catch (...) {
-        DebugTrace(L"[UpdateService] Failed to launch App Installer protocol URI: unknown exception");
+        util::DebugTraceUnknownException(L"[UpdateService] Failed to launch App Installer protocol URI");
     }
 
     try {
         co_await winrt::Windows::System::Launcher::LaunchUriAsync(
             winrt::Windows::Foundation::Uri(winrt::hstring(c_appInstallerUrl)));
     } catch (winrt::hresult_error const& ex) {
-        DebugTrace(L"[UpdateService] Failed to launch appinstaller URI: 0x{0:X} {1}",
-                   static_cast<uint32_t>(ex.code()),
-                   ex.message());
+        util::DebugTraceException(L"[UpdateService] Failed to launch appinstaller URI", ex);
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[UpdateService] Failed to launch appinstaller URI", ex);
     } catch (...) {
-        DebugTrace(L"[UpdateService] Failed to launch appinstaller URI: unknown exception");
+        util::DebugTraceUnknownException(L"[UpdateService] Failed to launch appinstaller URI");
     }
 }
 
@@ -277,10 +285,10 @@ winrt::fire_and_forget UpdateService::LaunchReleasePageAsync(std::wstring releas
         co_await winrt::Windows::System::Launcher::LaunchUriAsync(
             winrt::Windows::Foundation::Uri(winrt::hstring(std::move(releaseUrl))));
     } catch (winrt::hresult_error const& ex) {
-        DebugTrace(L"[UpdateService] Failed to launch release URI: 0x{0:X} {1}",
-                   static_cast<uint32_t>(ex.code()),
-                   ex.message());
+        util::DebugTraceException(L"[UpdateService] Failed to launch release URI", ex);
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[UpdateService] Failed to launch release URI", ex);
     } catch (...) {
-        DebugTrace(L"[UpdateService] Failed to launch release URI: unknown exception");
+        util::DebugTraceUnknownException(L"[UpdateService] Failed to launch release URI");
     }
 }

@@ -165,8 +165,12 @@ void DeviceManager::SuspendForPowerTransition() noexcept {
                             AudioConnectionService::Close(connection);
                         }
                     });
+            } catch (winrt::hresult_error const& ex) {
+                util::DebugTraceException(L"[DeviceManager] Power transition cleanup scheduling failed", ex);
+            } catch (std::exception const& ex) {
+                util::DebugTraceException(L"[DeviceManager] Power transition cleanup scheduling failed", ex);
             } catch (...) {
-                DebugTrace(L"[DeviceManager] Power transition cleanup scheduling failed");
+                util::DebugTraceUnknownException(L"[DeviceManager] Power transition cleanup scheduling failed");
             }
         }
 
@@ -284,7 +288,22 @@ winrt::Windows::Foundation::IAsyncAction DeviceManager::ConnectAsync(winrt::hstr
                 ex.message(),
                 winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::ShowRetryButton);
         }
+    } catch (std::exception const& ex) {
+        auto message = winrt::hstring(util::Utf8ToUtf16(ex.what()));
+        bool reportFailure = false;
+        {
+            auto guard = m_lock.lock_shared();
+            reportFailure = !m_shutdownForProcessExit;
+        }
+        if (reportFailure) {
+            ConnectionError(deviceId, message);
+            DeviceStatusChanged(
+                deviceId,
+                message,
+                winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::ShowRetryButton);
+        }
     } catch (...) {
+        util::DebugTraceUnknownException(L"[DeviceManager] ConnectAsync ERROR");
         auto message = winrt::hstring(_("UnknownError"));
         bool reportFailure = false;
         {
@@ -405,8 +424,14 @@ winrt::fire_and_forget DeviceManager::ReconnectAsync(winrt::hstring deviceId) {
         DeviceStatusChanged(deviceId,
                             ex.message(),
                             winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::ShowRetryButton);
+    } catch (std::exception const& ex) {
+        auto message = winrt::hstring(util::Utf8ToUtf16(ex.what()));
+        DebugTrace(L"[DeviceManager] ReconnectAsync ERROR: {0}", std::wstring(message));
+        ConnectionError(deviceId, message);
+        DeviceStatusChanged(
+            deviceId, message, winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::ShowRetryButton);
     } catch (...) {
-        DebugTrace(L"[DeviceManager] ReconnectAsync ERROR: Unknown exception");
+        util::DebugTraceUnknownException(L"[DeviceManager] ReconnectAsync ERROR");
         auto message = winrt::hstring(_("UnknownError"));
         ConnectionError(deviceId, message);
         DeviceStatusChanged(
@@ -505,7 +530,8 @@ void DeviceManager::LogConnectionSnapshot(winrt::hstring const& reason) const {
             if (info.Device) {
                 try {
                     snapshot.Name = info.Device.Name();
-                } catch (...) {
+                } catch (winrt::hresult_error const&) {
+                } catch (std::exception const&) {
                 }
             }
             snapshot.HasConnection = static_cast<bool>(info.Connection);
@@ -666,8 +692,12 @@ void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason)
                             AudioConnectionService::Close(z);
                         }
                     });
+            } catch (winrt::hresult_error const& ex) {
+                util::DebugTraceException(L"[DeviceManager] Disconnect cleanup scheduling failed", ex);
+            } catch (std::exception const& ex) {
+                util::DebugTraceException(L"[DeviceManager] Disconnect cleanup scheduling failed", ex);
             } catch (...) {
-                DebugTrace(L"[DeviceManager] Disconnect cleanup scheduling failed");
+                util::DebugTraceUnknownException(L"[DeviceManager] Disconnect cleanup scheduling failed");
             }
         }
     }
@@ -852,7 +882,11 @@ DeviceManager::ConnectInternalAsync(winrt::Windows::Devices::Enumeration::Device
     } catch (winrt::hresult_error const& ex) {
         if (!IsConnectAttemptCurrent(deviceId, attemptId)) co_return;
         ReportConnectionFailure(deviceId, ex.message(), true);
+    } catch (std::exception const& ex) {
+        if (!IsConnectAttemptCurrent(deviceId, attemptId)) co_return;
+        ReportConnectionFailure(deviceId, winrt::hstring(util::Utf8ToUtf16(ex.what())), true);
     } catch (...) {
+        util::DebugTraceUnknownException(L"[DeviceManager] ConnectInternalAsync ERROR");
         if (!IsConnectAttemptCurrent(deviceId, attemptId)) co_return;
         ReportConnectionFailure(deviceId, winrt::hstring(_("UnknownError")), true);
     }
@@ -904,8 +938,11 @@ void DeviceManager::OnConnectionStateChanged(winrt::Windows::Media::Audio::Audio
                    static_cast<uint32_t>(ex.code()),
                    ex.message());
         return;
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[DeviceManager] StateChanged callback failed", ex);
+        return;
     } catch (...) {
-        DebugTrace(L"[DeviceManager] StateChanged callback failed: unknown exception");
+        util::DebugTraceUnknownException(L"[DeviceManager] StateChanged callback failed");
         return;
     }
 
@@ -979,11 +1016,18 @@ void DeviceManager::ScheduleReconnect(winrt::hstring deviceId) {
                 }
             },
             decision.Delay);
+    } catch (winrt::hresult_error const& ex) {
+        auto guard = m_lock.lock_exclusive();
+        m_reconnectController.HandleTimerCreateFailed(deviceId);
+        util::DebugTraceException(L"[DeviceManager] ScheduleReconnect ERROR: failed to create reconnect timer", ex);
+    } catch (std::exception const& ex) {
+        auto guard = m_lock.lock_exclusive();
+        m_reconnectController.HandleTimerCreateFailed(deviceId);
+        util::DebugTraceException(L"[DeviceManager] ScheduleReconnect ERROR: failed to create reconnect timer", ex);
     } catch (...) {
         auto guard = m_lock.lock_exclusive();
         m_reconnectController.HandleTimerCreateFailed(deviceId);
-        DebugTrace(L"[DeviceManager] ScheduleReconnect ERROR: failed to create reconnect timer for {0}",
-                   std::wstring(deviceId));
+        util::DebugTraceUnknownException(L"[DeviceManager] ScheduleReconnect ERROR: failed to create reconnect timer");
     }
 }
 

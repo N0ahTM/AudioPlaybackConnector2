@@ -26,8 +26,12 @@ void DeviceDiscoveryService::Start() {
             m_watcher.Removed([this](auto const& sender, auto const& args) { OnDeviceRemoved(sender, args); });
         m_watcher.Start();
         DebugTrace(L"[DeviceDiscoveryService] DeviceWatcher started");
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(L"[DeviceDiscoveryService] Start ERROR: failed to create or start watcher", ex);
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[DeviceDiscoveryService] Start ERROR: failed to create or start watcher", ex);
     } catch (...) {
-        DebugTrace(L"[DeviceDiscoveryService] Start ERROR: failed to create or start watcher");
+        util::DebugTraceUnknownException(L"[DeviceDiscoveryService] Start ERROR: failed to create or start watcher");
     }
 }
 
@@ -42,8 +46,13 @@ void DeviceDiscoveryService::Stop() {
         m_watcher.Stop();
         m_watcher.Added(std::exchange(m_watcherAddedToken, {}));
         m_watcher.Removed(std::exchange(m_watcherRemovedToken, {}));
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(L"[DeviceDiscoveryService] Stop ERROR: failed to stop watcher or revoke token", ex);
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[DeviceDiscoveryService] Stop ERROR: failed to stop watcher or revoke token", ex);
     } catch (...) {
-        DebugTrace(L"[DeviceDiscoveryService] Stop ERROR: failed to stop watcher or revoke token");
+        util::DebugTraceUnknownException(
+            L"[DeviceDiscoveryService] Stop ERROR: failed to stop watcher or revoke token");
     }
 
     m_watcher = nullptr;

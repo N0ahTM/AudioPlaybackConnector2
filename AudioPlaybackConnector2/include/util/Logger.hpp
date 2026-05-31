@@ -57,3 +57,23 @@ template <typename... Args> inline void DebugTrace(std::wstring_view fmt, Args&&
         DebugTrace(fmt);
     }
 }
+
+namespace util {
+
+inline void DebugTraceException(std::wstring_view context, winrt::hresult_error const& ex) noexcept {
+    DebugTrace(L"{0}: 0x{1:08X} {2}", context, static_cast<uint32_t>(ex.code()), ex.message());
+}
+
+inline void DebugTraceException(std::wstring_view context, std::exception const& ex) noexcept {
+    try {
+        DebugTrace(L"{0}: {1}", context, Utf8ToUtf16(ex.what()));
+    } catch (...) {
+        DebugTrace(L"{0}: standard exception", context);
+    }
+}
+
+inline void DebugTraceUnknownException(std::wstring_view context) noexcept {
+    DebugTrace(L"{0}: unknown exception", context);
+}
+
+} // namespace util

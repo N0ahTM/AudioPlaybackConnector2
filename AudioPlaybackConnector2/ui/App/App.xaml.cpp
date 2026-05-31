@@ -362,13 +362,22 @@ void winrt::AudioPlaybackConnector2::implementation::App::SaveLastConnectedDevic
                     if (c.Device) {
                         locked->LastConnectedIds.push_back(std::wstring(c.Device.Id()));
                     }
+                } catch (winrt::hresult_error const& ex) {
+                    util::DebugTraceException(L"[App] SaveLastConnectedDevices skipped a device", ex);
+                } catch (std::exception const& ex) {
+                    util::DebugTraceException(L"[App] SaveLastConnectedDevices skipped a device", ex);
                 } catch (...) {
+                    util::DebugTraceUnknownException(L"[App] SaveLastConnectedDevices skipped a device");
                 }
             }
         }
         m_settings->Save(GetModuleHandleW(nullptr));
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(L"[App] SaveLastConnectedDevices ERROR", ex);
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[App] SaveLastConnectedDevices ERROR", ex);
     } catch (...) {
-        DebugTrace(L"[App] SaveLastConnectedDevices ERROR: ignored exception");
+        util::DebugTraceUnknownException(L"[App] SaveLastConnectedDevices ERROR");
     }
 }
 

@@ -1,7 +1,6 @@
 #include <pch.h>
 #include <ui/App/App.xaml.h>
 #include <MainWindow/MainWindow.xaml.h>
-#include <SettingsWindow/SettingsWindow.xaml.h>
 #include <DevicePickerView/DevicePickerView.xaml.h>
 
 #include <app/StartupUpdateCoordinator.hpp>
@@ -51,6 +50,7 @@ winrt::AudioPlaybackConnector2::implementation::App::App() {
 winrt::AudioPlaybackConnector2::implementation::App::~App() {
     m_exiting.store(true);
     m_powerTransitionCoordinator.Cancel();
+    m_settingsWindowPresenter.Close();
     TeardownDeviceEvents();
     if (m_hwnd) {
         try {
@@ -550,59 +550,12 @@ void winrt::AudioPlaybackConnector2::implementation::App::TeardownDeviceEvents()
 void winrt::AudioPlaybackConnector2::implementation::App::ShowSettingsWindow() {
     if (m_exiting.load()) return;
     DebugTrace(L"[App] ShowSettingsWindow()");
-    if (m_settingsWindow) {
-        auto hwnd = util::GetWindowHandle(m_settingsWindow);
-        if (hwnd) {
-            ShowWindow(hwnd, SW_SHOW);
-            SetForegroundWindow(hwnd);
-            DebugTrace(L"[App] SettingsWindow brought to foreground");
-        }
-        return;
-    }
-
-    try {
-        m_settingsWindow = winrt::AudioPlaybackConnector2::SettingsWindow();
-
-        auto impl = m_settingsWindow.as<winrt::AudioPlaybackConnector2::implementation::SettingsWindow>();
-        if (impl) {
-            impl->SetSettingsController(m_settingsController);
-            if (m_trayController) {
-                if (auto pos = m_trayController->GetSettingsWindowPosition()) {
-                    impl->SetTargetPosition(pos->x, pos->y);
-                }
-            }
-        }
-
-        // Move off-screen BEFORE Activate() so the window never appears
-        // on screen until RootGrid_Loaded has finished styling and content.
-        auto appWindow = m_settingsWindow.AppWindow();
-        if (appWindow) {
-            appWindow.Move({-32000, -32000});
-            appWindow.Resize({1, 1});
-        }
-
-        m_settingsWindow.Activate();
-
-        auto hwnd = util::GetWindowHandle(m_settingsWindow);
-        if (hwnd) {
-            ShowWindow(hwnd, SW_HIDE);
-        }
-
-        auto weak = get_weak();
-        m_settingsWindow.Closed([weak](auto&, auto&) {
-            auto self = weak.get();
-            if (!self) return;
-            DebugTrace(L"[App] SettingsWindow closed");
-            self->m_settingsWindow = nullptr;
-            if (self->m_settings) {
-                self->m_settings->Save(GetModuleHandleW(nullptr));
-            }
-        });
-        DebugTrace(L"[App] SettingsWindow created off-screen (hidden until ready)");
-    } catch (...) {
-        DebugTrace(L"[App] ERROR: Failed to create SettingsWindow");
-        m_settingsWindow = nullptr;
-    }
+    auto weak = get_weak();
+    m_settingsWindowPresenter.Show(m_settingsController, m_trayController, [weak]() {
+        auto self = weak.get();
+        if (!self || !self->m_settings) return;
+        self->m_settings->Save(GetModuleHandleW(nullptr));
+    });
 }
 
 void winrt::AudioPlaybackConnector2::implementation::App::ExitApplication() {
@@ -642,12 +595,7 @@ void winrt::AudioPlaybackConnector2::implementation::App::ExitApplication() {
         m_gdiplusToken = 0;
     }
 
-    if (m_settingsWindow) {
-        try {
-            m_settingsWindow.Close();
-        } catch (...) {
-        }
-    }
+    m_settingsWindowPresenter.Close();
 
     if (m_mainWindow) {
         m_mainWindow.Close();

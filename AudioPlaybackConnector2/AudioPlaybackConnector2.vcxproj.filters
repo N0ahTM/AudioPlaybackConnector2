@@ -29,6 +29,9 @@
     <ClCompile Include="src\app\PowerTransitionCoordinator.cpp">
       <Filter>src\app</Filter>
     </ClCompile>
+    <ClCompile Include="src\app\SettingsWindowPresenter.cpp">
+      <Filter>src\app</Filter>
+    </ClCompile>
     <ClCompile Include="src\app\StartupUpdateCoordinator.cpp">
       <Filter>src\app</Filter>
     </ClCompile>
@@ -101,6 +104,9 @@
       <Filter>include\app</Filter>
     </ClInclude>
     <ClInclude Include="include\app\PowerTransitionCoordinator.hpp">
+      <Filter>include\app</Filter>
+    </ClInclude>
+    <ClInclude Include="include\app\SettingsWindowPresenter.hpp">
       <Filter>include\app</Filter>
     </ClInclude>
     <ClInclude Include="include\app\StartupUpdateCoordinator.hpp">

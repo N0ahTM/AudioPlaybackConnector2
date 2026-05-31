@@ -2,6 +2,7 @@
 
 #include <app/SingleInstanceGuard.hpp>
 #include <app/PowerTransitionCoordinator.hpp>
+#include <app/SettingsWindowPresenter.hpp>
 #include <ui/App/App.xaml.g.h>
 
 #include <services/NotificationService.hpp>
@@ -83,7 +84,6 @@ private:
 
     static std::atomic<App*> s_instance;
     winrt::Microsoft::UI::Xaml::Window m_mainWindow{nullptr};
-    winrt::Microsoft::UI::Xaml::Window m_settingsWindow{nullptr};
     HWND m_hwnd = nullptr;
 
     std::unique_ptr<::Settings> m_settings;
@@ -108,5 +108,6 @@ private:
     bool m_notificationsAvailable = false;
     std::atomic<bool> m_exiting = false;
     PowerTransitionCoordinator m_powerTransitionCoordinator{m_exiting};
+    SettingsWindowPresenter m_settingsWindowPresenter;
 };
 } // namespace winrt::AudioPlaybackConnector2::implementation

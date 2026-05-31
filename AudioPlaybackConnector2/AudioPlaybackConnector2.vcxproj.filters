@@ -23,6 +23,9 @@
     <ClCompile Include="$(GeneratedFilesDir)module.g.cpp">
       <Filter>Generated Files</Filter>
     </ClCompile>
+    <ClCompile Include="src\app\ApplicationHost.cpp">
+      <Filter>src\app</Filter>
+    </ClCompile>
     <ClCompile Include="src\app\DeviceEventRouter.cpp">
       <Filter>src\app</Filter>
     </ClCompile>
@@ -108,6 +111,9 @@
   <ItemGroup>
     <ClInclude Include="include\pch.h">
       <Filter>include</Filter>
+    </ClInclude>
+    <ClInclude Include="include\app\ApplicationHost.hpp">
+      <Filter>include\app</Filter>
     </ClInclude>
     <ClInclude Include="include\app\DeviceEventRouter.hpp">
       <Filter>include\app</Filter>

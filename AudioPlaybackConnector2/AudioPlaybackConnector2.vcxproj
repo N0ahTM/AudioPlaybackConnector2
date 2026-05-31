@@ -123,6 +123,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\pch.h" />
+    <ClInclude Include="include\app\ApplicationHost.hpp" />
     <ClInclude Include="include\app\DeviceEventRouter.hpp" />
     <ClInclude Include="include\app\PowerTransitionCoordinator.hpp" />
     <ClInclude Include="include\app\SettingsWindowPresenter.hpp" />
@@ -172,6 +173,7 @@
     <ClCompile Include="src\pch.cpp">
       <PrecompiledHeader>Create</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="src\app\ApplicationHost.cpp" />
     <ClCompile Include="src\app\DeviceEventRouter.cpp" />
     <ClCompile Include="src\app\PowerTransitionCoordinator.cpp" />
     <ClCompile Include="src\app\SettingsWindowPresenter.cpp" />

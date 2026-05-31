@@ -78,29 +78,64 @@ std::wstring ReadString(winrt::Windows::Data::Json::JsonObject const& json, winr
 }
 } // namespace
 
-UpdateCheckResult UpdateService::CheckForUpdates() {
+UpdateCheckTask UpdateCheckTask::promise_type::get_return_object() noexcept {
+    return UpdateCheckTask{UpdateCheckTask::Handle::from_promise(*this)};
+}
+
+auto UpdateCheckTask::promise_type::final_suspend() noexcept {
+    struct FinalAwaiter {
+        bool await_ready() noexcept { return false; }
+
+        void await_suspend(UpdateCheckTask::Handle handle) noexcept {
+            if (auto continuation = handle.promise().Continuation) {
+                continuation.resume();
+            }
+        }
+
+        void await_resume() noexcept {}
+    };
+
+    return FinalAwaiter{};
+}
+
+void UpdateCheckTask::await_suspend(std::coroutine_handle<> continuation) noexcept {
+    m_handle.promise().Continuation = continuation;
+    m_handle.resume();
+}
+
+UpdateCheckResult UpdateCheckTask::await_resume() {
+    if (m_handle.promise().Exception) {
+        std::rethrow_exception(m_handle.promise().Exception);
+    }
+    return std::move(m_handle.promise().Result);
+}
+
+UpdateCheckTask UpdateService::CheckForUpdatesAsync() {
     UpdateCheckResult result;
     result.CurrentVersion = CurrentVersionString();
     result.ReleaseUrl = std::wstring(c_latestReleasePageUrl);
     result.AppInstallerUrl = std::wstring(c_appInstallerUrl);
 
     try {
+        co_await winrt::resume_background();
+
         winrt::Windows::Web::Http::HttpClient client;
         client.DefaultRequestHeaders().UserAgent().TryParseAdd(L"AudioPlaybackConnector2");
         client.DefaultRequestHeaders().Accept().TryParseAdd(L"application/vnd.github+json");
 
-        auto response = client.GetAsync(winrt::Windows::Foundation::Uri(winrt::hstring(c_latestReleaseApiUrl))).get();
+        auto response =
+            co_await client.GetAsync(winrt::Windows::Foundation::Uri(winrt::hstring(c_latestReleaseApiUrl)));
         if (!response.IsSuccessStatusCode()) {
             result.ErrorMessage = std::format(L"GitHub returned HTTP {}", static_cast<uint32_t>(response.StatusCode()));
-            return result;
+            co_return result;
         }
 
-        auto body = response.Content().ReadAsStringAsync().get();
+        auto body = co_await response.Content().ReadAsStringAsync();
         auto json = winrt::Windows::Data::Json::JsonObject::Parse(body);
         auto tagName = ReadString(json, L"tag_name");
         if (tagName.empty()) {
             result.ErrorMessage = L"GitHub release response did not contain tag_name";
-            return result;
+            co_return result;
         }
 
         if (auto releaseUrl = ReadString(json, L"html_url"); !releaseUrl.empty()) {
@@ -110,14 +145,14 @@ UpdateCheckResult UpdateService::CheckForUpdates() {
         auto latestVersion = ParseVersion(tagName);
         if (!latestVersion.Valid) {
             result.ErrorMessage = std::format(L"Unsupported release tag: {}", tagName);
-            return result;
+            co_return result;
         }
 
         auto currentVersion = ParsePackageVersion(winrt::Windows::ApplicationModel::Package::Current().Id().Version());
         result.LatestVersion = FormatVersion(latestVersion);
         result.Status = CompareVersions(latestVersion, currentVersion) > 0 ? UpdateCheckStatus::UpdateAvailable
                                                                            : UpdateCheckStatus::UpToDate;
-        return result;
+        co_return result;
     } catch (winrt::hresult_error const& ex) {
         result.ErrorMessage = std::format(L"0x{:08X} {}", static_cast<uint32_t>(ex.code()), std::wstring(ex.message()));
     } catch (std::exception const& ex) {
@@ -126,7 +161,7 @@ UpdateCheckResult UpdateService::CheckForUpdates() {
         result.ErrorMessage = L"Unknown update check error";
     }
 
-    return result;
+    co_return result;
 }
 
 std::wstring UpdateService::CurrentVersionString() {

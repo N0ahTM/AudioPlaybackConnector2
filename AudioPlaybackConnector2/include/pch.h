@@ -36,6 +36,7 @@
 #include <tuple>
 #include <array>
 #include <chrono>
+#include <coroutine>
 
 #ifndef _DEBUG
 #define RESULT_DIAGNOSTICS_LEVEL 1

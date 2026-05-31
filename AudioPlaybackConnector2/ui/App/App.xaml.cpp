@@ -478,8 +478,7 @@ winrt::fire_and_forget winrt::AudioPlaybackConnector2::implementation::App::Chec
     settings->Save(GetModuleHandleW(nullptr));
 
     winrt::apartment_context ui;
-    co_await winrt::resume_background();
-    auto result = UpdateService::CheckForUpdates();
+    auto result = co_await UpdateService::CheckForUpdatesAsync();
     co_await ui;
 
     settings = m_settings.get();

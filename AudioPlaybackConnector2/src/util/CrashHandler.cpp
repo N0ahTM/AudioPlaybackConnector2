@@ -310,7 +310,7 @@ BuildIssueUrl(DWORD exceptionCode, std::filesystem::path const& reportPath, std:
                             L"- App log: `{}`\r\n"
                             L"\r\n"
                             L"## What happened\r\n"
-                            L"<!-- Bitte kurz beschreiben, was direkt vor dem Absturz passiert ist. -->\r\n",
+                            L"<!-- Briefly describe what happened right before the crash. -->\r\n",
                             exceptionCode,
                             GetAppVersionString(),
                             GetWindowsVersionString(),

@@ -162,6 +162,16 @@ When installed through `AudioPlaybackConnector2.appinstaller`, Windows also chec
 
 ---
 
+## Privacy and Crash Reports
+
+AudioPlaybackConnector2 stores settings locally in the current user's profile. This includes paired device names, device IDs, reconnect preferences, language, startup preference, and update notification state.
+
+The app does not send telemetry. Update checks only request GitHub release metadata, and App Installer updates use the fixed appinstaller feed URL shown above.
+
+If the app crashes, it may create a local crash report and minidump. Minidumps can contain sensitive process memory, local paths, device names, or other private data. Do not upload dump files publicly unless you have reviewed them and are comfortable sharing their contents.
+
+---
+
 ## Supported Languages
 
 AudioPlaybackConnector2 currently includes string resources for:

@@ -34,16 +34,11 @@ TrayNotificationType ToTrayNotificationType(NotificationService::FallbackNotific
 }
 } // namespace
 
-namespace winrt::AudioPlaybackConnector2::implementation {
-std::atomic<App*> App::s_instance = nullptr;
-} // namespace winrt::AudioPlaybackConnector2::implementation
-
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Constructors / Destructor /////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
 winrt::AudioPlaybackConnector2::implementation::App::App() {
-    s_instance.store(this);
     util::crash::InstallCrashHandlers();
 }
 
@@ -71,7 +66,6 @@ winrt::AudioPlaybackConnector2::implementation::App::~App() {
     }
     m_notificationService.reset();
     m_trayController.reset();
-    s_instance.store(nullptr);
 }
 
 /*------------------------------------------------------------------------------------------------------------*/

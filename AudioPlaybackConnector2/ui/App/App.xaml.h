@@ -23,16 +23,6 @@ struct App : AppT<App> {
     void OnLaunched(Microsoft::UI::Xaml::LaunchActivatedEventArgs const& e);
 
     /*------------------------------------------------------------------------------------------------------------*/
-    /*//////// Public Accessors //////////////////////////////////////////////////////////////////////////////////*/
-    /*------------------------------------------------------------------------------------------------------------*/
-
-    static App* GetInstance() { return s_instance.load(); }
-    ::Settings& GetSettings() { return *m_settings; }
-    std::shared_ptr<::DeviceManager> GetDeviceManager() { return m_deviceManager; }
-    HWND GetWindowHandle() const { return m_hwnd; }
-    winrt::Microsoft::UI::Xaml::Window GetMainWindow() const { return m_mainWindow; }
-
-    /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Actions ///////////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
@@ -83,7 +73,6 @@ private:
     /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    static std::atomic<App*> s_instance;
     winrt::Microsoft::UI::Xaml::Window m_mainWindow{nullptr};
     HWND m_hwnd = nullptr;
 

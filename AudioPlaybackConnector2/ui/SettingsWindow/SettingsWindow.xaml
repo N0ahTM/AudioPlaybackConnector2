@@ -9,14 +9,24 @@
     Title="Settings"
     mc:Ignorable="d">
 
+    <Window.SystemBackdrop>
+        <MicaBackdrop />
+    </Window.SystemBackdrop>
+
     <Grid
         x:Name="RootGrid"
-        Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
+        Background="Transparent"
         Loaded="RootGrid_Loaded">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
+
+        <SystemBackdropElement
+            x:Name="BackdropElement"
+            Grid.RowSpan="2"
+            HorizontalAlignment="Stretch"
+            VerticalAlignment="Stretch" />
 
         <Grid
             x:Name="TitleBarArea"
@@ -31,12 +41,16 @@
         </Grid>
 
         <ScrollViewer
+            x:Name="SettingsContentHost"
             Grid.Row="1"
             HorizontalScrollBarVisibility="Disabled"
             VerticalScrollBarVisibility="Auto">
-            <StackPanel Padding="10,8,10,8" Spacing="12">
+            <StackPanel
+                Padding="10,8,10,8"
+                HorizontalAlignment="Stretch"
+                Spacing="12">
 
-                <StackPanel Spacing="4">
+                <StackPanel HorizontalAlignment="Stretch" Spacing="4">
                     <TextBlock
                         x:Name="TitleText"
                         FontSize="28"
@@ -45,25 +59,27 @@
                     <TextBlock
                         x:Name="SubtitleText"
                         Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
-                        Text="Device connection and app behavior" />
+                        Text="Device connection and app behavior"
+                        TextWrapping="Wrap" />
                 </StackPanel>
 
                 <!-- Connection -->
                 <Border
                     Padding="18"
+                    HorizontalAlignment="Stretch"
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"
                     CornerRadius="8">
-                    <StackPanel Spacing="16">
+                    <StackPanel HorizontalAlignment="Stretch" Spacing="16">
                         <TextBlock
                             x:Name="ConnectionHeader"
                             FontSize="18"
                             FontWeight="SemiBold"
                             Text="Connection" />
 
-                        <Grid ColumnDefinitions="*,Auto">
-                            <StackPanel>
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                            <StackPanel MinWidth="0">
                                 <TextBlock
                                     x:Name="AutoReconnectLabel"
                                     Text="Auto-reconnect on startup"
@@ -75,7 +91,11 @@
                                     Text="Automatically connects to the last used device."
                                     TextWrapping="Wrap" />
                             </StackPanel>
-                            <ToggleSwitch x:Name="AutoReconnectToggle" Grid.Column="1" />
+                            <ToggleSwitch
+                                x:Name="AutoReconnectToggle"
+                                Grid.Column="1"
+                                VerticalAlignment="Center"
+                                MinWidth="64" />
                         </Grid>
 
                         <StackPanel x:Name="DevicesPanel" Spacing="8" />
@@ -85,19 +105,20 @@
                 <!--  System  -->
                 <Border
                     Padding="18"
+                    HorizontalAlignment="Stretch"
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"
                     CornerRadius="8">
-                    <StackPanel Spacing="16">
+                    <StackPanel HorizontalAlignment="Stretch" Spacing="16">
                         <TextBlock
                             x:Name="SystemHeader"
                             FontSize="18"
                             FontWeight="SemiBold"
                             Text="System" />
 
-                        <Grid ColumnDefinitions="*,Auto">
-                            <StackPanel>
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                            <StackPanel MinWidth="0">
                                 <TextBlock
                                     x:Name="StartWithWindowsLabel"
                                     Text="Start with Windows"
@@ -109,7 +130,11 @@
                                     Text="Starts the tray app automatically after sign-in."
                                     TextWrapping="Wrap" />
                             </StackPanel>
-                            <ToggleSwitch x:Name="StartWithWindowsToggle" Grid.Column="1" />
+                            <ToggleSwitch
+                                x:Name="StartWithWindowsToggle"
+                                Grid.Column="1"
+                                VerticalAlignment="Center"
+                                MinWidth="64" />
                         </Grid>
                     </StackPanel>
                 </Border>
@@ -117,45 +142,34 @@
                 <!--  App  -->
                 <Border
                     Padding="18"
+                    HorizontalAlignment="Stretch"
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1"
                     CornerRadius="8">
-                    <StackPanel Spacing="12">
+                    <StackPanel HorizontalAlignment="Stretch" Spacing="12">
                         <TextBlock
                             x:Name="AppHeader"
                             FontSize="18"
                             FontWeight="SemiBold"
                             Text="App" />
 
-                        <TextBlock x:Name="VersionText" Text="Version" />
-
-                        <TextBlock
-                            x:Name="CopyrightText"
-                            FontSize="12"
-                            Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
-                            Text="Copyright (C) 2026 Noah Meyer" />
-                    </StackPanel>
-                </Border>
-
-                <!--  Updates  -->
-                <Border
-                    Padding="18"
-                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="1"
-                    CornerRadius="8">
-                    <StackPanel Spacing="12">
-                        <TextBlock
-                            x:Name="UpdatesHeader"
-                            FontSize="18"
-                            FontWeight="SemiBold"
-                            Text="Updates" />
-
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                            <StackPanel>
+                            <StackPanel MinWidth="0">
+                                <TextBlock
+                                    x:Name="VersionText"
+                                    Text="Version"
+                                    TextWrapping="Wrap" />
+                                <TextBlock
+                                    x:Name="CopyrightText"
+                                    Margin="0,6,0,0"
+                                    FontSize="12"
+                                    Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
+                                    Text="Copyright (C) 2026 Noah Meyer"
+                                    TextWrapping="Wrap" />
                                 <TextBlock
                                     x:Name="CheckForUpdatesLabel"
+                                    Margin="0,14,0,0"
                                     Text="Check for updates"
                                     TextWrapping="Wrap" />
                                 <TextBlock
@@ -185,6 +199,7 @@
 
                         <InfoBar
                             x:Name="UpdateInfoBar"
+                            HorizontalAlignment="Stretch"
                             IsClosable="True"
                             IsOpen="False">
                             <InfoBar.ActionButton>

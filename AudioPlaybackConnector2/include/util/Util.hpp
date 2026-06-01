@@ -142,11 +142,151 @@ inline HWND GetWindowHandle(winrt::Microsoft::UI::Xaml::Window const& window) {
     return hwnd;
 }
 
+inline void ApplyNativeMicaBackdrop(HWND hwnd) {
+    if (!hwnd) return;
+
+    // DWMWA_SYSTEMBACKDROP_TYPE is ignored on unsupported Windows builds.
+    // 2 is DWMSBT_MAINWINDOW, the DWM-native Mica backdrop.
+    int backdropType = 2;
+    DwmSetWindowAttribute(hwnd, static_cast<DWORD>(38), &backdropType, sizeof(backdropType));
+}
+
+inline std::wstring ReplacePlaceholders(std::wstring_view templateStr, std::wstring_view replacement) {
+    std::wstring result;
+    size_t pos = 0;
+    while (pos < templateStr.size()) {
+        auto found = templateStr.find(L"{0}", pos);
+        if (found == std::wstring_view::npos) {
+            result.append(templateStr.substr(pos));
+            break;
+        }
+        result.append(templateStr.substr(pos, found - pos));
+        result.append(replacement);
+        pos = found + 3;
+    }
+    return result;
+}
+
 } // namespace util
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Window Constants //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-inline constexpr int32_t c_settingsWindowWidth = 540;
-inline constexpr int32_t c_settingsWindowHeight = 580;
+inline constexpr int32_t c_settingsWindowPreferredWidthDip = 540;
+inline constexpr int32_t c_settingsWindowPreferredHeightDip = 580;
+inline constexpr int32_t c_settingsWindowMinWidthDip = 420;
+inline constexpr int32_t c_settingsWindowMinHeightDip = 360;
+
+namespace util {
+
+struct SettingsWindowPlacement {
+    POINT position{};
+    SIZE size{};
+    RECT workArea{};
+    UINT dpi = USER_DEFAULT_SCREEN_DPI;
+};
+
+inline int32_t DipToPixel(int32_t dip, UINT dpi) {
+    if (dpi == 0) dpi = USER_DEFAULT_SCREEN_DPI;
+    return MulDiv(dip, static_cast<int>(dpi), USER_DEFAULT_SCREEN_DPI);
+}
+
+inline UINT GetMonitorDpi(HMONITOR monitor) {
+    if (!monitor) return USER_DEFAULT_SCREEN_DPI;
+
+    UINT dpiX = USER_DEFAULT_SCREEN_DPI;
+    UINT dpiY = USER_DEFAULT_SCREEN_DPI;
+    if (SUCCEEDED(GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &dpiX, &dpiY)) && dpiX != 0) {
+        return dpiX;
+    }
+    return USER_DEFAULT_SCREEN_DPI;
+}
+
+inline RECT GetMonitorWorkArea(HMONITOR monitor) {
+    MONITORINFO monitorInfo{sizeof(monitorInfo)};
+    if (monitor && GetMonitorInfoW(monitor, &monitorInfo)) {
+        return monitorInfo.rcWork;
+    }
+
+    RECT rcWork{};
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &rcWork, 0);
+    return rcWork;
+}
+
+inline HMONITOR GetSettingsWindowTargetMonitor(std::optional<RECT> anchorRect) {
+    if (anchorRect) {
+        return MonitorFromRect(&*anchorRect, MONITOR_DEFAULTTONEAREST);
+    }
+
+    POINT cursor{};
+    if (GetCursorPos(&cursor)) {
+        return MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+    }
+
+    return MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY);
+}
+
+inline int32_t ClampInt(int32_t value, int32_t minValue, int32_t maxValue) {
+    if (maxValue < minValue) return maxValue;
+    return std::clamp(value, minValue, maxValue);
+}
+
+inline SettingsWindowPlacement CalculateSettingsWindowPlacement(std::optional<RECT> anchorRect = std::nullopt) {
+    auto monitor = GetSettingsWindowTargetMonitor(anchorRect);
+    auto workArea = GetMonitorWorkArea(monitor);
+    auto dpi = GetMonitorDpi(monitor);
+
+    const int32_t workWidth = std::max<int32_t>(1, workArea.right - workArea.left);
+    const int32_t workHeight = std::max<int32_t>(1, workArea.bottom - workArea.top);
+    const int32_t preferredWidth = DipToPixel(c_settingsWindowPreferredWidthDip, dpi);
+    const int32_t preferredHeight = DipToPixel(c_settingsWindowPreferredHeightDip, dpi);
+    const int32_t designMinWidth = DipToPixel(c_settingsWindowMinWidthDip, dpi);
+    const int32_t designMinHeight = DipToPixel(c_settingsWindowMinHeightDip, dpi);
+    const int32_t maxWidth = std::max<int32_t>(1, MulDiv(workWidth, 90, 100));
+    const int32_t maxHeight = std::max<int32_t>(1, MulDiv(workHeight, 90, 100));
+    const int32_t minWidth = std::min(designMinWidth, maxWidth);
+    const int32_t minHeight = std::min(designMinHeight, maxHeight);
+
+    const int32_t width = ClampInt(preferredWidth, minWidth, maxWidth);
+    const int32_t height = ClampInt(preferredHeight, minHeight, maxHeight);
+
+    int32_t x = workArea.left + (workWidth - width) / 2;
+    int32_t y = workArea.top + (workHeight - height) / 2;
+
+    if (anchorRect) {
+        x = anchorRect->right - width;
+        const int32_t spaceBelow = workArea.bottom - anchorRect->bottom;
+        const int32_t spaceAbove = anchorRect->top - workArea.top;
+
+        if (spaceBelow >= height) {
+            y = anchorRect->bottom;
+        } else if (spaceAbove >= height) {
+            y = anchorRect->top - height;
+        }
+    }
+
+    x = ClampInt(x, workArea.left, workArea.right - width);
+    y = ClampInt(y, workArea.top, workArea.bottom - height);
+
+    return SettingsWindowPlacement{POINT{x, y}, SIZE{width, height}, workArea, dpi};
+}
+
+inline SIZE GetSettingsWindowMinTrackSize(HWND hwnd) {
+    UINT dpi = USER_DEFAULT_SCREEN_DPI;
+    if (hwnd) {
+        dpi = GetDpiForWindow(hwnd);
+        if (dpi == 0) dpi = USER_DEFAULT_SCREEN_DPI;
+    }
+
+    auto monitor =
+        hwnd ? MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) : GetSettingsWindowTargetMonitor(std::nullopt);
+    auto workArea = GetMonitorWorkArea(monitor);
+    const int32_t workWidth = std::max<int32_t>(1, workArea.right - workArea.left);
+    const int32_t workHeight = std::max<int32_t>(1, workArea.bottom - workArea.top);
+
+    return SIZE{std::min(DipToPixel(c_settingsWindowMinWidthDip, dpi), workWidth),
+                std::min(DipToPixel(c_settingsWindowMinHeightDip, dpi), workHeight)};
+}
+
+} // namespace util

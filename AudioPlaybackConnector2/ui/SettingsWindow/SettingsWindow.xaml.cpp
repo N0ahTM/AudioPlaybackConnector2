@@ -40,21 +40,6 @@ std::wstring BuildVersionText() {
     }
 }
 
-std::wstring ReplacePlaceholders(std::wstring_view templateStr, std::wstring_view replacement) {
-    std::wstring result;
-    size_t pos = 0;
-    while (pos < templateStr.size()) {
-        auto found = templateStr.find(L"{0}", pos);
-        if (found == std::wstring_view::npos) {
-            result.append(templateStr.substr(pos));
-            break;
-        }
-        result.append(templateStr.substr(pos, found - pos));
-        result.append(replacement);
-        pos = found + 3;
-    }
-    return result;
-}
 } // namespace
 
 namespace winrt::AudioPlaybackConnector2::implementation {
@@ -63,13 +48,36 @@ namespace winrt::AudioPlaybackConnector2::implementation {
 /*//////// Constructors / Destructor /////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-SettingsWindow::SettingsWindow() {}
+SettingsWindow::SettingsWindow() {
+    this->SystemBackdrop(winrt::Microsoft::UI::Xaml::Media::MicaBackdrop());
+}
+
+LRESULT CALLBACK SettingsWindow::SettingsWindowSubclassProc(
+    HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
+    auto self = reinterpret_cast<SettingsWindow*>(dwRefData);
+    if (msg == WM_GETMINMAXINFO) {
+        auto minSize = util::GetSettingsWindowMinTrackSize(hwnd);
+        auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
+        info->ptMinTrackSize.x = minSize.cx;
+        info->ptMinTrackSize.y = minSize.cy;
+        return 0;
+    }
+
+    if (msg == WM_NCDESTROY) {
+        RemoveWindowSubclass(hwnd, SettingsWindowSubclassProc, uIdSubclass);
+        if (self) self->m_subclassInstalled = false;
+    }
+
+    return DefSubclassProc(hwnd, msg, wParam, lParam);
+}
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Event Handlers ////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
 void SettingsWindow::RootGrid_Loaded(IInspectable const&, RoutedEventArgs const&) {
+    BackdropElement().SystemBackdrop(winrt::Microsoft::UI::Xaml::Media::MicaBackdrop());
+
     // Localize static text before the window becomes visible.
     this->Title(winrt::hstring(_("Settings_Title")));
     TitleText().Text(winrt::hstring(_("Settings_Title")));
@@ -83,11 +91,74 @@ void SettingsWindow::RootGrid_Loaded(IInspectable const&, RoutedEventArgs const&
     AppHeader().Text(winrt::hstring(_("Settings_App")));
     VersionText().Text(winrt::hstring(BuildVersionText()));
     CopyrightText().Text(winrt::hstring(_("About_Copyright")));
-    UpdatesHeader().Text(winrt::hstring(_("Settings_Updates")));
     CheckForUpdatesLabel().Text(winrt::hstring(_("Settings_CheckForUpdates")));
     CheckForUpdatesDesc().Text(winrt::hstring(_("Settings_CheckForUpdates_Desc")));
     CheckForUpdatesButton().Content(box_value(winrt::hstring(_("Settings_CheckForUpdates_Button"))));
     OpenAppInstallerButton().Content(box_value(winrt::hstring(_("Settings_OpenAppInstaller"))));
+
+    InitializeSettingsContent();
+
+    // Extend content into title bar for seamless Mica look (Windows 11 style).
+    this->ExtendsContentIntoTitleBar(true);
+    this->SetTitleBar(TitleBarArea());
+
+    auto hwnd = util::GetWindowHandle(*this);
+    if (hwnd) {
+        util::ApplyNativeMicaBackdrop(hwnd);
+
+        DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
+        DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
+
+        BOOL dark = ThemeHelper::GetSystemTheme() == Theme::Dark;
+        DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+
+        auto appWindow = this->AppWindow();
+        if (appWindow) {
+            appWindow.Resize({m_targetPlacement.size.cx, m_targetPlacement.size.cy});
+
+            auto presenter = appWindow.Presenter().as<OverlappedPresenter>();
+            if (presenter) {
+                presenter.IsResizable(true);
+                presenter.IsMinimizable(false);
+                presenter.IsMaximizable(false);
+            }
+
+            if (!m_subclassInstalled &&
+                SetWindowSubclass(hwnd, SettingsWindowSubclassProc, 1, reinterpret_cast<DWORD_PTR>(this))) {
+                m_subclassInstalled = true;
+            }
+
+            RevealAtTarget(hwnd);
+        }
+    }
+}
+
+void SettingsWindow::RevealAtTarget(HWND hwnd) {
+    auto appWindow = this->AppWindow();
+    if (appWindow) {
+        appWindow.Move({m_targetPlacement.position.x, m_targetPlacement.position.y});
+        appWindow.Show();
+    }
+    SetForegroundWindow(hwnd);
+}
+
+void SettingsWindow::StartWithWindowsToggle_Toggled(IInspectable const& sender, RoutedEventArgs const&) {
+    if (m_suppressStartupToggle) return;
+    auto toggle = sender.as<ToggleSwitch>();
+    ApplyStartWithWindowsAsync(toggle.IsOn());
+}
+
+void SettingsWindow::CheckForUpdatesButton_Click(IInspectable const&, RoutedEventArgs const&) {
+    RunManualUpdateCheckAsync();
+}
+
+void SettingsWindow::OpenAppInstallerButton_Click(IInspectable const&, RoutedEventArgs const&) {
+    UpdateService::LaunchAppInstallerAsync();
+}
+
+void SettingsWindow::InitializeSettingsContent() {
+    if (m_contentInitialized) return;
+    m_contentInitialized = true;
 
     auto controller = m_settingsController;
     if (!controller) return;
@@ -123,63 +194,6 @@ void SettingsWindow::RootGrid_Loaded(IInspectable const&, RoutedEventArgs const&
     });
 
     RebuildDeviceList();
-
-    // Mica system backdrop for the settings window.
-    this->SystemBackdrop(winrt::Microsoft::UI::Xaml::Media::MicaBackdrop());
-
-    // Extend content into title bar for seamless Mica look (Windows 11 style).
-    this->ExtendsContentIntoTitleBar(true);
-    this->SetTitleBar(TitleBarArea());
-
-    auto hwnd = util::GetWindowHandle(*this);
-    if (hwnd) {
-        DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
-        DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
-
-        BOOL dark = ThemeHelper::GetSystemTheme() == Theme::Dark;
-        DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
-
-        // Only show the window once content and DWM styling are fully ready.
-        auto appWindow = this->AppWindow();
-        if (appWindow) {
-            RECT rcWork{};
-            SystemParametersInfoW(SPI_GETWORKAREA, 0, &rcWork, 0);
-            int x, y;
-            if (m_targetX != INT_MIN && m_targetY != INT_MIN) {
-                x = m_targetX;
-                y = m_targetY;
-            } else {
-                x = rcWork.left + ((rcWork.right - rcWork.left) - c_settingsWindowWidth) / 2;
-                y = rcWork.top + ((rcWork.bottom - rcWork.top) - c_settingsWindowHeight) / 2;
-            }
-            appWindow.Move({x, y});
-            appWindow.Resize({c_settingsWindowWidth, c_settingsWindowHeight});
-
-            auto presenter = appWindow.Presenter().as<OverlappedPresenter>();
-            if (presenter) {
-                presenter.IsResizable(false);
-                presenter.IsMinimizable(false);
-                presenter.IsMaximizable(false);
-            }
-
-            appWindow.Show();
-        }
-        SetForegroundWindow(hwnd);
-    }
-}
-
-void SettingsWindow::StartWithWindowsToggle_Toggled(IInspectable const& sender, RoutedEventArgs const&) {
-    if (m_suppressStartupToggle) return;
-    auto toggle = sender.as<ToggleSwitch>();
-    ApplyStartWithWindowsAsync(toggle.IsOn());
-}
-
-void SettingsWindow::CheckForUpdatesButton_Click(IInspectable const&, RoutedEventArgs const&) {
-    RunManualUpdateCheckAsync();
-}
-
-void SettingsWindow::OpenAppInstallerButton_Click(IInspectable const&, RoutedEventArgs const&) {
-    UpdateService::LaunchAppInstallerAsync();
 }
 
 winrt::fire_and_forget SettingsWindow::RunManualUpdateCheckAsync() {
@@ -214,7 +228,7 @@ void SettingsWindow::ShowUpdateCheckResult(UpdateCheckResult const& result) {
             UpdateInfoBar().Severity(InfoBarSeverity::Informational);
             UpdateInfoBar().Title(winrt::hstring(_("Settings_UpdateAvailable_Title")));
             UpdateInfoBar().Message(
-                winrt::hstring(ReplacePlaceholders(_("Settings_UpdateAvailable_Message"), result.LatestVersion)));
+                winrt::hstring(util::ReplacePlaceholders(_("Settings_UpdateAvailable_Message"), result.LatestVersion)));
             OpenAppInstallerButton().Visibility(Visibility::Visible);
             break;
         case UpdateCheckStatus::UpToDate:
@@ -364,12 +378,15 @@ void SettingsWindow::RebuildDeviceList() {
         noDevices.Text(winrt::hstring(_("Settings_NoDevices")));
         noDevices.Foreground(secondaryBrush);
         noDevices.FontSize(12);
+        noDevices.TextWrapping(TextWrapping::Wrap);
         DevicesPanel().Children().Append(noDevices);
         return;
     }
 
     for (auto& dev : devices) {
         auto item = Grid();
+        item.HorizontalAlignment(HorizontalAlignment::Stretch);
+        item.ColumnSpacing(12);
         item.ColumnDefinitions().Append(ColumnDefinition());
         item.ColumnDefinitions().Append(ColumnDefinition());
         item.ColumnDefinitions().Append(ColumnDefinition());
@@ -377,14 +394,21 @@ void SettingsWindow::RebuildDeviceList() {
         item.ColumnDefinitions().GetAt(2).Width(GridLengthHelper::Auto());
 
         auto namePanel = StackPanel();
+        namePanel.MinWidth(0);
+        namePanel.VerticalAlignment(VerticalAlignment::Center);
         auto name = TextBlock();
         name.Text(dev.DisplayName);
+        name.TextWrapping(TextWrapping::Wrap);
+        name.TextTrimming(TextTrimming::CharacterEllipsis);
+        name.MaxLines(2);
+        ToolTipService::SetToolTip(name, box_value(dev.DisplayName));
         namePanel.Children().Append(name);
 
         auto subtitle = TextBlock();
         subtitle.Text(winrt::hstring(_("Settings_PairedDevice")));
         subtitle.Foreground(secondaryBrush);
         subtitle.FontSize(12);
+        subtitle.TextWrapping(TextWrapping::Wrap);
         namePanel.Children().Append(subtitle);
 
         Grid::SetColumn(namePanel, 0);
@@ -392,6 +416,7 @@ void SettingsWindow::RebuildDeviceList() {
         auto toggle = ToggleSwitch();
         toggle.IsOn(dev.AutoReconnect);
         toggle.MinWidth(64);
+        toggle.VerticalAlignment(VerticalAlignment::Center);
         toggle.OffContent(box_value(L""));
         toggle.OnContent(box_value(L""));
         ToolTipService::SetToolTip(toggle, box_value(winrt::hstring(_("Device_AutoReconnect"))));
@@ -407,6 +432,7 @@ void SettingsWindow::RebuildDeviceList() {
 
         auto forgetBtn = Button();
         forgetBtn.MinWidth(80);
+        forgetBtn.VerticalAlignment(VerticalAlignment::Center);
         forgetBtn.Content(box_value(winrt::hstring(_("Device_Forget"))));
         forgetBtn.Click([id = dev.Id, weak](auto, auto) {
             if (auto self = weak.get()) {
@@ -433,9 +459,8 @@ void SettingsWindow::SetSettingsController(std::shared_ptr<ISettingsController> 
     m_settingsController = std::move(controller);
 }
 
-void SettingsWindow::SetTargetPosition(int32_t x, int32_t y) {
-    m_targetX = x;
-    m_targetY = y;
+void SettingsWindow::SetTargetPlacement(util::SettingsWindowPlacement placement) {
+    m_targetPlacement = placement;
 }
 
 } // namespace winrt::AudioPlaybackConnector2::implementation

@@ -8,6 +8,7 @@
 #include <windowsx.h>
 #include <commctrl.h>
 #include <shellapi.h>
+#include <shellscalingapi.h>
 #include <shobjidl_core.h>
 #include <shlwapi.h>
 #include <dwmapi.h>

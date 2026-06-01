@@ -26,31 +26,27 @@ void SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settings
 
     try {
         m_settingsWindow = winrt::AudioPlaybackConnector2::SettingsWindow();
+        auto placement =
+            trayController ? trayController->GetSettingsWindowPlacement() : util::CalculateSettingsWindowPlacement();
 
         auto impl = m_settingsWindow.as<winrt::AudioPlaybackConnector2::implementation::SettingsWindow>();
         if (impl) {
             impl->SetSettingsController(std::move(settingsController));
-            if (trayController) {
-                if (auto pos = trayController->GetSettingsWindowPosition()) {
-                    impl->SetTargetPosition(pos->x, pos->y);
-                }
-            }
+            impl->SetTargetPlacement(placement);
         }
 
-        // Move off-screen before Activate() so the window never appears on screen until RootGrid_Loaded has
-        // finished styling and content.
+        // Move off-screen at the final size before Activate() so XAML never measures against a tiny 1x1 window.
         auto appWindow = m_settingsWindow.AppWindow();
         if (appWindow) {
             appWindow.Move({-32000, -32000});
-            appWindow.Resize({1, 1});
+            appWindow.Resize({placement.size.cx, placement.size.cy});
+        }
+
+        if (auto hwnd = util::GetWindowHandle(m_settingsWindow)) {
+            util::ApplyNativeMicaBackdrop(hwnd);
         }
 
         m_settingsWindow.Activate();
-
-        auto hwnd = util::GetWindowHandle(m_settingsWindow);
-        if (hwnd) {
-            ShowWindow(hwnd, SW_HIDE);
-        }
 
         m_settingsWindow.Closed([this, saveSettings = std::move(saveSettings)](auto&, auto&) mutable {
             DebugTrace(L"[SettingsWindowPresenter] SettingsWindow closed");

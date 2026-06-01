@@ -77,6 +77,37 @@ void TrayController::SetDeviceManager(std::shared_ptr<DeviceManager> deviceManag
 
 void TrayController::Teardown() noexcept {
     m_isTearingDown.store(true);
+
+    // Marshal to UI thread if necessary so XAML objects are destroyed on the correct thread.
+    if (m_mainWindow) {
+        if (auto dispatcher = m_mainWindow.DispatcherQueue()) {
+            if (!dispatcher.HasThreadAccess()) {
+                bool enqueued = false;
+                try {
+                    auto weak = weak_from_this();
+                    if (!weak.expired()) {
+                        enqueued = dispatcher.TryEnqueue([weak]() noexcept {
+                            if (auto self = weak.lock()) {
+                                self->Teardown();
+                            }
+                        });
+                    }
+                } catch (winrt::hresult_error const& ex) {
+                    util::DebugTraceException(L"[TrayController] ERROR: failed to marshal teardown to UI thread", ex);
+                } catch (std::exception const& ex) {
+                    util::DebugTraceException(L"[TrayController] ERROR: failed to marshal teardown to UI thread", ex);
+                } catch (...) {
+                    util::DebugTraceUnknownException(
+                        L"[TrayController] ERROR: failed to marshal teardown to UI thread");
+                }
+                if (enqueued) return;
+
+                DebugTrace(
+                    L"[TrayController] UI dispatcher unavailable during teardown; continuing best-effort cleanup");
+            }
+        }
+    }
+
     if (m_pickerFlyout) {
         try {
             m_pickerFlyout.Hide();
@@ -305,8 +336,8 @@ void TrayController::SetState(TrayIconState state) {
     }
 }
 
-std::optional<POINT> TrayController::GetSettingsWindowPosition() const {
-    return CalculateSettingsWindowPosition();
+util::SettingsWindowPlacement TrayController::GetSettingsWindowPlacement() const {
+    return CalculateSettingsWindowPlacement();
 }
 
 void TrayController::HandleTrayMessage([[maybe_unused]] WPARAM wParam, LPARAM lParam) {
@@ -534,25 +565,12 @@ Controls::Flyout TrayController::CreatePickerFlyout() {
     return flyout;
 }
 
-std::optional<POINT> TrayController::CalculateSettingsWindowPosition() const {
-    if (!m_trayIcon) return std::nullopt;
+util::SettingsWindowPlacement TrayController::CalculateSettingsWindowPlacement() const {
+    if (!m_trayIcon) return util::CalculateSettingsWindowPlacement();
     auto rect = m_trayIcon->GetIconRect();
-    if (!rect) return std::nullopt;
+    if (!rect) return util::CalculateSettingsWindowPlacement();
 
-    RECT rcWork{};
-    SystemParametersInfoW(SPI_GETWORKAREA, 0, &rcWork, 0);
-
-    int x = rect->right - c_settingsWindowWidth;
-    int y = rect->bottom;
-
-    if (x < rcWork.left) x = rcWork.left;
-    if (x + c_settingsWindowWidth > rcWork.right) x = rcWork.right - c_settingsWindowWidth;
-
-    if (y + c_settingsWindowHeight > rcWork.bottom) y = rect->top - c_settingsWindowHeight;
-
-    if (y < rcWork.top) y = rcWork.bottom - c_settingsWindowHeight;
-
-    return POINT{x, y};
+    return util::CalculateSettingsWindowPlacement(*rect);
 }
 
 void TrayController::OnTrayIconDoubleClick() {

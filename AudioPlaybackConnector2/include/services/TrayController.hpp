@@ -3,6 +3,7 @@
 #include <ui/TrayIcon.hpp>
 #include <ui/TrayContextMenu.hpp>
 #include <DevicePickerView/DevicePickerView.xaml.h>
+#include <util/Util.hpp>
 
 #include <functional>
 #include <memory>
@@ -67,7 +68,7 @@ public:
     void ToggleConnectingFrame();
     void Reregister();
     void SetState(TrayIconState state);
-    [[nodiscard]] std::optional<POINT> GetSettingsWindowPosition() const;
+    [[nodiscard]] util::SettingsWindowPlacement GetSettingsWindowPlacement() const;
 
     void HandleTrayMessage(WPARAM wParam, LPARAM lParam);
     [[nodiscard]] UINT TrayCallbackMessage() const noexcept { return m_trayCallbackMsg; }
@@ -81,7 +82,7 @@ private:
     void LaunchBluetoothSettings();
     winrt::Microsoft::UI::Xaml::Controls::Flyout CreatePickerFlyout();
     static void StripFlyoutPresenterStyle(winrt::Microsoft::UI::Xaml::DependencyObject const& content);
-    [[nodiscard]] std::optional<POINT> CalculateSettingsWindowPosition() const;
+    [[nodiscard]] util::SettingsWindowPlacement CalculateSettingsWindowPlacement() const;
     void OnTrayIconDoubleClick();
 
     /*------------------------------------------------------------------------------------------------------------*/

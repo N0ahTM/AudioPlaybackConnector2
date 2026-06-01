@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-06-01
+
+### Added
+- Explicit logging for recoverable exceptions and UI async failures to improve field diagnostics.
+- Privacy and crash report documentation, with README content split into focused docs.
+
+### Changed
+- Refactored core device, reconnect, discovery, application host, settings, and update-check responsibilities into dedicated components.
+- Hardened release App Installer feed generation and verification in CI.
+- Stabilized parallel compilation settings for local and CI builds.
+
+### Fixed
+- Fixed a multi-device disconnect cascade where manually disconnecting or reconnecting one device could cause a second connected device to be treated as an unexpected failure and exit the app (`#6`).
+- Fixed a device picker flyout refresh race during reconnect and disconnect actions.
+- Hardened reconnect async flow and discovery watcher lifetimes during teardown.
+- Bounded logger queue memory under write backpressure.
+- Hardened update release checks and App Installer feed version handling.
+- Ensured generated crash issue templates stay in English.
+
 ## [0.5.0] - 2026-05-28
 
 ### Added
@@ -149,7 +168,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-language support for 8 locales: English, German, French, Spanish, Japanese, Korean, Chinese Simplified, Chinese Traditional.
 - CI/CD workflows: build (with clang-format and CppCheck), CodeQL analysis, and automated MSIX releases on version tags.
 
-[Unreleased]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.4.0...v0.4.1

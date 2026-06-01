@@ -13,7 +13,7 @@ public:
     static StringResources& Instance();
     void Initialize(HINSTANCE hInst);
     void Initialize(HINSTANCE hInst, std::wstring_view language);
-    std::wstring_view Get(std::string_view key) const;
+    std::wstring Get(std::string_view key) const;
 
     StringResources(const StringResources&) = delete;
     StringResources& operator=(const StringResources&) = delete;
@@ -48,6 +48,6 @@ private:
 /*//////// Convenience Macro /////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-inline std::wstring_view _(std::string_view key) {
+inline std::wstring _(std::string_view key) {
     return StringResources::Instance().Get(key);
 }

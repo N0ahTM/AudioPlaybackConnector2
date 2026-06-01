@@ -18,6 +18,7 @@ public:
     /*------------------------------------------------------------------------------------------------------------*/
 
     void Initialize(HWND hwnd, UINT callbackMessage);
+    [[nodiscard]] bool IsInitialized() const noexcept { return m_initialized; }
     void Reregister();
     void SetState(TrayIconState state);
     void SetTooltip(std::wstring_view text);
@@ -49,6 +50,7 @@ private:
     mutable wil::srwlock m_lock;
     TrayIconState m_state = TrayIconState::Idle;
     bool m_connectingFrame = false;
+    bool m_initialized = false;
 
     static constexpr GUID c_trayGuid = {0xcf5eeb74, 0x90fb, 0x441e, {0xbf, 0x17, 0x72, 0x84, 0x02, 0x0e, 0xf0, 0x5c}};
     static constexpr int SIZE_COUNT = 4;

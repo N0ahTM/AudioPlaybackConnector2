@@ -61,6 +61,7 @@ private:
 
     void ShowSettingsWindow();
     void ExitApplication();
+    void PerformTeardown(bool saveLastConnected) noexcept;
     void RunOnUIThread(std::function<void()> work);
 
     /*------------------------------------------------------------------------------------------------------------*/

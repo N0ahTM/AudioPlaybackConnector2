@@ -74,6 +74,8 @@ private:
 
     [[nodiscard]] StatusNotificationTagReservation ReserveStatusNotificationTag();
     [[nodiscard]] bool IsStatusNotificationGenerationCurrent(uint64_t generation) const;
+    // NOTE: This is a coroutine. All parameters are passed by value intentionally to ensure
+    // they remain valid across suspension points. Do NOT change to const&.
     winrt::fire_and_forget ShowToastOrFallbackAsync(std::wstring xml,
                                                     winrt::hstring group,
                                                     winrt::hstring tag,

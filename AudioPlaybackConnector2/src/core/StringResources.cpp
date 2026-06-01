@@ -73,7 +73,7 @@ void StringResources::Initialize(HINSTANCE hInst, std::wstring_view language) {
     }
 }
 
-std::wstring_view StringResources::Get(std::string_view key) const {
+std::wstring StringResources::Get(std::string_view key) const {
     auto guard = m_lock.lock_shared();
     auto it = m_map.find(key);
     if (it != m_map.end()) return it->second;

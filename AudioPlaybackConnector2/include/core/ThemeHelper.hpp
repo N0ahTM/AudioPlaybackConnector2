@@ -40,8 +40,6 @@ private:
         bool Active = true;
     };
 
-    static wil::srwlock s_lock;
-    static std::vector<std::pair<ThemeChangedToken, std::shared_ptr<HandlerState>>> s_handlers;
-    static ThemeChangedToken s_nextToken;
-    static std::optional<Theme> s_lastTheme;
+    struct StaticState;
+    static StaticState& GetStaticState();
 };

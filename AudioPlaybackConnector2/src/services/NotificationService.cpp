@@ -17,24 +17,8 @@ namespace {
 constexpr wchar_t kStatusNotificationGroup[] = L"audioPlaybackConnectorStatus";
 constexpr wchar_t kStatusNotificationTagPrefix[] = L"currentStatus:";
 
-std::wstring ReplacePlaceholders(std::wstring_view templateStr, std::wstring_view replacement) {
-    std::wstring result;
-    size_t pos = 0;
-    while (pos < templateStr.size()) {
-        auto found = templateStr.find(L"{0}", pos);
-        if (found == std::wstring_view::npos) {
-            result.append(templateStr.substr(pos));
-            break;
-        }
-        result.append(templateStr.substr(pos, found - pos));
-        result.append(replacement);
-        pos = found + 3;
-    }
-    return result;
-}
-
 std::wstring NotificationText(std::string_view key, std::wstring_view replacement = {}) {
-    return ReplacePlaceholders(std::wstring(_(key)), replacement);
+    return util::ReplacePlaceholders(std::wstring(_(key)), replacement);
 }
 
 std::wstring XmlEscape(std::wstring_view value) {
@@ -410,7 +394,7 @@ void NotificationService::ShowDeviceConnected(winrt::hstring const& id, winrt::h
                              L"<audio src=\"ms-winsoundevent:Notification.Default\"/>",
                              L"long");
 
-    auto fallbackBody = ReplacePlaceholders(std::wstring(_("Notification_Connected")), deviceName);
+    auto fallbackBody = util::ReplacePlaceholders(std::wstring(_("Notification_Connected")), deviceName);
     ShowStatusToastOrFallback(xml,
                               ExpirationFromNow(std::chrono::minutes(1)),
                               std::wstring(_("AppName")),
@@ -428,7 +412,7 @@ void NotificationService::ShowDeviceDisconnected(winrt::hstring const&, winrt::h
                              L"ms-appx:///Images/ToastWarning.png",
                              L"<audio silent=\"true\"/>");
 
-    auto fallbackBody = ReplacePlaceholders(std::wstring(_("Notification_Disconnected")), deviceName);
+    auto fallbackBody = util::ReplacePlaceholders(std::wstring(_("Notification_Disconnected")), deviceName);
     ShowStatusToastOrFallback(xml,
                               ExpirationFromNow(std::chrono::minutes(1)),
                               std::wstring(_("AppName")),
@@ -446,7 +430,7 @@ void NotificationService::ShowAutoReconnect(winrt::hstring const&, winrt::hstrin
                              L"ms-appx:///Images/ToastReconnect.png",
                              L"<audio silent=\"true\"/>");
 
-    auto fallbackBody = ReplacePlaceholders(std::wstring(_("Notification_AutoReconnect")), deviceName);
+    auto fallbackBody = util::ReplacePlaceholders(std::wstring(_("Notification_AutoReconnect")), deviceName);
     ShowStatusToastOrFallback(xml,
                               ExpirationFromNow(std::chrono::minutes(1)),
                               std::wstring(_("AppName")),
@@ -464,7 +448,7 @@ void NotificationService::ShowAutoReconnectFailed(winrt::hstring const& id, winr
                              L"ms-appx:///Images/ToastError.png",
                              L"<audio src=\"ms-winsoundevent:Notification.Looping.Alarm2\"/>");
 
-    auto fallbackBody = ReplacePlaceholders(std::wstring(_("Notification_AutoReconnectFailed")), deviceName);
+    auto fallbackBody = util::ReplacePlaceholders(std::wstring(_("Notification_AutoReconnectFailed")), deviceName);
     ShowStatusToastOrFallback(xml,
                               ExpirationFromNow(std::chrono::hours(1)),
                               std::wstring(_("AppName")),

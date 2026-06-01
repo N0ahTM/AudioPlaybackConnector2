@@ -174,7 +174,13 @@ UpdateCheckTask UpdateService::CheckForUpdatesAsync() {
             co_return result;
         }
 
-        auto body = co_await response.Content().ReadAsStringAsync();
+        auto content = response.Content();
+        auto headers = content.Headers();
+        if (headers.ContentLength() && headers.ContentLength().Value() > c_maxReleaseJsonCharacters) {
+            result.ErrorMessage = L"GitHub release response was too large";
+            co_return result;
+        }
+        auto body = co_await content.ReadAsStringAsync();
         if (body.size() > c_maxReleaseJsonCharacters) {
             result.ErrorMessage = L"GitHub release response was too large";
             co_return result;

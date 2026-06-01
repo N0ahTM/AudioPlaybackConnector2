@@ -151,6 +151,7 @@ void TrayIcon::Initialize(HWND hwnd, UINT callbackMessage) {
         return;
     }
     Shell_NotifyIconW(NIM_SETVERSION, &m_nid);
+    m_initialized = true;
 }
 
 void TrayIcon::SetState(TrayIconState state) {
@@ -164,6 +165,7 @@ void TrayIcon::SetState(TrayIconState state) {
 void TrayIcon::SetTooltip(std::wstring_view text) {
     std::wstring tmp(text);
     auto guard = m_lock.lock_exclusive();
+    if (!m_initialized) return;
     wcsncpy_s(m_nid.szTip, tmp.c_str(), _TRUNCATE);
     Shell_NotifyIconW(NIM_MODIFY, &m_nid);
 }
@@ -172,6 +174,7 @@ void TrayIcon::ShowNotification(std::wstring_view title, std::wstring_view text,
     std::wstring t(title);
     std::wstring m(text);
     auto guard = m_lock.lock_exclusive();
+    if (!m_initialized) return;
     wcsncpy_s(m_nid.szInfoTitle, t.c_str(), _TRUNCATE);
     wcsncpy_s(m_nid.szInfo, m.c_str(), _TRUNCATE);
 
@@ -210,13 +213,16 @@ std::optional<RECT> TrayIcon::GetIconRect() const {
 
 void TrayIcon::Reregister() {
     auto guard = m_lock.lock_exclusive();
+    if (!m_initialized) return;
     Shell_NotifyIconW(NIM_ADD, &m_nid);
     Shell_NotifyIconW(NIM_SETVERSION, &m_nid);
 }
 
 void TrayIcon::Remove() {
     auto guard = m_lock.lock_exclusive();
+    if (!m_initialized) return;
     Shell_NotifyIconW(NIM_DELETE, &m_nid);
+    m_initialized = false;
 }
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -286,6 +292,7 @@ void TrayIcon::RefreshIcon() {
     TrayIconState state;
     bool connectingFrame;
     auto guard = m_lock.lock_exclusive();
+    if (!m_initialized) return;
     state = m_state;
     connectingFrame = m_connectingFrame;
     HICON hIcon = nullptr;

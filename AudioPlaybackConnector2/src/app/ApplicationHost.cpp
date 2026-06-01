@@ -58,7 +58,7 @@ void ApplicationHost::Start() {
     SetupMainWindow();
 }
 
-void ApplicationHost::Shutdown() noexcept {
+void ApplicationHost::PerformTeardown(bool saveLastConnected) noexcept {
     if (m_exiting.exchange(true)) return;
 
     m_powerTransitionCoordinator.Cancel();
@@ -77,6 +77,9 @@ void ApplicationHost::Shutdown() noexcept {
     if (m_notificationService) {
         m_notificationService->Teardown();
     }
+    if (saveLastConnected) {
+        SaveLastConnectedDevices();
+    }
     if (m_deviceManager) {
         m_deviceManager->ShutdownForProcessExit();
         m_deviceManager.reset();
@@ -87,6 +90,10 @@ void ApplicationHost::Shutdown() noexcept {
         Gdiplus::GdiplusShutdown(m_gdiplusToken);
         m_gdiplusToken = 0;
     }
+}
+
+void ApplicationHost::Shutdown() noexcept {
+    PerformTeardown(/*saveLastConnected=*/false);
 }
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -170,6 +177,7 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) {
     Gdiplus::GdiplusStartupInput gdiplusStartupInput;
     if (Gdiplus::GdiplusStartup(&m_gdiplusToken, &gdiplusStartupInput, nullptr) != Gdiplus::Ok) {
         DebugTrace(L"[App] ERROR: GdiplusStartup failed");
+        ExitApplication();
         return;
     }
     DebugTrace(L"[App] GDI+ initialized");
@@ -531,41 +539,8 @@ void ApplicationHost::ShowSettingsWindow() {
 }
 
 void ApplicationHost::ExitApplication() {
-    if (m_exiting.exchange(true)) return;
     DebugTrace(L"[App] ExitApplication() started");
-
-    m_powerTransitionCoordinator.Cancel();
-
-    TeardownDeviceEvents();
-
-    if (m_hwnd) {
-        try {
-            KillTimer(m_hwnd, c_timerAnimation);
-            RemoveWindowSubclass(m_hwnd, SubclassProc, 1);
-        } catch (...) {
-        }
-    }
-
-    if (m_trayController) {
-        m_trayController->Teardown();
-    }
-
-    if (m_notificationService) {
-        m_notificationService->Teardown();
-    }
-
-    SaveLastConnectedDevices();
-
-    if (m_deviceManager) {
-        m_deviceManager->ShutdownForProcessExit();
-    }
-    m_notificationService.reset();
-
-    m_trayController.reset();
-    if (m_gdiplusToken) {
-        Gdiplus::GdiplusShutdown(m_gdiplusToken);
-        m_gdiplusToken = 0;
-    }
+    PerformTeardown(/*saveLastConnected=*/true);
 
     m_settingsWindowPresenter.Close();
 

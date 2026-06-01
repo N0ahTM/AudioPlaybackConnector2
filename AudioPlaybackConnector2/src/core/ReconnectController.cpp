@@ -83,6 +83,15 @@ std::size_t ReconnectController::Attempts(winrt::hstring const& deviceId) const 
     return 0;
 }
 
+bool ReconnectController::HasPendingTimer(winrt::hstring const& deviceId) const {
+    auto iter = m_reconnectTimerCounts.find(deviceId);
+    return iter != m_reconnectTimerCounts.end() && iter->second > 0;
+}
+
+bool ReconnectController::HasPendingTimers() const {
+    return std::ranges::any_of(m_reconnectTimerCounts, [](auto const& entry) { return entry.second > 0; });
+}
+
 ReconnectController::ScheduleDecision ReconnectController::PrepareSchedule(winrt::hstring const& deviceId,
                                                                            bool blocked) {
     ScheduleDecision decision;

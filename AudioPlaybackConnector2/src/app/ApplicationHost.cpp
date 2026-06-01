@@ -299,6 +299,11 @@ winrt::hstring ApplicationHost::ResolveKnownDeviceName(winrt::hstring const& id)
 void ApplicationHost::ToggleLastConnectedDeviceFromTray() {
     if (m_exiting.load() || !m_settings || !m_deviceManager) return;
 
+    if (m_deviceManager->HasBusyOperations()) {
+        DebugTrace(L"[App] Tray double-click ignored: device operation in progress");
+        return;
+    }
+
     std::wstring targetId;
     {
         auto locked = m_settings->LockSharedData();

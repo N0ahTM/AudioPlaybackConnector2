@@ -83,6 +83,7 @@ private:
     void TrackUserActionCascadeLocked(winrt::hstring const& deviceId);
     bool ConsumeUserActionCascadeLocked(winrt::hstring const& deviceId);
     void PruneUserActionCascadeLocked(std::chrono::steady_clock::time_point now);
+    void RestoreCascadeConnectionDetached(winrt::hstring deviceId);
     void OnConnectionStateChanged(winrt::Windows::Media::Audio::AudioPlaybackConnection sender,
                                   winrt::Windows::Foundation::IInspectable);
     void ScheduleReconnect(winrt::hstring deviceId);
@@ -103,6 +104,7 @@ private:
     AutoReconnectPredicate m_autoReconnectPred;
     std::unordered_map<std::wstring, std::size_t> m_connectAttemptIds;
     std::unordered_map<winrt::hstring, std::chrono::steady_clock::time_point> m_userActionCascadeIds;
+    std::unordered_set<winrt::hstring> m_cascadeRestoreIds;
     bool m_powerTransitionSuspended = false;
     bool m_shutdownForProcessExit = false;
 

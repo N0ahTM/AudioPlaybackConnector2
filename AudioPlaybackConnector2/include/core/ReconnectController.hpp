@@ -39,6 +39,8 @@ public:
     [[nodiscard]] bool IsCancelled(winrt::hstring const& deviceId) const;
     [[nodiscard]] bool AllReconnectsCancelled() const;
     [[nodiscard]] std::size_t Attempts(winrt::hstring const& deviceId) const;
+    [[nodiscard]] bool HasPendingTimer(winrt::hstring const& deviceId) const;
+    [[nodiscard]] bool HasPendingTimers() const;
 
     [[nodiscard]] ScheduleDecision PrepareSchedule(winrt::hstring const& deviceId, bool blocked);
     void StartTimer(winrt::hstring const& deviceId);

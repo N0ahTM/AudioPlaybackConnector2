@@ -3,8 +3,10 @@
 #include <core/DeviceDiscoveryService.hpp>
 #include <core/DeviceSessionStore.hpp>
 #include <core/ReconnectController.hpp>
+#include <chrono>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <util/Util.hpp>
 
@@ -73,11 +75,14 @@ private:
 
     winrt::Windows::Foundation::IAsyncAction
     ConnectInternalAsync(winrt::Windows::Devices::Enumeration::DeviceInformation device);
-    enum class DisconnectReason { UserInitiated, Unexpected, Cleanup };
+    enum class DisconnectReason { UserInitiated, UserInitiatedCascade, Unexpected, Cleanup };
 
     void ReportConnectionFailure(winrt::hstring const& deviceId, winrt::hstring const& message, bool cleanupConnection);
     void Disconnect(winrt::hstring deviceId, DisconnectReason reason);
     bool IsConnectAttemptCurrent(winrt::hstring const& deviceId, std::size_t attemptId) const;
+    void TrackUserActionCascadeLocked(winrt::hstring const& deviceId);
+    bool ConsumeUserActionCascadeLocked(winrt::hstring const& deviceId);
+    void PruneUserActionCascadeLocked(std::chrono::steady_clock::time_point now);
     void OnConnectionStateChanged(winrt::Windows::Media::Audio::AudioPlaybackConnection sender,
                                   winrt::Windows::Foundation::IInspectable);
     void ScheduleReconnect(winrt::hstring deviceId);
@@ -97,6 +102,7 @@ private:
     ReconnectController m_reconnectController;
     AutoReconnectPredicate m_autoReconnectPred;
     std::unordered_map<std::wstring, std::size_t> m_connectAttemptIds;
+    std::unordered_map<winrt::hstring, std::chrono::steady_clock::time_point> m_userActionCascadeIds;
     bool m_powerTransitionSuspended = false;
     bool m_shutdownForProcessExit = false;
 

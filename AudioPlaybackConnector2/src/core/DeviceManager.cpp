@@ -6,6 +6,7 @@
 
 namespace {
 constexpr int c_heartbeatIntervalMinutes = 5;
+constexpr std::chrono::seconds c_userActionCascadeWindow{5};
 
 std::wstring_view ConnectionStateName(winrt::Windows::Media::Audio::AudioPlaybackConnectionState state) {
     switch (state) {
@@ -92,6 +93,7 @@ void DeviceManager::ShutdownForProcessExit() noexcept {
             m_sessions.Clear();
             m_reconnectController.ClearTracking();
             m_connectAttemptIds.clear();
+            m_userActionCascadeIds.clear();
             m_autoReconnectPred = nullptr;
         }
         if (m_discoveryService) {
@@ -144,6 +146,7 @@ void DeviceManager::SuspendForPowerTransition() noexcept {
 
             m_sessions.Clear();
             m_reconnectController.ClearTracking();
+            m_userActionCascadeIds.clear();
         }
 
         if (!connections.empty()) {
@@ -187,6 +190,7 @@ void DeviceManager::ResumeAfterPowerTransition() {
         m_powerTransitionSuspended = false;
         m_reconnectController.AllowReconnects();
         m_reconnectController.ClearTracking();
+        m_userActionCascadeIds.clear();
     }
     DebugTrace(L"[DeviceManager] Power transition resume completed");
     StartDeviceWatcher();
@@ -195,6 +199,7 @@ void DeviceManager::ResumeAfterPowerTransition() {
 void DeviceManager::CancelPendingReconnects() {
     auto guard = m_lock.lock_exclusive();
     m_reconnectController.CancelPendingReconnects();
+    m_userActionCascadeIds.clear();
 }
 
 void DeviceManager::SetAutoReconnectPredicate(AutoReconnectPredicate pred) {
@@ -384,6 +389,7 @@ winrt::Windows::Foundation::IAsyncAction DeviceManager::ReconnectAsync(winrt::hs
                 m_sessions.Connections().erase(iter);
                 ++m_connectAttemptIds[std::wstring(deviceId)];
                 m_sessions.DisconnectingIds().insert(deviceId);
+                TrackUserActionCascadeLocked(deviceId);
             }
         }
 
@@ -609,6 +615,7 @@ void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason)
     auto reasonName = [](DisconnectReason value) -> std::wstring_view {
         switch (value) {
             case DisconnectReason::UserInitiated: return L"UserInitiated";
+            case DisconnectReason::UserInitiatedCascade: return L"UserInitiatedCascade";
             case DisconnectReason::Unexpected: return L"Unexpected";
             case DisconnectReason::Cleanup: return L"Cleanup";
             default: return L"UnknownReason";
@@ -641,6 +648,7 @@ void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason)
         ++m_connectAttemptIds[std::wstring(deviceId)];
         m_sessions.DisconnectingIds().insert(deviceId);
         if (reason == DisconnectReason::UserInitiated) {
+            TrackUserActionCascadeLocked(deviceId);
             m_reconnectController.MarkUserCancelled(deviceId);
         }
     }
@@ -677,7 +685,9 @@ void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason)
         DeviceDisconnected(deviceId);
         DeviceStatusChanged(
             deviceId, L"", winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::None);
-        if (reason == DisconnectReason::Unexpected && autoReconnect) ScheduleReconnect(deviceId);
+        if ((reason == DisconnectReason::Unexpected || reason == DisconnectReason::UserInitiatedCascade) &&
+            autoReconnect)
+            ScheduleReconnect(deviceId);
     }
 
     {
@@ -879,6 +889,7 @@ DeviceManager::ConnectInternalAsync(winrt::Windows::Devices::Enumeration::Device
                         co_return;
                     iter->second.IsOpen = true;
                     m_reconnectController.ClearAttempts(deviceId);
+                    m_userActionCascadeIds.erase(deviceId);
                 }
                 DeviceConnected(deviceId);
                 DeviceStatusChanged(
@@ -920,6 +931,45 @@ bool DeviceManager::IsConnectAttemptCurrent(winrt::hstring const& deviceId, std:
     const std::wstring deviceIdKey = std::wstring(deviceId);
     auto attempt = m_connectAttemptIds.find(deviceIdKey);
     return attempt != m_connectAttemptIds.end() && attempt->second == attemptId;
+}
+
+void DeviceManager::TrackUserActionCascadeLocked(winrt::hstring const& deviceId) {
+    auto now = std::chrono::steady_clock::now();
+    PruneUserActionCascadeLocked(now);
+
+    bool marked = false;
+    auto const expiresAt = now + c_userActionCascadeWindow;
+    for (auto const& [id, info] : m_sessions.Connections()) {
+        if (id == deviceId || !info.IsOpen) continue;
+        m_userActionCascadeIds[id] = expiresAt;
+        marked = true;
+    }
+
+    if (marked) {
+        DebugTrace(L"[DeviceManager] User action cascade tracking started: target={0} windowSeconds={1}",
+                   std::wstring(deviceId),
+                   c_userActionCascadeWindow.count());
+    }
+}
+
+bool DeviceManager::ConsumeUserActionCascadeLocked(winrt::hstring const& deviceId) {
+    PruneUserActionCascadeLocked(std::chrono::steady_clock::now());
+
+    auto iter = m_userActionCascadeIds.find(deviceId);
+    if (iter == m_userActionCascadeIds.end()) return false;
+
+    m_userActionCascadeIds.erase(iter);
+    return true;
+}
+
+void DeviceManager::PruneUserActionCascadeLocked(std::chrono::steady_clock::time_point now) {
+    for (auto iter = m_userActionCascadeIds.begin(); iter != m_userActionCascadeIds.end();) {
+        if (iter->second <= now) {
+            iter = m_userActionCascadeIds.erase(iter);
+        } else {
+            ++iter;
+        }
+    }
 }
 
 void DeviceManager::EnsureDiscoveryEventHandlers() {
@@ -968,8 +1018,9 @@ void DeviceManager::OnConnectionStateChanged(winrt::Windows::Media::Audio::Audio
         return;
     }
 
+    bool isUserActionCascade = false;
     {
-        auto guard = m_lock.lock_shared();
+        auto guard = m_lock.lock_exclusive();
         if (m_sessions.DisconnectingIds().count(id)) return;
         if (m_sessions.ReconnectingIds().count(id)) return; // reconnect in progress – ignore stale Closed events
 
@@ -978,9 +1029,15 @@ void DeviceManager::OnConnectionStateChanged(winrt::Windows::Media::Audio::Audio
 
         // Ignore stale callbacks from an older connection object that was already replaced.
         if (!iter->second.Connection || iter->second.Connection != sender) return;
+        isUserActionCascade = ConsumeUserActionCascadeLocked(id);
     }
 
-    Disconnect(id, DisconnectReason::Unexpected);
+    if (isUserActionCascade) {
+        DebugTrace(L"[DeviceManager] StateChanged Closed treated as user-action cascade: {0}", std::wstring(id));
+        Disconnect(id, DisconnectReason::UserInitiatedCascade);
+    } else {
+        Disconnect(id, DisconnectReason::Unexpected);
+    }
 }
 
 void DeviceManager::ScheduleReconnect(winrt::hstring deviceId) {

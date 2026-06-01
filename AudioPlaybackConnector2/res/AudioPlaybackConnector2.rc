@@ -8,8 +8,8 @@
 LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 0,5,1,0
- PRODUCTVERSION 0,5,1,0
+ FILEVERSION 0,5,2,0
+ PRODUCTVERSION 0,5,2,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -26,12 +26,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Noah Meyer"
             VALUE "FileDescription", "AudioPlaybackConnector2"
-            VALUE "FileVersion", "0.5.1.0"
+            VALUE "FileVersion", "0.5.2.0"
             VALUE "InternalName", "AudioPlaybackConnector2.exe"
             VALUE "LegalCopyright", "Copyright (C) 2026 Noah Meyer"
             VALUE "OriginalFilename", "AudioPlaybackConnector2.exe"
             VALUE "ProductName", "AudioPlaybackConnector2"
-            VALUE "ProductVersion", "0.5.1.0"
+            VALUE "ProductVersion", "0.5.2.0"
         END
     END
     BLOCK "VarFileInfo"

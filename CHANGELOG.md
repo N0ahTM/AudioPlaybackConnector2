@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-06-01
+
+### Changed
+- Improved Settings window placement, DPI-aware sizing, and Mica backdrop handling.
+
+### Fixed
+- Further hardened multi-device disconnect and reconnect state handling for the crash path reported in `#6`.
+- Hardened shutdown, tray, theme-change, and notification teardown paths against stale callbacks.
+
 ## [0.5.1] - 2026-06-01
 
 ### Added
@@ -168,7 +177,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multi-language support for 8 locales: English, German, French, Spanish, Japanese, Korean, Chinese Simplified, Chinese Traditional.
 - CI/CD workflows: build (with clang-format and CppCheck), CodeQL analysis, and automated MSIX releases on version tags.
 
-[Unreleased]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/N0ahTM/AudioPlaybackConnector2/compare/v0.4.1...v0.4.2

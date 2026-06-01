@@ -32,5 +32,7 @@ public:
         winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResult>
     OpenAsync(winrt::Windows::Media::Audio::AudioPlaybackConnection const& connection);
     static void Close(winrt::Windows::Media::Audio::AudioPlaybackConnection& connection) noexcept;
+    // Intentionally leaks the ABI reference to avoid STA re-entrancy crashes during process exit.
+    // Must ONLY be called from shutdown paths (e.g. ShutdownForProcessExit).
     static void DetachForProcessExit(winrt::Windows::Media::Audio::AudioPlaybackConnection& connection) noexcept;
 };

@@ -17,7 +17,15 @@ void DevicePickerViewModel::SetDevices(
     m_devices.clear();
     m_devices.reserve(devices.Size());
     for (auto const& device : devices) {
-        m_devices.push_back(device);
+        auto id = device.Id();
+        auto name = device.Name();
+        if (name.empty()) {
+            name = id;
+        }
+        m_devices.push_back({
+            .Id = id,
+            .Name = name,
+        });
     }
 }
 
@@ -29,12 +37,11 @@ std::vector<DevicePickerItemViewModel> DevicePickerViewModel::SnapshotItems() co
     std::vector<DevicePickerItemViewModel> items;
     items.reserve(m_devices.size());
     for (auto const& device : m_devices) {
-        auto id = device.Id();
         items.push_back({
-            .Id = id,
-            .Name = device.Name(),
-            .IsConnected = IsConnected(id),
-            .IsBusy = IsBusy(id),
+            .Id = device.Id,
+            .Name = device.Name,
+            .IsConnected = IsConnected(device.Id),
+            .IsBusy = IsBusy(device.Id),
         });
     }
     return items;

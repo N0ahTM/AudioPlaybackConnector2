@@ -143,22 +143,27 @@ void DevicePickerView::Initialize(std::shared_ptr<DeviceManager> manager,
 }
 
 void DevicePickerView::LoadDevices() {
-    if (m_isLoadingDevices) return;
+    if (!m_viewModel.Empty()) {
+        RebuildDeviceListFromCache();
+    }
+
+    if (m_isLoadingDevices) {
+        SetRefreshIndicators(true, m_viewModel.Empty());
+        return;
+    }
 
     m_isLoadingDevices.store(true);
     m_loadDevicesCancelled.store(false);
     auto requestId = ++m_loadDevicesRequestId;
     m_activeLoadRequestId.store(requestId);
 
-    bool listWasEmpty = DeviceList().Items().Size() == 0;
-    if (listWasEmpty) {
-        ProgressIndicator().Visibility(Visibility::Visible);
-        ProgressIndicator().IsActive(true);
-    }
+    const bool blockingRefresh = m_viewModel.Empty() && DeviceList().Items().Size() == 0;
+    SetRefreshIndicators(true, blockingRefresh);
 
     auto dispatcher = this->DispatcherQueue();
     if (!dispatcher) {
         DebugTrace(L"[DevicePickerView] ERROR: no UI dispatcher available for LoadDevices");
+        SetRefreshIndicators(false, false);
         m_isLoadingDevices.store(false);
         m_activeLoadRequestId.store(0);
         return;
@@ -167,7 +172,7 @@ void DevicePickerView::LoadDevices() {
     auto manager = m_deviceManager.lock();
     if (!manager) {
         DebugTrace(L"[DevicePickerView] ERROR: no DeviceManager available for LoadDevices");
-        OnDeviceEnumerationFailed(listWasEmpty, requestId);
+        OnDeviceEnumerationFailed(blockingRefresh, requestId);
         return;
     }
 
@@ -190,8 +195,8 @@ void DevicePickerView::LoadDevices() {
     winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
         pendingOp = refreshOp;
 
-    pendingOp.Completed([weak, dispatcher, listWasEmpty, requestId](auto const& sender,
-                                                                    winrt::Windows::Foundation::AsyncStatus status) {
+    pendingOp.Completed([weak, dispatcher, blockingRefresh, requestId](auto const& sender,
+                                                                       winrt::Windows::Foundation::AsyncStatus status) {
         if (auto self = weak.get()) {
             std::lock_guard lock(self->m_refreshDevicesOpMutex);
             if (self->m_activeLoadRequestId.load() != requestId) {
@@ -210,8 +215,8 @@ void DevicePickerView::LoadDevices() {
             return;
         }
         auto enqueueFailure = [&]() {
-            bool enqueued = dispatcher.TryEnqueue([weak, listWasEmpty, requestId]() {
-                if (auto self = weak.get()) self->OnDeviceEnumerationFailed(listWasEmpty, requestId);
+            bool enqueued = dispatcher.TryEnqueue([weak, blockingRefresh, requestId]() {
+                if (auto self = weak.get()) self->OnDeviceEnumerationFailed(blockingRefresh, requestId);
             });
             if (!enqueued) {
                 DebugTrace(L"[DevicePickerView] ERROR: failed to marshal OnDeviceEnumerationFailed to UI thread");
@@ -226,8 +231,8 @@ void DevicePickerView::LoadDevices() {
         };
         try {
             auto devices = sender.GetResults();
-            bool enqueued = dispatcher.TryEnqueue([weak, devices, listWasEmpty, requestId]() {
-                if (auto self = weak.get()) self->ApplyDeviceResults(devices, listWasEmpty, requestId);
+            bool enqueued = dispatcher.TryEnqueue([weak, devices, blockingRefresh, requestId]() {
+                if (auto self = weak.get()) self->ApplyDeviceResults(devices, blockingRefresh, requestId);
             });
             if (!enqueued) {
                 DebugTrace(L"[DevicePickerView] ERROR: failed to marshal ApplyDeviceResults to UI thread");
@@ -259,6 +264,7 @@ void DevicePickerView::CancelLoadDevices() {
     auto invalidatedRequest = ++m_loadDevicesRequestId;
     m_activeLoadRequestId.store(invalidatedRequest);
     m_isLoadingDevices.store(false);
+    SetRefreshIndicators(false, false);
     winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection> op{
         nullptr};
     {
@@ -269,9 +275,7 @@ void DevicePickerView::CancelLoadDevices() {
 }
 
 void DevicePickerView::RefreshDeviceStates() {
-    if (m_isLoadingDevices.load()) {
-        return;
-    }
+    if (m_viewModel.Empty()) return;
     RebuildDeviceListFromCache();
 }
 
@@ -281,23 +285,22 @@ void DevicePickerView::RefreshDeviceStates() {
 
 void DevicePickerView::ApplyDeviceResults(
     winrt::Windows::Devices::Enumeration::DeviceInformationCollection const& devices,
-    bool listWasEmpty,
+    bool blockingRefresh,
     uint64_t requestId) {
     if (m_loadDevicesRequestId.load() != requestId) return;
     if (m_activeLoadRequestId.load() != requestId) return;
     if (m_loadDevicesCancelled) {
-        if (listWasEmpty) {
-            ProgressIndicator().IsActive(false);
-            ProgressIndicator().Visibility(Visibility::Collapsed);
-        }
+        SetRefreshIndicators(false, false);
         m_isLoadingDevices.store(false);
         m_activeLoadRequestId.store(0);
         return;
     }
-    ProgressIndicator().IsActive(false);
-    ProgressIndicator().Visibility(Visibility::Collapsed);
+    SetRefreshIndicators(false, false);
 
     if (!devices) {
+        if (blockingRefresh && m_viewModel.Empty() && DeviceList().Items().Size() == 0) {
+            RebuildDeviceListFromCache();
+        }
         m_isLoadingDevices.store(false);
         m_activeLoadRequestId.store(0);
         return;
@@ -309,16 +312,16 @@ void DevicePickerView::ApplyDeviceResults(
     m_activeLoadRequestId.store(0);
 }
 
-void DevicePickerView::OnDeviceEnumerationFailed(bool listWasEmpty, uint64_t requestId) {
+void DevicePickerView::OnDeviceEnumerationFailed(bool blockingRefresh, uint64_t requestId) {
     if (m_loadDevicesRequestId.load() != requestId) return;
     if (m_activeLoadRequestId.load() != requestId) return;
     if (m_loadDevicesCancelled.load()) return;
-    if (listWasEmpty) {
-        ProgressIndicator().IsActive(false);
-        ProgressIndicator().Visibility(Visibility::Collapsed);
-    }
+    SetRefreshIndicators(false, false);
     m_isLoadingDevices.store(false);
     m_activeLoadRequestId.store(0);
+    if (blockingRefresh && m_viewModel.Empty() && DeviceList().Items().Size() == 0) {
+        RebuildDeviceListFromCache();
+    }
 }
 
 void DevicePickerView::RebuildDeviceListFromCache(bool reconcilePendingActions) {
@@ -478,6 +481,13 @@ void DevicePickerView::ApplyGlobalActionState(bool visible, bool enabled) {
     GlobalActionsPanel().Visibility(visible ? Visibility::Visible : Visibility::Collapsed);
     DisconnectAllButton().IsEnabled(visible && enabled);
     ReconnectAllButton().IsEnabled(visible && enabled);
+}
+
+void DevicePickerView::SetRefreshIndicators(bool refreshing, bool blockingRefresh) {
+    HeaderRefreshIndicator().IsActive(refreshing && !blockingRefresh);
+    HeaderRefreshIndicator().Visibility(refreshing && !blockingRefresh ? Visibility::Visible : Visibility::Collapsed);
+    ProgressIndicator().IsActive(refreshing && blockingRefresh);
+    ProgressIndicator().Visibility(refreshing && blockingRefresh ? Visibility::Visible : Visibility::Collapsed);
 }
 
 /*------------------------------------------------------------------------------------------------------------*/

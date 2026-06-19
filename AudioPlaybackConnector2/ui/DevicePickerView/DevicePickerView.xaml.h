@@ -47,9 +47,9 @@ private:
     void OnDeviceReconnectClicked(winrt::hstring const& id);
 
     void ApplyDeviceResults(winrt::Windows::Devices::Enumeration::DeviceInformationCollection const& devices,
-                            bool listWasEmpty,
+                            bool blockingRefresh,
                             uint64_t requestId);
-    void OnDeviceEnumerationFailed(bool listWasEmpty, uint64_t requestId);
+    void OnDeviceEnumerationFailed(bool blockingRefresh, uint64_t requestId);
     void RebuildDeviceListFromCache(bool reconcilePendingActions = true);
     winrt::Microsoft::UI::Xaml::Controls::ListViewItem BuildDeviceListItem(DevicePickerItemViewModel const& device);
     bool BeginPendingDeviceAction(winrt::hstring const& id);
@@ -57,6 +57,7 @@ private:
     bool IsDeviceActionPending(winrt::hstring const& id) const;
     void ReconcilePendingActions(std::vector<DevicePickerItemViewModel> const& items);
     void ApplyGlobalActionState(bool visible, bool enabled);
+    void SetRefreshIndicators(bool refreshing, bool blockingRefresh);
 
     DevicePickerViewModel m_viewModel;
     std::function<void()> m_onClose;

@@ -5,6 +5,11 @@
 
 class DeviceManager;
 
+struct CachedDevicePickerDevice {
+    winrt::hstring Id;
+    winrt::hstring Name;
+};
+
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Device Picker View Model //////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
@@ -41,5 +46,5 @@ private:
     /*------------------------------------------------------------------------------------------------------------*/
 
     std::weak_ptr<DeviceManager> m_manager;
-    std::vector<winrt::Windows::Devices::Enumeration::DeviceInformation> m_devices;
+    std::vector<CachedDevicePickerDevice> m_devices;
 };

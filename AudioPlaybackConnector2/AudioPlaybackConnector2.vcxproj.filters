@@ -80,6 +80,9 @@
     <ClCompile Include="src\services\StartupTaskController.cpp">
       <Filter>src\services</Filter>
     </ClCompile>
+    <ClCompile Include="src\services\CommandLineControlServer.cpp">
+      <Filter>src\services</Filter>
+    </ClCompile>
     <ClCompile Include="src\services\ToastContentBuilder.cpp">
       <Filter>src\services</Filter>
     </ClCompile>
@@ -148,6 +151,9 @@
     <ClInclude Include="include\app\StartupUpdateCoordinator.hpp">
       <Filter>include\app</Filter>
     </ClInclude>
+    <ClInclude Include="include\control\CommandProtocol.hpp">
+      <Filter>include\control</Filter>
+    </ClInclude>
     <ClInclude Include="include\util\Logger.hpp">
       <Filter>include\util</Filter>
     </ClInclude>
@@ -188,6 +194,9 @@
       <Filter>include\services</Filter>
     </ClInclude>
     <ClInclude Include="include\services\StartupTaskController.hpp">
+      <Filter>include\services</Filter>
+    </ClInclude>
+    <ClInclude Include="include\services\CommandLineControlServer.hpp">
       <Filter>include\services</Filter>
     </ClInclude>
     <ClInclude Include="include\services\ToastContentBuilder.hpp">
@@ -283,6 +292,9 @@
     </Filter>
     <Filter Include="include\util">
       <UniqueIdentifier>{b2c3d4e5-f6a7-8901-bcde-f12345678904}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="include\control">
+      <UniqueIdentifier>{8701bf2f-61c8-4b6c-afbc-d5a5639f5eda}</UniqueIdentifier>
     </Filter>
     <Filter Include="res">
       <UniqueIdentifier>{c3d4e5f6-a7b8-9012-cdef-123456789012}</UniqueIdentifier>

@@ -14,6 +14,9 @@
 #include <util/CrashHandler.hpp>
 #include <util/Util.hpp>
 
+#include <cwctype>
+#include <iterator>
+#include <sstream>
 #include <utility>
 
 using namespace winrt;
@@ -23,7 +26,110 @@ using namespace winrt::Microsoft::UI::Xaml;
 /*//////// Helpers ///////////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-namespace {} // namespace
+namespace {
+
+struct ControlDeviceInfo {
+    std::wstring Id;
+    std::wstring Name;
+    bool Connected = false;
+    bool Known = false;
+};
+
+constexpr DWORD c_controlDeviceRefreshTimeoutMs = 2500;
+
+std::optional<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
+TryRefreshControlDevices(std::shared_ptr<DeviceManager> const& manager) {
+    if (!manager) return std::nullopt;
+
+    try {
+        auto operation = manager->RefreshDevicesAsync();
+        std::shared_ptr<void> completed(CreateEventW(nullptr, TRUE, FALSE, nullptr), [](void* handle) noexcept {
+            if (handle) {
+                CloseHandle(static_cast<HANDLE>(handle));
+            }
+        });
+        if (!completed) {
+            DebugTrace(L"[App] Control command device refresh skipped; failed to create wait event");
+            return std::nullopt;
+        }
+
+        operation.Completed(
+            [completed](auto const&, auto const&) noexcept { SetEvent(static_cast<HANDLE>(completed.get())); });
+
+        const DWORD waitResult =
+            WaitForSingleObject(static_cast<HANDLE>(completed.get()), c_controlDeviceRefreshTimeoutMs);
+        if (waitResult != WAIT_OBJECT_0) {
+            operation.Cancel();
+            DebugTrace(L"[App] Control command device refresh timed out");
+            return std::nullopt;
+        }
+
+        if (operation.Status() != winrt::Windows::Foundation::AsyncStatus::Completed) {
+            return std::nullopt;
+        }
+
+        return operation.GetResults();
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(L"[App] Control command device refresh failed", ex);
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[App] Control command device refresh failed", ex);
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[App] Control command device refresh failed");
+    }
+
+    return std::nullopt;
+}
+
+std::wstring ToLowerInvariant(std::wstring_view value) {
+    std::wstring lowered;
+    lowered.reserve(value.size());
+    for (wchar_t ch : value) {
+        lowered.push_back(static_cast<wchar_t>(std::towlower(ch)));
+    }
+    return lowered;
+}
+
+bool EqualsIgnoreCase(std::wstring_view lhs, std::wstring_view rhs) {
+    return ToLowerInvariant(lhs) == ToLowerInvariant(rhs);
+}
+
+bool ContainsIgnoreCase(std::wstring_view haystack, std::wstring_view needle) {
+    if (needle.empty()) return false;
+    return ToLowerInvariant(haystack).find(ToLowerInvariant(needle)) != std::wstring::npos;
+}
+
+std::wstring NormalizeHex(std::wstring_view value) {
+    std::wstring normalized;
+    normalized.reserve(value.size());
+    for (wchar_t ch : value) {
+        if ((ch >= L'0' && ch <= L'9') || (ch >= L'a' && ch <= L'f') || (ch >= L'A' && ch <= L'F')) {
+            normalized.push_back(static_cast<wchar_t>(std::towlower(ch)));
+        }
+    }
+    return normalized;
+}
+
+std::wstring DeviceLabel(ControlDeviceInfo const& device) {
+    return device.Name.empty() ? device.Id : device.Name;
+}
+
+std::wstring FormatResource(std::string_view key, std::wstring_view replacement) {
+    return util::ReplacePlaceholders(_(key), replacement);
+}
+
+std::wstring FormatResource(std::string_view key, std::size_t value) {
+    return FormatResource(key, std::to_wstring(value));
+}
+
+void InsertDeviceJson(winrt::Windows::Data::Json::JsonObject& object, ControlDeviceInfo const& device) {
+    using winrt::Windows::Data::Json::JsonValue;
+    object.Insert(L"id", JsonValue::CreateStringValue(winrt::hstring(device.Id)));
+    object.Insert(L"name", JsonValue::CreateStringValue(winrt::hstring(device.Name)));
+    object.Insert(L"connected", JsonValue::CreateBooleanValue(device.Connected));
+    object.Insert(L"known", JsonValue::CreateBooleanValue(device.Known));
+}
+
+} // namespace
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Constructors / Destructor /////////////////////////////////////////////////////////////////////////*/
@@ -54,6 +160,7 @@ void ApplicationHost::PerformTeardown(bool saveLastConnected) noexcept {
     if (m_exiting.exchange(true)) return;
 
     m_powerTransitionCoordinator.Cancel();
+    m_commandLineControlServer.Stop();
     m_settingsWindowPresenter.Close();
     TeardownDeviceEvents();
     if (m_hwnd) {
@@ -187,6 +294,7 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) {
     SetupDeviceEvents();
     m_deviceManager->StartDeviceWatcher();
     DebugTrace(L"[App] Device watcher started");
+    InitializeCommandLineControl();
     bool willAutoReconnect = false;
     {
         auto locked = m_settings->LockSharedData();
@@ -287,6 +395,18 @@ void ApplicationHost::InitializeDeviceManager() {
         return std::ranges::any_of(locked->Devices, [&](const auto& d) { return d.Id == id && d.AutoReconnect; });
     });
     DebugTrace(L"[App] DeviceManager initialized");
+}
+
+void ApplicationHost::InitializeCommandLineControl() {
+    DebugTrace(L"[App] InitializeCommandLineControl()");
+    auto weak = weak_from_this();
+    m_commandLineControlServer.Start([weak](apc::control::Request const& request) -> apc::control::Response {
+        if (auto self = weak.lock()) {
+            return self->HandleControlCommand(request);
+        }
+        return {apc::control::ExitCode::Unavailable, L""};
+    });
+    DebugTrace(L"[App] Command line control server started");
 }
 
 winrt::hstring ApplicationHost::ResolveKnownDeviceName(winrt::hstring const& id) const {
@@ -519,6 +639,376 @@ void ApplicationHost::ExitApplication() {
         m_mainWindow.Close();
     }
     DebugTrace(L"[App] ExitApplication() complete");
+}
+
+apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Request const& request) {
+    using apc::control::CommandFlagJson;
+    using apc::control::CommandType;
+    using apc::control::ExitCode;
+    using apc::control::Response;
+    using apc::control::TargetKind;
+    using winrt::Windows::Data::Json::JsonArray;
+    using winrt::Windows::Data::Json::JsonObject;
+    using winrt::Windows::Data::Json::JsonValue;
+
+    const bool wantsJson = (request.Flags & CommandFlagJson) != 0;
+
+    auto makeResponse = [wantsJson](ExitCode code, std::wstring message) -> Response {
+        if (!wantsJson) return {code, std::move(message)};
+
+        JsonObject root;
+        root.Insert(L"ok", JsonValue::CreateBooleanValue(code == ExitCode::Success));
+        root.Insert(L"exitCode", JsonValue::CreateNumberValue(static_cast<double>(code)));
+        root.Insert(L"message", JsonValue::CreateStringValue(winrt::hstring(message)));
+        return {code, std::wstring(root.Stringify())};
+    };
+
+    auto makeOperationResponse = [wantsJson](ExitCode code,
+                                             std::wstring_view action,
+                                             std::wstring_view id,
+                                             std::wstring_view name,
+                                             std::wstring message) -> Response {
+        if (!wantsJson) return {code, std::move(message)};
+
+        JsonObject root;
+        root.Insert(L"ok", JsonValue::CreateBooleanValue(code == ExitCode::Success));
+        root.Insert(L"exitCode", JsonValue::CreateNumberValue(static_cast<double>(code)));
+        root.Insert(L"action", JsonValue::CreateStringValue(winrt::hstring(action)));
+        root.Insert(L"id", JsonValue::CreateStringValue(winrt::hstring(id)));
+        root.Insert(L"name", JsonValue::CreateStringValue(winrt::hstring(name)));
+        root.Insert(L"message", JsonValue::CreateStringValue(winrt::hstring(message)));
+        return {code, std::wstring(root.Stringify())};
+    };
+
+    if (m_exiting.load() || !m_deviceManager || !m_settings) {
+        return makeResponse(ExitCode::Unavailable, _("Command_NotReady"));
+    }
+
+    auto buildDevices = [this](bool refreshLiveDevices) {
+        std::unordered_map<std::wstring, ControlDeviceInfo> byId;
+        auto upsert = [&byId](std::wstring id, std::wstring name, bool connected, bool known) {
+            if (id.empty()) return;
+            auto& entry = byId[id];
+            entry.Id = std::move(id);
+            if (!name.empty()) {
+                entry.Name = std::move(name);
+            }
+            entry.Connected = entry.Connected || connected;
+            entry.Known = entry.Known || known;
+        };
+
+        if (refreshLiveDevices) {
+            if (auto devices = TryRefreshControlDevices(m_deviceManager)) {
+                for (auto const& device : *devices) {
+                    upsert(std::wstring(device.Id()), std::wstring(device.Name()), false, false);
+                }
+            }
+        }
+
+        for (auto const& connection : m_deviceManager->GetConnectedDevices()) {
+            upsert(connection.Id, connection.Name, true, true);
+        }
+
+        {
+            auto locked = m_settings->LockSharedData();
+            for (auto const& device : locked->Devices) {
+                upsert(device.Id, device.Name, false, true);
+            }
+        }
+
+        std::vector<ControlDeviceInfo> devices;
+        devices.reserve(byId.size());
+        for (auto& [id, info] : byId) {
+            devices.push_back(std::move(info));
+        }
+        std::ranges::sort(devices, [](auto const& lhs, auto const& rhs) {
+            auto lhsLabel = ToLowerInvariant(DeviceLabel(lhs));
+            auto rhsLabel = ToLowerInvariant(DeviceLabel(rhs));
+            if (lhsLabel != rhsLabel) return lhsLabel < rhsLabel;
+            return ToLowerInvariant(lhs.Id) < ToLowerInvariant(rhs.Id);
+        });
+        return devices;
+    };
+
+    auto deviceJson = [](ControlDeviceInfo const& device) {
+        JsonObject object;
+        InsertDeviceJson(object, device);
+        return object;
+    };
+
+    auto listDevices = [&]() -> Response {
+        auto devices = buildDevices(true);
+        if (wantsJson) {
+            JsonObject root;
+            JsonArray deviceArray;
+            for (auto const& device : devices) {
+                deviceArray.Append(deviceJson(device));
+            }
+            root.Insert(L"devices", deviceArray);
+            return {ExitCode::Success, std::wstring(root.Stringify())};
+        }
+
+        if (devices.empty()) {
+            return {ExitCode::Success, _("Command_List_NoDevices") + L"\n"};
+        }
+
+        std::wstringstream output;
+        output << _("Command_List_Header") << L"\n";
+        for (auto const& device : devices) {
+            output << L"- " << DeviceLabel(device);
+            if (device.Connected) {
+                output << L" (" << _("Command_ConnectedSuffix") << L")";
+            }
+            output << L"\n  ID: " << device.Id << L"\n";
+        }
+        return {ExitCode::Success, output.str()};
+    };
+
+    auto status = [&]() -> Response {
+        auto devices = buildDevices(false);
+        std::vector<ControlDeviceInfo> connected;
+        std::ranges::copy_if(
+            devices, std::back_inserter(connected), [](auto const& device) { return device.Connected; });
+
+        if (wantsJson) {
+            JsonObject root;
+            JsonArray connectedArray;
+            for (auto const& device : connected) {
+                connectedArray.Append(deviceJson(device));
+            }
+            root.Insert(L"running", JsonValue::CreateBooleanValue(true));
+            root.Insert(L"connectedCount", JsonValue::CreateNumberValue(static_cast<double>(connected.size())));
+            root.Insert(L"connectedDevices", connectedArray);
+            return {ExitCode::Success, std::wstring(root.Stringify())};
+        }
+
+        std::wstringstream output;
+        output << _("Command_Status_Running") << L"\n";
+        output << FormatResource("Command_Status_Connections", connected.size()) << L"\n";
+        for (auto const& device : connected) {
+            output << L"- " << DeviceLabel(device) << L"\n  ID: " << device.Id << L"\n";
+        }
+        return {ExitCode::Success, output.str()};
+    };
+
+    struct TargetResolution {
+        ExitCode Code = ExitCode::Success;
+        std::wstring Id;
+        std::wstring Name;
+        std::wstring Message;
+    };
+
+    auto targetFromId = [&](std::wstring id, std::vector<ControlDeviceInfo> const& devices) -> TargetResolution {
+        for (auto const& device : devices) {
+            if (EqualsIgnoreCase(device.Id, id)) {
+                return {.Id = device.Id, .Name = DeviceLabel(device)};
+            }
+        }
+        auto name = std::wstring(ResolveKnownDeviceName(winrt::hstring(id)));
+        return {.Id = std::move(id), .Name = std::move(name)};
+    };
+
+    auto matchOne = [](std::vector<ControlDeviceInfo> matches, std::wstring_view query) -> TargetResolution {
+        std::ranges::sort(matches, [](auto const& lhs, auto const& rhs) { return lhs.Id < rhs.Id; });
+        auto last = std::ranges::unique(matches, [](auto const& lhs, auto const& rhs) { return lhs.Id == rhs.Id; });
+        matches.erase(last.begin(), last.end());
+
+        if (matches.empty()) {
+            return {ExitCode::NotFound, L"", L"", FormatResource("Command_TargetNotFound", query)};
+        }
+        if (matches.size() > 1) {
+            return {ExitCode::Ambiguous, L"", L"", FormatResource("Command_TargetAmbiguous", query)};
+        }
+        return {.Id = matches.front().Id, .Name = DeviceLabel(matches.front())};
+    };
+
+    auto resolveTarget = [&](apc::control::Request const& commandRequest) -> TargetResolution {
+        const bool refreshLiveDevices = commandRequest.Target == TargetKind::Name ||
+                                        commandRequest.Target == TargetKind::Mac ||
+                                        commandRequest.Target == TargetKind::Auto;
+        auto devices = buildDevices(refreshLiveDevices);
+        if (commandRequest.Target == TargetKind::Last) {
+            std::wstring id;
+            {
+                auto locked = m_settings->LockSharedData();
+                if (locked->LastConnectedIds.empty()) {
+                    return {ExitCode::NotFound, L"", L"", _("Command_LastTargetMissing")};
+                }
+                id = locked->LastConnectedIds.front();
+            }
+            return targetFromId(std::move(id), devices);
+        }
+
+        if (commandRequest.Payload.empty()) {
+            return {ExitCode::InvalidRequest, L"", L"", _("Command_TargetRequired")};
+        }
+
+        if (commandRequest.Target == TargetKind::Id) {
+            return targetFromId(commandRequest.Payload, devices);
+        }
+
+        std::vector<ControlDeviceInfo> matches;
+        if (commandRequest.Target == TargetKind::Auto) {
+            for (auto const& device : devices) {
+                if (EqualsIgnoreCase(device.Id, commandRequest.Payload)) {
+                    matches.push_back(device);
+                }
+            }
+            if (!matches.empty()) return matchOne(std::move(matches), commandRequest.Payload);
+        }
+
+        if (commandRequest.Target == TargetKind::Mac || commandRequest.Target == TargetKind::Auto) {
+            const auto queryHex = NormalizeHex(commandRequest.Payload);
+            if (queryHex.size() >= 6) {
+                matches.clear();
+                for (auto const& device : devices) {
+                    if (NormalizeHex(device.Id).find(queryHex) != std::wstring::npos) {
+                        matches.push_back(device);
+                    }
+                }
+                if (!matches.empty() || commandRequest.Target == TargetKind::Mac)
+                    return matchOne(std::move(matches), commandRequest.Payload);
+            }
+        }
+
+        if (commandRequest.Target == TargetKind::Name || commandRequest.Target == TargetKind::Auto) {
+            matches.clear();
+            for (auto const& device : devices) {
+                if (EqualsIgnoreCase(device.Name, commandRequest.Payload)) {
+                    matches.push_back(device);
+                }
+            }
+            if (!matches.empty()) return matchOne(std::move(matches), commandRequest.Payload);
+
+            matches.clear();
+            for (auto const& device : devices) {
+                if (ContainsIgnoreCase(device.Name, commandRequest.Payload)) {
+                    matches.push_back(device);
+                }
+            }
+            return matchOne(std::move(matches), commandRequest.Payload);
+        }
+
+        return {ExitCode::InvalidRequest, L"", L"", _("Command_TargetRequired")};
+    };
+
+    auto connectTarget = [&](TargetResolution const& target, std::wstring_view action) -> Response {
+        if (m_deviceManager->IsDeviceConnected(winrt::hstring(target.Id))) {
+            return makeOperationResponse(ExitCode::Success,
+                                         action,
+                                         target.Id,
+                                         target.Name,
+                                         FormatResource("Command_DeviceAlreadyConnected", target.Name));
+        }
+
+        m_deviceManager->ConnectAsync(winrt::hstring(target.Id)).get();
+        if (!m_deviceManager->IsDeviceConnected(winrt::hstring(target.Id))) {
+            return makeOperationResponse(ExitCode::OperationFailed,
+                                         action,
+                                         target.Id,
+                                         target.Name,
+                                         FormatResource("Command_ConnectFailed", target.Name));
+        }
+
+        return makeOperationResponse(
+            ExitCode::Success, action, target.Id, target.Name, FormatResource("Command_ConnectSucceeded", target.Name));
+    };
+
+    auto disconnectTarget = [&](TargetResolution const& target, std::wstring_view action) -> Response {
+        if (!m_deviceManager->IsDeviceConnected(winrt::hstring(target.Id))) {
+            return makeOperationResponse(ExitCode::Success,
+                                         action,
+                                         target.Id,
+                                         target.Name,
+                                         FormatResource("Command_DeviceAlreadyDisconnected", target.Name));
+        }
+
+        m_deviceManager->Disconnect(winrt::hstring(target.Id));
+        if (m_deviceManager->IsDeviceConnected(winrt::hstring(target.Id))) {
+            return makeOperationResponse(ExitCode::OperationFailed,
+                                         action,
+                                         target.Id,
+                                         target.Name,
+                                         FormatResource("Command_DisconnectFailed", target.Name));
+        }
+
+        return makeOperationResponse(ExitCode::Success,
+                                     action,
+                                     target.Id,
+                                     target.Name,
+                                     FormatResource("Command_DisconnectSucceeded", target.Name));
+    };
+
+    auto reconnectTarget = [&](TargetResolution const& target) -> Response {
+        m_deviceManager->ReconnectAsync(winrt::hstring(target.Id)).get();
+        if (!m_deviceManager->IsDeviceConnected(winrt::hstring(target.Id))) {
+            return makeOperationResponse(ExitCode::OperationFailed,
+                                         L"reconnect",
+                                         target.Id,
+                                         target.Name,
+                                         FormatResource("Command_ReconnectFailed", target.Name));
+        }
+
+        return makeOperationResponse(ExitCode::Success,
+                                     L"reconnect",
+                                     target.Id,
+                                     target.Name,
+                                     FormatResource("Command_ReconnectSucceeded", target.Name));
+    };
+
+    try {
+        switch (request.Command) {
+            case CommandType::List: return listDevices();
+            case CommandType::Status: return status();
+            case CommandType::DisconnectAll:
+                m_deviceManager->DisconnectAll();
+                return makeOperationResponse(
+                    ExitCode::Success, L"disconnect-all", L"", L"", _("Command_DisconnectAllSucceeded"));
+            case CommandType::ReconnectAll: {
+                auto connected = m_deviceManager->GetConnectedDevices();
+                for (auto const& device : connected) {
+                    if (!device.Id.empty()) {
+                        m_deviceManager->ReconnectAsync(winrt::hstring(device.Id)).get();
+                    }
+                }
+                return makeOperationResponse(
+                    ExitCode::Success, L"reconnect-all", L"", L"", _("Command_ReconnectAllSucceeded"));
+            }
+            case CommandType::Connect: {
+                auto target = resolveTarget(request);
+                if (target.Code != ExitCode::Success) return makeResponse(target.Code, target.Message);
+                return connectTarget(target, L"connect");
+            }
+            case CommandType::Disconnect: {
+                auto target = resolveTarget(request);
+                if (target.Code != ExitCode::Success) return makeResponse(target.Code, target.Message);
+                return disconnectTarget(target, L"disconnect");
+            }
+            case CommandType::Reconnect: {
+                auto target = resolveTarget(request);
+                if (target.Code != ExitCode::Success) return makeResponse(target.Code, target.Message);
+                return reconnectTarget(target);
+            }
+            case CommandType::ToggleLast: {
+                auto target = resolveTarget(request);
+                if (target.Code != ExitCode::Success) return makeResponse(target.Code, target.Message);
+                if (m_deviceManager->IsDeviceConnected(winrt::hstring(target.Id))) {
+                    return disconnectTarget(target, L"toggle");
+                }
+                return connectTarget(target, L"toggle");
+            }
+            default: return makeResponse(ExitCode::InvalidRequest, _("Command_Unsupported"));
+        }
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(L"[App] HandleControlCommand ERROR", ex);
+        return makeResponse(ExitCode::OperationFailed, ex.message().c_str());
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[App] HandleControlCommand ERROR", ex);
+        return makeResponse(ExitCode::OperationFailed, util::Utf8ToUtf16(ex.what()));
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[App] HandleControlCommand ERROR");
+        return makeResponse(ExitCode::OperationFailed, _("UnknownError"));
+    }
 }
 
 /*------------------------------------------------------------------------------------------------------------*/

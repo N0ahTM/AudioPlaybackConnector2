@@ -133,6 +133,7 @@
     <ClInclude Include="include\app\SettingsWindowPresenter.hpp" />
     <ClInclude Include="include\app\SingleInstanceGuard.hpp" />
     <ClInclude Include="include\app\StartupUpdateCoordinator.hpp" />
+    <ClInclude Include="include\control\CommandProtocol.hpp" />
     <ClInclude Include="include\util\Logger.hpp" />
     <ClInclude Include="include\util\Util.hpp" />
     <ClInclude Include="include\core\StringResources.hpp" />
@@ -147,6 +148,7 @@
     <ClInclude Include="include\services\NotificationService.hpp" />
     <ClInclude Include="include\services\SettingsController.hpp" />
     <ClInclude Include="include\services\StartupTaskController.hpp" />
+    <ClInclude Include="include\services\CommandLineControlServer.hpp" />
     <ClInclude Include="include\services\ToastContentBuilder.hpp" />
     <ClInclude Include="include\services\TrayController.hpp" />
     <ClInclude Include="include\services\UpdateService.hpp" />
@@ -201,6 +203,7 @@
     <ClCompile Include="src\services\NotificationService.cpp" />
     <ClCompile Include="src\services\SettingsController.cpp" />
     <ClCompile Include="src\services\StartupTaskController.cpp" />
+    <ClCompile Include="src\services\CommandLineControlServer.cpp" />
     <ClCompile Include="src\services\ToastContentBuilder.cpp" />
     <ClCompile Include="src\services\TrayController.cpp" />
     <ClCompile Include="src\services\UpdateService.cpp" />

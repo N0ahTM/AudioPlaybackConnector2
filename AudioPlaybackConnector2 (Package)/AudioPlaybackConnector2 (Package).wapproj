@@ -154,8 +154,14 @@
     <Content Include="Images\Wide310x150Logo.scale-150.png" />
     <Content Include="Images\Wide310x150Logo.scale-200.png" />
     <Content Include="Images\Wide310x150Logo.scale-400.png" />
+    <Content Include="..\$(Platform)\$(Configuration)\AudioPlaybackConnector2.Control.exe">
+      <Link>AudioPlaybackConnector2.Control.exe</Link>
+    </Content>
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\AudioPlaybackConnector2.Control\AudioPlaybackConnector2.Control.vcxproj">
+      <SkipGetTargetFrameworkProperties>True</SkipGetTargetFrameworkProperties>
+    </ProjectReference>
     <ProjectReference Include="..\AudioPlaybackConnector2\AudioPlaybackConnector2.vcxproj">
       <SkipGetTargetFrameworkProperties>True</SkipGetTargetFrameworkProperties>
     </ProjectReference>
@@ -165,4 +171,10 @@
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.0.1" />
   </ItemGroup>
   <Import Project="$(WapProjPath)\Microsoft.DesktopBridge.targets" />
+  <Target Name="BeforeGenerateAppxPackageRecipe">
+    <Message Importance="High" Text="Building AudioPlaybackConnector2.Control package payloads ($(Configuration))." />
+    <MSBuild Projects="..\AudioPlaybackConnector2.Control\AudioPlaybackConnector2.Control.vcxproj" Targets="Build" Properties="Configuration=$(Configuration);Platform=Win32;PreferredToolArchitecture=x64" />
+    <MSBuild Projects="..\AudioPlaybackConnector2.Control\AudioPlaybackConnector2.Control.vcxproj" Targets="Build" Properties="Configuration=$(Configuration);Platform=x64;PreferredToolArchitecture=x64" />
+    <MSBuild Projects="..\AudioPlaybackConnector2.Control\AudioPlaybackConnector2.Control.vcxproj" Targets="Build" Properties="Configuration=$(Configuration);Platform=ARM64;PreferredToolArchitecture=x64" />
+  </Target>
 </Project>

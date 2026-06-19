@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added `apc2ctl.exe` command line control for listing devices, status checks, connect/disconnect/reconnect actions, last-device toggle, and macro-friendly ID/name/MAC targeting (`#7`).
+
 ## [0.6.0] - 2026-06-17
 
 ### Added

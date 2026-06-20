@@ -554,15 +554,18 @@ void ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle) {
     const bool hasBusyOperations = m_deviceManager->HasBusyOperations();
     const bool hasConnections = m_deviceManager->HasConnections();
 
-    if (forceErrorWhenIdle) {
+    if (hasConnections) {
         KillTimer(m_hwnd, c_timerAnimation);
-        m_trayController->SetState(hasConnections ? TrayIconState::Connected : TrayIconState::Error);
+        m_trayController->SetState(TrayIconState::Connected);
+    } else if (forceErrorWhenIdle) {
+        KillTimer(m_hwnd, c_timerAnimation);
+        m_trayController->SetState(TrayIconState::Error);
     } else if (hasBusyOperations) {
         m_trayController->SetState(TrayIconState::Connecting);
         SetTimer(m_hwnd, c_timerAnimation, 75, nullptr);
     } else {
         KillTimer(m_hwnd, c_timerAnimation);
-        m_trayController->SetState(hasConnections ? TrayIconState::Connected : TrayIconState::Idle);
+        m_trayController->SetState(TrayIconState::Idle);
     }
 
     if (!forceErrorWhenIdle) {

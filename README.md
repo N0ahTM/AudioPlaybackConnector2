@@ -5,10 +5,6 @@
 [![C++](https://img.shields.io/badge/C%2B%2B-23-00599C?logo=c%2B%2B)](https://en.cppreference.com/)
 
 <p align="center">
-  <img width="75%" alt="AudioPlaybackConnector2 repository preview" src="docs/assets/repository-open-graph.jpg">
-</p>
-
-<p align="center">
   <a href="https://github.com/N0ahTM/AudioPlaybackConnector2">
     <img src="https://img.shields.io/badge/⭐_Star_this_project-2d333b?style=for-the-badge&logo=github&logoColor=white&labelColor=1f2328" alt="Star this project">
   </a>

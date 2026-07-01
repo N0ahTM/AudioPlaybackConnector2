@@ -51,6 +51,30 @@ If Windows reports an untrusted publisher:
 
 See [Installation](INSTALLATION.md) for commands.
 
+## A2DP Sink audio always plays through the default output device
+
+Windows may ignore the per-app output device selected in **Settings > System > Sound > Volume mixer** for an
+`A2DP Sink` entry. In that case the Bluetooth source audio keeps playing through the current default playback device.
+
+AudioPlaybackConnector2 uses Windows' `AudioPlaybackConnection` API, which does not expose a supported output-device
+selector. The most reliable workaround is to make the A2DP Sink visible as a recording device, then use the legacy
+Sound control panel:
+
+1. Open Registry Editor.
+2. Go to `HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture`.
+3. Find the capture endpoint whose `Properties` include the Bluetooth device name.
+4. Back up the endpoint key before changing it.
+5. Under that endpoint's `Properties`, delete the value named `{9c119480-ddc2-4954-a150-5bd240d454ad},6`.
+6. Open `control mmsys.cpl sounds`, then switch to the **Recording** tab.
+7. Open the A2DP Sink device properties, switch to **Listen**, enable **Listen to this device**, and select the target
+   playback device.
+
+Be careful when editing `HKLM`; deleting the wrong value can break device configuration for the current Windows
+install. If you use Voicemeeter or similar routing software, route the newly visible recording endpoint there and
+avoid enabling **Listen to this device** at the same time, otherwise Windows may play the audio twice.
+
+Reference: [Microsoft Answers workaround](https://learn.microsoft.com/en-us/answers/questions/4123061/bluetooth-a2dp-snk-device-not-showing-up-in-sound).
+
 ## Packaging fails because certificate thumbprint is invalid
 
 In Visual Studio:

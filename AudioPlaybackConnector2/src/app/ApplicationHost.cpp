@@ -36,6 +36,53 @@ struct ControlDeviceInfo {
 };
 
 constexpr DWORD c_controlDeviceRefreshTimeoutMs = 2500;
+constexpr int c_hiddenAnchorCoordinate = -32000;
+
+void LogMainWindowAnchor(HWND hwnd, std::wstring_view reason) noexcept {
+    if (!hwnd) return;
+
+    RECT rect{};
+    GetWindowRect(hwnd, &rect);
+    auto const style = GetWindowLongPtr(hwnd, GWL_STYLE);
+    auto const exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+    DebugTrace(L"[App] MainWindow anchor reason={0} hwnd=0x{1:X} visible={2} rect=({3},{4})-({5},{6}) "
+               L"size={7}x{8} style=0x{9:08X} exStyle=0x{10:08X}",
+               reason,
+               reinterpret_cast<uintptr_t>(hwnd),
+               IsWindowVisible(hwnd) != FALSE,
+               rect.left,
+               rect.top,
+               rect.right,
+               rect.bottom,
+               rect.right - rect.left,
+               rect.bottom - rect.top,
+               static_cast<uint32_t>(style),
+               static_cast<uint32_t>(exStyle));
+}
+
+void ConfigureHiddenMainWindowAnchor(HWND hwnd) noexcept {
+    if (!hwnd) return;
+
+    auto const oldStyle = GetWindowLongPtr(hwnd, GWL_STYLE);
+    auto const newStyle =
+        (oldStyle & ~static_cast<LONG_PTR>(WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX)) |
+        static_cast<LONG_PTR>(WS_POPUP);
+    SetWindowLongPtr(hwnd, GWL_STYLE, newStyle);
+
+    auto const oldExStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+    auto const newExStyle = oldExStyle | static_cast<LONG_PTR>(WS_EX_TOOLWINDOW);
+    SetWindowLongPtr(hwnd, GWL_EXSTYLE, newExStyle);
+
+    SetWindowPos(hwnd,
+                 HWND_BOTTOM,
+                 c_hiddenAnchorCoordinate,
+                 c_hiddenAnchorCoordinate,
+                 1,
+                 1,
+                 SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+    ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    LogMainWindowAnchor(hwnd, L"configured-hidden-anchor");
+}
 
 std::optional<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
 TryRefreshControlDevices(std::shared_ptr<DeviceManager> const& manager) {
@@ -202,6 +249,7 @@ void ApplicationHost::Shutdown() noexcept {
 
 void ApplicationHost::SetupMainWindow() {
     m_mainWindow = winrt::make<winrt::AudioPlaybackConnector2::implementation::MainWindow>();
+    m_mainWindow.Title(winrt::hstring(L"AudioPlaybackConnector2"));
     m_dispatcherQueue = m_mainWindow.DispatcherQueue();
 
     // Move the window off-screen before Activate() to prevent any visible flash.
@@ -255,11 +303,9 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) {
     }
     DebugTrace(L"[App] MainWindow HWND = 0x{0:X}", reinterpret_cast<uintptr_t>(m_hwnd));
 
-    auto exStyle = GetWindowLongPtr(m_hwnd, GWL_EXSTYLE);
-    SetWindowLongPtr(m_hwnd, GWL_EXSTYLE, exStyle | WS_EX_TOOLWINDOW);
-    ShowWindow(m_hwnd, SW_SHOWNA);
+    ConfigureHiddenMainWindowAnchor(m_hwnd);
     root.Opacity(1);
-    DebugTrace(L"[App] MainWindow moved off-screen (toolwindow, showna)");
+    DebugTrace(L"[App] MainWindow hidden anchor configured");
 
     SetWindowSubclass(m_hwnd, SubclassProc, 1, reinterpret_cast<DWORD_PTR>(this));
     DebugTrace(L"[App] Window subclass installed");
@@ -305,7 +351,7 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) {
         m_notificationService->ShowAppStarted();
     }
     TryAutoReconnect();
-    RefreshTrayVisualState(false);
+    RefreshTrayVisualState(false, L"initialize-tray");
 
     gdiplusGuard.release();
 
@@ -451,7 +497,7 @@ void ApplicationHost::ToggleLastConnectedDeviceFromTray() {
         DebugTrace(L"[App] Tray double-click: connecting {0}", targetId);
         m_deviceManager->ConnectDetached(id);
     }
-    RefreshTrayVisualState(false);
+    RefreshTrayVisualState(false, L"tray-double-click-finished");
 }
 
 void ApplicationHost::TryAutoReconnect() {
@@ -547,26 +593,48 @@ void ApplicationHost::RunOnUIThread(std::function<void()> work) {
     }
 }
 
-void ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle) {
-    if (m_exiting.load() || !m_trayController || !m_deviceManager) return;
-    if (!m_hwnd || !IsWindow(m_hwnd)) return;
+void ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstring_view reason) {
+    if (m_exiting.load() || !m_trayController || !m_deviceManager) {
+        DebugTrace(L"[App] RefreshTrayVisualState skipped reason={0} exiting={1} hasTrayController={2} "
+                   L"hasDeviceManager={3}",
+                   reason,
+                   m_exiting.load(),
+                   m_trayController != nullptr,
+                   m_deviceManager != nullptr);
+        return;
+    }
+    if (!m_hwnd || !IsWindow(m_hwnd)) {
+        DebugTrace(L"[App] RefreshTrayVisualState skipped reason={0} invalidHwnd hwnd=0x{1:X}",
+                   reason,
+                   reinterpret_cast<uintptr_t>(m_hwnd));
+        return;
+    }
 
     const bool hasBusyOperations = m_deviceManager->HasBusyOperations();
     const bool hasConnections = m_deviceManager->HasConnections();
 
+    TrayIconState desiredState = TrayIconState::Idle;
     if (hasConnections) {
+        desiredState = TrayIconState::Connected;
         KillTimer(m_hwnd, c_timerAnimation);
-        m_trayController->SetState(TrayIconState::Connected);
     } else if (forceErrorWhenIdle) {
+        desiredState = TrayIconState::Error;
         KillTimer(m_hwnd, c_timerAnimation);
-        m_trayController->SetState(TrayIconState::Error);
     } else if (hasBusyOperations) {
-        m_trayController->SetState(TrayIconState::Connecting);
+        desiredState = TrayIconState::Connecting;
         SetTimer(m_hwnd, c_timerAnimation, 75, nullptr);
     } else {
         KillTimer(m_hwnd, c_timerAnimation);
-        m_trayController->SetState(TrayIconState::Idle);
     }
+
+    DebugTrace(L"[App] RefreshTrayVisualState reason={0} forceErrorWhenIdle={1} hasConnections={2} "
+               L"hasBusyOperations={3} desired={4}",
+               reason,
+               forceErrorWhenIdle,
+               hasConnections,
+               hasBusyOperations,
+               TrayIconStateToString(desiredState));
+    m_trayController->SetState(desiredState);
 
     if (!forceErrorWhenIdle) {
         m_trayController->UpdateTooltipFromConnections();
@@ -598,13 +666,13 @@ void ApplicationHost::SetupDeviceEvents() {
         if (!self) return;
         if (self->m_exiting.load() || !self->m_trayController || !self->m_deviceManager) return;
         if (!self->m_hwnd || !IsWindow(self->m_hwnd)) return;
-        self->RefreshTrayVisualState(statusKind == DeviceStatusKind::Error);
+        self->RefreshTrayVisualState(statusKind == DeviceStatusKind::Error, L"device-status-event");
     };
     callbacks.DeviceActivityChanged = [weak]() {
         auto self = weak.lock();
         if (!self || self->m_exiting.load() || !self->m_trayController || !self->m_deviceManager) return;
         if (!self->m_hwnd || !IsWindow(self->m_hwnd)) return;
-        self->RefreshTrayVisualState(false);
+        self->RefreshTrayVisualState(false, L"device-activity-event");
     };
 
     m_deviceEventRouter.Attach(
@@ -1124,7 +1192,7 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
         util::DebugTraceUnknownException(L"[App] OnDeviceConnected notification ERROR");
     }
 
-    RefreshTrayVisualState(false);
+    RefreshTrayVisualState(false, L"device-connected");
 }
 
 void ApplicationHost::OnDeviceDisconnected(winrt::hstring const& id) {
@@ -1140,7 +1208,7 @@ void ApplicationHost::OnDeviceDisconnected(winrt::hstring const& id) {
         util::DebugTraceException(L"[App] OnDeviceDisconnected notification ERROR", ex);
     }
 
-    RefreshTrayVisualState(false);
+    RefreshTrayVisualState(false, L"device-disconnected");
 }
 
 void ApplicationHost::OnConnectionError(winrt::hstring const& id, winrt::hstring msg) {
@@ -1150,7 +1218,7 @@ void ApplicationHost::OnConnectionError(winrt::hstring const& id, winrt::hstring
         std::wstring tip = std::wstring(_("AppName")) + L"\n" + std::wstring(msg);
         m_trayController->UpdateTooltip(tip);
     }
-    RefreshTrayVisualState(true);
+    RefreshTrayVisualState(true, L"connection-error");
 }
 
 void ApplicationHost::OnAutoReconnectTriggered(winrt::hstring const& id) {

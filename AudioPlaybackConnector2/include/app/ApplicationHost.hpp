@@ -11,6 +11,7 @@
 #include <services/TrayController.hpp>
 
 #include <atomic>
+#include <string_view>
 
 class DeviceManager;
 class Settings;
@@ -55,7 +56,7 @@ private:
     void HandlePowerSuspend();
     void HandlePowerResume();
     void ToggleLastConnectedDeviceFromTray();
-    void RefreshTrayVisualState(bool forceErrorWhenIdle = false);
+    void RefreshTrayVisualState(bool forceErrorWhenIdle = false, std::wstring_view reason = L"unspecified");
     [[nodiscard]] winrt::hstring ResolveKnownDeviceName(winrt::hstring const& id) const;
 
     /*------------------------------------------------------------------------------------------------------------*/

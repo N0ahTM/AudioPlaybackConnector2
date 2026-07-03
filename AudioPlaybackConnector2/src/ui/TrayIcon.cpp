@@ -114,6 +114,16 @@ static HICON CreateHIconFromBitmap(Gdiplus::Bitmap& bitmap) {
     return CreateIconIndirect(&ii);
 }
 
+std::wstring_view TrayIconStateToString(TrayIconState state) noexcept {
+    switch (state) {
+        case TrayIconState::Idle: return L"Idle";
+        case TrayIconState::Connecting: return L"Connecting";
+        case TrayIconState::Connected: return L"Connected";
+        case TrayIconState::Error: return L"Error";
+    }
+    return L"Unknown";
+}
+
 static std::unique_ptr<Gdiplus::Bitmap> LoadBitmapResource(HINSTANCE hInst, int resId) {
     HRSRC hRes = FindResourceW(hInst, MAKEINTRESOURCEW(resId), RT_RCDATA);
     if (!hRes) return nullptr;
@@ -159,23 +169,45 @@ void TrayIcon::Initialize(HWND hwnd, UINT callbackMessage) {
     m_niid.guidItem = m_guid;
     m_initialized = true;
 
+    SetLastError(ERROR_SUCCESS);
     if (!Shell_NotifyIconW(NIM_ADD, &m_nid)) {
-        DebugTrace(L"[TrayIcon] ERROR: Shell_NotifyIconW(NIM_ADD) failed");
+        DebugTrace(L"[TrayIcon] ERROR: Shell_NotifyIconW(NIM_ADD) failed lastError={0}", GetLastError());
         return;
     }
-    Shell_NotifyIconW(NIM_SETVERSION, &m_nid);
+    SetLastError(ERROR_SUCCESS);
+    const BOOL versionSet = Shell_NotifyIconW(NIM_SETVERSION, &m_nid);
+    DebugTrace(
+        L"[TrayIcon] Shell_NotifyIconW(NIM_SETVERSION) ok={0} lastError={1}", versionSet != FALSE, GetLastError());
     m_registered = true;
+    DebugTrace(L"[TrayIcon] Initialized state={0} registered={1}", TrayIconStateToString(m_state), m_registered);
+}
+
+TrayIconState TrayIcon::State() const {
+    auto guard = m_lock.lock_shared();
+    return m_state;
 }
 
 void TrayIcon::SetState(TrayIconState state) {
+    TrayIconState previousState;
+    bool initialized;
+    bool registered;
     {
         auto guard = m_lock.lock_exclusive();
+        previousState = m_state;
         if (m_state != state && state == TrayIconState::Connecting) {
             m_connectingFrame = 0;
         }
         m_state = state;
+        initialized = m_initialized;
+        registered = m_registered;
     }
-    RefreshIcon();
+    DebugTrace(L"[TrayIcon] SetState previous={0} requested={1} changed={2} initialized={3} registered={4}",
+               TrayIconStateToString(previousState),
+               TrayIconStateToString(state),
+               previousState != state,
+               initialized,
+               registered);
+    RefreshIcon(true);
 }
 
 void TrayIcon::SetTooltip(std::wstring_view text) {
@@ -184,13 +216,21 @@ void TrayIcon::SetTooltip(std::wstring_view text) {
     if (!m_initialized) return;
     wcsncpy_s(m_nid.szTip, tmp.c_str(), _TRUNCATE);
     if (m_registered) {
-        Shell_NotifyIconW(NIM_MODIFY, &m_nid);
+        SetLastError(ERROR_SUCCESS);
+        const BOOL modified = Shell_NotifyIconW(NIM_MODIFY, &m_nid);
+        const auto lastError = GetLastError();
+        if (!modified) {
+            DebugTrace(L"[TrayIcon] ERROR: Shell_NotifyIconW(NIM_MODIFY tooltip) failed lastError={0}", lastError);
+        } else {
+            DebugTrace(L"[TrayIcon] Shell_NotifyIconW(NIM_MODIFY tooltip) ok lastError={0}", lastError);
+        }
     }
 }
 
 void TrayIcon::UpdateTheme() {
     CreateAllIcons();
-    RefreshIcon();
+    DebugTrace(L"[TrayIcon] UpdateTheme refreshing state={0}", TrayIconStateToString(State()));
+    RefreshIcon(true);
 }
 
 void TrayIcon::AdvanceConnectingFrame() {
@@ -199,34 +239,45 @@ void TrayIcon::AdvanceConnectingFrame() {
         if (m_state != TrayIconState::Connecting) return;
         m_connectingFrame = static_cast<uint8_t>((m_connectingFrame + 1) % CONNECTING_FRAME_COUNT);
     }
-    RefreshIcon();
+    RefreshIcon(false);
 }
 
 std::optional<RECT> TrayIcon::GetIconRect() const {
     RECT rc{};
     auto guard = m_lock.lock_shared();
     auto hr = Shell_NotifyIconGetRect(&m_niid, &rc);
-    if (FAILED(hr)) return std::nullopt;
+    if (FAILED(hr)) {
+        DebugTrace(L"[TrayIcon] ERROR: Shell_NotifyIconGetRect failed hr=0x{0:08X}", static_cast<uint32_t>(hr));
+        return std::nullopt;
+    }
+    DebugTrace(L"[TrayIcon] GetIconRect left={0} top={1} right={2} bottom={3}", rc.left, rc.top, rc.right, rc.bottom);
     return rc;
 }
 
 void TrayIcon::Reregister() {
     auto guard = m_lock.lock_exclusive();
     if (!m_initialized) return;
+    SetLastError(ERROR_SUCCESS);
     if (!Shell_NotifyIconW(NIM_ADD, &m_nid)) {
         m_registered = false;
-        DebugTrace(L"[TrayIcon] ERROR: Shell_NotifyIconW(NIM_ADD) failed during reregister");
+        DebugTrace(L"[TrayIcon] ERROR: Shell_NotifyIconW(NIM_ADD) failed during reregister lastError={0}",
+                   GetLastError());
         return;
     }
-    Shell_NotifyIconW(NIM_SETVERSION, &m_nid);
+    SetLastError(ERROR_SUCCESS);
+    const BOOL versionSet = Shell_NotifyIconW(NIM_SETVERSION, &m_nid);
+    DebugTrace(L"[TrayIcon] Reregister NIM_SETVERSION ok={0} lastError={1}", versionSet != FALSE, GetLastError());
     m_registered = true;
+    DebugTrace(L"[TrayIcon] Reregistered state={0}", TrayIconStateToString(m_state));
 }
 
 void TrayIcon::Remove() {
     auto guard = m_lock.lock_exclusive();
     if (!m_initialized) return;
     if (m_registered) {
-        Shell_NotifyIconW(NIM_DELETE, &m_nid);
+        SetLastError(ERROR_SUCCESS);
+        const BOOL deleted = Shell_NotifyIconW(NIM_DELETE, &m_nid);
+        DebugTrace(L"[TrayIcon] Shell_NotifyIconW(NIM_DELETE) ok={0} lastError={1}", deleted != FALSE, GetLastError());
     }
     m_registered = false;
     m_initialized = false;
@@ -299,12 +350,15 @@ int TrayIcon::GetBestIconSizeIndex() {
     return SIZE_COUNT - 1;
 }
 
-void TrayIcon::RefreshIcon() {
+void TrayIcon::RefreshIcon(bool logSuccess) {
     int sizeIdx = GetBestIconSizeIndex();
     TrayIconState state;
     uint8_t connectingFrame;
     auto guard = m_lock.lock_exclusive();
-    if (!m_initialized) return;
+    if (!m_initialized) {
+        DebugTrace(L"[TrayIcon] RefreshIcon skipped; not initialized");
+        return;
+    }
     state = m_state;
     connectingFrame = m_connectingFrame;
     HICON hIcon = nullptr;
@@ -318,7 +372,30 @@ void TrayIcon::RefreshIcon() {
     }
     m_nid.hIcon = hIcon;
     if (m_registered) {
-        Shell_NotifyIconW(NIM_MODIFY, &m_nid);
+        SetLastError(ERROR_SUCCESS);
+        const BOOL modified = Shell_NotifyIconW(NIM_MODIFY, &m_nid);
+        const auto lastError = GetLastError();
+        if (!modified) {
+            DebugTrace(L"[TrayIcon] ERROR: Shell_NotifyIconW(NIM_MODIFY icon) failed state={0} size={1} frame={2} "
+                       L"hIcon=0x{3:X} "
+                       L"lastError={4}",
+                       TrayIconStateToString(state),
+                       SIZES[sizeIdx],
+                       connectingFrame,
+                       reinterpret_cast<uintptr_t>(hIcon),
+                       lastError);
+        } else if (logSuccess) {
+            DebugTrace(L"[TrayIcon] Shell_NotifyIconW(NIM_MODIFY icon) ok state={0} size={1} frame={2} hIcon=0x{3:X} "
+                       L"lastError={4}",
+                       TrayIconStateToString(state),
+                       SIZES[sizeIdx],
+                       connectingFrame,
+                       reinterpret_cast<uintptr_t>(hIcon),
+                       lastError);
+        }
+    } else {
+        DebugTrace(L"[TrayIcon] RefreshIcon skipped shell update; not registered state={0}",
+                   TrayIconStateToString(state));
     }
 }
 

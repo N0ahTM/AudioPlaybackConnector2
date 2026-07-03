@@ -66,7 +66,7 @@ public:
     void ShowDevicePicker();
     void UpdateTooltip(std::wstring_view text);
     void UpdateTooltipFromConnections();
-    void RefreshDevicePickerState();
+    void RefreshDevicePickerState(bool reconcileTrayState = true);
     void OnThemeChanged();
     void AdvanceConnectingFrame();
     void Reregister();

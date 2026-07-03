@@ -105,6 +105,8 @@ private:
     SingleInstanceGuard m_singleInstanceGuard;
     static inline UINT s_wmTaskbarCreated = 0;
     static constexpr UINT_PTR c_timerAnimation = 0x41504332;
+    static constexpr UINT_PTR c_timerTransientTrayError = 0x41504333;
+    static constexpr UINT c_transientTrayErrorMs = 3000;
     ULONG_PTR m_gdiplusToken = 0;
     bool m_notificationsAvailable = false;
     std::atomic<bool> m_exiting = false;

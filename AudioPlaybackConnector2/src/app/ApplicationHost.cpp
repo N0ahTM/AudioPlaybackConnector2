@@ -213,6 +213,7 @@ void ApplicationHost::PerformTeardown(bool saveLastConnected) noexcept {
     if (m_hwnd) {
         try {
             KillTimer(m_hwnd, c_timerAnimation);
+            KillTimer(m_hwnd, c_timerTransientTrayError);
             RemoveWindowSubclass(m_hwnd, SubclassProc, 1);
         } catch (...) {
         }
@@ -612,34 +613,40 @@ void ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstri
 
     const bool hasBusyOperations = m_deviceManager->HasBusyOperations();
     const bool hasConnections = m_deviceManager->HasConnections();
+    const bool showTransientError = forceErrorWhenIdle && !hasConnections && !hasBusyOperations;
 
     TrayIconState desiredState = TrayIconState::Idle;
     if (hasConnections) {
         desiredState = TrayIconState::Connected;
         KillTimer(m_hwnd, c_timerAnimation);
-    } else if (forceErrorWhenIdle) {
-        desiredState = TrayIconState::Error;
-        KillTimer(m_hwnd, c_timerAnimation);
+        KillTimer(m_hwnd, c_timerTransientTrayError);
     } else if (hasBusyOperations) {
         desiredState = TrayIconState::Connecting;
+        KillTimer(m_hwnd, c_timerTransientTrayError);
         SetTimer(m_hwnd, c_timerAnimation, 75, nullptr);
+    } else if (showTransientError) {
+        desiredState = TrayIconState::Error;
+        KillTimer(m_hwnd, c_timerAnimation);
+        SetTimer(m_hwnd, c_timerTransientTrayError, c_transientTrayErrorMs, nullptr);
     } else {
         KillTimer(m_hwnd, c_timerAnimation);
+        KillTimer(m_hwnd, c_timerTransientTrayError);
     }
 
     DebugTrace(L"[App] RefreshTrayVisualState reason={0} forceErrorWhenIdle={1} hasConnections={2} "
-               L"hasBusyOperations={3} desired={4}",
+               L"hasBusyOperations={3} transientError={4} desired={5}",
                reason,
                forceErrorWhenIdle,
                hasConnections,
                hasBusyOperations,
+               showTransientError,
                TrayIconStateToString(desiredState));
     m_trayController->SetState(desiredState);
 
     if (!forceErrorWhenIdle) {
         m_trayController->UpdateTooltipFromConnections();
     }
-    m_trayController->RefreshDevicePickerState();
+    m_trayController->RefreshDevicePickerState(!showTransientError);
 }
 
 void ApplicationHost::SetupDeviceEvents() {
@@ -1280,6 +1287,12 @@ ApplicationHost::SubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
 
     if (msg == WM_TIMER && wParam == c_timerAnimation && host->m_trayController) {
         host->m_trayController->AdvanceConnectingFrame();
+        return 0;
+    }
+
+    if (msg == WM_TIMER && wParam == c_timerTransientTrayError) {
+        KillTimer(hwnd, c_timerTransientTrayError);
+        host->RefreshTrayVisualState(false, L"transient-tray-error-expired");
         return 0;
     }
 

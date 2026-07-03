@@ -334,7 +334,7 @@ void TrayController::UpdateTooltipFromConnections() {
     }
 }
 
-void TrayController::RefreshDevicePickerState() {
+void TrayController::RefreshDevicePickerState(bool reconcileTrayState) {
     if (m_isTearingDown.load()) {
         return;
     }
@@ -351,7 +351,9 @@ void TrayController::RefreshDevicePickerState() {
     try {
         auto impl = m_devicePickerView.as<winrt::AudioPlaybackConnector2::implementation::DevicePickerView>();
         impl->RefreshDeviceStates();
-        ReconcileTrayStateFromDeviceSnapshot(L"flyout-refresh-device-states");
+        if (reconcileTrayState) {
+            ReconcileTrayStateFromDeviceSnapshot(L"flyout-refresh-device-states");
+        }
     } catch (winrt::hresult_error const& ex) {
         util::DebugTraceException(L"[TrayController] ERROR: failed to refresh picker device state", ex);
     } catch (std::exception const& ex) {

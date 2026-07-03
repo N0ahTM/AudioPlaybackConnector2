@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-07-03
+
+### Changed
+- Added extended diagnostics for tray icon updates, flyout refreshes, connection snapshots, and hidden WinUI anchor placement to make future state mismatches easier to diagnose.
+- Documented the Windows A2DP sink routing workaround in the troubleshooting guide.
+
+### Fixed
+- Retried transient `AudioPlaybackConnection.OpenAsync` failures with cooldown/backoff when Windows returns recoverable failures such as `UnknownFailure` with `0x8007001F` (`#14`).
+- Made the tray error icon transient and reconciled tray state from the actual device snapshot so tray, flyout, and connection state converge after errors (`#10`, `#14`).
+- Hardened the hidden WinUI anchor window so the small `WinUI Desktop` window does not appear instead of the flyout.
+- Kept the command-line control server responsive while long device operations run, and return a localized busy response for overlapping mutating commands.
+
 ## [0.6.1] - 2026-06-20
 
 ### Added

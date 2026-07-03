@@ -1,9 +1,9 @@
-# Builds a local Release x64 MSIX (unsigned) and copies release assets into ./dist/v0.6.1/
-# For signed GitHub releases, push tag v0.6.1 and use the Release workflow instead.
+# Builds a local Release x64 MSIX (unsigned) and copies release assets into ./dist/v0.6.2/
+# For signed GitHub releases, push tag v0.6.2 and use the Release workflow instead.
 
 param(
-    [string]$Version = "0.6.1.0",
-    [string]$SemVer = "0.6.1",
+    [string]$Version = "0.6.2.0",
+    [string]$SemVer = "0.6.2",
     [string]$Architecture = "x64",
     [string]$Configuration = "Release"
 )

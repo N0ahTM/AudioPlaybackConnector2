@@ -75,6 +75,7 @@
   "Settings_ShowNotifications": "顯示通知",
   "Settings_ShowNotifications_Desc": "顯示連線事件的 Toast 通知。",
   "Command_NotReady": "AudioPlaybackConnector2 尚未準備就緒。",
+  "Command_Busy": "另一個裝置操作已在進行中。",
   "Command_List_NoDevices": "找不到裝置。",
   "Command_List_Header": "可用裝置：",
   "Command_ConnectedSuffix": "已連線",

@@ -75,6 +75,7 @@
   "Settings_ShowNotifications": "Benachrichtigungen anzeigen",
   "Settings_ShowNotifications_Desc": "Toast-Benachrichtigungen für Verbindungsereignisse anzeigen.",
   "Command_NotReady": "AudioPlaybackConnector2 ist noch nicht bereit.",
+  "Command_Busy": "Es läuft bereits ein anderer Gerätebefehl.",
   "Command_List_NoDevices": "Keine Geräte gefunden.",
   "Command_List_Header": "Verfügbare Geräte:",
   "Command_ConnectedSuffix": "verbunden",

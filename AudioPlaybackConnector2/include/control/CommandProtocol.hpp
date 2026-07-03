@@ -40,7 +40,8 @@ enum class ExitCode : uint32_t {
     NotFound = 4,
     Ambiguous = 5,
     OperationFailed = 6,
-    Unavailable = 7
+    Unavailable = 7,
+    Busy = 8
 };
 
 struct RequestHeader {

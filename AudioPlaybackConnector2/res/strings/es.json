@@ -75,6 +75,7 @@
   "Settings_ShowNotifications": "Mostrar notificaciones",
   "Settings_ShowNotifications_Desc": "Muestra notificaciones emergentes para eventos de conexión.",
   "Command_NotReady": "AudioPlaybackConnector2 aún no está listo.",
+  "Command_Busy": "Ya hay otra operación de dispositivo en curso.",
   "Command_List_NoDevices": "No se encontraron dispositivos.",
   "Command_List_Header": "Dispositivos disponibles:",
   "Command_ConnectedSuffix": "conectado",

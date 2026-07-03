@@ -38,6 +38,19 @@ struct ControlDeviceInfo {
 constexpr DWORD c_controlDeviceRefreshTimeoutMs = 2500;
 constexpr int c_hiddenAnchorCoordinate = -32000;
 
+bool IsMutatingControlCommand(apc::control::CommandType command) noexcept {
+    using apc::control::CommandType;
+    switch (command) {
+        case CommandType::Connect:
+        case CommandType::Disconnect:
+        case CommandType::Reconnect:
+        case CommandType::ToggleLast:
+        case CommandType::DisconnectAll:
+        case CommandType::ReconnectAll: return true;
+        default: return false;
+    }
+}
+
 void LogMainWindowAnchor(HWND hwnd, std::wstring_view reason) noexcept {
     if (!hwnd) return;
 
@@ -760,6 +773,14 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
 
     if (m_exiting.load() || !m_deviceManager || !m_settings) {
         return makeResponse(ExitCode::Unavailable, _("Command_NotReady"));
+    }
+
+    std::unique_lock mutationLock(m_controlMutationMutex, std::defer_lock);
+    if (IsMutatingControlCommand(request.Command)) {
+        if (!mutationLock.try_lock()) {
+            DebugTrace(L"[App] Control command rejected as busy: command={0}", static_cast<uint32_t>(request.Command));
+            return makeResponse(ExitCode::Busy, _("Command_Busy"));
+        }
     }
 
     auto buildDevices = [this](bool refreshLiveDevices) {

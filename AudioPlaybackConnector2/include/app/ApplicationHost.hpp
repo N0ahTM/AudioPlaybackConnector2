@@ -11,6 +11,7 @@
 #include <services/TrayController.hpp>
 
 #include <atomic>
+#include <mutex>
 #include <string_view>
 
 class DeviceManager;
@@ -101,6 +102,7 @@ private:
     std::shared_ptr<NotificationService> m_notificationService;
     std::shared_ptr<TrayController> m_trayController;
     CommandLineControlServer m_commandLineControlServer;
+    std::mutex m_controlMutationMutex;
     DeviceEventRouter m_deviceEventRouter;
     SingleInstanceGuard m_singleInstanceGuard;
     static inline UINT s_wmTaskbarCreated = 0;

@@ -75,6 +75,7 @@
   "Settings_ShowNotifications": "Show notifications",
   "Settings_ShowNotifications_Desc": "Show toast notifications for connection events.",
   "Command_NotReady": "AudioPlaybackConnector2 is not ready yet.",
+  "Command_Busy": "Another device operation is already running.",
   "Command_List_NoDevices": "No devices found.",
   "Command_List_Header": "Available devices:",
   "Command_ConnectedSuffix": "connected",

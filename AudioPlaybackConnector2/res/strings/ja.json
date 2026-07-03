@@ -75,6 +75,7 @@
   "Settings_ShowNotifications": "通知を表示",
   "Settings_ShowNotifications_Desc": "接続イベントのトースト通知を表示します。",
   "Command_NotReady": "AudioPlaybackConnector2 はまだ準備できていません。",
+  "Command_Busy": "別のデバイス操作が既に実行中です。",
   "Command_List_NoDevices": "デバイスが見つかりません。",
   "Command_List_Header": "利用可能なデバイス:",
   "Command_ConnectedSuffix": "接続済み",

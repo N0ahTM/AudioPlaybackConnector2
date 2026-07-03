@@ -75,6 +75,7 @@
   "Settings_ShowNotifications": "알림 표시",
   "Settings_ShowNotifications_Desc": "연결 이벤트에 대한 토스트 알림을 표시합니다.",
   "Command_NotReady": "AudioPlaybackConnector2가 아직 준비되지 않았습니다.",
+  "Command_Busy": "다른 장치 작업이 이미 실행 중입니다.",
   "Command_List_NoDevices": "디바이스를 찾을 수 없습니다.",
   "Command_List_Header": "사용 가능한 디바이스:",
   "Command_ConnectedSuffix": "연결됨",

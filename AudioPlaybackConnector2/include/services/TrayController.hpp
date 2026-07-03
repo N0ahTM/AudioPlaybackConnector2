@@ -8,6 +8,7 @@
 #include <functional>
 #include <memory>
 #include <atomic>
+#include <string_view>
 
 class DeviceManager;
 
@@ -65,7 +66,7 @@ public:
     void ShowDevicePicker();
     void UpdateTooltip(std::wstring_view text);
     void UpdateTooltipFromConnections();
-    void RefreshDevicePickerState();
+    void RefreshDevicePickerState(bool reconcileTrayState = true);
     void OnThemeChanged();
     void AdvanceConnectingFrame();
     void Reregister();
@@ -83,6 +84,7 @@ private:
     void EnsureDevicePickerViewCreated();
     void LaunchBluetoothSettings();
     winrt::Microsoft::UI::Xaml::Controls::Flyout CreatePickerFlyout();
+    void ReconcileTrayStateFromDeviceSnapshot(std::wstring_view reason);
     [[nodiscard]] util::SettingsWindowPlacement CalculateSettingsWindowPlacement() const;
     [[nodiscard]] bool IsCursorOverTrayIcon() const;
     void OnTrayIconDoubleClick();

@@ -343,6 +343,16 @@ void DevicePickerView::RebuildDeviceListFromCache(bool reconcilePendingActions) 
     }
 
     const bool anyBusy = std::any_of(items.begin(), items.end(), [](auto const& item) { return item.IsBusy; });
+    const auto connectedItemCount =
+        std::count_if(items.begin(), items.end(), [](auto const& item) { return item.IsConnected; });
+    const auto busyItemCount = std::count_if(items.begin(), items.end(), [](auto const& item) { return item.IsBusy; });
+    DebugTrace(L"[DevicePickerView] RebuildDeviceListFromCache connectedCount={0} itemCount={1} "
+               L"connectedItemCount={2} busyItemCount={3} pendingGlobalAction={4}",
+               connectedCount,
+               items.size(),
+               connectedItemCount,
+               busyItemCount,
+               m_pendingGlobalAction);
     ApplyGlobalActionState(connectedCount > 1, !anyBusy && !m_pendingGlobalAction);
     RootGrid().Width(DevicePickerSizer::WidthFor(items, connectedCount > 1));
 

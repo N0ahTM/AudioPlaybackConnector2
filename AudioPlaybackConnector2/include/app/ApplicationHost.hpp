@@ -11,6 +11,8 @@
 #include <services/TrayController.hpp>
 
 #include <atomic>
+#include <mutex>
+#include <string_view>
 
 class DeviceManager;
 class Settings;
@@ -55,7 +57,7 @@ private:
     void HandlePowerSuspend();
     void HandlePowerResume();
     void ToggleLastConnectedDeviceFromTray();
-    void RefreshTrayVisualState(bool forceErrorWhenIdle = false);
+    void RefreshTrayVisualState(bool forceErrorWhenIdle = false, std::wstring_view reason = L"unspecified");
     [[nodiscard]] winrt::hstring ResolveKnownDeviceName(winrt::hstring const& id) const;
 
     /*------------------------------------------------------------------------------------------------------------*/
@@ -100,10 +102,13 @@ private:
     std::shared_ptr<NotificationService> m_notificationService;
     std::shared_ptr<TrayController> m_trayController;
     CommandLineControlServer m_commandLineControlServer;
+    std::mutex m_controlMutationMutex;
     DeviceEventRouter m_deviceEventRouter;
     SingleInstanceGuard m_singleInstanceGuard;
     static inline UINT s_wmTaskbarCreated = 0;
     static constexpr UINT_PTR c_timerAnimation = 0x41504332;
+    static constexpr UINT_PTR c_timerTransientTrayError = 0x41504333;
+    static constexpr UINT c_transientTrayErrorMs = 3000;
     ULONG_PTR m_gdiplusToken = 0;
     bool m_notificationsAvailable = false;
     std::atomic<bool> m_exiting = false;

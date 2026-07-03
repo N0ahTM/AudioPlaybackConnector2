@@ -248,6 +248,7 @@ void TrayController::ShowDevicePicker() {
     }
 
     EnsureDevicePickerViewCreated();
+    ReconcileTrayStateFromDeviceSnapshot(L"flyout-open-before-load");
 
     m_pickerFlyoutState.store(PickerFlyoutState::Opening);
     try {
@@ -333,7 +334,7 @@ void TrayController::UpdateTooltipFromConnections() {
     }
 }
 
-void TrayController::RefreshDevicePickerState() {
+void TrayController::RefreshDevicePickerState(bool reconcileTrayState) {
     if (m_isTearingDown.load()) {
         return;
     }
@@ -350,6 +351,9 @@ void TrayController::RefreshDevicePickerState() {
     try {
         auto impl = m_devicePickerView.as<winrt::AudioPlaybackConnector2::implementation::DevicePickerView>();
         impl->RefreshDeviceStates();
+        if (reconcileTrayState) {
+            ReconcileTrayStateFromDeviceSnapshot(L"flyout-refresh-device-states");
+        }
     } catch (winrt::hresult_error const& ex) {
         util::DebugTraceException(L"[TrayController] ERROR: failed to refresh picker device state", ex);
     } catch (std::exception const& ex) {
@@ -379,6 +383,7 @@ void TrayController::Reregister() {
 
 void TrayController::SetState(TrayIconState state) {
     if (m_trayIcon) {
+        DebugTrace(L"[TrayController] SetState requested={0}", TrayIconStateToString(state));
         m_trayIcon->SetState(state);
     }
 }
@@ -602,6 +607,53 @@ Controls::Flyout TrayController::CreatePickerFlyout() {
     });
 
     return flyout;
+}
+
+void TrayController::ReconcileTrayStateFromDeviceSnapshot(std::wstring_view reason) {
+    if (!m_trayIcon || !m_deviceManager || m_isTearingDown.load()) {
+        DebugTrace(L"[TrayController] Tray state reconcile skipped reason={0} hasTrayIcon={1} hasDeviceManager={2} "
+                   L"tearingDown={3}",
+                   reason,
+                   m_trayIcon != nullptr,
+                   m_deviceManager != nullptr,
+                   m_isTearingDown.load());
+        return;
+    }
+
+    auto connected = m_deviceManager->GetConnectedDevices();
+    const bool hasConnections = !connected.empty();
+    const bool hasBusyOperations = m_deviceManager->HasBusyOperations();
+
+    TrayIconState desiredState = TrayIconState::Idle;
+    if (hasConnections) {
+        desiredState = TrayIconState::Connected;
+    } else if (hasBusyOperations) {
+        desiredState = TrayIconState::Connecting;
+    }
+
+    const auto currentState = m_trayIcon->State();
+    const bool mismatch = currentState != desiredState;
+    DebugTrace(L"[TrayController] Tray state reconcile reason={0} current={1} desired={2} mismatch={3} "
+               L"connectedCount={4} hasBusyOperations={5}",
+               reason,
+               TrayIconStateToString(currentState),
+               TrayIconStateToString(desiredState),
+               mismatch,
+               connected.size(),
+               hasBusyOperations);
+
+    if (mismatch) {
+        DebugTrace(L"[TrayController] TRAY_STATE_MISMATCH reason={0} current={1} desired={2} connectedCount={3} "
+                   L"hasBusyOperations={4}",
+                   reason,
+                   TrayIconStateToString(currentState),
+                   TrayIconStateToString(desiredState),
+                   connected.size(),
+                   hasBusyOperations);
+    }
+
+    m_trayIcon->SetState(desiredState);
+    UpdateTooltipFromConnections();
 }
 
 util::SettingsWindowPlacement TrayController::CalculateSettingsWindowPlacement() const {

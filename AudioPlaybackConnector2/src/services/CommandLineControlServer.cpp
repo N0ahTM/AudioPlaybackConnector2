@@ -9,7 +9,10 @@ CommandLineControlServer::~CommandLineControlServer() {
 void CommandLineControlServer::Start(Handler handler) {
     if (m_running.exchange(true)) return;
 
-    m_handler = std::move(handler);
+    {
+        std::lock_guard lock(m_handlerMutex);
+        m_handler = std::move(handler);
+    }
     m_pipeName = apc::control::PipeName();
     m_thread = std::thread([this]() noexcept { ListenLoop(); });
 }
@@ -29,7 +32,15 @@ void CommandLineControlServer::Stop() noexcept {
         }
     }
 
-    m_handler = nullptr;
+    {
+        std::unique_lock lock(m_activeClientsMutex);
+        m_activeClientsCv.wait(lock, [this]() noexcept { return m_activeClients.load() == 0; });
+    }
+
+    {
+        std::lock_guard lock(m_handlerMutex);
+        m_handler = nullptr;
+    }
 }
 
 void CommandLineControlServer::ListenLoop() noexcept {
@@ -69,11 +80,42 @@ void CommandLineControlServer::ListenLoop() noexcept {
         }
 
         if (m_running.load()) {
-            HandleClient(pipe.get());
+            DispatchClient(std::move(pipe));
+        } else {
+            FlushFileBuffers(pipe.get());
+            DisconnectNamedPipe(pipe.get());
         }
+    }
+}
 
-        FlushFileBuffers(pipe.get());
-        DisconnectNamedPipe(pipe.get());
+void CommandLineControlServer::DispatchClient(wil::unique_hfile pipe) noexcept {
+    auto sharedPipe = std::make_shared<wil::unique_hfile>(std::move(pipe));
+    m_activeClients.fetch_add(1);
+    try {
+        std::thread([this, sharedPipe]() noexcept {
+            auto activeClientGuard = wil::scope_exit([this]() noexcept {
+                m_activeClients.fetch_sub(1);
+                m_activeClientsCv.notify_all();
+            });
+
+            HandleClient(sharedPipe->get());
+            FlushFileBuffers(sharedPipe->get());
+            DisconnectNamedPipe(sharedPipe->get());
+        }).detach();
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[CommandLineControlServer] client worker creation failed", ex);
+        HandleClient(sharedPipe->get());
+        FlushFileBuffers(sharedPipe->get());
+        DisconnectNamedPipe(sharedPipe->get());
+        m_activeClients.fetch_sub(1);
+        m_activeClientsCv.notify_all();
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[CommandLineControlServer] client worker creation failed");
+        HandleClient(sharedPipe->get());
+        FlushFileBuffers(sharedPipe->get());
+        DisconnectNamedPipe(sharedPipe->get());
+        m_activeClients.fetch_sub(1);
+        m_activeClientsCv.notify_all();
     }
 }
 
@@ -82,7 +124,11 @@ void CommandLineControlServer::HandleClient(HANDLE pipe) noexcept {
     try {
         apc::control::Request request;
         if (apc::control::ReadRequest(pipe, request)) {
-            auto handler = m_handler;
+            Handler handler;
+            {
+                std::lock_guard lock(m_handlerMutex);
+                handler = m_handler;
+            }
             if (handler) {
                 response = handler(request);
             } else {

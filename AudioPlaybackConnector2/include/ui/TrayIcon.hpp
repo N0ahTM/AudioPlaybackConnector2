@@ -1,10 +1,14 @@
 #pragma once
 
+#include <string_view>
+
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Tray Icon State ///////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
 enum class TrayIconState { Idle, Connecting, Connected, Error };
+
+[[nodiscard]] std::wstring_view TrayIconStateToString(TrayIconState state) noexcept;
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Tray Icon /////////////////////////////////////////////////////////////////////////////////////////*/
@@ -18,6 +22,7 @@ public:
 
     void Initialize(HWND hwnd, UINT callbackMessage);
     [[nodiscard]] bool IsInitialized() const noexcept { return m_initialized; }
+    [[nodiscard]] TrayIconState State() const;
     void Reregister();
     void SetState(TrayIconState state);
     void SetTooltip(std::wstring_view text);
@@ -32,7 +37,7 @@ private:
     /*------------------------------------------------------------------------------------------------------------*/
 
     void CreateAllIcons();
-    void RefreshIcon();
+    void RefreshIcon(bool logSuccess);
     static wil::unique_hicon CreateIconFromImage(Gdiplus::Bitmap& source, int size, Gdiplus::Color color);
     static int GetBestIconSizeIndex();
 

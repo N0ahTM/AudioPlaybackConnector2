@@ -12,6 +12,23 @@ constexpr std::chrono::seconds c_userActionCascadeWindow{5};
 constexpr std::chrono::milliseconds c_cascadeRestorePollInterval{500};
 constexpr std::chrono::milliseconds c_cascadeRestoreSettleDelay{2500};
 constexpr int c_cascadeRestoreMaxBusyWaits = 20;
+constexpr std::size_t c_openTransientFailureMaxAttempts = 10;
+
+std::chrono::milliseconds OpenTransientRetryDelay(std::size_t failedAttempt) noexcept {
+    constexpr std::array<int, c_openTransientFailureMaxAttempts - 1> delaysMs{
+        500, 1000, 1500, 2500, 4000, 6000, 8000, 8000, 8000};
+    if (failedAttempt == 0) return std::chrono::milliseconds(0);
+    const auto index = std::min(failedAttempt - 1, delaysMs.size() - 1);
+    return std::chrono::milliseconds(delaysMs[index]);
+}
+
+bool IsRetryableOpenFailure(winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResultStatus status,
+                            winrt::hresult extendedError) noexcept {
+    using winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResultStatus;
+    if (status == AudioPlaybackConnectionOpenResultStatus::RequestTimedOut) return true;
+    if (status != AudioPlaybackConnectionOpenResultStatus::UnknownFailure) return false;
+    return static_cast<HRESULT>(extendedError) == HRESULT_FROM_WIN32(ERROR_GEN_FAILURE);
+}
 
 inline void ReportAsyncConnectionError(DeviceManager& dm,
                                        winrt::hstring const& deviceId,
@@ -860,147 +877,209 @@ DeviceManager::ConnectInternalAsync(winrt::Windows::Devices::Enumeration::Device
             if (m_shutdownForProcessExit || m_powerTransitionSuspended) co_return;
         }
 
-        auto connection = AudioConnectionService::TryCreateFromId(deviceId);
-        auto detachConnectionOnExitShutdown = wil::scope_exit([&]() noexcept {
-            auto guard = m_lock.lock_shared();
-            if (m_shutdownForProcessExit) {
-                AudioConnectionService::DetachForProcessExit(connection);
-            }
-        });
-
-        if (!connection) {
-            // Do NOT touch the reconnecting flag here. ReconnectAsync owns it
-            // for the entire reconnect flow and will clear it when finished.
-            DebugTrace(L"[DeviceManager] TryCreateFromId returned null: {0}", std::wstring(deviceId));
-            bool shutdownForProcessExit = false;
+        auto closePendingConnectionForRetry =
+            [&](winrt::Windows::Media::Audio::AudioPlaybackConnection& failedConnection) -> bool {
+            std::optional<DeviceConnectionInfo> extracted;
             {
-                auto guard = m_lock.lock_shared();
-                shutdownForProcessExit = m_shutdownForProcessExit;
+                auto guard = m_lock.lock_exclusive();
+                auto attempt = m_connectAttemptIds.find(deviceIdKey);
+                if (m_shutdownForProcessExit || m_powerTransitionSuspended || attempt == m_connectAttemptIds.end() ||
+                    attempt->second != attemptId) {
+                    return false;
+                }
+                extracted = m_sessions.ExtractConnection(deviceId);
             }
-            if (!shutdownForProcessExit) {
-                ReportConnectionFailure(deviceId, winrt::hstring(_("UnknownError")), false);
-            }
-            co_return;
-        }
 
-        DeviceConnectionInfo info;
-        info.Id = metadataTemplate.Id.empty() ? deviceIdKey : metadataTemplate.Id;
-        info.Name = metadataTemplate.Name.empty() ? info.Id : metadataTemplate.Name;
-        info.Connection = connection;
-        info.IsOpen = false;
-        auto weak = weak_from_this();
-        auto stateChangedDeviceId = deviceId;
-        info.StateChangedToken = AudioConnectionService::RegisterStateChanged(
-            connection, [weak, stateChangedDeviceId](auto sender, auto args) {
-                if (auto self = weak.lock()) {
-                    self->OnConnectionStateChanged(stateChangedDeviceId, sender, args);
+            if (extracted) {
+                if (extracted->StateChangedToken.value != 0) {
+                    AudioConnectionService::RevokeStateChanged(extracted->Connection, extracted->StateChangedToken);
+                }
+                AudioConnectionService::Close(extracted->Connection);
+            }
+            failedConnection = nullptr;
+            LogConnectionSnapshot(L"open-retry-cleanup");
+            return true;
+        };
+
+        for (std::size_t openAttempt = 1; openAttempt <= c_openTransientFailureMaxAttempts; ++openAttempt) {
+            auto connection = AudioConnectionService::TryCreateFromId(deviceId);
+            auto detachConnectionOnExitShutdown = wil::scope_exit([&]() noexcept {
+                auto guard = m_lock.lock_shared();
+                if (m_shutdownForProcessExit) {
+                    AudioConnectionService::DetachForProcessExit(connection);
                 }
             });
-        AutoReconnectPredicate pred;
-        {
-            auto guard = m_lock.lock_shared();
-            pred = m_autoReconnectPred;
-        }
-        info.AutoReconnect = pred ? pred(deviceId) : false;
 
-        bool duplicateConnection = false;
-        bool shutdownForProcessExit = false;
-        {
-            auto guard = m_lock.lock_exclusive();
-            auto attempt = m_connectAttemptIds.find(deviceIdKey);
-            shutdownForProcessExit = m_shutdownForProcessExit;
-            if (shutdownForProcessExit || m_powerTransitionSuspended || attempt == m_connectAttemptIds.end() ||
-                attempt->second != attemptId || m_sessions.HasConnection(deviceId)) {
-                duplicateConnection = true;
-            } else {
-                m_sessions.InsertOrUpdateConnection(deviceId, std::move(info));
-                m_reconnectController.ClearCancelled(deviceId);
-            }
-        }
-        if (duplicateConnection) {
-            if (!shutdownForProcessExit && info.StateChangedToken.value != 0) {
-                AudioConnectionService::RevokeStateChanged(connection, info.StateChangedToken);
-            }
-            if (shutdownForProcessExit) {
-                AudioConnectionService::DetachForProcessExit(connection);
-            } else {
-                AudioConnectionService::Close(connection);
-            }
-            co_return;
-        }
-
-        bool isReconnecting = false;
-        {
-            auto guard = m_lock.lock_shared();
-            if (m_shutdownForProcessExit || m_powerTransitionSuspended) co_return;
-            isReconnecting = m_sessions.IsReconnecting(deviceId);
-        }
-
-        if (!isReconnecting) {
-            DeviceStatusChanged(
-                deviceId,
-                winrt::hstring(_("Connecting")),
-                winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::ShowProgress |
-                    winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::ShowDisconnectButton,
-                DeviceStatusKind::Connecting);
-        }
-
-        co_await AudioConnectionService::StartAsync(connection);
-        DebugTrace(L"[DeviceManager] StartAsync completed: {0}", std::wstring(deviceId));
-        if (!IsConnectAttemptCurrent(deviceId, attemptId)) co_return;
-
-        auto result = co_await AudioConnectionService::OpenAsync(connection);
-        DebugTrace(L"[DeviceManager] OpenAsync completed: id={0} status={1} extended=0x{2:08X}",
-                   std::wstring(deviceId),
-                   DeviceOpenResultStatusName(result.Status()),
-                   static_cast<uint32_t>(result.ExtendedError()));
-        if (!IsConnectAttemptCurrent(deviceId, attemptId)) co_return;
-
-        bool currentAttempt = false;
-        {
-            auto guard = m_lock.lock_exclusive();
-            auto attempt = m_connectAttemptIds.find(deviceIdKey);
-            currentAttempt = !m_shutdownForProcessExit && !m_powerTransitionSuspended &&
-                             attempt != m_connectAttemptIds.end() && attempt->second == attemptId &&
-                             m_sessions.HasConnection(deviceId);
-        }
-        if (!currentAttempt) co_return;
-
-        switch (result.Status()) {
-            case winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResultStatus::Success: {
+            if (!connection) {
+                // Do NOT touch the reconnecting flag here. ReconnectAsync owns it
+                // for the entire reconnect flow and will clear it when finished.
+                DebugTrace(L"[DeviceManager] TryCreateFromId returned null: {0}", std::wstring(deviceId));
+                bool shutdownForProcessExit = false;
                 {
-                    auto guard = m_lock.lock_exclusive();
-                    auto existingInfo = m_sessions.FindConnection(deviceId);
-                    auto attempt = m_connectAttemptIds.find(deviceIdKey);
-                    if (m_shutdownForProcessExit || m_powerTransitionSuspended || !existingInfo ||
-                        attempt == m_connectAttemptIds.end() || attempt->second != attemptId)
-                        co_return;
-                    m_sessions.UpdateConnectionIsOpen(deviceId, true);
-                    m_sessions.UnmarkReconnecting(deviceId);
-                    m_reconnectController.ClearAttempts(deviceId);
-                    m_userActionCascadeIds.erase(deviceIdKey);
+                    auto guard = m_lock.lock_shared();
+                    shutdownForProcessExit = m_shutdownForProcessExit;
                 }
-                isReconnecting = false;
-                DeviceConnected(deviceId);
+                if (!shutdownForProcessExit) {
+                    ReportConnectionFailure(deviceId, winrt::hstring(_("UnknownError")), false);
+                }
+                co_return;
+            }
+
+            DeviceConnectionInfo info;
+            info.Id = metadataTemplate.Id.empty() ? deviceIdKey : metadataTemplate.Id;
+            info.Name = metadataTemplate.Name.empty() ? info.Id : metadataTemplate.Name;
+            info.Connection = connection;
+            info.IsOpen = false;
+            auto weak = weak_from_this();
+            auto stateChangedDeviceId = deviceId;
+            info.StateChangedToken = AudioConnectionService::RegisterStateChanged(
+                connection, [weak, stateChangedDeviceId](auto sender, auto args) {
+                    if (auto self = weak.lock()) {
+                        self->OnConnectionStateChanged(stateChangedDeviceId, sender, args);
+                    }
+                });
+            AutoReconnectPredicate pred;
+            {
+                auto guard = m_lock.lock_shared();
+                pred = m_autoReconnectPred;
+            }
+            info.AutoReconnect = pred ? pred(deviceId) : false;
+
+            bool duplicateConnection = false;
+            bool shutdownForProcessExit = false;
+            {
+                auto guard = m_lock.lock_exclusive();
+                auto attempt = m_connectAttemptIds.find(deviceIdKey);
+                shutdownForProcessExit = m_shutdownForProcessExit;
+                if (shutdownForProcessExit || m_powerTransitionSuspended || attempt == m_connectAttemptIds.end() ||
+                    attempt->second != attemptId || m_sessions.HasConnection(deviceId)) {
+                    duplicateConnection = true;
+                } else {
+                    m_sessions.InsertOrUpdateConnection(deviceId, std::move(info));
+                    m_reconnectController.ClearCancelled(deviceId);
+                }
+            }
+            if (duplicateConnection) {
+                if (!shutdownForProcessExit && info.StateChangedToken.value != 0) {
+                    AudioConnectionService::RevokeStateChanged(connection, info.StateChangedToken);
+                }
+                if (shutdownForProcessExit) {
+                    AudioConnectionService::DetachForProcessExit(connection);
+                } else {
+                    AudioConnectionService::Close(connection);
+                }
+                co_return;
+            }
+
+            bool isReconnecting = false;
+            {
+                auto guard = m_lock.lock_shared();
+                if (m_shutdownForProcessExit || m_powerTransitionSuspended) co_return;
+                isReconnecting = m_sessions.IsReconnecting(deviceId);
+            }
+
+            if (!isReconnecting) {
                 DeviceStatusChanged(
                     deviceId,
-                    winrt::hstring(_("Connected")),
-                    winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::ShowDisconnectButton,
-                    DeviceStatusKind::Connected);
-                LogConnectionSnapshot(L"open-success");
-                StartConnectionHeartbeat();
-                break;
+                    winrt::hstring(_("Connecting")),
+                    winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::ShowProgress |
+                        winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::ShowDisconnectButton,
+                    DeviceStatusKind::Connecting);
             }
-            case winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResultStatus::RequestTimedOut:
-                ReportConnectionFailure(deviceId, winrt::hstring(_("RequestTimedOut")), true);
-                break;
-            case winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResultStatus::DeniedBySystem:
-                ReportConnectionFailure(deviceId, winrt::hstring(_("DeniedBySystem")), true);
-                break;
-            case winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResultStatus::UnknownFailure: {
-                winrt::hresult_error err(result.ExtendedError());
-                ReportConnectionFailure(deviceId, err.message(), true);
-                break;
+
+            DebugTrace(L"[DeviceManager] Open attempt {0}/{1} starting: {2}",
+                       openAttempt,
+                       c_openTransientFailureMaxAttempts,
+                       std::wstring(deviceId));
+            co_await AudioConnectionService::StartAsync(connection);
+            DebugTrace(
+                L"[DeviceManager] StartAsync completed: id={0} openAttempt={1}", std::wstring(deviceId), openAttempt);
+            if (!IsConnectAttemptCurrent(deviceId, attemptId)) co_return;
+
+            auto result = co_await AudioConnectionService::OpenAsync(connection);
+            DebugTrace(L"[DeviceManager] OpenAsync completed: id={0} openAttempt={1} status={2} extended=0x{3:08X}",
+                       std::wstring(deviceId),
+                       openAttempt,
+                       DeviceOpenResultStatusName(result.Status()),
+                       static_cast<uint32_t>(result.ExtendedError()));
+            if (!IsConnectAttemptCurrent(deviceId, attemptId)) co_return;
+
+            bool currentAttempt = false;
+            {
+                auto guard = m_lock.lock_exclusive();
+                auto attempt = m_connectAttemptIds.find(deviceIdKey);
+                currentAttempt = !m_shutdownForProcessExit && !m_powerTransitionSuspended &&
+                                 attempt != m_connectAttemptIds.end() && attempt->second == attemptId &&
+                                 m_sessions.HasConnection(deviceId);
+            }
+            if (!currentAttempt) co_return;
+
+            switch (result.Status()) {
+                case winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResultStatus::Success: {
+                    {
+                        auto guard = m_lock.lock_exclusive();
+                        auto existingInfo = m_sessions.FindConnection(deviceId);
+                        auto attempt = m_connectAttemptIds.find(deviceIdKey);
+                        if (m_shutdownForProcessExit || m_powerTransitionSuspended || !existingInfo ||
+                            attempt == m_connectAttemptIds.end() || attempt->second != attemptId)
+                            co_return;
+                        m_sessions.UpdateConnectionIsOpen(deviceId, true);
+                        m_sessions.UnmarkReconnecting(deviceId);
+                        m_reconnectController.ClearAttempts(deviceId);
+                        m_userActionCascadeIds.erase(deviceIdKey);
+                    }
+                    isReconnecting = false;
+                    DeviceConnected(deviceId);
+                    DeviceStatusChanged(
+                        deviceId,
+                        winrt::hstring(_("Connected")),
+                        winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::ShowDisconnectButton,
+                        DeviceStatusKind::Connected);
+                    LogConnectionSnapshot(L"open-success");
+                    StartConnectionHeartbeat();
+                    co_return;
+                }
+                case winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResultStatus::RequestTimedOut:
+                    if (IsRetryableOpenFailure(result.Status(), result.ExtendedError()) &&
+                        openAttempt < c_openTransientFailureMaxAttempts) {
+                        const auto delay = OpenTransientRetryDelay(openAttempt);
+                        DebugTrace(L"[DeviceManager] OpenAsync transient failure; retry scheduled: id={0} "
+                                   L"openAttempt={1} delayMs={2} status={3} extended=0x{4:08X}",
+                                   std::wstring(deviceId),
+                                   openAttempt,
+                                   delay.count(),
+                                   DeviceOpenResultStatusName(result.Status()),
+                                   static_cast<uint32_t>(result.ExtendedError()));
+                        if (!closePendingConnectionForRetry(connection)) co_return;
+                        co_await winrt::resume_after(delay);
+                        if (!IsConnectAttemptCurrent(deviceId, attemptId)) co_return;
+                        continue;
+                    }
+                    ReportConnectionFailure(deviceId, winrt::hstring(_("RequestTimedOut")), true);
+                    co_return;
+                case winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResultStatus::DeniedBySystem:
+                    ReportConnectionFailure(deviceId, winrt::hstring(_("DeniedBySystem")), true);
+                    co_return;
+                case winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResultStatus::UnknownFailure: {
+                    if (IsRetryableOpenFailure(result.Status(), result.ExtendedError()) &&
+                        openAttempt < c_openTransientFailureMaxAttempts) {
+                        const auto delay = OpenTransientRetryDelay(openAttempt);
+                        DebugTrace(L"[DeviceManager] OpenAsync transient failure; retry scheduled: id={0} "
+                                   L"openAttempt={1} delayMs={2} status={3} extended=0x{4:08X}",
+                                   std::wstring(deviceId),
+                                   openAttempt,
+                                   delay.count(),
+                                   DeviceOpenResultStatusName(result.Status()),
+                                   static_cast<uint32_t>(result.ExtendedError()));
+                        if (!closePendingConnectionForRetry(connection)) co_return;
+                        co_await winrt::resume_after(delay);
+                        if (!IsConnectAttemptCurrent(deviceId, attemptId)) co_return;
+                        continue;
+                    }
+                    winrt::hresult_error err(result.ExtendedError());
+                    ReportConnectionFailure(deviceId, err.message(), true);
+                    co_return;
+                }
             }
         }
     } catch (winrt::hresult_error const& ex) {

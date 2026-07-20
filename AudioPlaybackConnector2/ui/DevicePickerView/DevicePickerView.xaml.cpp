@@ -88,7 +88,6 @@ namespace winrt::AudioPlaybackConnector2::implementation {
 
 DevicePickerView::DevicePickerView() {
     InitializeComponent();
-    BackdropElement().SystemBackdrop(Media::MicaBackdrop());
     auto weak = get_weak();
     CloseButton().Click([weak](auto const& sender, auto const& args) {
         if (auto self = weak.get()) {
@@ -117,6 +116,7 @@ DevicePickerView::DevicePickerView() {
 /*------------------------------------------------------------------------------------------------------------*/
 
 void DevicePickerView::Initialize(std::shared_ptr<DeviceManager> manager,
+                                  std::shared_ptr<Settings> settings,
                                   std::function<void()> onClose,
                                   std::function<void(winrt::hstring)> onDeviceSelected,
                                   std::function<void(winrt::hstring)> onDeviceDisconnect,
@@ -124,7 +124,9 @@ void DevicePickerView::Initialize(std::shared_ptr<DeviceManager> manager,
                                   std::function<void()> onDisconnectAll,
                                   std::function<void()> onReconnectAll) {
     m_deviceManager = manager;
+    m_settings = settings;
     m_viewModel.SetDeviceManager(manager);
+    m_viewModel.SetSettings(settings);
     m_onClose = std::move(onClose);
     m_onDeviceSelected = std::move(onDeviceSelected);
     m_onDeviceDisconnect = std::move(onDeviceDisconnect);

@@ -53,6 +53,20 @@ jobs:
           --template=gcc `
           $files
 
+    - name: Set up Node.js for Stream Deck plugin
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: npm
+        cache-dependency-path: integrations/stream-deck/package-lock.json
+
+    - name: Build and package Stream Deck plugin
+      working-directory: integrations/stream-deck
+      run: |
+        npm ci
+        npm audit --audit-level=high
+        npm run pack
+
     - name: Restore NuGet packages
       run: msbuild AudioPlaybackConnector2.slnx -t:restore -p:RestorePackagesConfig=true
 
@@ -72,4 +86,11 @@ jobs:
       with:
         name: AudioPlaybackConnector2-x64-Release
         path: x64/Release/AudioPlaybackConnector2/AudioPlaybackConnector2.exe
+        if-no-files-found: error
+
+    - name: Upload Stream Deck plugin artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: AudioPlaybackConnector2-StreamDeck-0.1.0
+        path: integrations/stream-deck/*.streamDeckPlugin
         if-no-files-found: error

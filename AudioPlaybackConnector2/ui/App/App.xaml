@@ -9,14 +9,12 @@
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
             </ResourceDictionary.MergedDictionaries>
-
-            <!-- Mica backdrop for all MenuFlyoutPresenters (tray context menu) -->
-            <Style TargetType="MenuFlyoutPresenter">
-                <Setter Property="SystemBackdrop">
-                    <Setter.Value>
-                        <MicaBackdrop />
-                    </Setter.Value>
-                </Setter>
+            <DesktopAcrylicBackdrop x:Key="MenuFlyoutBackdrop" />
+            <Style BasedOn="{StaticResource DefaultMenuFlyoutPresenterStyle}" TargetType="MenuFlyoutPresenter">
+                <Setter Property="SystemBackdrop" Value="{StaticResource MenuFlyoutBackdrop}" />
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderBrush" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
             </Style>
         </ResourceDictionary>
     </Application.Resources>

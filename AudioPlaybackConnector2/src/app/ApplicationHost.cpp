@@ -5,6 +5,7 @@
 #include <MainWindow/MainWindow.xaml.h>
 #include <app/AutoReconnectPlanner.hpp>
 #include <app/StartupUpdateCoordinator.hpp>
+#include <core/DeviceDisplay.hpp>
 #include <core/DeviceManager.hpp>
 #include <core/Settings.hpp>
 #include <core/StringResources.hpp>
@@ -31,6 +32,7 @@ namespace {
 struct ControlDeviceInfo {
     std::wstring Id;
     std::wstring Name;
+    std::wstring Alias;
     bool Connected = false;
     bool Known = false;
 };
@@ -46,7 +48,11 @@ bool IsMutatingControlCommand(apc::control::CommandType command) noexcept {
         case CommandType::Reconnect:
         case CommandType::ToggleLast:
         case CommandType::DisconnectAll:
-        case CommandType::ReconnectAll: return true;
+        case CommandType::ReconnectAll:
+        case CommandType::DefaultSet:
+        case CommandType::DefaultClear:
+        case CommandType::AliasSet:
+        case CommandType::AliasClear: return true;
         default: return false;
     }
 }
@@ -170,7 +176,20 @@ std::wstring NormalizeHex(std::wstring_view value) {
 }
 
 std::wstring DeviceLabel(ControlDeviceInfo const& device) {
+    if (!device.Alias.empty()) return device.Alias;
     return device.Name.empty() ? device.Id : device.Name;
+}
+
+std::wstring DeviceDisplayLabel(ControlDeviceInfo const& device, bool redact) {
+    return apc::display::DeviceNameOrId(device.Id, device.Name, device.Alias, redact);
+}
+
+std::wstring ResponseId(std::wstring_view id, bool redact) {
+    return redact && !id.empty() ? std::wstring(_("Privacy_RedactedValue")) : std::wstring(id);
+}
+
+std::wstring ResponseName(ControlDeviceInfo const& device, bool redact) {
+    return redact ? std::wstring() : device.Name;
 }
 
 std::wstring FormatResource(std::string_view key, std::wstring_view replacement) {
@@ -181,12 +200,25 @@ std::wstring FormatResource(std::string_view key, std::size_t value) {
     return FormatResource(key, std::to_wstring(value));
 }
 
-void InsertDeviceJson(winrt::Windows::Data::Json::JsonObject& object, ControlDeviceInfo const& device) {
+std::wstring FormatResource(std::string_view key, std::wstring_view first, std::wstring_view second) {
+    auto result = util::ReplacePlaceholders(_(key), first);
+    size_t pos = 0;
+    while ((pos = result.find(L"{1}", pos)) != std::wstring::npos) {
+        result.replace(pos, 3, second);
+        pos += second.size();
+    }
+    return result;
+}
+
+void InsertDeviceJson(winrt::Windows::Data::Json::JsonObject& object, ControlDeviceInfo const& device, bool redact) {
     using winrt::Windows::Data::Json::JsonValue;
-    object.Insert(L"id", JsonValue::CreateStringValue(winrt::hstring(device.Id)));
-    object.Insert(L"name", JsonValue::CreateStringValue(winrt::hstring(device.Name)));
+    object.Insert(L"id", JsonValue::CreateStringValue(winrt::hstring(ResponseId(device.Id, redact))));
+    object.Insert(L"name", JsonValue::CreateStringValue(winrt::hstring(ResponseName(device, redact))));
+    object.Insert(L"alias", JsonValue::CreateStringValue(winrt::hstring(device.Alias)));
+    object.Insert(L"displayName", JsonValue::CreateStringValue(winrt::hstring(DeviceDisplayLabel(device, redact))));
     object.Insert(L"connected", JsonValue::CreateBooleanValue(device.Connected));
     object.Insert(L"known", JsonValue::CreateBooleanValue(device.Known));
+    object.Insert(L"privacyRedacted", JsonValue::CreateBooleanValue(redact));
 }
 
 } // namespace
@@ -385,7 +417,20 @@ void ApplicationHost::InitializeTray() {
     m_trayController = std::make_shared<TrayController>();
     m_trayController->Initialize(m_hwnd, m_mainWindow);
     m_trayController->SetDeviceManager(m_deviceManager);
+    m_trayController->SetSettings(m_settings);
     auto weak = weak_from_this();
+    if (m_settingsController) {
+        m_settingsController->SetPresentationChangedCallback([weak]() {
+            auto self = weak.lock();
+            if (!self || self->m_exiting.load() || !self->m_dispatcherQueue) return;
+            (void)self->m_dispatcherQueue.TryEnqueue([weak]() {
+                if (auto self = weak.lock(); self && !self->m_exiting.load() && self->m_trayController) {
+                    self->m_trayController->UpdateTooltipFromConnections();
+                    self->m_trayController->RefreshDevicePickerState(false);
+                }
+            });
+        });
+    }
     m_trayController->SetCallbacks(
         [weak]() {
             if (auto self = weak.lock()) self->ShowSettingsWindow();
@@ -473,8 +518,25 @@ winrt::hstring ApplicationHost::ResolveKnownDeviceName(winrt::hstring const& id)
     if (!m_settings) return id;
     auto locked = m_settings->LockSharedData();
     auto it = std::ranges::find_if(locked->Devices, [&](const auto& device) { return device.Id == id; });
-    if (it != locked->Devices.end()) return winrt::hstring(it->Name);
-    return id;
+    if (it != locked->Devices.end()) {
+        if (!it->Alias.empty()) return winrt::hstring(it->Alias);
+        if (locked->PrivacyModeEnabled) return winrt::hstring(_("Privacy_RedactedDevice"));
+        if (!it->Name.empty()) return winrt::hstring(it->Name);
+    }
+    return locked->PrivacyModeEnabled ? winrt::hstring(_("Privacy_RedactedDevice")) : id;
+}
+
+std::optional<std::wstring> ApplicationHost::ResolveDefaultDeviceId() const {
+    if (!m_settings) return std::nullopt;
+
+    auto locked = m_settings->LockSharedData();
+    if (locked->DefaultDevice == DefaultDeviceMode::SpecificDevice && !locked->DefaultDeviceId.empty()) {
+        return locked->DefaultDeviceId;
+    }
+    if (!locked->LastConnectedIds.empty()) {
+        return locked->LastConnectedIds.front();
+    }
+    return std::nullopt;
 }
 
 void ApplicationHost::ToggleLastConnectedDeviceFromTray() {
@@ -485,30 +547,26 @@ void ApplicationHost::ToggleLastConnectedDeviceFromTray() {
         return;
     }
 
-    std::wstring targetId;
-    {
-        auto locked = m_settings->LockSharedData();
-        if (locked->LastConnectedIds.empty()) {
-            DebugTrace(L"[App] Tray double-click ignored: no last connected device");
-            return;
-        }
-        targetId = locked->LastConnectedIds.front();
+    auto targetId = ResolveDefaultDeviceId();
+    if (!targetId) {
+        DebugTrace(L"[App] Tray double-click ignored: no default or last connected device");
+        return;
     }
 
-    if (targetId.empty()) return;
+    if (targetId->empty()) return;
 
-    auto id = winrt::hstring(targetId);
+    auto id = winrt::hstring(*targetId);
 
     if (m_deviceManager->IsDeviceBusy(id)) {
-        DebugTrace(L"[App] Tray double-click ignored: device busy: {0}", targetId);
+        DebugTrace(L"[App] Tray double-click ignored: device busy: {0}", *targetId);
         return;
     }
 
     if (m_deviceManager->IsDeviceConnected(id)) {
-        DebugTrace(L"[App] Tray double-click: disconnecting {0}", targetId);
+        DebugTrace(L"[App] Tray double-click: disconnecting {0}", *targetId);
         m_deviceManager->Disconnect(id);
     } else {
-        DebugTrace(L"[App] Tray double-click: connecting {0}", targetId);
+        DebugTrace(L"[App] Tray double-click: connecting {0}", *targetId);
         m_deviceManager->ConnectDetached(id);
     }
     RefreshTrayVisualState(false, L"tray-double-click-finished");
@@ -734,6 +792,7 @@ void ApplicationHost::ExitApplication() {
 
 apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Request const& request) {
     using apc::control::CommandFlagJson;
+    using apc::control::CommandFlagRaw;
     using apc::control::CommandType;
     using apc::control::ExitCode;
     using apc::control::Response;
@@ -743,6 +802,7 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
     using winrt::Windows::Data::Json::JsonValue;
 
     const bool wantsJson = (request.Flags & CommandFlagJson) != 0;
+    const bool wantsRaw = (request.Flags & CommandFlagRaw) != 0;
 
     auto makeResponse = [wantsJson](ExitCode code, std::wstring message) -> Response {
         if (!wantsJson) return {code, std::move(message)};
@@ -754,26 +814,33 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
         return {code, std::wstring(root.Stringify())};
     };
 
-    auto makeOperationResponse = [wantsJson](ExitCode code,
-                                             std::wstring_view action,
-                                             std::wstring_view id,
-                                             std::wstring_view name,
-                                             std::wstring message) -> Response {
+    if (m_exiting.load() || !m_deviceManager || !m_settings) {
+        return makeResponse(ExitCode::Unavailable, _("Command_NotReady"));
+    }
+
+    const bool redactOutput = [&]() {
+        auto locked = m_settings->LockSharedData();
+        return locked->PrivacyModeEnabled && !wantsRaw;
+    }();
+
+    auto makeOperationResponse = [wantsJson, redactOutput](ExitCode code,
+                                                           std::wstring_view action,
+                                                           std::wstring_view id,
+                                                           std::wstring_view name,
+                                                           std::wstring message) -> Response {
         if (!wantsJson) return {code, std::move(message)};
 
         JsonObject root;
         root.Insert(L"ok", JsonValue::CreateBooleanValue(code == ExitCode::Success));
         root.Insert(L"exitCode", JsonValue::CreateNumberValue(static_cast<double>(code)));
         root.Insert(L"action", JsonValue::CreateStringValue(winrt::hstring(action)));
-        root.Insert(L"id", JsonValue::CreateStringValue(winrt::hstring(id)));
+        root.Insert(L"id", JsonValue::CreateStringValue(winrt::hstring(ResponseId(id, redactOutput))));
         root.Insert(L"name", JsonValue::CreateStringValue(winrt::hstring(name)));
+        root.Insert(L"displayName", JsonValue::CreateStringValue(winrt::hstring(name)));
+        root.Insert(L"privacyRedacted", JsonValue::CreateBooleanValue(redactOutput));
         root.Insert(L"message", JsonValue::CreateStringValue(winrt::hstring(message)));
         return {code, std::wstring(root.Stringify())};
     };
-
-    if (m_exiting.load() || !m_deviceManager || !m_settings) {
-        return makeResponse(ExitCode::Unavailable, _("Command_NotReady"));
-    }
 
     std::unique_lock mutationLock(m_controlMutationMutex, std::defer_lock);
     if (IsMutatingControlCommand(request.Command)) {
@@ -785,12 +852,15 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
 
     auto buildDevices = [this](bool refreshLiveDevices) {
         std::unordered_map<std::wstring, ControlDeviceInfo> byId;
-        auto upsert = [&byId](std::wstring id, std::wstring name, bool connected, bool known) {
+        auto upsert = [&byId](std::wstring id, std::wstring name, std::wstring alias, bool connected, bool known) {
             if (id.empty()) return;
             auto& entry = byId[id];
             entry.Id = std::move(id);
             if (!name.empty()) {
                 entry.Name = std::move(name);
+            }
+            if (!alias.empty()) {
+                entry.Alias = std::move(alias);
             }
             entry.Connected = entry.Connected || connected;
             entry.Known = entry.Known || known;
@@ -799,19 +869,19 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
         if (refreshLiveDevices) {
             if (auto devices = TryRefreshControlDevices(m_deviceManager)) {
                 for (auto const& device : *devices) {
-                    upsert(std::wstring(device.Id()), std::wstring(device.Name()), false, false);
+                    upsert(std::wstring(device.Id()), std::wstring(device.Name()), L"", false, false);
                 }
             }
         }
 
         for (auto const& connection : m_deviceManager->GetConnectedDevices()) {
-            upsert(connection.Id, connection.Name, true, true);
+            upsert(connection.Id, connection.Name, L"", true, true);
         }
 
         {
             auto locked = m_settings->LockSharedData();
             for (auto const& device : locked->Devices) {
-                upsert(device.Id, device.Name, false, true);
+                upsert(device.Id, device.Name, device.Alias, false, true);
             }
         }
 
@@ -829,9 +899,9 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
         return devices;
     };
 
-    auto deviceJson = [](ControlDeviceInfo const& device) {
+    auto deviceJson = [redactOutput](ControlDeviceInfo const& device) {
         JsonObject object;
-        InsertDeviceJson(object, device);
+        InsertDeviceJson(object, device, redactOutput);
         return object;
     };
 
@@ -854,11 +924,11 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
         std::wstringstream output;
         output << _("Command_List_Header") << L"\n";
         for (auto const& device : devices) {
-            output << L"- " << DeviceLabel(device);
+            output << L"- " << DeviceDisplayLabel(device, redactOutput);
             if (device.Connected) {
                 output << L" (" << _("Command_ConnectedSuffix") << L")";
             }
-            output << L"\n  ID: " << device.Id << L"\n";
+            output << L"\n  ID: " << ResponseId(device.Id, redactOutput) << L"\n";
         }
         return {ExitCode::Success, output.str()};
     };
@@ -885,7 +955,8 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
         output << _("Command_Status_Running") << L"\n";
         output << FormatResource("Command_Status_Connections", connected.size()) << L"\n";
         for (auto const& device : connected) {
-            output << L"- " << DeviceLabel(device) << L"\n  ID: " << device.Id << L"\n";
+            output << L"- " << DeviceDisplayLabel(device, redactOutput) << L"\n  ID: "
+                   << ResponseId(device.Id, redactOutput) << L"\n";
         }
         return {ExitCode::Success, output.str()};
     };
@@ -894,31 +965,39 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
         ExitCode Code = ExitCode::Success;
         std::wstring Id;
         std::wstring Name;
+        std::wstring RawName;
         std::wstring Message;
+        bool Exists = false;
     };
 
     auto targetFromId = [&](std::wstring id, std::vector<ControlDeviceInfo> const& devices) -> TargetResolution {
         for (auto const& device : devices) {
             if (EqualsIgnoreCase(device.Id, id)) {
-                return {.Id = device.Id, .Name = DeviceLabel(device)};
+                return {.Id = device.Id,
+                        .Name = DeviceDisplayLabel(device, redactOutput),
+                        .RawName = device.Name,
+                        .Exists = true};
             }
         }
-        auto name = std::wstring(ResolveKnownDeviceName(winrt::hstring(id)));
+        auto name = redactOutput ? std::wstring(_("Privacy_RedactedDevice")) : id;
         return {.Id = std::move(id), .Name = std::move(name)};
     };
 
-    auto matchOne = [](std::vector<ControlDeviceInfo> matches, std::wstring_view query) -> TargetResolution {
+    auto matchOne = [&](std::vector<ControlDeviceInfo> matches, std::wstring_view query) -> TargetResolution {
         std::ranges::sort(matches, [](auto const& lhs, auto const& rhs) { return lhs.Id < rhs.Id; });
         auto last = std::ranges::unique(matches, [](auto const& lhs, auto const& rhs) { return lhs.Id == rhs.Id; });
         matches.erase(last.begin(), last.end());
 
         if (matches.empty()) {
-            return {ExitCode::NotFound, L"", L"", FormatResource("Command_TargetNotFound", query)};
+            return {ExitCode::NotFound, L"", L"", L"", FormatResource("Command_TargetNotFound", query)};
         }
         if (matches.size() > 1) {
-            return {ExitCode::Ambiguous, L"", L"", FormatResource("Command_TargetAmbiguous", query)};
+            return {ExitCode::Ambiguous, L"", L"", L"", FormatResource("Command_TargetAmbiguous", query)};
         }
-        return {.Id = matches.front().Id, .Name = DeviceLabel(matches.front())};
+        return {.Id = matches.front().Id,
+                .Name = DeviceDisplayLabel(matches.front(), redactOutput),
+                .RawName = matches.front().Name,
+                .Exists = true};
     };
 
     auto resolveTarget = [&](apc::control::Request const& commandRequest) -> TargetResolution {
@@ -926,12 +1005,20 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
                                         commandRequest.Target == TargetKind::Mac ||
                                         commandRequest.Target == TargetKind::Auto;
         auto devices = buildDevices(refreshLiveDevices);
+        if (commandRequest.Target == TargetKind::Default) {
+            auto id = ResolveDefaultDeviceId();
+            if (!id) {
+                return {ExitCode::NotFound, L"", L"", L"", _("Command_DefaultTargetMissing")};
+            }
+            return targetFromId(std::move(*id), devices);
+        }
+
         if (commandRequest.Target == TargetKind::Last) {
             std::wstring id;
             {
                 auto locked = m_settings->LockSharedData();
                 if (locked->LastConnectedIds.empty()) {
-                    return {ExitCode::NotFound, L"", L"", _("Command_LastTargetMissing")};
+                    return {ExitCode::NotFound, L"", L"", L"", _("Command_LastTargetMissing")};
                 }
                 id = locked->LastConnectedIds.front();
             }
@@ -939,7 +1026,7 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
         }
 
         if (commandRequest.Payload.empty()) {
-            return {ExitCode::InvalidRequest, L"", L"", _("Command_TargetRequired")};
+            return {ExitCode::InvalidRequest, L"", L"", L"", _("Command_TargetRequired")};
         }
 
         if (commandRequest.Target == TargetKind::Id) {
@@ -970,6 +1057,25 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
             }
         }
 
+        if (commandRequest.Target == TargetKind::Alias || commandRequest.Target == TargetKind::Auto) {
+            matches.clear();
+            for (auto const& device : devices) {
+                if (EqualsIgnoreCase(device.Alias, commandRequest.Payload)) {
+                    matches.push_back(device);
+                }
+            }
+            if (!matches.empty()) return matchOne(std::move(matches), commandRequest.Payload);
+
+            matches.clear();
+            for (auto const& device : devices) {
+                if (ContainsIgnoreCase(device.Alias, commandRequest.Payload)) {
+                    matches.push_back(device);
+                }
+            }
+            if (!matches.empty() || commandRequest.Target == TargetKind::Alias)
+                return matchOne(std::move(matches), commandRequest.Payload);
+        }
+
         if (commandRequest.Target == TargetKind::Name || commandRequest.Target == TargetKind::Auto) {
             matches.clear();
             for (auto const& device : devices) {
@@ -988,7 +1094,7 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
             return matchOne(std::move(matches), commandRequest.Payload);
         }
 
-        return {ExitCode::InvalidRequest, L"", L"", _("Command_TargetRequired")};
+        return {ExitCode::InvalidRequest, L"", L"", L"", _("Command_TargetRequired")};
     };
 
     auto connectTarget = [&](TargetResolution const& target, std::wstring_view action) -> Response {
@@ -1055,10 +1161,186 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
                                      FormatResource("Command_ReconnectSucceeded", target.Name));
     };
 
+    auto showDevicePicker = [&]() -> Response {
+        RunOnUIThread([weak = weak_from_this()]() {
+            if (auto self = weak.lock(); self && self->m_trayController) {
+                self->m_trayController->ShowDevicePicker();
+            }
+        });
+        return makeOperationResponse(ExitCode::Success, L"show", L"", L"", _("Command_ShowOpened"));
+    };
+
+    auto showSettings = [&]() -> Response {
+        RunOnUIThread([weak = weak_from_this()]() {
+            if (auto self = weak.lock()) {
+                self->ShowSettingsWindow();
+            }
+        });
+        return makeOperationResponse(ExitCode::Success, L"settings", L"", L"", _("Command_SettingsOpened"));
+    };
+
+    auto showDefault = [&]() -> Response {
+        SettingsData snapshot;
+        {
+            auto locked = m_settings->LockSharedData();
+            snapshot = *locked;
+        }
+
+        std::wstring mode =
+            snapshot.DefaultDevice == DefaultDeviceMode::SpecificDevice ? L"specificDevice" : L"lastConnected";
+        std::optional<TargetResolution> target;
+        if (snapshot.DefaultDevice == DefaultDeviceMode::SpecificDevice && !snapshot.DefaultDeviceId.empty()) {
+            target = targetFromId(snapshot.DefaultDeviceId, buildDevices(false));
+        } else if (!snapshot.LastConnectedIds.empty()) {
+            target = targetFromId(snapshot.LastConnectedIds.front(), buildDevices(false));
+        }
+
+        if (wantsJson) {
+            JsonObject root;
+            root.Insert(L"ok", JsonValue::CreateBooleanValue(true));
+            root.Insert(L"mode", JsonValue::CreateStringValue(winrt::hstring(mode)));
+            root.Insert(L"privacyRedacted", JsonValue::CreateBooleanValue(redactOutput));
+            root.Insert(L"id",
+                        JsonValue::CreateStringValue(
+                            winrt::hstring(target ? ResponseId(target->Id, redactOutput) : std::wstring())));
+            root.Insert(L"displayName",
+                        JsonValue::CreateStringValue(winrt::hstring(target ? target->Name : std::wstring())));
+            root.Insert(L"resolved", JsonValue::CreateBooleanValue(target && target->Exists));
+            root.Insert(L"connected",
+                        JsonValue::CreateBooleanValue(target &&
+                                                      m_deviceManager->IsDeviceConnected(winrt::hstring(target->Id))));
+            return {ExitCode::Success, std::wstring(root.Stringify())};
+        }
+
+        if (!target) {
+            return {ExitCode::Success, std::wstring(_("Command_DefaultMode_LastConnected")) + L"\n"};
+        }
+        return {ExitCode::Success, FormatResource("Command_DefaultMode_Specific", target->Name) + L"\n"};
+    };
+
+    auto setDefault = [&]() -> Response {
+        auto target = resolveTarget(request);
+        if (target.Code != ExitCode::Success) return makeResponse(target.Code, target.Message);
+        if (!target.Exists) {
+            return makeResponse(ExitCode::NotFound, FormatResource("Command_TargetNotFound", request.Payload));
+        }
+        if (m_settingsController) {
+            m_settingsController->SetDefaultDeviceId(target.Id);
+        }
+        return makeOperationResponse(ExitCode::Success,
+                                     L"default-set",
+                                     target.Id,
+                                     target.Name,
+                                     FormatResource("Command_DefaultSet", target.Name));
+    };
+
+    auto clearDefault = [&]() -> Response {
+        if (m_settingsController) {
+            m_settingsController->ClearDefaultDevice();
+        }
+        return makeOperationResponse(ExitCode::Success, L"default-clear", L"", L"", _("Command_DefaultCleared"));
+    };
+
+    auto listAliases = [&]() -> Response {
+        auto devices = buildDevices(false);
+        if (wantsJson) {
+            JsonObject root;
+            JsonArray deviceArray;
+            for (auto const& device : devices) {
+                auto object = deviceJson(device);
+                object.Insert(L"hasAlias", JsonValue::CreateBooleanValue(!device.Alias.empty()));
+                deviceArray.Append(object);
+            }
+            root.Insert(L"devices", deviceArray);
+            root.Insert(L"privacyRedacted", JsonValue::CreateBooleanValue(redactOutput));
+            return {ExitCode::Success, std::wstring(root.Stringify())};
+        }
+
+        if (devices.empty()) {
+            return {ExitCode::Success, _("Command_AliasList_NoDevices") + L"\n"};
+        }
+
+        std::wstringstream output;
+        output << _("Command_AliasList_Header") << L"\n";
+        for (auto const& device : devices) {
+            output << L"- " << DeviceDisplayLabel(device, redactOutput) << L": "
+                   << (device.Alias.empty() ? std::wstring(_("Command_AliasNone")) : device.Alias) << L"\n";
+            output << L"  ID: " << ResponseId(device.Id, redactOutput) << L"\n";
+        }
+        return {ExitCode::Success, output.str()};
+    };
+
+    auto splitAliasPayload = [](std::wstring const& payload) -> std::optional<std::pair<std::wstring, std::wstring>> {
+        auto separator = payload.find(L'\n');
+        if (separator == std::wstring::npos) return std::nullopt;
+        auto target = payload.substr(0, separator);
+        auto alias = payload.substr(separator + 1);
+        if (target.empty() || alias.empty()) return std::nullopt;
+        if (alias.find_first_of(L"\r\n") != std::wstring::npos) return std::nullopt;
+        return std::pair{std::move(target), std::move(alias)};
+    };
+
+    auto setAlias = [&]() -> Response {
+        auto payload = splitAliasPayload(request.Payload);
+        if (!payload) return makeResponse(ExitCode::InvalidRequest, _("Command_InvalidAliasPayload"));
+
+        auto targetRequest = request;
+        targetRequest.Payload = payload->first;
+        auto target = resolveTarget(targetRequest);
+        if (target.Code != ExitCode::Success) return makeResponse(target.Code, target.Message);
+        if (!target.Exists) {
+            return makeResponse(ExitCode::NotFound, FormatResource("Command_TargetNotFound", payload->first));
+        }
+
+        if (m_settingsController && !m_settingsController->SetDeviceAlias(target.Id, payload->second, target.RawName)) {
+            return makeOperationResponse(ExitCode::OperationFailed,
+                                         L"alias-set",
+                                         target.Id,
+                                         target.Name,
+                                         FormatResource("Command_AliasSetFailed", target.Name));
+        }
+        return makeOperationResponse(ExitCode::Success,
+                                     L"alias-set",
+                                     target.Id,
+                                     payload->second,
+                                     FormatResource("Command_AliasSet", target.Name, payload->second));
+    };
+
+    auto clearAlias = [&]() -> Response {
+        auto target = resolveTarget(request);
+        if (target.Code != ExitCode::Success) return makeResponse(target.Code, target.Message);
+        if (!target.Exists) {
+            return makeResponse(ExitCode::NotFound, FormatResource("Command_TargetNotFound", request.Payload));
+        }
+
+        if (m_settingsController && !m_settingsController->SetDeviceAlias(target.Id, L"", target.RawName)) {
+            return makeOperationResponse(ExitCode::OperationFailed,
+                                         L"alias-clear",
+                                         target.Id,
+                                         target.Name,
+                                         FormatResource("Command_AliasClearFailed", target.Name));
+        }
+        auto displayName = redactOutput ? std::wstring(_("Privacy_RedactedDevice"))
+                                        : (target.RawName.empty() ? target.Id : target.RawName);
+        return makeOperationResponse(ExitCode::Success,
+                                     L"alias-clear",
+                                     target.Id,
+                                     displayName,
+                                     FormatResource("Command_AliasCleared", target.Name));
+    };
+
     try {
         switch (request.Command) {
+            case CommandType::Show: return showDevicePicker();
+            case CommandType::Settings: return showSettings();
             case CommandType::List: return listDevices();
             case CommandType::Status: return status();
+            case CommandType::DefaultShow: return showDefault();
+            case CommandType::DefaultSet: return setDefault();
+            case CommandType::DefaultClear: return clearDefault();
+            case CommandType::AliasList: return listAliases();
+            case CommandType::AliasSet: return setAlias();
+            case CommandType::AliasClear: return clearAlias();
             case CommandType::DisconnectAll:
                 m_deviceManager->DisconnectAll();
                 return makeOperationResponse(
@@ -1148,9 +1430,9 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
         return;
     }
 
-    winrt::hstring deviceName = ResolveKnownDeviceName(id);
+    winrt::hstring rawDeviceName = id;
     if (auto displayName = m_deviceManager->GetConnectionDisplayName(id)) {
-        deviceName = winrt::hstring(*displayName);
+        rawDeviceName = winrt::hstring(*displayName);
     }
 
     bool addedNew = false;
@@ -1161,14 +1443,14 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
         if (!alreadyKnown) {
             DeviceSettings newDevice;
             newDevice.Id = std::wstring(id);
-            newDevice.Name = std::wstring(deviceName);
+            newDevice.Name = std::wstring(rawDeviceName);
             newDevice.AutoReconnect = locked->GlobalAutoReconnect;
             locked->Devices.push_back(std::move(newDevice));
             addedNew = true;
         } else {
             auto existingDevice = std::ranges::find_if(locked->Devices, [&](const auto& d) { return d.Id == id; });
-            if (existingDevice != locked->Devices.end() && existingDevice->Name != deviceName) {
-                existingDevice->Name = std::wstring(deviceName);
+            if (existingDevice != locked->Devices.end() && existingDevice->Name != rawDeviceName) {
+                existingDevice->Name = std::wstring(rawDeviceName);
             }
         }
 
@@ -1192,7 +1474,7 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
     if (addedNew || updatedLastConnected) {
         ScheduleDeferredSettingsSave();
         if (addedNew) {
-            DebugTrace(L"[App] New device added to settings: {0}", std::wstring(deviceName));
+            DebugTrace(L"[App] New device added to settings: {0}", std::wstring(rawDeviceName));
         }
     }
 
@@ -1211,7 +1493,7 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
     }
 
     try {
-        m_notificationService->ShowDeviceConnected(id, deviceName);
+        m_notificationService->ShowDeviceConnected(id, ResolveKnownDeviceName(id));
     } catch (winrt::hresult_error const& ex) {
         util::DebugTraceException(L"[App] OnDeviceConnected notification ERROR", ex);
     } catch (std::exception const& ex) {

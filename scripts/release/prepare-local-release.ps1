@@ -1,9 +1,9 @@
-# Builds a local Release x64 MSIX (unsigned) and copies release assets into ./dist/v0.6.1/
-# For signed GitHub releases, push tag v0.6.1 and use the Release workflow instead.
+# Builds a local Release x64 MSIX (unsigned) and copies release assets into ./dist/v0.7.0/
+# For signed GitHub releases, push tag v0.7.0 and use the Release workflow instead.
 
 param(
-    [string]$Version = "0.6.1.0",
-    [string]$SemVer = "0.6.1",
+    [string]$Version = "0.7.0.0",
+    [string]$SemVer = "0.7.0",
     [string]$Architecture = "x64",
     [string]$Configuration = "Release"
 )
@@ -20,7 +20,7 @@ try {
     msbuild AudioPlaybackConnector2.slnx -t:restore -p:RestorePackagesConfig=true | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "Restore failed." }
 
-    Write-Host "Building signed-off sideload MSIX ($Configuration, $Architecture) ..."
+    Write-Host "Building unsigned sideload MSIX ($Configuration, $Architecture) ..."
     msbuild AudioPlaybackConnector2.slnx `
         /p:Configuration=$Configuration `
         /p:Platform=$Architecture `
@@ -82,7 +82,31 @@ try {
 
     $changelogSource = Join-Path $repoRoot "CHANGELOG.md"
     Copy-Item -LiteralPath $changelogSource -Destination (Join-Path $distRoot "CHANGELOG.md") -Force
-    Copy-Item -LiteralPath $changelogSource -Destination (Join-Path $distRoot "RELEASE_NOTES.md") -Force
+    [string]$releaseNotes = & (Join-Path $repoRoot "scripts/release/extract-changelog.ps1") `
+        -Version $SemVer `
+        -ChangelogPath $changelogSource
+    [System.IO.File]::WriteAllText(
+        (Join-Path $distRoot "RELEASE_NOTES.md"),
+        $releaseNotes.Trim() + [Environment]::NewLine
+    )
+
+    $streamDeckRoot = Join-Path $repoRoot "integrations/stream-deck"
+    Push-Location $streamDeckRoot
+    try {
+        npm ci | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "Stream Deck dependency restore failed." }
+        npm audit --audit-level=high | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "Stream Deck dependency audit failed." }
+        npm run pack | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "Stream Deck plugin build failed." }
+    } finally {
+        Pop-Location
+    }
+    $streamDeckPackage = Get-ChildItem -Path $streamDeckRoot -Filter "*.streamDeckPlugin" -File |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if (-not $streamDeckPackage) { throw "Stream Deck plugin package was not created." }
+    Copy-Item -LiteralPath $streamDeckPackage.FullName -Destination $distRoot -Force
 
     Write-Host ""
     Write-Host "Local release bundle ready:" -ForegroundColor Green

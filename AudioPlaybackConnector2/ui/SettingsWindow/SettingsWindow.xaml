@@ -6,11 +6,11 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:local="using:AudioPlaybackConnector2"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-    Title="Settings"
+    Title=""
     mc:Ignorable="d">
 
     <Window.SystemBackdrop>
-        <MicaBackdrop />
+        <DesktopAcrylicBackdrop />
     </Window.SystemBackdrop>
 
     <Grid
@@ -21,12 +21,6 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
-
-        <SystemBackdropElement
-            x:Name="BackdropElement"
-            Grid.RowSpan="2"
-            HorizontalAlignment="Stretch"
-            VerticalAlignment="Stretch" />
 
         <Grid
             x:Name="TitleBarArea"
@@ -40,254 +34,669 @@
                 Text="AudioPlaybackConnector2" />
         </Grid>
 
-        <ScrollViewer
-            x:Name="SettingsContentHost"
+        <NavigationView
+            x:Name="SettingsNavigation"
             Grid.Row="1"
-            HorizontalScrollBarVisibility="Disabled"
-            VerticalScrollBarVisibility="Auto">
-            <StackPanel
-                Padding="10,8,10,8"
-                HorizontalAlignment="Stretch"
-                Spacing="12">
+            IsBackButtonVisible="Collapsed"
+            IsPaneOpen="True"
+            IsPaneToggleButtonVisible="False"
+            IsSettingsVisible="False"
+            OpenPaneLength="156"
+            PaneDisplayMode="Left"
+            SelectionChanged="SettingsNavigation_SelectionChanged">
+            <NavigationView.MenuItems>
+                <NavigationViewItem
+                    x:Name="DevicesNavItem"
+                    Content=""
+                    Margin="4,0"
+                    MinHeight="40"
+                    Padding="8,0"
+                    Tag="devices">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE7F4;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem
+                    x:Name="AppNavItem"
+                    Content=""
+                    Margin="4,0"
+                    MinHeight="40"
+                    Padding="8,0"
+                    Tag="app">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE713;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem
+                    x:Name="PrivacyNavItem"
+                    Content=""
+                    Margin="4,0"
+                    MinHeight="40"
+                    Padding="8,0"
+                    Tag="privacy">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE72E;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem
+                    x:Name="StreamDeckNavItem"
+                    Content=""
+                    Margin="4,0"
+                    MinHeight="40"
+                    Padding="8,0"
+                    Tag="streamDeck">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE950;" />
+                    </NavigationViewItem.Icon>
+                    <NavigationViewItem.InfoBadge>
+                        <InfoBadge
+                            x:Name="StreamDeckBetaBadge"
+                            Background="#2F7FE5">
+                            <InfoBadge.IconSource>
+                                <FontIconSource
+                                    x:Name="StreamDeckBetaIcon"
+                                    FontFamily="Segoe UI"
+                                    FontSize="10"
+                                    Foreground="White"
+                                    Glyph="&#x03B2;" />
+                            </InfoBadge.IconSource>
+                        </InfoBadge>
+                    </NavigationViewItem.InfoBadge>
+                </NavigationViewItem>
+            </NavigationView.MenuItems>
+            <NavigationView.FooterMenuItems>
+                <NavigationViewItem
+                    x:Name="HelpNavItem"
+                    Content=""
+                    Margin="4,0"
+                    MinHeight="40"
+                    Padding="8,0"
+                    Tag="help">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE897;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem
+                    x:Name="InfoNavItem"
+                    Content=""
+                    Margin="4,0"
+                    MinHeight="40"
+                    Padding="8,0"
+                    Tag="about">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE946;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.FooterMenuItems>
 
-                <StackPanel HorizontalAlignment="Stretch" Spacing="4">
-                    <TextBlock
-                        x:Name="TitleText"
-                        FontSize="28"
-                        FontWeight="SemiBold"
-                        Text="Settings" />
-                    <TextBlock
-                        x:Name="SubtitleText"
-                        Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
-                        Text="Device connection and app behavior"
-                        TextWrapping="Wrap" />
-                </StackPanel>
+            <ScrollViewer
+                x:Name="SettingsContentHost"
+                Padding="16,10,22,12"
+                HorizontalScrollBarVisibility="Disabled"
+                SizeChanged="SettingsContentHost_SizeChanged"
+                VerticalScrollBarVisibility="Auto">
+                <StackPanel
+                    x:Name="SettingsContentPanel"
+                    HorizontalAlignment="Left"
+                    Spacing="8">
 
-                <!-- Connection -->
-                <Border
-                    Padding="18"
-                    HorizontalAlignment="Stretch"
-                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="1"
-                    CornerRadius="8">
-                    <StackPanel HorizontalAlignment="Stretch" Spacing="16">
+                    <StackPanel Spacing="4">
                         <TextBlock
-                            x:Name="ConnectionHeader"
-                            FontSize="18"
+                            x:Name="TitleText"
+                            FontSize="26"
                             FontWeight="SemiBold"
-                            Text="Connection" />
+                            Text="" />
+                        <TextBlock
+                            x:Name="SubtitleText"
+                            Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
+                            Text=""
+                            TextWrapping="Wrap" />
+                    </StackPanel>
 
+                    <InfoBar
+                        x:Name="DiagnosticsInfoBar"
+                        Margin="0,0,12,0"
+                        HorizontalAlignment="Stretch"
+                        IsClosable="True"
+                        IsOpen="False" />
+
+                    <StackPanel
+                        x:Name="DevicesSection"
+                        HorizontalAlignment="Stretch"
+                        Spacing="8">
+                        <StackPanel Margin="0,4,12,8" Spacing="12">
+                            <Grid RowDefinitions="Auto,Auto" RowSpacing="10">
+                                <StackPanel MinWidth="0">
+                                    <TextBlock
+                                        x:Name="DefaultDeviceLabel"
+                                        Text=""
+                                        TextWrapping="Wrap" />
+                                    <TextBlock
+                                        x:Name="DefaultDeviceDesc"
+                                        FontSize="12"
+                                        Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
+                                        Text=""
+                                        TextWrapping="Wrap" />
+                                </StackPanel>
+                                <StackPanel
+                                    Grid.Row="1"
+                                    HorizontalAlignment="Left"
+                                    VerticalAlignment="Center"
+                                    Orientation="Horizontal"
+                                    Spacing="8">
+                                    <Button
+                                        x:Name="DefaultLastConnectedButton"
+                                        Click="DefaultLastConnectedButton_Click">
+                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+                                            <FontIcon
+                                                VerticalAlignment="Center"
+                                                FontSize="14"
+                                                Glyph="&#xE8AB;" />
+                                            <TextBlock
+                                                x:Name="DefaultLastConnectedButtonText"
+                                                Grid.Column="1"
+                                                MinWidth="0"
+                                                TextWrapping="WrapWholeWords"
+                                                Text="" />
+                                        </Grid>
+                                    </Button>
+                                    <Button
+                                        x:Name="ClearDefaultDeviceButton"
+                                        Click="ClearDefaultDeviceButton_Click">
+                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+                                            <FontIcon
+                                                VerticalAlignment="Center"
+                                                FontSize="14"
+                                                Glyph="&#xE894;" />
+                                            <TextBlock
+                                                x:Name="ClearDefaultDeviceButtonText"
+                                                Grid.Column="1"
+                                                MinWidth="0"
+                                                TextWrapping="WrapWholeWords"
+                                                Text="" />
+                                        </Grid>
+                                    </Button>
+                                </StackPanel>
+                            </Grid>
+
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                <StackPanel MinWidth="0">
+                                    <TextBlock
+                                        x:Name="AutoReconnectLabel"
+                                        Text=""
+                                        TextWrapping="Wrap" />
+                                    <TextBlock
+                                        x:Name="AutoReconnectDesc"
+                                        FontSize="12"
+                                        Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
+                                        Text=""
+                                        TextWrapping="Wrap" />
+                                </StackPanel>
+                                <ToggleSwitch
+                                    x:Name="AutoReconnectToggle"
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center"
+                                    MinWidth="64" />
+                            </Grid>
+
+                            <StackPanel x:Name="DevicesPanel" Spacing="8" />
+                        </StackPanel>
+                    </StackPanel>
+
+                    <StackPanel
+                        x:Name="AppSection"
+                        HorizontalAlignment="Stretch"
+                        Spacing="8"
+                        Visibility="Collapsed">
+                        <StackPanel Margin="0,4,12,8" Spacing="12">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                    <StackPanel MinWidth="0">
+                                        <TextBlock
+                                            x:Name="LanguageLabel"
+                                            Text=""
+                                            TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <ComboBox
+                                        x:Name="LanguageComboBox"
+                                        Grid.Column="1"
+                                        MinWidth="190"
+                                        SelectionChanged="LanguageComboBox_SelectionChanged">
+                                        <ComboBoxItem
+                                            x:Name="LanguageSystemItem"
+                                            Content=""
+                                            Tag="system" />
+                                        <ComboBoxItem
+                                            x:Name="LanguageEnglishItem"
+                                            Content=""
+                                            Tag="en" />
+                                        <ComboBoxItem
+                                            x:Name="LanguageGermanItem"
+                                            Content=""
+                                            Tag="de" />
+                                        <ComboBoxItem
+                                            x:Name="LanguageFrenchItem"
+                                            Content=""
+                                            Tag="fr" />
+                                        <ComboBoxItem
+                                            x:Name="LanguageSpanishItem"
+                                            Content=""
+                                            Tag="es" />
+                                        <ComboBoxItem
+                                            x:Name="LanguageJapaneseItem"
+                                            Content=""
+                                            Tag="ja" />
+                                        <ComboBoxItem
+                                            x:Name="LanguageKoreanItem"
+                                            Content=""
+                                            Tag="ko" />
+                                        <ComboBoxItem
+                                            x:Name="LanguageChineseSimplifiedItem"
+                                            Content=""
+                                            Tag="zh_hans" />
+                                        <ComboBoxItem
+                                            x:Name="LanguageChineseTraditionalItem"
+                                            Content=""
+                                            Tag="zh_hant" />
+                                    </ComboBox>
+                                </Grid>
+
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                    <StackPanel MinWidth="0">
+                                        <TextBlock
+                                            x:Name="StartWithWindowsLabel"
+                                            Text=""
+                                            TextWrapping="Wrap" />
+                                        <TextBlock
+                                            x:Name="StartWithWindowsDesc"
+                                            FontSize="12"
+                                            Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
+                                            Text=""
+                                            TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <StackPanel
+                                        Grid.Column="1"
+                                        VerticalAlignment="Center"
+                                        Orientation="Horizontal"
+                                        Spacing="8">
+                                        <ProgressRing
+                                            x:Name="StartupTaskProgress"
+                                            Width="20"
+                                            Height="20"
+                                            IsActive="False"
+                                            Visibility="Collapsed" />
+                                        <ToggleSwitch
+                                            x:Name="StartWithWindowsToggle"
+                                            MinWidth="64" />
+                                    </StackPanel>
+                                </Grid>
+
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                    <StackPanel MinWidth="0">
+                                        <TextBlock
+                                            x:Name="ShowNotificationsLabel"
+                                            Text=""
+                                            TextWrapping="Wrap" />
+                                        <TextBlock
+                                            x:Name="ShowNotificationsDesc"
+                                            FontSize="12"
+                                            Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
+                                            Text=""
+                                            TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <ToggleSwitch
+                                        x:Name="ShowNotificationsToggle"
+                                        Grid.Column="1"
+                                        VerticalAlignment="Center"
+                                        MinWidth="64" />
+                                </Grid>
+
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                    <StackPanel MinWidth="0">
+                                        <TextBlock
+                                            x:Name="WindowPlacementLabel"
+                                            Text=""
+                                            TextWrapping="Wrap" />
+                                        <TextBlock
+                                            x:Name="WindowPlacementDesc"
+                                            FontSize="12"
+                                            Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
+                                            Text=""
+                                            TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <Button
+                                        x:Name="ResetWindowPlacementButton"
+                                        Grid.Column="1"
+                                        VerticalAlignment="Center"
+                                        MinWidth="170"
+                                        Click="ResetWindowPlacementButton_Click">
+                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+                                            <FontIcon
+                                                VerticalAlignment="Center"
+                                                FontSize="14"
+                                                Glyph="&#xE72C;" />
+                                            <TextBlock
+                                                x:Name="ResetWindowPlacementButtonText"
+                                                Grid.Column="1"
+                                                MinWidth="0"
+                                                TextWrapping="WrapWholeWords"
+                                                Text="" />
+                                        </Grid>
+                                    </Button>
+                                </Grid>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <StackPanel
+                        x:Name="PrivacySection"
+                        HorizontalAlignment="Stretch"
+                        Spacing="8"
+                        Visibility="Collapsed">
                         <Grid
-                            Margin="0,2,0,2"
+                            Margin="0,4,12,8"
                             ColumnDefinitions="*,Auto"
                             ColumnSpacing="12">
-                            <StackPanel MinWidth="0">
-                                <TextBlock
-                                    x:Name="AutoReconnectLabel"
-                                    Text="Auto-reconnect on startup"
-                                    TextWrapping="Wrap" />
-                                <TextBlock
-                                    x:Name="AutoReconnectDesc"
-                                    FontSize="12"
-                                    Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
-                                    Text="Automatically connects to the last used device."
-                                    TextWrapping="Wrap" />
-                            </StackPanel>
-                            <ToggleSwitch
-                                x:Name="AutoReconnectToggle"
-                                Grid.Column="1"
-                                VerticalAlignment="Center"
-                                MinWidth="64" />
-                        </Grid>
-
-                        <StackPanel x:Name="DevicesPanel" Spacing="8" />
-                    </StackPanel>
-                </Border>
-
-                <!--  System  -->
-                <Border
-                    Padding="18"
-                    HorizontalAlignment="Stretch"
-                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="1"
-                    CornerRadius="8">
-                    <StackPanel HorizontalAlignment="Stretch" Spacing="16">
-                        <TextBlock
-                            x:Name="SystemHeader"
-                            FontSize="18"
-                            FontWeight="SemiBold"
-                            Text="System" />
-
-                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                            <StackPanel MinWidth="0">
-                                <TextBlock
-                                    x:Name="StartWithWindowsLabel"
-                                    Text="Start with Windows"
-                                    TextWrapping="Wrap" />
-                                <TextBlock
-                                    x:Name="StartWithWindowsDesc"
-                                    FontSize="12"
-                                    Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
-                                    Text="Starts the tray app automatically after sign-in."
-                                    TextWrapping="Wrap" />
-                            </StackPanel>
-                            <StackPanel
-                                Grid.Column="1"
-                                VerticalAlignment="Center"
-                                Orientation="Horizontal"
-                                Spacing="8">
-                                <ProgressRing
-                                    x:Name="StartupTaskProgress"
-                                    Width="20"
-                                    Height="20"
-                                    IsActive="False"
-                                    Visibility="Collapsed" />
-                                <ToggleSwitch
-                                    x:Name="StartWithWindowsToggle"
-                                    MinWidth="64" />
-                            </StackPanel>
-                        </Grid>
-
-                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                            <StackPanel MinWidth="0">
-                                <TextBlock
-                                    x:Name="ShowNotificationsLabel"
-                                    Text="Show notifications"
-                                    TextWrapping="Wrap" />
-                                <TextBlock
-                                    x:Name="ShowNotificationsDesc"
-                                    FontSize="12"
-                                    Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
-                                    Text="Show toast notifications for connection events."
-                                    TextWrapping="Wrap" />
-                            </StackPanel>
-                            <ToggleSwitch
-                                x:Name="ShowNotificationsToggle"
-                                Grid.Column="1"
-                                VerticalAlignment="Center"
-                                MinWidth="64" />
-                        </Grid>
-                    </StackPanel>
-                </Border>
-
-                <!--  App  -->
-                <Border
-                    Padding="18"
-                    HorizontalAlignment="Stretch"
-                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="1"
-                    CornerRadius="8">
-                    <StackPanel HorizontalAlignment="Stretch" Spacing="12">
-                        <TextBlock
-                            x:Name="AppHeader"
-                            FontSize="18"
-                            FontWeight="SemiBold"
-                            Text="App" />
-
-                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                            <StackPanel MinWidth="0">
-                                <TextBlock
-                                    x:Name="VersionText"
-                                    Text="Version"
-                                    TextWrapping="Wrap" />
-                                <TextBlock
-                                    x:Name="CopyrightText"
-                                    Margin="0,6,0,0"
-                                    FontSize="12"
-                                    Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
-                                    Text="Copyright (C) 2026 Noah Meyer"
-                                    TextWrapping="Wrap" />
-                                <TextBlock
-                                    x:Name="CheckForUpdatesLabel"
-                                    Margin="0,14,0,0"
-                                    Text="Check for updates"
-                                    TextWrapping="Wrap" />
-                                <TextBlock
-                                    x:Name="CheckForUpdatesDesc"
-                                    FontSize="12"
-                                    Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
-                                    Text="Looks for the latest GitHub release."
-                                    TextWrapping="Wrap" />
-                            </StackPanel>
-                            <StackPanel
-                                Grid.Column="1"
-                                VerticalAlignment="Center"
-                                Orientation="Horizontal"
-                                Spacing="8">
-                                <ProgressRing
-                                    x:Name="UpdateCheckProgress"
-                                    Width="20"
-                                    Height="20"
-                                    IsActive="False"
-                                    Visibility="Collapsed" />
-                                <Button
-                                    x:Name="CheckForUpdatesButton"
-                                    Click="CheckForUpdatesButton_Click">
-                                    <StackPanel Orientation="Horizontal" Spacing="6">
-                                        <FontIcon FontSize="14" Glyph="&#xE721;" />
-                                        <TextBlock
-                                            x:Name="CheckForUpdatesButtonText"
-                                            Text="Check" />
-                                    </StackPanel>
-                                </Button>
-                            </StackPanel>
-                        </Grid>
-
-                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                            <StackPanel MinWidth="0">
-                                <TextBlock
-                                    x:Name="WindowPlacementLabel"
-                                    Text="Window placement"
-                                    TextWrapping="Wrap" />
-                                <TextBlock
-                                    x:Name="WindowPlacementDesc"
-                                    FontSize="12"
-                                    Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
-                                    Text="Saves the settings window size and position for the next time you open it."
-                                    TextWrapping="Wrap" />
-                            </StackPanel>
-                            <Button
-                                x:Name="ResetWindowPlacementButton"
-                                Grid.Column="1"
-                                VerticalAlignment="Center"
-                                Click="ResetWindowPlacementButton_Click">
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <FontIcon FontSize="14" Glyph="&#xE72C;" />
+                                <StackPanel MinWidth="0">
                                     <TextBlock
-                                        x:Name="ResetWindowPlacementButtonText"
-                                        Text="Reset" />
+                                        x:Name="PrivacyModeLabel"
+                                        Text=""
+                                        TextWrapping="Wrap" />
+                                    <TextBlock
+                                        x:Name="PrivacyModeDesc"
+                                        FontSize="12"
+                                        Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
+                                        Text=""
+                                        TextWrapping="Wrap" />
                                 </StackPanel>
-                            </Button>
+                                <ToggleSwitch
+                                    x:Name="PrivacyModeToggle"
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center"
+                                    MinWidth="64" />
                         </Grid>
-
-                        <InfoBar
-                            x:Name="UpdateInfoBar"
-                            HorizontalAlignment="Stretch"
-                            IsClosable="True"
-                            IsOpen="False">
-                            <InfoBar.ActionButton>
-                                <Button
-                                    x:Name="OpenAppInstallerButton"
-                                    Click="OpenAppInstallerButton_Click"
-                                    Visibility="Collapsed">
-                                    <Button.Content>
-                                        <StackPanel Orientation="Horizontal" Spacing="6">
-                                            <FontIcon FontSize="14" Glyph="&#xE8A7;" />
-                                            <TextBlock
-                                                x:Name="OpenAppInstallerButtonText"
-                                                Text="Open installer" />
-                                        </StackPanel>
-                                    </Button.Content>
-                                </Button>
-                            </InfoBar.ActionButton>
-                        </InfoBar>
                     </StackPanel>
-                </Border>
 
-            </StackPanel>
-        </ScrollViewer>
+                    <StackPanel
+                        x:Name="StreamDeckSection"
+                        HorizontalAlignment="Stretch"
+                        Spacing="8"
+                        Visibility="Collapsed">
+                        <Grid
+                            Margin="0,4,12,8"
+                            RowDefinitions="Auto,Auto"
+                            RowSpacing="10">
+                                <TextBlock
+                                    x:Name="StreamDeckDesc"
+                                    MinWidth="0"
+                                    VerticalAlignment="Center"
+                                    Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
+                                    Text=""
+                                    TextWrapping="Wrap" />
+                                <Button
+                                    x:Name="StreamDeckSetupButton"
+                                    Grid.Row="1"
+                                    HorizontalAlignment="Left"
+                                    VerticalAlignment="Center"
+                                    Click="StreamDeckSetupButton_Click">
+                                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+                                        <FontIcon
+                                            VerticalAlignment="Center"
+                                            FontSize="14"
+                                            Glyph="&#xE8A7;" />
+                                        <TextBlock
+                                            x:Name="StreamDeckSetupButtonText"
+                                            Grid.Column="1"
+                                            MinWidth="0"
+                                            TextWrapping="WrapWholeWords"
+                                        Text="" />
+                                    </Grid>
+                                </Button>
+                        </Grid>
+                    </StackPanel>
+
+                    <StackPanel
+                        x:Name="HelpSection"
+                        HorizontalAlignment="Stretch"
+                        Spacing="8"
+                        Visibility="Collapsed">
+                        <StackPanel Margin="0,4,12,8" Spacing="10">
+                                <TextBlock
+                                    x:Name="DiagnosticsPrivacyText"
+                                    FontSize="12"
+                                    Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
+                                    Text=""
+                                    TextWrapping="Wrap" />
+                                <Grid
+                                    ColumnDefinitions="*"
+                                    RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto"
+                                    RowSpacing="8">
+                                    <Button
+                                        x:Name="ReportBugButton"
+                                        Grid.Row="0"
+                                        HorizontalAlignment="Stretch"
+                                        Click="ReportBugButton_Click">
+                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+                                            <FontIcon
+                                                VerticalAlignment="Center"
+                                                FontSize="14"
+                                                Glyph="&#xE8BD;" />
+                                            <TextBlock
+                                                x:Name="ReportBugButtonText"
+                                                Grid.Column="1"
+                                                MinWidth="0"
+                                                TextWrapping="WrapWholeWords"
+                                                Text="" />
+                                        </Grid>
+                                    </Button>
+                                    <Button
+                                        x:Name="CopyDiagnosticsButton"
+                                        Grid.Row="1"
+                                        HorizontalAlignment="Stretch"
+                                        Click="CopyDiagnosticsButton_Click">
+                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+                                            <FontIcon
+                                                VerticalAlignment="Center"
+                                                FontSize="14"
+                                                Glyph="&#xE8C8;" />
+                                            <TextBlock
+                                                x:Name="CopyDiagnosticsButtonText"
+                                                Grid.Column="1"
+                                                MinWidth="0"
+                                                TextWrapping="WrapWholeWords"
+                                                Text="" />
+                                        </Grid>
+                                    </Button>
+                                    <Button
+                                        x:Name="TroubleshootingButton"
+                                        Grid.Row="2"
+                                        HorizontalAlignment="Stretch"
+                                        Click="TroubleshootingButton_Click">
+                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+                                            <FontIcon
+                                                VerticalAlignment="Center"
+                                                FontSize="14"
+                                                Glyph="&#xE946;" />
+                                            <TextBlock
+                                                x:Name="TroubleshootingButtonText"
+                                                Grid.Column="1"
+                                                MinWidth="0"
+                                                TextWrapping="WrapWholeWords"
+                                                Text="" />
+                                        </Grid>
+                                    </Button>
+                                    <Button
+                                        x:Name="OpenBluetoothSettingsButton"
+                                        Grid.Row="3"
+                                        HorizontalAlignment="Stretch"
+                                        Click="OpenBluetoothSettingsButton_Click">
+                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+                                            <FontIcon
+                                                VerticalAlignment="Center"
+                                                FontSize="14"
+                                                Glyph="&#xE702;" />
+                                            <TextBlock
+                                                x:Name="OpenBluetoothSettingsButtonText"
+                                                Grid.Column="1"
+                                                MinWidth="0"
+                                                TextWrapping="WrapWholeWords"
+                                                Text="" />
+                                        </Grid>
+                                    </Button>
+                                    <Button
+                                        x:Name="OpenLogFolderButton"
+                                        Grid.Row="4"
+                                        HorizontalAlignment="Stretch"
+                                        Click="OpenLogFolderButton_Click">
+                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+                                            <FontIcon
+                                                VerticalAlignment="Center"
+                                                FontSize="14"
+                                                Glyph="&#xE8B7;" />
+                                            <TextBlock
+                                                x:Name="OpenLogFolderButtonText"
+                                                Grid.Column="1"
+                                                MinWidth="0"
+                                                TextWrapping="WrapWholeWords"
+                                                Text="" />
+                                        </Grid>
+                                    </Button>
+                                    <Button
+                                        x:Name="FeatureRequestButton"
+                                        Grid.Row="5"
+                                        HorizontalAlignment="Stretch"
+                                        Click="FeatureRequestButton_Click">
+                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+                                            <FontIcon
+                                                VerticalAlignment="Center"
+                                                FontSize="14"
+                                                Glyph="&#xE710;" />
+                                            <TextBlock
+                                                x:Name="FeatureRequestButtonText"
+                                                Grid.Column="1"
+                                                MinWidth="0"
+                                                TextWrapping="WrapWholeWords"
+                                                Text="" />
+                                        </Grid>
+                                    </Button>
+                                </Grid>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <StackPanel
+                        x:Name="InfoSection"
+                        HorizontalAlignment="Stretch"
+                        Spacing="8"
+                        Visibility="Collapsed">
+                        <StackPanel Margin="0,4,12,8" Spacing="12">
+                                <Grid RowDefinitions="Auto,Auto" RowSpacing="10">
+                                    <StackPanel MinWidth="0">
+                                        <TextBlock
+                                            x:Name="VersionText"
+                                            Text=""
+                                            TextWrapping="Wrap" />
+                                        <TextBlock
+                                            x:Name="CopyrightText"
+                                            Margin="0,6,0,0"
+                                            FontSize="12"
+                                            Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
+                                            Text=""
+                                            TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <Button
+                                        x:Name="RepositoryButton"
+                                        Grid.Row="1"
+                                        HorizontalAlignment="Left"
+                                        VerticalAlignment="Center"
+                                        Click="RepositoryButton_Click">
+                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+                                            <FontIcon
+                                                VerticalAlignment="Center"
+                                                FontSize="14"
+                                                Glyph="&#xE8A7;" />
+                                            <TextBlock
+                                                x:Name="RepositoryButtonText"
+                                                Grid.Column="1"
+                                                MinWidth="0"
+                                                TextWrapping="WrapWholeWords"
+                                                Text="" />
+                                        </Grid>
+                                    </Button>
+                                </Grid>
+
+                                <Grid RowDefinitions="Auto,Auto" RowSpacing="10">
+                                    <StackPanel MinWidth="0">
+                                        <TextBlock
+                                            x:Name="CheckForUpdatesLabel"
+                                            Text=""
+                                            TextWrapping="Wrap" />
+                                        <TextBlock
+                                            x:Name="CheckForUpdatesDesc"
+                                            FontSize="12"
+                                            Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
+                                            Text=""
+                                            TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <StackPanel
+                                        Grid.Row="1"
+                                        HorizontalAlignment="Left"
+                                        VerticalAlignment="Center"
+                                        Orientation="Horizontal"
+                                        Spacing="8">
+                                        <ProgressRing
+                                            x:Name="UpdateCheckProgress"
+                                            Width="20"
+                                            Height="20"
+                                            IsActive="False"
+                                            Visibility="Collapsed" />
+                                        <Button
+                                            x:Name="CheckForUpdatesButton"
+                                            Click="CheckForUpdatesButton_Click">
+                                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+                                                <FontIcon
+                                                    VerticalAlignment="Center"
+                                                    FontSize="14"
+                                                    Glyph="&#xE721;" />
+                                                <TextBlock
+                                                    x:Name="CheckForUpdatesButtonText"
+                                                    Grid.Column="1"
+                                                    MinWidth="0"
+                                                    TextWrapping="WrapWholeWords"
+                                                    Text="" />
+                                            </Grid>
+                                        </Button>
+                                    </StackPanel>
+                                </Grid>
+
+                                <InfoBar
+                                    x:Name="UpdateInfoBar"
+                                    HorizontalAlignment="Stretch"
+                                    IsClosable="True"
+                                    IsOpen="False">
+                                    <InfoBar.ActionButton>
+                                        <Button
+                                            x:Name="OpenAppInstallerButton"
+                                            Click="OpenAppInstallerButton_Click"
+                                            Visibility="Collapsed">
+                                            <Button.Content>
+                                                <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
+                                                    <FontIcon
+                                                        VerticalAlignment="Center"
+                                                        FontSize="14"
+                                                        Glyph="&#xE8A7;" />
+                                                    <TextBlock
+                                                        x:Name="OpenAppInstallerButtonText"
+                                                        Grid.Column="1"
+                                                        MinWidth="0"
+                                                        TextWrapping="WrapWholeWords"
+                                                        Text="" />
+                                                </Grid>
+                                            </Button.Content>
+                                        </Button>
+                                    </InfoBar.ActionButton>
+                                </InfoBar>
+                        </StackPanel>
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+        </NavigationView>
     </Grid>
 </Window>

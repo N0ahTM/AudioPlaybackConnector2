@@ -11,8 +11,11 @@
 
 struct SettingsDeviceViewModel {
     std::wstring Id;
+    std::wstring Name;
+    std::wstring Alias;
     std::wstring DisplayName;
     bool AutoReconnect = false;
+    bool IsDefaultDevice = false;
 };
 
 class SettingsViewModel {

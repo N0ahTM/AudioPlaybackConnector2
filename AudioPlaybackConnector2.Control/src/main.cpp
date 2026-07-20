@@ -82,14 +82,22 @@ std::wstring HelpText() {
     return LR"(AudioPlaybackConnector2 command line control
 
 Usage:
+  apc2ctl show
+  apc2ctl settings
   apc2ctl status [--json]
   apc2ctl list [--json]
-  apc2ctl connect (--id ID | --name NAME | --mac MAC | --last | TARGET)
-  apc2ctl disconnect (--id ID | --name NAME | --mac MAC | --last | TARGET)
-  apc2ctl reconnect (--id ID | --name NAME | --mac MAC | --last | TARGET)
-  apc2ctl toggle [--last | --id ID | --name NAME | --mac MAC | TARGET]
+  apc2ctl connect (--id ID | --name NAME | --mac MAC | --alias ALIAS | --last | --default | TARGET)
+  apc2ctl disconnect (--id ID | --name NAME | --mac MAC | --alias ALIAS | --last | --default | TARGET)
+  apc2ctl reconnect (--id ID | --name NAME | --mac MAC | --alias ALIAS | --last | --default | TARGET)
+  apc2ctl toggle [--last | --default | --id ID | --name NAME | --mac MAC | --alias ALIAS | TARGET]
   apc2ctl disconnect-all
   apc2ctl reconnect-all
+  apc2ctl default show [--json] [--raw]
+  apc2ctl default set (--id ID | --name NAME | --mac MAC | --alias ALIAS | TARGET)
+  apc2ctl default clear
+  apc2ctl alias list [--json] [--raw]
+  apc2ctl alias set (--id ID | --name NAME | --mac MAC | --alias ALIAS | TARGET) (--value VALUE | VALUE)
+  apc2ctl alias clear (--id ID | --name NAME | --mac MAC | --alias ALIAS | TARGET)
 
 TARGET is resolved as an exact device ID, a MAC address contained in the device ID, then a device name.
 )";
@@ -117,17 +125,23 @@ ParseResult ParseTargetOptions(apc::control::CommandType command, int startIndex
         auto arg = ToView(argv[i]);
         if (EqualsIgnoreCase(arg, L"--json")) {
             request.Flags |= apc::control::CommandFlagJson;
+        } else if (EqualsIgnoreCase(arg, L"--raw")) {
+            request.Flags |= apc::control::CommandFlagRaw;
         } else if (EqualsIgnoreCase(arg, L"--last")) {
             request.Target = apc::control::TargetKind::Last;
             request.Payload.clear();
+        } else if (EqualsIgnoreCase(arg, L"--default")) {
+            request.Target = apc::control::TargetKind::Default;
+            request.Payload.clear();
         } else if (EqualsIgnoreCase(arg, L"--id") || EqualsIgnoreCase(arg, L"--name") ||
-                   EqualsIgnoreCase(arg, L"--mac")) {
+                   EqualsIgnoreCase(arg, L"--mac") || EqualsIgnoreCase(arg, L"--alias")) {
             auto value = ReadOptionValue(i, argc, argv);
             if (!value) return Error(3, L"Missing value for " + std::wstring(arg) + L".\n");
             request.Payload = std::move(*value);
             if (EqualsIgnoreCase(arg, L"--id")) request.Target = apc::control::TargetKind::Id;
             if (EqualsIgnoreCase(arg, L"--name")) request.Target = apc::control::TargetKind::Name;
             if (EqualsIgnoreCase(arg, L"--mac")) request.Target = apc::control::TargetKind::Mac;
+            if (EqualsIgnoreCase(arg, L"--alias")) request.Target = apc::control::TargetKind::Alias;
         } else if (!arg.empty() && arg.front() == L'-') {
             return Error(3, L"Unknown option: " + std::wstring(arg) + L"\n");
         } else if (!positionalTarget) {
@@ -144,13 +158,139 @@ ParseResult ParseTargetOptions(apc::control::CommandType command, int startIndex
 
     if (request.Target == apc::control::TargetKind::None) {
         if (command == apc::control::CommandType::ToggleLast) {
-            request.Target = apc::control::TargetKind::Last;
+            request.Target = apc::control::TargetKind::Default;
         } else {
             return Error(3, L"A device target is required.\n");
         }
     }
 
     return {.Send = true, .Request = std::move(request)};
+}
+
+ParseResult ParseDefaultCommand(int startIndex, int argc, wchar_t** argv) {
+    if (startIndex >= argc) return Error(3, L"default requires show, set, or clear.\n");
+
+    auto subcommand = ToView(argv[startIndex]);
+    if (EqualsIgnoreCase(subcommand, L"show")) {
+        apc::control::Request request;
+        request.Command = apc::control::CommandType::DefaultShow;
+        for (int i = startIndex + 1; i < argc; ++i) {
+            auto arg = ToView(argv[i]);
+            if (EqualsIgnoreCase(arg, L"--json")) {
+                request.Flags |= apc::control::CommandFlagJson;
+            } else if (EqualsIgnoreCase(arg, L"--raw")) {
+                request.Flags |= apc::control::CommandFlagRaw;
+            } else {
+                return Error(3, L"Unknown option: " + std::wstring(arg) + L"\n");
+            }
+        }
+        return {.Send = true, .Request = std::move(request)};
+    }
+
+    if (EqualsIgnoreCase(subcommand, L"clear")) {
+        apc::control::Request request;
+        request.Command = apc::control::CommandType::DefaultClear;
+        for (int i = startIndex + 1; i < argc; ++i) {
+            auto arg = ToView(argv[i]);
+            if (EqualsIgnoreCase(arg, L"--json")) {
+                request.Flags |= apc::control::CommandFlagJson;
+            } else if (EqualsIgnoreCase(arg, L"--raw")) {
+                request.Flags |= apc::control::CommandFlagRaw;
+            } else {
+                return Error(3, L"Unknown option: " + std::wstring(arg) + L"\n");
+            }
+        }
+        return {.Send = true, .Request = std::move(request)};
+    }
+
+    if (EqualsIgnoreCase(subcommand, L"set")) {
+        return ParseTargetOptions(apc::control::CommandType::DefaultSet, startIndex + 1, argc, argv);
+    }
+
+    return Error(3, L"Unknown default command: " + std::wstring(subcommand) + L"\n");
+}
+
+ParseResult ParseAliasSetOptions(int startIndex, int argc, wchar_t** argv) {
+    apc::control::Request request;
+    request.Command = apc::control::CommandType::AliasSet;
+    request.Target = apc::control::TargetKind::None;
+
+    std::optional<std::wstring> positionalTarget;
+    std::optional<std::wstring> alias;
+    for (int i = startIndex; i < argc; ++i) {
+        auto arg = ToView(argv[i]);
+        if (EqualsIgnoreCase(arg, L"--json")) {
+            request.Flags |= apc::control::CommandFlagJson;
+        } else if (EqualsIgnoreCase(arg, L"--raw")) {
+            request.Flags |= apc::control::CommandFlagRaw;
+        } else if (EqualsIgnoreCase(arg, L"--value")) {
+            auto value = ReadOptionValue(i, argc, argv);
+            if (!value) return Error(3, L"Missing value for --value.\n");
+            if (alias) return Error(3, L"Only one alias value is supported.\n");
+            alias = std::move(*value);
+        } else if (EqualsIgnoreCase(arg, L"--id") || EqualsIgnoreCase(arg, L"--name") ||
+                   EqualsIgnoreCase(arg, L"--mac") || EqualsIgnoreCase(arg, L"--alias")) {
+            auto value = ReadOptionValue(i, argc, argv);
+            if (!value) return Error(3, L"Missing value for " + std::wstring(arg) + L".\n");
+            request.Payload = std::move(*value);
+            if (EqualsIgnoreCase(arg, L"--id")) request.Target = apc::control::TargetKind::Id;
+            if (EqualsIgnoreCase(arg, L"--name")) request.Target = apc::control::TargetKind::Name;
+            if (EqualsIgnoreCase(arg, L"--mac")) request.Target = apc::control::TargetKind::Mac;
+            if (EqualsIgnoreCase(arg, L"--alias")) request.Target = apc::control::TargetKind::Alias;
+        } else if (!arg.empty() && arg.front() == L'-') {
+            return Error(3, L"Unknown option: " + std::wstring(arg) + L"\n");
+        } else if (request.Target == apc::control::TargetKind::None && !positionalTarget) {
+            positionalTarget = std::wstring(arg);
+        } else if (!alias) {
+            alias = std::wstring(arg);
+        } else {
+            return Error(3, L"Only one alias value is supported.\n");
+        }
+    }
+
+    if (request.Target == apc::control::TargetKind::None && positionalTarget) {
+        request.Target = apc::control::TargetKind::Auto;
+        request.Payload = std::move(*positionalTarget);
+    }
+    if (request.Target == apc::control::TargetKind::None || request.Payload.empty()) {
+        return Error(3, L"A device target is required.\n");
+    }
+    if (!alias) return Error(3, L"An alias value is required.\n");
+
+    request.Payload += L"\n";
+    request.Payload += *alias;
+    return {.Send = true, .Request = std::move(request)};
+}
+
+ParseResult ParseAliasCommand(int startIndex, int argc, wchar_t** argv) {
+    if (startIndex >= argc) return Error(3, L"alias requires list, set, or clear.\n");
+
+    auto subcommand = ToView(argv[startIndex]);
+    if (EqualsIgnoreCase(subcommand, L"list")) {
+        apc::control::Request request;
+        request.Command = apc::control::CommandType::AliasList;
+        for (int i = startIndex + 1; i < argc; ++i) {
+            auto arg = ToView(argv[i]);
+            if (EqualsIgnoreCase(arg, L"--json")) {
+                request.Flags |= apc::control::CommandFlagJson;
+            } else if (EqualsIgnoreCase(arg, L"--raw")) {
+                request.Flags |= apc::control::CommandFlagRaw;
+            } else {
+                return Error(3, L"Unknown option: " + std::wstring(arg) + L"\n");
+            }
+        }
+        return {.Send = true, .Request = std::move(request)};
+    }
+
+    if (EqualsIgnoreCase(subcommand, L"set")) {
+        return ParseAliasSetOptions(startIndex + 1, argc, argv);
+    }
+
+    if (EqualsIgnoreCase(subcommand, L"clear")) {
+        return ParseTargetOptions(apc::control::CommandType::AliasClear, startIndex + 1, argc, argv);
+    }
+
+    return Error(3, L"Unknown alias command: " + std::wstring(subcommand) + L"\n");
 }
 
 ParseResult ParseCommandLine(int argc, wchar_t** argv) {
@@ -165,7 +305,11 @@ ParseResult ParseCommandLine(int argc, wchar_t** argv) {
     }
 
     apc::control::Request request;
-    if (EqualsIgnoreCase(command, L"status")) {
+    if (EqualsIgnoreCase(command, L"show")) {
+        request.Command = apc::control::CommandType::Show;
+    } else if (EqualsIgnoreCase(command, L"settings")) {
+        request.Command = apc::control::CommandType::Settings;
+    } else if (EqualsIgnoreCase(command, L"status")) {
         request.Command = apc::control::CommandType::Status;
     } else if (EqualsIgnoreCase(command, L"list")) {
         request.Command = apc::control::CommandType::List;
@@ -181,6 +325,10 @@ ParseResult ParseCommandLine(int argc, wchar_t** argv) {
         return ParseTargetOptions(apc::control::CommandType::Reconnect, 2, argc, argv);
     } else if (EqualsIgnoreCase(command, L"toggle")) {
         return ParseTargetOptions(apc::control::CommandType::ToggleLast, 2, argc, argv);
+    } else if (EqualsIgnoreCase(command, L"default")) {
+        return ParseDefaultCommand(2, argc, argv);
+    } else if (EqualsIgnoreCase(command, L"alias")) {
+        return ParseAliasCommand(2, argc, argv);
     } else {
         return Error(3, L"Unknown command: " + std::wstring(command) + L"\n\n" + HelpText());
     }
@@ -189,6 +337,8 @@ ParseResult ParseCommandLine(int argc, wchar_t** argv) {
         auto arg = ToView(argv[i]);
         if (EqualsIgnoreCase(arg, L"--json")) {
             request.Flags |= apc::control::CommandFlagJson;
+        } else if (EqualsIgnoreCase(arg, L"--raw")) {
+            request.Flags |= apc::control::CommandFlagRaw;
         } else {
             return Error(3, L"Unknown option: " + std::wstring(arg) + L"\n");
         }

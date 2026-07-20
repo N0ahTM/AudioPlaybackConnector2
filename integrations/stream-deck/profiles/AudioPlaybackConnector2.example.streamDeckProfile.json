@@ -1,0 +1,13 @@
+{
+  "name": "AudioPlaybackConnector2 (Beta)",
+  "actions": [
+    "com.n0ahtm.audioplaybackconnector2.toggle-default",
+    "com.n0ahtm.audioplaybackconnector2.connect-default",
+    "com.n0ahtm.audioplaybackconnector2.disconnect-default",
+    "com.n0ahtm.audioplaybackconnector2.reconnect-default",
+    "com.n0ahtm.audioplaybackconnector2.reconnect-all",
+    "com.n0ahtm.audioplaybackconnector2.disconnect-all",
+    "com.n0ahtm.audioplaybackconnector2.open-picker",
+    "com.n0ahtm.audioplaybackconnector2.open-settings"
+  ]
+}

@@ -12,10 +12,13 @@ struct App : AppT<App> {
     void OnLaunched(Microsoft::UI::Xaml::LaunchActivatedEventArgs const& e);
 
 private:
+    void RegisterUnhandledExceptionHandler();
+
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
     std::shared_ptr<ApplicationHost> m_host;
+    bool m_unhandledExceptionHandlerRegistered = false;
 };
 } // namespace winrt::AudioPlaybackConnector2::implementation

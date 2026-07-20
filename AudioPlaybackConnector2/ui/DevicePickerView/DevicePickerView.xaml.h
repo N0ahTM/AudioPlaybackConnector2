@@ -7,6 +7,7 @@
 #include <unordered_map>
 
 class DeviceManager;
+class Settings;
 
 namespace winrt::Microsoft::UI::Xaml {
 struct RoutedEventArgs;
@@ -24,6 +25,7 @@ namespace winrt::AudioPlaybackConnector2::implementation {
 struct DevicePickerView : DevicePickerViewT<DevicePickerView> {
     DevicePickerView();
     void Initialize(std::shared_ptr<DeviceManager> manager,
+                    std::shared_ptr<Settings> settings,
                     std::function<void()> onClose,
                     std::function<void(winrt::hstring)> onDeviceSelected,
                     std::function<void(winrt::hstring)> onDeviceDisconnect = nullptr,
@@ -67,6 +69,7 @@ private:
     std::function<void()> m_onDisconnectAll;
     std::function<void()> m_onReconnectAll;
     std::weak_ptr<DeviceManager> m_deviceManager;
+    std::weak_ptr<Settings> m_settings;
     std::atomic<bool> m_isLoadingDevices = false;
     std::atomic<bool> m_loadDevicesCancelled = false;
     std::atomic<bool> m_suppressSelectionChanged = false;

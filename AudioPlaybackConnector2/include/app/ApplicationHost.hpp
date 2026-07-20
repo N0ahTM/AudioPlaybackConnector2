@@ -12,6 +12,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <optional>
 #include <string_view>
 
 class DeviceManager;
@@ -59,6 +60,7 @@ private:
     void ToggleLastConnectedDeviceFromTray();
     void RefreshTrayVisualState(bool forceErrorWhenIdle = false, std::wstring_view reason = L"unspecified");
     [[nodiscard]] winrt::hstring ResolveKnownDeviceName(winrt::hstring const& id) const;
+    [[nodiscard]] std::optional<std::wstring> ResolveDefaultDeviceId() const;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Actions ///////////////////////////////////////////////////////////////////////////////////////////*/

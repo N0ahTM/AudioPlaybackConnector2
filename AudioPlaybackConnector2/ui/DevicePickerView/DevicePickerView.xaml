@@ -11,11 +11,6 @@
         x:Name="RootGrid"
         MinWidth="260"
         MaxWidth="520">
-        <SystemBackdropElement
-            x:Name="BackdropElement"
-            HorizontalAlignment="Stretch"
-            VerticalAlignment="Stretch"
-            CornerRadius="8" />
         <StackPanel x:Name="ContentPanel">
             <Grid>
                 <Grid.ColumnDefinitions>

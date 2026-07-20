@@ -1,6 +1,8 @@
 #include <pch.h>
 #include <util/Logger.hpp>
 
+#include <cwctype>
+
 namespace util {
 
 namespace details {
@@ -454,13 +456,42 @@ void FlushInMemoryLogTailToFile(std::wstring_view reason, std::uint32_t exceptio
 /*//////// Debug Logging /////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
+#ifndef _DEBUG
+namespace {
+bool ShouldPersistReleaseTrace(std::wstring_view message) noexcept {
+    try {
+        std::wstring lower;
+        lower.reserve(message.size());
+        for (wchar_t ch : message) {
+            lower.push_back(static_cast<wchar_t>(std::towlower(ch)));
+        }
+
+        constexpr std::array<std::wstring_view, 9> keywords{
+            L"error", L"failed", L"warning", L"crash", L"exception", L"denied", L"timeout", L"corrupt", L"unsupported"};
+        return std::ranges::any_of(keywords, [&](auto keyword) { return lower.find(keyword) != std::wstring::npos; });
+    } catch (...) {
+        return true;
+    }
+}
+} // namespace
+#endif
+
 void DebugTrace(std::wstring_view message) noexcept {
-    util::WriteLogLine(message);
 #ifdef _DEBUG
+    util::WriteLogLine(message);
     try {
         std::wstring output(message);
         output.push_back(L'\n');
         OutputDebugStringW(output.c_str());
+    } catch (...) {
+    }
+#else
+    try {
+        auto line = util::details::FormatLogLine(message);
+        util::details::LogTail().Add(line);
+        if (ShouldPersistReleaseTrace(message)) {
+            util::Logger::Instance().Enqueue(std::move(line));
+        }
     } catch (...) {
     }
 #endif

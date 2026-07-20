@@ -7,8 +7,11 @@
 struct DeviceSettings {
     std::wstring Id;
     std::wstring Name;
+    std::wstring Alias;
     bool AutoReconnect = false;
 };
+
+enum class DefaultDeviceMode { LastConnected, SpecificDevice };
 
 struct PersistedWindowBounds {
     int32_t X = 0;
@@ -28,6 +31,9 @@ struct SettingsData {
     int64_t LastUpdateCheckUnixSeconds = 0;
     std::wstring LastNotifiedUpdateVersion;
     std::optional<PersistedWindowBounds> SettingsWindowBounds;
+    bool PrivacyModeEnabled = false;
+    DefaultDeviceMode DefaultDevice = DefaultDeviceMode::LastConnected;
+    std::wstring DefaultDeviceId;
     std::vector<DeviceSettings> Devices;
     std::vector<std::wstring> LastConnectedIds;
 };

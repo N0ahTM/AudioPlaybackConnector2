@@ -58,6 +58,14 @@ winrt::Windows::Data::Json::JsonArray GetOptionalArray(winrt::Windows::Data::Jso
     return value.ValueType() == winrt::Windows::Data::Json::JsonValueType::Array ? value.GetArray() : nullptr;
 }
 
+DefaultDeviceMode ParseDefaultDeviceMode(std::wstring_view value) noexcept {
+    return value == L"specificDevice" ? DefaultDeviceMode::SpecificDevice : DefaultDeviceMode::LastConnected;
+}
+
+std::wstring_view SerializeDefaultDeviceMode(DefaultDeviceMode mode) noexcept {
+    return mode == DefaultDeviceMode::SpecificDevice ? L"specificDevice" : L"lastConnected";
+}
+
 void BackupUnreadableSettingsFile(std::filesystem::path const& path) noexcept {
     if (path.empty()) return;
 
@@ -117,14 +125,23 @@ void Settings::Load(HINSTANCE hInst) {
         int64_t lastUpdateCheckUnixSeconds = 0;
         std::wstring lastNotifiedUpdateVersion;
         std::optional<PersistedWindowBounds> settingsWindowBounds;
+        bool privacyModeEnabled = false;
+        DefaultDeviceMode defaultDevice = DefaultDeviceMode::LastConnected;
+        std::wstring defaultDeviceId;
         std::vector<DeviceSettings> devices;
         std::vector<std::wstring> lastConnectedIds;
 
         globalAutoReconnect = GetOptionalBoolean(json, L"globalAutoReconnect", globalAutoReconnect);
         startWithWindows = GetOptionalBoolean(json, L"startWithWindows", startWithWindows);
         showNotifications = GetOptionalBoolean(json, L"showNotifications", showNotifications);
+        privacyModeEnabled = GetOptionalBoolean(json, L"privacyModeEnabled", privacyModeEnabled);
         lastUpdateCheckUnixSeconds = GetOptionalInt64(json, L"lastUpdateCheckUnixSeconds", lastUpdateCheckUnixSeconds);
         lastNotifiedUpdateVersion = GetOptionalString(json, L"lastNotifiedUpdateVersion", L"");
+        defaultDevice = ParseDefaultDeviceMode(std::wstring(GetOptionalString(json, L"defaultDeviceMode", L"")));
+        defaultDeviceId = GetOptionalString(json, L"defaultDeviceId", L"");
+        if (defaultDeviceId.empty()) {
+            defaultDevice = DefaultDeviceMode::LastConnected;
+        }
 
         {
             auto lang = GetOptionalString(json, L"language", L"system");
@@ -156,6 +173,7 @@ void Settings::Load(HINSTANCE hInst) {
                     ds.Id = GetOptionalString(obj, L"id", L"");
                     if (ds.Id.empty()) continue;
                     ds.Name = GetOptionalString(obj, L"name", L"");
+                    ds.Alias = GetOptionalString(obj, L"alias", L"");
                     ds.AutoReconnect = GetOptionalBoolean(obj, L"autoReconnect", false);
                     devices.push_back(std::move(ds));
                 } catch (...) {
@@ -179,6 +197,9 @@ void Settings::Load(HINSTANCE hInst) {
         m_data.LastUpdateCheckUnixSeconds = lastUpdateCheckUnixSeconds;
         m_data.LastNotifiedUpdateVersion = std::move(lastNotifiedUpdateVersion);
         m_data.SettingsWindowBounds = settingsWindowBounds;
+        m_data.PrivacyModeEnabled = privacyModeEnabled;
+        m_data.DefaultDevice = defaultDevice;
+        m_data.DefaultDeviceId = std::move(defaultDeviceId);
         m_data.Devices = std::move(devices);
         m_data.LastConnectedIds = std::move(lastConnectedIds);
     } catch (winrt::hresult_error const& ex) {
@@ -208,12 +229,19 @@ void Settings::Save(HINSTANCE hInst) {
                     winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.StartWithWindows));
         json.Insert(L"showNotifications",
                     winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.ShowNotifications));
+        json.Insert(L"privacyModeEnabled",
+                    winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.PrivacyModeEnabled));
         json.Insert(L"language", winrt::Windows::Data::Json::JsonValue::CreateStringValue(snapshot.Language));
         json.Insert(L"lastUpdateCheckUnixSeconds",
                     winrt::Windows::Data::Json::JsonValue::CreateNumberValue(
                         static_cast<double>(snapshot.LastUpdateCheckUnixSeconds)));
         json.Insert(L"lastNotifiedUpdateVersion",
                     winrt::Windows::Data::Json::JsonValue::CreateStringValue(snapshot.LastNotifiedUpdateVersion));
+        json.Insert(L"defaultDeviceMode",
+                    winrt::Windows::Data::Json::JsonValue::CreateStringValue(
+                        winrt::hstring(SerializeDefaultDeviceMode(snapshot.DefaultDevice))));
+        json.Insert(L"defaultDeviceId",
+                    winrt::Windows::Data::Json::JsonValue::CreateStringValue(snapshot.DefaultDeviceId));
 
         if (snapshot.SettingsWindowBounds) {
             winrt::Windows::Data::Json::JsonObject boundsJson;
@@ -237,6 +265,7 @@ void Settings::Save(HINSTANCE hInst) {
             winrt::Windows::Data::Json::JsonObject obj;
             obj.Insert(L"id", winrt::Windows::Data::Json::JsonValue::CreateStringValue(d.Id));
             obj.Insert(L"name", winrt::Windows::Data::Json::JsonValue::CreateStringValue(d.Name));
+            obj.Insert(L"alias", winrt::Windows::Data::Json::JsonValue::CreateStringValue(d.Alias));
             obj.Insert(L"autoReconnect", winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(d.AutoReconnect));
             devArr.Append(obj);
         }

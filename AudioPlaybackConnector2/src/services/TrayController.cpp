@@ -1,8 +1,9 @@
 #include <pch.h>
 #include <services/TrayController.hpp>
+#include <core/DeviceDisplay.hpp>
 #include <core/DeviceManager.hpp>
-#include <core/ThemeHelper.hpp>
 #include <core/StringResources.hpp>
+#include <core/ThemeHelper.hpp>
 #include <ui/FlyoutPresenterStyle.hpp>
 #include <util/Util.hpp>
 
@@ -76,6 +77,10 @@ void TrayController::Initialize(HWND hwnd, winrt::Microsoft::UI::Xaml::Window ma
 
 void TrayController::SetDeviceManager(std::shared_ptr<DeviceManager> deviceManager) {
     m_deviceManager = std::move(deviceManager);
+}
+
+void TrayController::SetSettings(std::shared_ptr<Settings> settings) {
+    m_settings = std::move(settings);
 }
 
 void TrayController::Teardown() noexcept {
@@ -324,10 +329,29 @@ void TrayController::UpdateTooltipFromConnections() {
     if (connected.empty()) {
         m_trayIcon->SetTooltip(_("AppName"));
     } else {
+        SettingsData settingsSnapshot;
+        bool hasSettings = false;
+        if (m_settings) {
+            auto locked = m_settings->LockSharedData();
+            settingsSnapshot = *locked;
+            hasSettings = true;
+        }
+
         std::wstring tip = std::wstring(_("AppName")) + L"\n";
         for (const auto& c : connected) {
-            auto const& label = !c.Name.empty() ? c.Name : c.Id;
-            tip += label;
+            std::wstring alias;
+            std::wstring name = c.Name;
+            if (hasSettings) {
+                auto it = std::ranges::find_if(settingsSnapshot.Devices,
+                                               [&](auto const& device) { return device.Id == c.Id; });
+                if (it != settingsSnapshot.Devices.end()) {
+                    alias = it->Alias;
+                    if (!it->Name.empty()) {
+                        name = it->Name;
+                    }
+                }
+            }
+            tip += apc::display::DeviceNameOrId(c.Id, name, alias, hasSettings && settingsSnapshot.PrivacyModeEnabled);
             tip += L"\n";
         }
         m_trayIcon->SetTooltip(tip);
@@ -487,6 +511,7 @@ void TrayController::EnsureDevicePickerViewCreated() {
     auto weak = weak_from_this();
     impl->Initialize(
         m_deviceManager,
+        m_settings,
         [weak]() {
             auto self = weak.lock();
             if (self && !self->m_isTearingDown.load() && self->m_pickerFlyout) self->m_pickerFlyout.Hide();
@@ -556,6 +581,7 @@ void TrayController::PreloadDevicePicker() {
 Controls::Flyout TrayController::CreatePickerFlyout() {
     Controls::Flyout flyout;
     flyout.ShouldConstrainToRootBounds(false);
+    flyout.SystemBackdrop(winrt::Microsoft::UI::Xaml::Media::DesktopAcrylicBackdrop());
     flyout.Content(m_devicePickerView);
 
     auto weak = weak_from_this();
@@ -657,11 +683,11 @@ void TrayController::ReconcileTrayStateFromDeviceSnapshot(std::wstring_view reas
 }
 
 util::SettingsWindowPlacement TrayController::CalculateSettingsWindowPlacement() const {
-    if (!m_trayIcon) return util::CalculateSettingsWindowPlacement();
-    auto rect = m_trayIcon->GetIconRect();
-    if (!rect) return util::CalculateSettingsWindowPlacement();
-
-    return util::CalculateSettingsWindowPlacement(*rect);
+    std::optional<RECT> anchorRect;
+    if (m_trayIcon) {
+        anchorRect = m_trayIcon->GetIconRect();
+    }
+    return util::CalculateSettingsWindowPlacement(anchorRect);
 }
 
 bool TrayController::IsCursorOverTrayIcon() const {

@@ -4,6 +4,7 @@
 #include <vector>
 
 class DeviceManager;
+class Settings;
 
 struct CachedDevicePickerDevice {
     winrt::hstring Id;
@@ -28,6 +29,7 @@ public:
     /*------------------------------------------------------------------------------------------------------------*/
 
     void SetDeviceManager(std::weak_ptr<DeviceManager> manager);
+    void SetSettings(std::weak_ptr<Settings> settings);
     void SetDevices(winrt::Windows::Devices::Enumeration::DeviceInformationCollection const& devices);
     [[nodiscard]] bool Empty() const noexcept;
     [[nodiscard]] std::vector<DevicePickerItemViewModel> SnapshotItems() const;
@@ -46,5 +48,6 @@ private:
     /*------------------------------------------------------------------------------------------------------------*/
 
     std::weak_ptr<DeviceManager> m_manager;
+    std::weak_ptr<Settings> m_settings;
     std::vector<CachedDevicePickerDevice> m_devices;
 };

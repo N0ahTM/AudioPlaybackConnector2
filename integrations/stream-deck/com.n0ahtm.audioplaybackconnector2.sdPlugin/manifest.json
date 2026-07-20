@@ -1,0 +1,139 @@
+{
+  "Name": "AudioPlaybackConnector2 (Beta)",
+  "UUID": "com.n0ahtm.audioplaybackconnector2",
+  "Version": "0.1.0.0",
+  "Author": "Noah Meyer",
+  "Description": "Control AudioPlaybackConnector2 Bluetooth playback connections from Stream Deck. Beta release: expect bugs and changing behavior — please report issues on GitHub.",
+  "Icon": "imgs/plugin/marketplace",
+  "Category": "AudioPlaybackConnector2 (Beta)",
+  "CategoryIcon": "imgs/plugin/category-icon",
+  "CodePath": "bin/plugin.js",
+  "SDKVersion": 2,
+  "Software": {
+    "MinimumVersion": "6.4"
+  },
+  "OS": [
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    }
+  ],
+  "Nodejs": {
+    "Version": "20",
+    "Debug": "disabled"
+  },
+  "Actions": [
+    {
+      "Name": "Toggle default",
+      "UUID": "com.n0ahtm.audioplaybackconnector2.toggle-default",
+      "Icon": "imgs/actions/apc2",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/apc2",
+          "Title": "Toggle"
+        }
+      ]
+    },
+    {
+      "Name": "Connect default",
+      "UUID": "com.n0ahtm.audioplaybackconnector2.connect-default",
+      "Icon": "imgs/actions/apc2",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/apc2",
+          "Title": "Connect"
+        }
+      ]
+    },
+    {
+      "Name": "Disconnect default",
+      "UUID": "com.n0ahtm.audioplaybackconnector2.disconnect-default",
+      "Icon": "imgs/actions/apc2",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/apc2",
+          "Title": "Disconnect"
+        }
+      ]
+    },
+    {
+      "Name": "Reconnect default",
+      "UUID": "com.n0ahtm.audioplaybackconnector2.reconnect-default",
+      "Icon": "imgs/actions/apc2",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/apc2",
+          "Title": "Reconnect"
+        }
+      ]
+    },
+    {
+      "Name": "Reconnect all",
+      "UUID": "com.n0ahtm.audioplaybackconnector2.reconnect-all",
+      "Icon": "imgs/actions/apc2",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/apc2",
+          "Title": "Reconnect all"
+        }
+      ]
+    },
+    {
+      "Name": "Disconnect all",
+      "UUID": "com.n0ahtm.audioplaybackconnector2.disconnect-all",
+      "Icon": "imgs/actions/apc2",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/apc2",
+          "Title": "Disconnect all"
+        }
+      ]
+    },
+    {
+      "Name": "Open picker",
+      "UUID": "com.n0ahtm.audioplaybackconnector2.open-picker",
+      "Icon": "imgs/actions/apc2",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/apc2",
+          "Title": "Picker"
+        }
+      ]
+    },
+    {
+      "Name": "Open settings",
+      "UUID": "com.n0ahtm.audioplaybackconnector2.open-settings",
+      "Icon": "imgs/actions/apc2",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/apc2",
+          "Title": "Settings"
+        }
+      ]
+    }
+  ]
+}

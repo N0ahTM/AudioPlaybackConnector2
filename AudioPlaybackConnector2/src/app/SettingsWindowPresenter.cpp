@@ -21,7 +21,7 @@ void SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settings
     if (m_settingsWindow) {
         auto hwnd = util::GetWindowHandle(m_settingsWindow);
         if (hwnd) {
-            ShowWindow(hwnd, SW_SHOW);
+            ShowWindow(hwnd, IsIconic(hwnd) ? SW_RESTORE : SW_SHOW);
             SetForegroundWindow(hwnd);
             DebugTrace(L"[SettingsWindowPresenter] SettingsWindow brought to foreground");
         }

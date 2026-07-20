@@ -1,6 +1,7 @@
 [![Build](https://github.com/N0ahTM/AudioPlaybackConnector2/actions/workflows/build.yml/badge.svg)](https://github.com/N0ahTM/AudioPlaybackConnector2/actions/workflows/build.yml)
 [![CodeQL](https://github.com/N0ahTM/AudioPlaybackConnector2/actions/workflows/codeql.yml/badge.svg)](https://github.com/N0ahTM/AudioPlaybackConnector2/actions/workflows/codeql.yml)
 [![GitHub release (latest by date)](https://img.shields.io/github/v/release/N0ahTM/AudioPlaybackConnector2)](https://github.com/N0ahTM/AudioPlaybackConnector2/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/N0ahTM/AudioPlaybackConnector2/total?label=downloads)](https://github.com/N0ahTM/AudioPlaybackConnector2/releases)
 [![License](https://img.shields.io/github/license/N0ahTM/AudioPlaybackConnector2)](LICENSE)
 [![C++](https://img.shields.io/badge/C%2B%2B-23-00599C?logo=c%2B%2B)](https://en.cppreference.com/)
 
@@ -31,9 +32,12 @@ For commands and certificate-store options, see [Installation](docs/INSTALLATION
 - Tray-only workflow with no main window.
 - Fast device picker on left-click.
 - Connect, reconnect, and disconnect devices from the picker.
-- Double-click the tray icon to toggle the most recently connected device.
+- Double-click the tray icon to toggle the configured default device, or the most recently connected device.
 - Disconnect or reconnect all active devices from the tray menu.
 - Global and per-device auto-reconnect on startup.
+- Device aliases for cleaner picker, notification, and command-line labels.
+- Privacy mode to redact real device names and IDs in UI, CLI output, and diagnostics.
+- Support and diagnostics tools for Bluetooth settings, log folder access, and redacted bug-report details.
 - Guarded device actions so repeated clicks do not start overlapping connect/disconnect work.
 - Animated, theme-aware tray icons for idle, connecting, connected, and error states.
 - Toast notifications for connection events, failures, and available updates.
@@ -41,6 +45,7 @@ For commands and certificate-store options, see [Installation](docs/INSTALLATION
 - Manual update checks through GitHub Releases and the App Installer feed.
 - Settings window placement persistence.
 - Local crash reports and minidumps for troubleshooting.
+- Native Stream Deck plugin source and example profile.
 - Localized UI in eight languages.
 
 ## Requirements
@@ -61,14 +66,21 @@ For commands and certificate-store options, see [Installation](docs/INSTALLATION
 ```powershell
 apc2ctl status
 apc2ctl list
+apc2ctl show
+apc2ctl settings
 apc2ctl connect --name "Device Name"
-apc2ctl connect --mac "A1:B2:C3:D4:E5:F6"
 apc2ctl disconnect --id "<Windows device id>"
-apc2ctl toggle --last
+apc2ctl toggle --default
+apc2ctl default set --alias "Desk Speakers"
+apc2ctl alias set --name "WH-1000XM5" --value "Headphones"
 apc2ctl reconnect-all
 ```
 
-Add `--json` to `status`, `list`, or device actions for machine-readable output.
+Add `--json` for machine-readable output. Add `--raw` when you explicitly need real device IDs or names while privacy mode is enabled.
+
+## Stream Deck
+
+The official Stream Deck SDK plugin (currently in **beta** — expect bugs and report them via GitHub issues) is available as a `.streamDeckPlugin` asset with each release. Open that file to install it in Stream Deck. Its source is in [integrations/stream-deck](integrations/stream-deck/README.md). It wraps `apc2ctl.exe` and includes actions for default-device toggle/connect/disconnect/reconnect, reconnect all, disconnect all, opening the picker, and opening Settings.
 
 ## Installation Notes
 
@@ -91,6 +103,7 @@ Releases are currently signed with a self-signed certificate, so Windows must tr
 - Settings are stored locally in the current user profile.
 - No telemetry is sent by the app.
 - Update checks query GitHub release metadata.
+- Privacy mode can redact real Bluetooth device names and IDs from the UI, command-line output, and copied diagnostics.
 - Crash reports and minidumps stay on your machine unless you choose to share them.
 - Minidumps may contain sensitive memory; review them before attaching them to an issue.
 

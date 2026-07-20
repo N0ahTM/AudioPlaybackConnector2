@@ -2,6 +2,8 @@
 
 #include <core/Settings.hpp>
 
+#include <functional>
+
 class DeviceManager;
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -10,16 +12,27 @@ class DeviceManager;
 
 class ISettingsController {
 public:
+    using PresentationChangedCallback = std::function<void()>;
+
     virtual ~ISettingsController() = default;
 
     virtual SettingsData Snapshot() const = 0;
+    virtual void SetPresentationChangedCallback(PresentationChangedCallback callback) = 0;
     virtual void SetGlobalAutoReconnect(bool enabled) = 0;
     virtual void SetStartWithWindows(bool enabled) = 0;
     virtual void SetShowNotifications(bool enabled) = 0;
+    virtual void SetLanguage(std::wstring language) = 0;
+    virtual void SetPrivacyMode(bool enabled) = 0;
     virtual bool SetSettingsWindowBounds(PersistedWindowBounds bounds) = 0;
     virtual bool ClearSettingsWindowBounds() = 0;
     virtual void Save() = 0;
     virtual void SetDeviceAutoReconnect(std::wstring const& deviceId, bool enabled) = 0;
+    virtual bool
+    SetDeviceAlias(std::wstring const& deviceId, std::wstring alias, std::wstring const& deviceName = {}) = 0;
+    virtual void SetDefaultDeviceMode(DefaultDeviceMode mode) = 0;
+    virtual void SetDefaultDeviceId(std::wstring const& deviceId) = 0;
+    virtual void ClearDefaultDevice() = 0;
+    [[nodiscard]] virtual std::size_t ConnectedDeviceCount() const = 0;
     virtual void ForgetDevice(std::wstring const& deviceId) = 0;
 };
 
@@ -28,16 +41,27 @@ public:
     SettingsController(std::shared_ptr<Settings> settings, std::weak_ptr<DeviceManager> deviceManager);
 
     SettingsData Snapshot() const override;
+    void SetPresentationChangedCallback(PresentationChangedCallback callback) override;
     void SetGlobalAutoReconnect(bool enabled) override;
     void SetStartWithWindows(bool enabled) override;
     void SetShowNotifications(bool enabled) override;
+    void SetLanguage(std::wstring language) override;
+    void SetPrivacyMode(bool enabled) override;
     bool SetSettingsWindowBounds(PersistedWindowBounds bounds) override;
     bool ClearSettingsWindowBounds() override;
     void Save() override;
     void SetDeviceAutoReconnect(std::wstring const& deviceId, bool enabled) override;
+    bool SetDeviceAlias(std::wstring const& deviceId, std::wstring alias, std::wstring const& deviceName = {}) override;
+    void SetDefaultDeviceMode(DefaultDeviceMode mode) override;
+    void SetDefaultDeviceId(std::wstring const& deviceId) override;
+    void ClearDefaultDevice() override;
+    [[nodiscard]] std::size_t ConnectedDeviceCount() const override;
     void ForgetDevice(std::wstring const& deviceId) override;
 
 private:
+    void NotifyPresentationChanged();
+
     std::shared_ptr<Settings> m_settings;
     std::weak_ptr<DeviceManager> m_deviceManager;
+    PresentationChangedCallback m_presentationChanged;
 };

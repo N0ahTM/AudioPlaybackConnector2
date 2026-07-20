@@ -173,10 +173,11 @@ inline std::wstring ReplacePlaceholders(std::wstring_view templateStr, std::wstr
 /*//////// Window Constants //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-inline constexpr int32_t c_settingsWindowPreferredWidthDip = 540;
-inline constexpr int32_t c_settingsWindowPreferredHeightDip = 580;
-inline constexpr int32_t c_settingsWindowMinWidthDip = 420;
+inline constexpr int32_t c_settingsWindowPreferredWidthDip = 900;
+inline constexpr int32_t c_settingsWindowPreferredHeightDip = 560;
+inline constexpr int32_t c_settingsWindowMinWidthDip = 660;
 inline constexpr int32_t c_settingsWindowMinHeightDip = 360;
+inline constexpr int32_t c_settingsWindowEdgeMarginDip = 16;
 
 namespace util {
 
@@ -240,6 +241,12 @@ inline SIZE GetSettingsWindowMinTrackSizeForWorkArea(RECT const& workArea, UINT 
                 std::min(DipToPixel(c_settingsWindowMinHeightDip, dpi), workHeight)};
 }
 
+inline POINT CalculateBottomRightWindowPosition(RECT const& workArea, SIZE size, UINT dpi) {
+    const int32_t margin = DipToPixel(c_settingsWindowEdgeMarginDip, dpi);
+    return POINT{ClampInt(workArea.right - size.cx - margin, workArea.left, workArea.right - size.cx),
+                 ClampInt(workArea.bottom - size.cy - margin, workArea.top, workArea.bottom - size.cy)};
+}
+
 inline SettingsWindowPlacement CalculateSettingsWindowPlacement(std::optional<RECT> anchorRect = std::nullopt) {
     auto monitor = GetSettingsWindowTargetMonitor(anchorRect);
     auto workArea = GetMonitorWorkArea(monitor);
@@ -259,25 +266,56 @@ inline SettingsWindowPlacement CalculateSettingsWindowPlacement(std::optional<RE
     const int32_t width = ClampInt(preferredWidth, minWidth, maxWidth);
     const int32_t height = ClampInt(preferredHeight, minHeight, maxHeight);
 
-    int32_t x = workArea.left + (workWidth - width) / 2;
-    int32_t y = workArea.top + (workHeight - height) / 2;
-
-    if (anchorRect) {
-        x = anchorRect->right - width;
-        const int32_t spaceBelow = workArea.bottom - anchorRect->bottom;
-        const int32_t spaceAbove = anchorRect->top - workArea.top;
-
-        if (spaceBelow >= height) {
-            y = anchorRect->bottom;
-        } else if (spaceAbove >= height) {
-            y = anchorRect->top - height;
-        }
-    }
+    auto position = CalculateBottomRightWindowPosition(workArea, SIZE{width, height}, dpi);
+    int32_t x = position.x;
+    int32_t y = position.y;
 
     x = ClampInt(x, workArea.left, workArea.right - width);
     y = ClampInt(y, workArea.top, workArea.bottom - height);
 
     return SettingsWindowPlacement{POINT{x, y}, SIZE{width, height}, workArea, dpi};
+}
+
+inline SettingsWindowPlacement
+CalculateSettingsWindowPlacementFromSize(SIZE size, UINT persistedDpi, SettingsWindowPlacement const& basePlacement) {
+    auto workArea = basePlacement.workArea;
+    auto dpi = basePlacement.dpi;
+    auto minTrackSize = GetSettingsWindowMinTrackSizeForWorkArea(workArea, dpi);
+
+    if (persistedDpi == 0) persistedDpi = USER_DEFAULT_SCREEN_DPI;
+    if (persistedDpi != dpi) {
+        size.cx = std::max<int32_t>(1, MulDiv(size.cx, static_cast<int>(dpi), static_cast<int>(persistedDpi)));
+        size.cy = std::max<int32_t>(1, MulDiv(size.cy, static_cast<int>(dpi), static_cast<int>(persistedDpi)));
+    }
+
+    const int32_t workWidth = std::max<int32_t>(1, workArea.right - workArea.left);
+    const int32_t workHeight = std::max<int32_t>(1, workArea.bottom - workArea.top);
+    const int32_t maxRestoredWidth =
+        std::min<int32_t>(workWidth, std::max<int32_t>(minTrackSize.cx, basePlacement.size.cx));
+    const int32_t maxRestoredHeight =
+        std::min<int32_t>(workHeight, std::max<int32_t>(minTrackSize.cy, basePlacement.size.cy));
+    const int32_t width = ClampInt(size.cx, minTrackSize.cx, maxRestoredWidth);
+    const int32_t height = ClampInt(size.cy, minTrackSize.cy, maxRestoredHeight);
+    POINT position{
+        ClampInt(basePlacement.position.x + basePlacement.size.cx - width, workArea.left, workArea.right - width),
+        ClampInt(basePlacement.position.y + basePlacement.size.cy - height, workArea.top, workArea.bottom - height)};
+
+    return SettingsWindowPlacement{position, SIZE{width, height}, workArea, dpi};
+}
+
+inline SettingsWindowPlacement CalculateSettingsWindowPlacementForSize(SIZE size,
+                                                                       SettingsWindowPlacement const& basePlacement) {
+    auto workArea = basePlacement.workArea;
+    auto dpi = basePlacement.dpi == 0 ? USER_DEFAULT_SCREEN_DPI : basePlacement.dpi;
+    auto minTrackSize = GetSettingsWindowMinTrackSizeForWorkArea(workArea, dpi);
+
+    const int32_t workWidth = std::max<int32_t>(1, workArea.right - workArea.left);
+    const int32_t workHeight = std::max<int32_t>(1, workArea.bottom - workArea.top);
+    const int32_t width = ClampInt(size.cx, minTrackSize.cx, workWidth);
+    const int32_t height = ClampInt(size.cy, minTrackSize.cy, workHeight);
+    auto position = CalculateBottomRightWindowPosition(workArea, SIZE{width, height}, dpi);
+
+    return SettingsWindowPlacement{position, SIZE{width, height}, workArea, dpi};
 }
 
 inline SettingsWindowPlacement

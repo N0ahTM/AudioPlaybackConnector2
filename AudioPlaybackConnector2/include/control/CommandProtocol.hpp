@@ -27,12 +27,20 @@ enum class CommandType : uint32_t {
     Reconnect = 5,
     ToggleLast = 6,
     DisconnectAll = 7,
-    ReconnectAll = 8
+    ReconnectAll = 8,
+    Show = 9,
+    Settings = 10,
+    DefaultShow = 11,
+    DefaultSet = 12,
+    DefaultClear = 13,
+    AliasSet = 14,
+    AliasClear = 15,
+    AliasList = 16
 };
 
-enum class TargetKind : uint32_t { None = 0, Id = 1, Name = 2, Mac = 3, Last = 4, Auto = 5 };
+enum class TargetKind : uint32_t { None = 0, Id = 1, Name = 2, Mac = 3, Last = 4, Auto = 5, Alias = 6, Default = 7 };
 
-enum CommandFlags : uint32_t { CommandFlagNone = 0, CommandFlagJson = 1 };
+enum CommandFlags : uint32_t { CommandFlagNone = 0, CommandFlagJson = 1, CommandFlagRaw = 2 };
 
 enum class ExitCode : uint32_t {
     Success = 0,

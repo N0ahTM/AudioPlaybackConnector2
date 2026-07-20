@@ -2,6 +2,9 @@
 
 #include <ui/SettingsViewModel.hpp>
 
+#include <core/DeviceDisplay.hpp>
+#include <core/StringResources.hpp>
+
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
@@ -10,10 +13,16 @@ std::vector<SettingsDeviceViewModel> SettingsViewModel::BuildDeviceItems(Setting
     std::vector<SettingsDeviceViewModel> items;
     items.reserve(settings.Devices.size());
     for (auto const& device : settings.Devices) {
+        auto displayName =
+            apc::display::DeviceNameOrId(device.Id, device.Name, device.Alias, settings.PrivacyModeEnabled);
         items.push_back({
             .Id = device.Id,
-            .DisplayName = device.Name.empty() ? device.Id : device.Name,
+            .Name = device.Name,
+            .Alias = device.Alias,
+            .DisplayName = std::move(displayName),
             .AutoReconnect = device.AutoReconnect,
+            .IsDefaultDevice =
+                settings.DefaultDevice == DefaultDeviceMode::SpecificDevice && settings.DefaultDeviceId == device.Id,
         });
     }
     return items;

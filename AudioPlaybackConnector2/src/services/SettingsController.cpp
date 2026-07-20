@@ -21,6 +21,10 @@ SettingsData SettingsController::Snapshot() const {
     return *locked;
 }
 
+void SettingsController::SetPresentationChangedCallback(PresentationChangedCallback callback) {
+    m_presentationChanged = std::move(callback);
+}
+
 void SettingsController::SetGlobalAutoReconnect(bool enabled) {
     if (!m_settings) return;
 
@@ -66,6 +70,31 @@ void SettingsController::SetShowNotifications(bool enabled) {
         locked->ShowNotifications = enabled;
     }
     m_settings->Save(GetModuleHandleW(nullptr));
+}
+
+void SettingsController::SetLanguage(std::wstring language) {
+    if (!m_settings) return;
+    if (language.empty()) {
+        language = L"system";
+    }
+    {
+        auto locked = m_settings->LockExclusiveData();
+        if (locked->Language == language) return;
+        locked->Language = std::move(language);
+    }
+    m_settings->Save(GetModuleHandleW(nullptr));
+    NotifyPresentationChanged();
+}
+
+void SettingsController::SetPrivacyMode(bool enabled) {
+    if (!m_settings) return;
+    {
+        auto locked = m_settings->LockExclusiveData();
+        if (locked->PrivacyModeEnabled == enabled) return;
+        locked->PrivacyModeEnabled = enabled;
+    }
+    m_settings->Save(GetModuleHandleW(nullptr));
+    NotifyPresentationChanged();
 }
 
 bool SettingsController::SetSettingsWindowBounds(PersistedWindowBounds bounds) {
@@ -130,6 +159,102 @@ void SettingsController::SetDeviceAutoReconnect(std::wstring const& deviceId, bo
     m_settings->Save(GetModuleHandleW(nullptr));
 }
 
+bool SettingsController::SetDeviceAlias(std::wstring const& deviceId,
+                                        std::wstring alias,
+                                        std::wstring const& deviceName) {
+    if (!m_settings || deviceId.empty()) return false;
+
+    bool changed = false;
+    bool deviceExists = false;
+    {
+        auto locked = m_settings->LockExclusiveData();
+        for (auto& device : locked->Devices) {
+            if (device.Id == deviceId) {
+                deviceExists = true;
+                if (!deviceName.empty() && device.Name != deviceName) {
+                    device.Name = deviceName;
+                    changed = true;
+                }
+                if (device.Alias != alias) {
+                    device.Alias = std::move(alias);
+                    changed = true;
+                }
+                break;
+            }
+        }
+        if (!deviceExists && !alias.empty()) {
+            locked->Devices.push_back(DeviceSettings{.Id = deviceId,
+                                                     .Name = deviceName,
+                                                     .Alias = std::move(alias),
+                                                     .AutoReconnect = locked->GlobalAutoReconnect});
+            deviceExists = true;
+            changed = true;
+        }
+    }
+    if (changed) {
+        m_settings->Save(GetModuleHandleW(nullptr));
+        NotifyPresentationChanged();
+    }
+    return deviceExists;
+}
+
+void SettingsController::SetDefaultDeviceMode(DefaultDeviceMode mode) {
+    if (!m_settings) return;
+
+    bool changed = false;
+    {
+        auto locked = m_settings->LockExclusiveData();
+        if (locked->DefaultDevice != mode) {
+            locked->DefaultDevice = mode;
+            changed = true;
+        }
+        if (mode == DefaultDeviceMode::LastConnected && !locked->DefaultDeviceId.empty()) {
+            locked->DefaultDeviceId.clear();
+            changed = true;
+        }
+    }
+    if (changed) {
+        m_settings->Save(GetModuleHandleW(nullptr));
+        NotifyPresentationChanged();
+    }
+}
+
+void SettingsController::SetDefaultDeviceId(std::wstring const& deviceId) {
+    if (!m_settings) return;
+    if (deviceId.empty()) {
+        SetDefaultDeviceMode(DefaultDeviceMode::LastConnected);
+        return;
+    }
+
+    bool changed = false;
+    {
+        auto locked = m_settings->LockExclusiveData();
+        if (locked->DefaultDevice != DefaultDeviceMode::SpecificDevice) {
+            locked->DefaultDevice = DefaultDeviceMode::SpecificDevice;
+            changed = true;
+        }
+        if (locked->DefaultDeviceId != deviceId) {
+            locked->DefaultDeviceId = deviceId;
+            changed = true;
+        }
+    }
+    if (changed) {
+        m_settings->Save(GetModuleHandleW(nullptr));
+        NotifyPresentationChanged();
+    }
+}
+
+void SettingsController::ClearDefaultDevice() {
+    SetDefaultDeviceMode(DefaultDeviceMode::LastConnected);
+}
+
+std::size_t SettingsController::ConnectedDeviceCount() const {
+    if (auto manager = m_deviceManager.lock()) {
+        return manager->GetConnectedDevices().size();
+    }
+    return 0;
+}
+
 void SettingsController::ForgetDevice(std::wstring const& deviceId) {
     if (!m_settings) return;
     bool changed = false;
@@ -139,7 +264,12 @@ void SettingsController::ForgetDevice(std::wstring const& deviceId) {
         const auto devicesRemoved =
             std::erase_if(locked->Devices, [&](auto const& device) { return device.Id == deviceId; });
         const auto lastConnectedRemoved = std::erase(locked->LastConnectedIds, deviceId);
-        changed = devicesRemoved > 0 || lastConnectedRemoved > 0;
+        if (locked->DefaultDevice == DefaultDeviceMode::SpecificDevice && locked->DefaultDeviceId == deviceId) {
+            locked->DefaultDevice = DefaultDeviceMode::LastConnected;
+            locked->DefaultDeviceId.clear();
+            changed = true;
+        }
+        changed = changed || devicesRemoved > 0 || lastConnectedRemoved > 0;
         globalAutoReconnect = locked->GlobalAutoReconnect;
     }
     if (!changed) return;
@@ -148,4 +278,11 @@ void SettingsController::ForgetDevice(std::wstring const& deviceId) {
         manager->SetAutoReconnect(winrt::hstring(deviceId), globalAutoReconnect);
     }
     m_settings->Save(GetModuleHandleW(nullptr));
+    NotifyPresentationChanged();
+}
+
+void SettingsController::NotifyPresentationChanged() {
+    if (m_presentationChanged) {
+        m_presentationChanged();
+    }
 }

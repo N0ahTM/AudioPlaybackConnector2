@@ -9,7 +9,8 @@ struct DeviceManagerDiagnosticSnapshot {
     winrt::hstring Name;
     bool HasConnection = false;
     bool IsOpen = false;
-    bool AutoReconnect = false;
+    bool ReconnectOnConnectionLoss = false;
+    bool AcceptIncomingConnections = false;
     bool Disconnecting = false;
     bool Reconnecting = false;
     bool CancelledReconnect = false;

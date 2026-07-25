@@ -294,7 +294,9 @@ LRESULT CALLBACK SettingsWindow::SettingsWindowSubclassProc(
 void SettingsWindow::RootGrid_Loaded(IInspectable const&, RoutedEventArgs const&) {
     LocalizeSettingsText();
 
-    SetAutomationName(AutoReconnectToggle(), _("Settings_AutoReconnect"));
+    SetAutomationName(ConnectOnStartupToggle(), _("Settings_ConnectOnStartup"));
+    SetAutomationName(ReconnectOnConnectionLossToggle(), _("Settings_ReconnectOnConnectionLoss"));
+    SetAutomationName(AllowIncomingConnectionsToggle(), _("Settings_AllowIncomingConnections"));
     SetAutomationName(PrivacyModeToggle(), _("Settings_PrivacyMode"));
     SetAutomationName(StartWithWindowsToggle(), _("Settings_StartWithWindows"));
     SetAutomationName(ShowNotificationsToggle(), _("Settings_ShowNotifications"));
@@ -366,8 +368,12 @@ void SettingsWindow::LocalizeSettingsText() {
                             winrt::hstring(_("Settings_DefaultDevice_LastConnected")));
     apc::ui::SetButtonLabel(
         ClearDefaultDeviceButton(), ClearDefaultDeviceButtonText(), winrt::hstring(_("Settings_DefaultDevice_Clear")));
-    AutoReconnectLabel().Text(winrt::hstring(_("Settings_AutoReconnect")));
-    AutoReconnectDesc().Text(winrt::hstring(_("Settings_AutoReconnect_Desc")));
+    ConnectOnStartupLabel().Text(winrt::hstring(_("Settings_ConnectOnStartup")));
+    ConnectOnStartupDesc().Text(winrt::hstring(_("Settings_ConnectOnStartup_Desc")));
+    ReconnectOnConnectionLossLabel().Text(winrt::hstring(_("Settings_ReconnectOnConnectionLoss")));
+    ReconnectOnConnectionLossDesc().Text(winrt::hstring(_("Settings_ReconnectOnConnectionLoss_Desc")));
+    AllowIncomingConnectionsLabel().Text(winrt::hstring(_("Settings_AllowIncomingConnections")));
+    AllowIncomingConnectionsDesc().Text(winrt::hstring(_("Settings_AllowIncomingConnections_Desc")));
 
     LanguageLabel().Text(winrt::hstring(_("Settings_Language")));
     SetItemContent(LanguageSystemItem(), _("Settings_System"));
@@ -420,7 +426,9 @@ void SettingsWindow::LocalizeSettingsText() {
     apc::ui::SetButtonLabel(
         OpenAppInstallerButton(), OpenAppInstallerButtonText(), winrt::hstring(_("Settings_OpenAppInstaller")));
 
-    SetAutomationName(AutoReconnectToggle(), _("Settings_AutoReconnect"));
+    SetAutomationName(ConnectOnStartupToggle(), _("Settings_ConnectOnStartup"));
+    SetAutomationName(ReconnectOnConnectionLossToggle(), _("Settings_ReconnectOnConnectionLoss"));
+    SetAutomationName(AllowIncomingConnectionsToggle(), _("Settings_AllowIncomingConnections"));
     SetAutomationName(PrivacyModeToggle(), _("Settings_PrivacyMode"));
     SetAutomationName(StartWithWindowsToggle(), _("Settings_StartWithWindows"));
     SetAutomationName(ShowNotificationsToggle(), _("Settings_ShowNotifications"));
@@ -752,21 +760,44 @@ void SettingsWindow::InitializeSettingsContent() {
 
     {
         auto settings = controller->Snapshot();
-        AutoReconnectToggle().IsOn(settings.GlobalAutoReconnect);
+        ConnectOnStartupToggle().IsOn(settings.GlobalConnectOnStartup);
+        ReconnectOnConnectionLossToggle().IsOn(settings.GlobalReconnectOnConnectionLoss);
+        AllowIncomingConnectionsToggle().IsOn(settings.AllowIncomingConnections);
         PrivacyModeToggle().IsOn(settings.PrivacyModeEnabled);
         SelectLanguage(settings.Language);
     }
-    AutoReconnectToggle().OffContent(box_value(L""));
-    AutoReconnectToggle().OnContent(box_value(L""));
+    ConnectOnStartupToggle().OffContent(box_value(L""));
+    ConnectOnStartupToggle().OnContent(box_value(L""));
+    ReconnectOnConnectionLossToggle().OffContent(box_value(L""));
+    ReconnectOnConnectionLossToggle().OnContent(box_value(L""));
+    AllowIncomingConnectionsToggle().OffContent(box_value(L""));
+    AllowIncomingConnectionsToggle().OnContent(box_value(L""));
     PrivacyModeToggle().OffContent(box_value(L""));
     PrivacyModeToggle().OnContent(box_value(L""));
     auto weak = get_weak();
-    AutoReconnectToggle().Toggled([weak](auto const& s, auto) {
+    ConnectOnStartupToggle().Toggled([weak](auto const& s, auto) {
         if (auto self = weak.get()) {
             if (auto settingsController = self->m_settingsController) {
-                settingsController->SetGlobalAutoReconnect(s.template as<ToggleSwitch>().IsOn());
+                settingsController->SetGlobalConnectOnStartup(s.template as<ToggleSwitch>().IsOn());
             }
             self->RebuildDeviceList();
+        }
+    });
+
+    ReconnectOnConnectionLossToggle().Toggled([weak](auto const& s, auto) {
+        if (auto self = weak.get()) {
+            if (auto settingsController = self->m_settingsController) {
+                settingsController->SetGlobalReconnectOnConnectionLoss(s.template as<ToggleSwitch>().IsOn());
+            }
+            self->RebuildDeviceList();
+        }
+    });
+
+    AllowIncomingConnectionsToggle().Toggled([weak](auto const& s, auto) {
+        if (auto self = weak.get()) {
+            if (auto settingsController = self->m_settingsController) {
+                settingsController->SetAllowIncomingConnections(s.template as<ToggleSwitch>().IsOn());
+            }
         }
     });
 
@@ -1038,8 +1069,10 @@ std::wstring SettingsWindow::BuildDiagnosticsText() const {
             output << L"  " << _("Settings_Diagnostics_DeviceId") << L": " << _("Privacy_RedactedValue") << L"\n";
             output << L"  " << _("Settings_Diagnostics_Alias") << L": "
                    << (device.Alias.empty() ? _("Command_AliasNone") : _("Privacy_RedactedValue")) << L"\n";
-            output << L"  " << _("Settings_Diagnostics_AutoReconnect") << L": "
-                   << (device.AutoReconnect ? _("Settings_On") : _("Settings_Off")) << L"\n";
+            output << L"  " << _("Settings_Diagnostics_ConnectOnStartup") << L": "
+                   << (device.ConnectOnStartup ? _("Settings_On") : _("Settings_Off")) << L"\n";
+            output << L"  " << _("Settings_Diagnostics_ReconnectOnConnectionLoss") << L": "
+                   << (device.ReconnectOnConnectionLoss ? _("Settings_On") : _("Settings_Off")) << L"\n";
         }
     }
 
@@ -1252,7 +1285,8 @@ void SettingsWindow::RebuildDeviceList() {
     // Snapshot settings through the controller, then build UI without holding any settings lock.
     auto snapshot = controller->Snapshot();
     auto devices = SettingsViewModel::BuildDeviceItems(snapshot);
-    bool globalAutoReconnect = snapshot.GlobalAutoReconnect;
+    bool globalConnectOnStartup = snapshot.GlobalConnectOnStartup;
+    bool globalReconnectOnConnectionLoss = snapshot.GlobalReconnectOnConnectionLoss;
     ClearDefaultDeviceButton().IsEnabled(snapshot.DefaultDevice == DefaultDeviceMode::SpecificDevice);
     DefaultLastConnectedButton().IsEnabled(snapshot.DefaultDevice != DefaultDeviceMode::LastConnected);
 
@@ -1339,10 +1373,13 @@ void SettingsWindow::RebuildDeviceList() {
         nameRow.Height(GridLengthHelper::Auto());
         auto aliasRow = RowDefinition();
         aliasRow.Height(GridLengthHelper::Auto());
+        auto policyRow = RowDefinition();
+        policyRow.Height(GridLengthHelper::Auto());
         auto actionsRow = RowDefinition();
         actionsRow.Height(GridLengthHelper::Auto());
         item.RowDefinitions().Append(nameRow);
         item.RowDefinitions().Append(aliasRow);
+        item.RowDefinitions().Append(policyRow);
         item.RowDefinitions().Append(actionsRow);
 
         auto namePanel = StackPanel();
@@ -1359,8 +1396,6 @@ void SettingsWindow::RebuildDeviceList() {
         auto subtitle = TextBlock();
         if (dev.IsDefaultDevice) {
             subtitle.Text(winrt::hstring(_("Settings_DefaultDevice_Current")));
-        } else if (globalAutoReconnect) {
-            subtitle.Text(winrt::hstring(_("Device_AutoReconnect_Global")));
         } else {
             subtitle.Text(winrt::hstring(_("Settings_PairedDevice")));
         }
@@ -1385,7 +1420,7 @@ void SettingsWindow::RebuildDeviceList() {
         actionPanel.Orientation(Orientation::Horizontal);
         actionPanel.VerticalAlignment(VerticalAlignment::Center);
         actionPanel.Spacing(8);
-        Grid::SetRow(actionPanel, 2);
+        Grid::SetRow(actionPanel, 3);
 
         auto aliasBox = TextBox();
         aliasBox.HorizontalAlignment(HorizontalAlignment::Stretch);
@@ -1459,26 +1494,71 @@ void SettingsWindow::RebuildDeviceList() {
             }
         });
 
-        auto toggle = ToggleSwitch();
-        toggle.IsOn(globalAutoReconnect || dev.AutoReconnect);
-        toggle.IsEnabled(!globalAutoReconnect);
-        toggle.MinWidth(64);
-        toggle.VerticalAlignment(VerticalAlignment::Center);
-        toggle.OffContent(box_value(L""));
-        toggle.OnContent(box_value(L""));
-        SetAutomationName(toggle, _("Device_AutoReconnect"));
-        if (globalAutoReconnect) {
-            apc::ui::SetTooltipText(toggle, winrt::hstring(_("Device_AutoReconnect_Global")));
-        } else {
-            apc::ui::SetTooltipText(toggle, winrt::hstring(_("Device_AutoReconnect")));
-        }
-        toggle.Toggled([id = dev.Id, weak](auto const& s, auto) {
+        auto policyPanel = StackPanel();
+        policyPanel.Spacing(6);
+        Grid::SetRow(policyPanel, 2);
+
+        auto startupPolicy = Grid();
+        startupPolicy.ColumnSpacing(12);
+        auto startupLabelColumn = ColumnDefinition();
+        startupLabelColumn.Width(GridLengthHelper::FromValueAndType(1, GridUnitType::Star));
+        auto startupToggleColumn = ColumnDefinition();
+        startupToggleColumn.Width(GridLengthHelper::Auto());
+        startupPolicy.ColumnDefinitions().Append(startupLabelColumn);
+        startupPolicy.ColumnDefinitions().Append(startupToggleColumn);
+        auto startupLabel = TextBlock();
+        startupLabel.Text(winrt::hstring(_("Device_ConnectOnStartup")));
+        startupLabel.FontSize(12);
+        startupLabel.TextWrapping(TextWrapping::Wrap);
+        auto startupToggle = ToggleSwitch();
+        startupToggle.IsOn(globalConnectOnStartup || dev.ConnectOnStartup);
+        startupToggle.IsEnabled(!globalConnectOnStartup);
+        startupToggle.MinWidth(64);
+        startupToggle.OffContent(box_value(L""));
+        startupToggle.OnContent(box_value(L""));
+        SetAutomationName(startupToggle, _("Device_ConnectOnStartup"));
+        Grid::SetColumn(startupToggle, 1);
+        startupToggle.Toggled([id = dev.Id, weak](auto const& s, auto) {
             if (auto self = weak.get()) {
                 if (auto settingsController = self->m_settingsController) {
-                    settingsController->SetDeviceAutoReconnect(id, s.template as<ToggleSwitch>().IsOn());
+                    settingsController->SetDeviceConnectOnStartup(id, s.template as<ToggleSwitch>().IsOn());
                 }
             }
         });
+        startupPolicy.Children().Append(startupLabel);
+        startupPolicy.Children().Append(startupToggle);
+        policyPanel.Children().Append(startupPolicy);
+
+        auto reconnectPolicy = Grid();
+        reconnectPolicy.ColumnSpacing(12);
+        auto reconnectLabelColumn = ColumnDefinition();
+        reconnectLabelColumn.Width(GridLengthHelper::FromValueAndType(1, GridUnitType::Star));
+        auto reconnectToggleColumn = ColumnDefinition();
+        reconnectToggleColumn.Width(GridLengthHelper::Auto());
+        reconnectPolicy.ColumnDefinitions().Append(reconnectLabelColumn);
+        reconnectPolicy.ColumnDefinitions().Append(reconnectToggleColumn);
+        auto reconnectLabel = TextBlock();
+        reconnectLabel.Text(winrt::hstring(_("Device_ReconnectOnConnectionLoss")));
+        reconnectLabel.FontSize(12);
+        reconnectLabel.TextWrapping(TextWrapping::Wrap);
+        auto reconnectToggle = ToggleSwitch();
+        reconnectToggle.IsOn(globalReconnectOnConnectionLoss || dev.ReconnectOnConnectionLoss);
+        reconnectToggle.IsEnabled(!globalReconnectOnConnectionLoss);
+        reconnectToggle.MinWidth(64);
+        reconnectToggle.OffContent(box_value(L""));
+        reconnectToggle.OnContent(box_value(L""));
+        SetAutomationName(reconnectToggle, _("Device_ReconnectOnConnectionLoss"));
+        Grid::SetColumn(reconnectToggle, 1);
+        reconnectToggle.Toggled([id = dev.Id, weak](auto const& s, auto) {
+            if (auto self = weak.get()) {
+                if (auto settingsController = self->m_settingsController) {
+                    settingsController->SetDeviceReconnectOnConnectionLoss(id, s.template as<ToggleSwitch>().IsOn());
+                }
+            }
+        });
+        reconnectPolicy.Children().Append(reconnectLabel);
+        reconnectPolicy.Children().Append(reconnectToggle);
+        policyPanel.Children().Append(reconnectPolicy);
 
         apc::ui::IconButtonOptions forgetOptions;
         forgetOptions.Width = 36;
@@ -1500,9 +1580,9 @@ void SettingsWindow::RebuildDeviceList() {
 
         item.Children().Append(namePanel);
         item.Children().Append(aliasBox);
+        item.Children().Append(policyPanel);
         actionPanel.Children().Append(defaultBtn);
         actionPanel.Children().Append(clearAliasBtn);
-        actionPanel.Children().Append(toggle);
         actionPanel.Children().Append(forgetBtn);
         item.Children().Append(actionPanel);
         DevicesPanel().Children().Append(item);

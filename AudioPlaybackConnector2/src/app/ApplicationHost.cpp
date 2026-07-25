@@ -397,6 +397,10 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) {
         m_notificationService->ShowAppStarted();
     }
     TryAutoReconnect();
+    {
+        auto locked = m_settings->LockSharedData();
+        m_deviceManager->SetIncomingConnectionsEnabled(locked->AllowIncomingConnections);
+    }
     RefreshTrayVisualState(false, L"initialize-tray");
 
     gdiplusGuard.release();
@@ -492,12 +496,13 @@ void ApplicationHost::InitializeDeviceManager() {
     m_deviceManager = std::make_shared<DeviceManager>();
     m_settingsController = std::make_shared<SettingsController>(m_settings, m_deviceManager);
     auto weak = weak_from_this();
-    m_deviceManager->SetAutoReconnectPredicate([weak](auto id) {
+    m_deviceManager->SetReconnectOnConnectionLossPredicate([weak](auto id) {
         auto self = weak.lock();
         if (!self || self->m_exiting.load() || !self->m_settings) return false;
         auto locked = self->m_settings->LockSharedData();
-        if (locked->GlobalAutoReconnect) return true;
-        return std::ranges::any_of(locked->Devices, [&](const auto& d) { return d.Id == id && d.AutoReconnect; });
+        if (locked->GlobalReconnectOnConnectionLoss) return true;
+        return std::ranges::any_of(locked->Devices,
+                                   [&](const auto& d) { return d.Id == id && d.ReconnectOnConnectionLoss; });
     });
     DebugTrace(L"[App] DeviceManager initialized");
 }
@@ -1444,7 +1449,8 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
             DeviceSettings newDevice;
             newDevice.Id = std::wstring(id);
             newDevice.Name = std::wstring(rawDeviceName);
-            newDevice.AutoReconnect = locked->GlobalAutoReconnect;
+            newDevice.ConnectOnStartup = locked->GlobalConnectOnStartup;
+            newDevice.ReconnectOnConnectionLoss = locked->GlobalReconnectOnConnectionLoss;
             locked->Devices.push_back(std::move(newDevice));
             addedNew = true;
         } else {
@@ -1480,16 +1486,18 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
 
     try {
         auto locked = m_settings->LockSharedData();
-        bool autoReconnect = locked->GlobalAutoReconnect;
+        bool reconnectOnConnectionLoss = locked->GlobalReconnectOnConnectionLoss;
         auto it = std::ranges::find_if(locked->Devices, [&](const auto& d) { return d.Id == id; });
-        if (it != locked->Devices.end()) autoReconnect = autoReconnect || it->AutoReconnect;
-        m_deviceManager->SetAutoReconnect(id, autoReconnect);
+        if (it != locked->Devices.end()) {
+            reconnectOnConnectionLoss = reconnectOnConnectionLoss || it->ReconnectOnConnectionLoss;
+        }
+        m_deviceManager->SetReconnectOnConnectionLoss(id, reconnectOnConnectionLoss);
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[App] OnDeviceConnected auto-reconnect sync ERROR", ex);
+        util::DebugTraceException(L"[App] OnDeviceConnected reconnect-on-loss sync ERROR", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[App] OnDeviceConnected auto-reconnect sync ERROR", ex);
+        util::DebugTraceException(L"[App] OnDeviceConnected reconnect-on-loss sync ERROR", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[App] OnDeviceConnected auto-reconnect sync ERROR");
+        util::DebugTraceUnknownException(L"[App] OnDeviceConnected reconnect-on-loss sync ERROR");
     }
 
     try {

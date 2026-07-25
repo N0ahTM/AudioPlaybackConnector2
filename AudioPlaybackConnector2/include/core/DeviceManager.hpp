@@ -16,7 +16,7 @@
 /*//////// Device Manager ////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-enum class DeviceStatusKind { None, Connecting, Reconnecting, Connected, Error };
+enum class DeviceStatusKind { None, Ready, Connecting, Reconnecting, Connected, Error };
 
 class DeviceManager : public std::enable_shared_from_this<DeviceManager> {
 public:
@@ -34,7 +34,7 @@ public:
     using DeviceActivityEvent = Event<winrt::hstring>;
     using AutoReconnectTriggeredEvent = Event<winrt::hstring>;
     using AutoReconnectFailedEvent = Event<winrt::hstring>;
-    using AutoReconnectPredicate = std::function<bool(winrt::hstring const&)>;
+    using ReconnectOnConnectionLossPredicate = std::function<bool(winrt::hstring const&)>;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
@@ -47,7 +47,8 @@ public:
     void SuspendForPowerTransition() noexcept;
     void ResumeAfterPowerTransition();
     void CancelPendingReconnects();
-    void SetAutoReconnectPredicate(AutoReconnectPredicate pred);
+    void SetReconnectOnConnectionLossPredicate(ReconnectOnConnectionLossPredicate pred);
+    void SetIncomingConnectionsEnabled(bool enabled);
     winrt::Windows::Foundation::IAsyncAction ConnectAsync(winrt::hstring deviceId);
     void ConnectDetached(winrt::hstring deviceId);
     winrt::Windows::Foundation::IAsyncAction ReconnectAsync(winrt::hstring deviceId);
@@ -55,11 +56,12 @@ public:
     void Disconnect(winrt::hstring deviceId);
     void DisconnectAll();
     void ReconnectAll();
-    void SetAutoReconnect(winrt::hstring deviceId, bool enabled);
+    void SetReconnectOnConnectionLoss(winrt::hstring deviceId, bool enabled);
     winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
     RefreshDevicesAsync();
 
     std::vector<DeviceConnectionInfo> GetConnectedDevices() const;
+    std::vector<DeviceConnectionInfo> GetConnectionSessions() const;
     [[nodiscard]] bool IsDeviceConnected(winrt::hstring const& deviceId) const;
     [[nodiscard]] std::optional<std::wstring> GetConnectionDisplayName(winrt::hstring const& deviceId) const;
     bool HasConnections() const;
@@ -84,7 +86,12 @@ private:
     /*------------------------------------------------------------------------------------------------------------*/
 
     winrt::Windows::Foundation::IAsyncAction
-    ConnectInternalAsync(winrt::Windows::Devices::Enumeration::DeviceInformation device);
+    ConnectInternalAsync(winrt::Windows::Devices::Enumeration::DeviceInformation device, bool openImmediately);
+    winrt::Windows::Foundation::IAsyncAction
+    EnableIncomingConnectionAsync(winrt::Windows::Devices::Enumeration::DeviceInformation device);
+    void EnableIncomingConnectionDetached(winrt::Windows::Devices::Enumeration::DeviceInformation device);
+    void EnableIncomingConnectionsForDiscoveredDevicesDetached();
+    void ReenableIncomingConnectionDetached(winrt::hstring deviceId);
     enum class DisconnectReason { UserInitiated, UserInitiatedCascade, Unexpected, Cleanup };
 
     void ReportConnectionFailure(winrt::hstring const& deviceId, winrt::hstring const& message, bool cleanupConnection);
@@ -113,12 +120,13 @@ private:
     mutable wil::srwlock m_lock;
     DeviceSessionStore m_sessions;
     ReconnectController m_reconnectController;
-    AutoReconnectPredicate m_autoReconnectPred;
+    ReconnectOnConnectionLossPredicate m_reconnectOnConnectionLossPred;
     std::unordered_map<std::wstring, std::size_t> m_connectAttemptIds;
     std::unordered_map<std::wstring, std::chrono::steady_clock::time_point> m_userActionCascadeIds;
     std::unordered_set<std::wstring> m_cascadeRestoreIds;
     bool m_powerTransitionSuspended = false;
     bool m_shutdownForProcessExit = false;
+    bool m_incomingConnectionsEnabled = false;
 
     std::shared_ptr<DeviceDiscoveryService> m_discoveryService;
     std::size_t m_discoveryDeviceAddedToken = 0;

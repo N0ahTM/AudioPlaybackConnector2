@@ -14,7 +14,8 @@ struct SettingsDeviceViewModel {
     std::wstring Name;
     std::wstring Alias;
     std::wstring DisplayName;
-    bool AutoReconnect = false;
+    bool ConnectOnStartup = false;
+    bool ReconnectOnConnectionLoss = false;
     bool IsDefaultDevice = false;
 };
 

@@ -118,7 +118,9 @@ void Settings::Load(HINSTANCE hInst) {
         // JSON parsing don't block concurrent readers.
         auto json = winrt::Windows::Data::Json::JsonObject::Parse(winrt::to_hstring(buf));
 
-        bool globalAutoReconnect = false;
+        bool globalConnectOnStartup = false;
+        bool globalReconnectOnConnectionLoss = false;
+        bool allowIncomingConnections = false;
         bool startWithWindows = false;
         bool showNotifications = true;
         std::wstring language = L"system";
@@ -131,7 +133,11 @@ void Settings::Load(HINSTANCE hInst) {
         std::vector<DeviceSettings> devices;
         std::vector<std::wstring> lastConnectedIds;
 
-        globalAutoReconnect = GetOptionalBoolean(json, L"globalAutoReconnect", globalAutoReconnect);
+        const bool legacyGlobalAutoReconnect = GetOptionalBoolean(json, L"globalAutoReconnect", false);
+        globalConnectOnStartup = GetOptionalBoolean(json, L"globalConnectOnStartup", legacyGlobalAutoReconnect);
+        globalReconnectOnConnectionLoss =
+            GetOptionalBoolean(json, L"globalReconnectOnConnectionLoss", legacyGlobalAutoReconnect);
+        allowIncomingConnections = GetOptionalBoolean(json, L"allowIncomingConnections", false);
         startWithWindows = GetOptionalBoolean(json, L"startWithWindows", startWithWindows);
         showNotifications = GetOptionalBoolean(json, L"showNotifications", showNotifications);
         privacyModeEnabled = GetOptionalBoolean(json, L"privacyModeEnabled", privacyModeEnabled);
@@ -174,7 +180,10 @@ void Settings::Load(HINSTANCE hInst) {
                     if (ds.Id.empty()) continue;
                     ds.Name = GetOptionalString(obj, L"name", L"");
                     ds.Alias = GetOptionalString(obj, L"alias", L"");
-                    ds.AutoReconnect = GetOptionalBoolean(obj, L"autoReconnect", false);
+                    const bool legacyAutoReconnect = GetOptionalBoolean(obj, L"autoReconnect", false);
+                    ds.ConnectOnStartup = GetOptionalBoolean(obj, L"connectOnStartup", legacyAutoReconnect);
+                    ds.ReconnectOnConnectionLoss =
+                        GetOptionalBoolean(obj, L"reconnectOnConnectionLoss", legacyAutoReconnect);
                     devices.push_back(std::move(ds));
                 } catch (...) {
                     DebugTrace(L"[Settings] Load WARNING: skipping invalid device entry");
@@ -190,7 +199,9 @@ void Settings::Load(HINSTANCE hInst) {
         }
 
         auto guard = m_lock.lock_exclusive();
-        m_data.GlobalAutoReconnect = globalAutoReconnect;
+        m_data.GlobalConnectOnStartup = globalConnectOnStartup;
+        m_data.GlobalReconnectOnConnectionLoss = globalReconnectOnConnectionLoss;
+        m_data.AllowIncomingConnections = allowIncomingConnections;
         m_data.StartWithWindows = startWithWindows;
         m_data.ShowNotifications = showNotifications;
         m_data.Language = std::move(language);
@@ -223,8 +234,13 @@ void Settings::Save(HINSTANCE hInst) {
         }
 
         winrt::Windows::Data::Json::JsonObject json;
-        json.Insert(L"globalAutoReconnect",
-                    winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.GlobalAutoReconnect));
+        json.Insert(L"globalConnectOnStartup",
+                    winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.GlobalConnectOnStartup));
+        json.Insert(
+            L"globalReconnectOnConnectionLoss",
+            winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.GlobalReconnectOnConnectionLoss));
+        json.Insert(L"allowIncomingConnections",
+                    winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.AllowIncomingConnections));
         json.Insert(L"startWithWindows",
                     winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.StartWithWindows));
         json.Insert(L"showNotifications",
@@ -266,7 +282,10 @@ void Settings::Save(HINSTANCE hInst) {
             obj.Insert(L"id", winrt::Windows::Data::Json::JsonValue::CreateStringValue(d.Id));
             obj.Insert(L"name", winrt::Windows::Data::Json::JsonValue::CreateStringValue(d.Name));
             obj.Insert(L"alias", winrt::Windows::Data::Json::JsonValue::CreateStringValue(d.Alias));
-            obj.Insert(L"autoReconnect", winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(d.AutoReconnect));
+            obj.Insert(L"connectOnStartup",
+                       winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(d.ConnectOnStartup));
+            obj.Insert(L"reconnectOnConnectionLoss",
+                       winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(d.ReconnectOnConnectionLoss));
             devArr.Append(obj);
         }
         json.Insert(L"devices", devArr);

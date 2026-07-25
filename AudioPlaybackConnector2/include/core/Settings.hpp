@@ -8,7 +8,8 @@ struct DeviceSettings {
     std::wstring Id;
     std::wstring Name;
     std::wstring Alias;
-    bool AutoReconnect = false;
+    bool ConnectOnStartup = false;
+    bool ReconnectOnConnectionLoss = false;
 };
 
 enum class DefaultDeviceMode { LastConnected, SpecificDevice };
@@ -24,7 +25,9 @@ struct PersistedWindowBounds {
 };
 
 struct SettingsData {
-    bool GlobalAutoReconnect = false;
+    bool GlobalConnectOnStartup = false;
+    bool GlobalReconnectOnConnectionLoss = false;
+    bool AllowIncomingConnections = false;
     bool StartWithWindows = false;
     bool ShowNotifications = true;
     std::wstring Language = L"system";

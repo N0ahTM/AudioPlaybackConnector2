@@ -8,7 +8,7 @@ std::vector<std::wstring> AutoReconnectPlanner::BuildReconnectPlan(SettingsData 
     for (auto const& id : settings.LastConnectedIds) {
         auto device =
             std::ranges::find_if(settings.Devices, [&](auto const& knownDevice) { return knownDevice.Id == id; });
-        if (device != settings.Devices.end() && (settings.GlobalAutoReconnect || device->AutoReconnect)) {
+        if (device != settings.Devices.end() && (settings.GlobalConnectOnStartup || device->ConnectOnStartup)) {
             reconnectIds.push_back(id);
         }
     }

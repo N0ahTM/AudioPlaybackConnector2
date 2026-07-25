@@ -34,7 +34,8 @@ For commands and certificate-store options, see [Installation](docs/INSTALLATION
 - Connect, reconnect, and disconnect devices from the picker.
 - Double-click the tray icon to toggle the configured default device, or the most recently connected device.
 - Disconnect or reconnect all active devices from the tray menu.
-- Global and per-device auto-reconnect on startup.
+- Separate global and per-device policies for connecting on app startup and reconnecting after an unexpected connection loss.
+- Optional incoming-connection mode that keeps the Windows A2DP sink ready, so a paired phone can connect and disconnect from its Bluetooth menu.
 - Device aliases for cleaner picker, notification, and command-line labels.
 - Privacy mode to redact real device names and IDs in UI, CLI output, and diagnostics.
 - Support and diagnostics tools for Bluetooth settings, log folder access, and redacted bug-report details.

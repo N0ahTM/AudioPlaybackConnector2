@@ -20,7 +20,8 @@ std::vector<SettingsDeviceViewModel> SettingsViewModel::BuildDeviceItems(Setting
             .Name = device.Name,
             .Alias = device.Alias,
             .DisplayName = std::move(displayName),
-            .AutoReconnect = device.AutoReconnect,
+            .ConnectOnStartup = device.ConnectOnStartup,
+            .ReconnectOnConnectionLoss = device.ReconnectOnConnectionLoss,
             .IsDefaultDevice =
                 settings.DefaultDevice == DefaultDeviceMode::SpecificDevice && settings.DefaultDeviceId == device.Id,
         });

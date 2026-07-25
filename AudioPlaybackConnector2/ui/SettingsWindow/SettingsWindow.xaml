@@ -222,18 +222,58 @@
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
                                 <StackPanel MinWidth="0">
                                     <TextBlock
-                                        x:Name="AutoReconnectLabel"
+                                        x:Name="ConnectOnStartupLabel"
                                         Text=""
                                         TextWrapping="Wrap" />
                                     <TextBlock
-                                        x:Name="AutoReconnectDesc"
+                                        x:Name="ConnectOnStartupDesc"
                                         FontSize="12"
                                         Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
                                         Text=""
                                         TextWrapping="Wrap" />
                                 </StackPanel>
                                 <ToggleSwitch
-                                    x:Name="AutoReconnectToggle"
+                                    x:Name="ConnectOnStartupToggle"
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center"
+                                    MinWidth="64" />
+                            </Grid>
+
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                <StackPanel MinWidth="0">
+                                    <TextBlock
+                                        x:Name="ReconnectOnConnectionLossLabel"
+                                        Text=""
+                                        TextWrapping="Wrap" />
+                                    <TextBlock
+                                        x:Name="ReconnectOnConnectionLossDesc"
+                                        FontSize="12"
+                                        Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
+                                        Text=""
+                                        TextWrapping="Wrap" />
+                                </StackPanel>
+                                <ToggleSwitch
+                                    x:Name="ReconnectOnConnectionLossToggle"
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center"
+                                    MinWidth="64" />
+                            </Grid>
+
+                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                <StackPanel MinWidth="0">
+                                    <TextBlock
+                                        x:Name="AllowIncomingConnectionsLabel"
+                                        Text=""
+                                        TextWrapping="Wrap" />
+                                    <TextBlock
+                                        x:Name="AllowIncomingConnectionsDesc"
+                                        FontSize="12"
+                                        Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
+                                        Text=""
+                                        TextWrapping="Wrap" />
+                                </StackPanel>
+                                <ToggleSwitch
+                                    x:Name="AllowIncomingConnectionsToggle"
                                     Grid.Column="1"
                                     VerticalAlignment="Center"
                                     MinWidth="64" />

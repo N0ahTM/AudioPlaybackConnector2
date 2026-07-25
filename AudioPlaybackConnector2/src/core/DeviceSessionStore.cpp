@@ -97,11 +97,6 @@ std::vector<winrt::Windows::Media::Audio::AudioPlaybackConnection> DeviceSession
     return result;
 }
 
-std::size_t DeviceSessionStore::ConnectionCount() const {
-    auto guard = m_lock.lock_shared();
-    return m_connections.size();
-}
-
 std::optional<DeviceConnectionInfo> DeviceSessionStore::ExtractConnection(winrt::hstring const& deviceId) {
     auto guard = m_lock.lock_exclusive();
     auto iter = m_connections.find(DeviceKey(deviceId));
@@ -185,10 +180,16 @@ void DeviceSessionStore::AddZombie(winrt::Windows::Media::Audio::AudioPlaybackCo
     m_zombieConnections.push_back(std::move(connection));
 }
 
-void DeviceSessionStore::SetConnectionAutoReconnect(winrt::hstring const& deviceId, bool enabled) {
+void DeviceSessionStore::SetReconnectOnConnectionLoss(winrt::hstring const& deviceId, bool enabled) {
     auto guard = m_lock.lock_exclusive();
     auto iter = m_connections.find(DeviceKey(deviceId));
-    if (iter != m_connections.end()) iter->second.AutoReconnect = enabled;
+    if (iter != m_connections.end()) iter->second.ReconnectOnConnectionLoss = enabled;
+}
+
+void DeviceSessionStore::SetAcceptIncomingConnections(winrt::hstring const& deviceId, bool enabled) {
+    auto guard = m_lock.lock_exclusive();
+    auto iter = m_connections.find(DeviceKey(deviceId));
+    if (iter != m_connections.end()) iter->second.AcceptIncomingConnections = enabled;
 }
 
 void DeviceSessionStore::UpdateConnectionIsOpen(winrt::hstring const& deviceId, bool isOpen) {

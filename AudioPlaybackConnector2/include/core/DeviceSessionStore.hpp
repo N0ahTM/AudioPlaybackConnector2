@@ -16,7 +16,8 @@ struct DeviceConnectionInfo {
     std::wstring Name;
     winrt::Windows::Media::Audio::AudioPlaybackConnection Connection{nullptr};
     winrt::event_token StateChangedToken{};
-    bool AutoReconnect = false;
+    bool ReconnectOnConnectionLoss = false;
+    bool AcceptIncomingConnections = false;
     bool IsOpen = false;
 };
 
@@ -41,7 +42,6 @@ public:
     [[nodiscard]] bool IsReconnecting(winrt::hstring const& deviceId) const;
     [[nodiscard]] bool IsConnecting(winrt::hstring const& deviceId) const;
     [[nodiscard]] std::vector<winrt::Windows::Media::Audio::AudioPlaybackConnection> TakeZombieConnections();
-    [[nodiscard]] std::size_t ConnectionCount() const;
     [[nodiscard]] std::optional<DeviceConnectionInfo> ExtractConnection(winrt::hstring const& deviceId);
     [[nodiscard]] std::vector<std::pair<std::wstring, DeviceConnectionInfo>> ExtractAllConnections();
     [[nodiscard]] std::vector<std::pair<std::wstring, DeviceConnectionInfo>> GetConnectionsSnapshot() const;
@@ -51,7 +51,8 @@ public:
     /*------------------------------------------------------------------------------------------------------------*/
 
     void Clear();
-    void SetConnectionAutoReconnect(winrt::hstring const& deviceId, bool enabled);
+    void SetReconnectOnConnectionLoss(winrt::hstring const& deviceId, bool enabled);
+    void SetAcceptIncomingConnections(winrt::hstring const& deviceId, bool enabled);
     void UpdateConnectionIsOpen(winrt::hstring const& deviceId, bool isOpen);
     void InsertOrUpdateConnection(winrt::hstring const& deviceId, DeviceConnectionInfo info);
     void MarkDisconnecting(winrt::hstring const& deviceId);

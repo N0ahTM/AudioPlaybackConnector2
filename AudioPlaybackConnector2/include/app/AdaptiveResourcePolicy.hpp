@@ -20,6 +20,7 @@ struct AdaptiveResourcePolicyConfig {
 
 struct AdaptiveResourcePolicyInput {
     bool MemoryPressure = false;
+    bool PreloadAllowed = false;
     bool FullscreenOrPresentation = false;
     bool EnergySaver = false;
     bool UiVisible = false;
@@ -54,15 +55,15 @@ public:
 private:
     void Initialize(TimePoint now, bool pressureActive) noexcept;
     void ResetTemporalStateAfterClockRollback(TimePoint now, bool pressureActive) noexcept;
-    void SetBackgroundResidency(ResidencyPolicy residency, TimePoint now) noexcept;
+    void SetBackgroundResidency(ResidencyPolicy residency) noexcept;
     void UpdateBackgroundResidency(AdaptiveResourcePolicyInput const& input, TimePoint now) noexcept;
 
     AdaptiveResourcePolicyConfig m_config;
     ResidencyPolicy m_backgroundResidency = ResidencyPolicy::Warm;
     ResidencyPolicy m_effectiveResidency = ResidencyPolicy::Warm;
-    TimePoint m_backgroundResidencySince{};
     std::optional<TimePoint> m_pressureSince;
     std::optional<TimePoint> m_healthySince;
+    std::optional<TimePoint> m_preloadAllowedSince;
     std::optional<TimePoint> m_interactionUntil;
     std::optional<TimePoint> m_lastEvaluation;
 };

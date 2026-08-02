@@ -30,7 +30,7 @@ AdaptiveResourcePolicy::TimePoint At(std::chrono::seconds elapsed) {
 
 void TestWarmupAndActions() {
     AdaptiveResourcePolicy policy(TestConfig());
-    AdaptiveResourcePolicyInput input;
+    AdaptiveResourcePolicyInput input{.PreloadAllowed = true};
 
     auto initial = policy.Evaluate(input, At(0s));
     Check(initial.Residency == ResidencyPolicy::Warm, "startup must begin warm without preloading heavy UI");
@@ -53,7 +53,7 @@ void TestWarmupAndActions() {
 
 void TestImmediateMemoryPressureAndStagedRecovery() {
     AdaptiveResourcePolicy policy(TestConfig(), ResidencyPolicy::Hot);
-    AdaptiveResourcePolicyInput input{.UiResourcesLoaded = true};
+    AdaptiveResourcePolicyInput input{.PreloadAllowed = true, .UiResourcesLoaded = true};
     static_cast<void>(policy.Evaluate(input, At(0s)));
 
     input.MemoryPressure = true;
@@ -80,7 +80,7 @@ void TestImmediateMemoryPressureAndStagedRecovery() {
 
 void TestBackgroundPressureGraceAndHysteresis() {
     AdaptiveResourcePolicy policy(TestConfig(), ResidencyPolicy::Hot);
-    AdaptiveResourcePolicyInput input{.UiResourcesLoaded = true};
+    AdaptiveResourcePolicyInput input{.PreloadAllowed = true, .UiResourcesLoaded = true};
     static_cast<void>(policy.Evaluate(input, At(0s)));
 
     input.FullscreenOrPresentation = true;
@@ -92,7 +92,7 @@ void TestBackgroundPressureGraceAndHysteresis() {
           "sustained fullscreen pressure must transition to cold");
 
     AdaptiveResourcePolicy transientPolicy(TestConfig(), ResidencyPolicy::Warm);
-    AdaptiveResourcePolicyInput transientInput;
+    AdaptiveResourcePolicyInput transientInput{.PreloadAllowed = true};
     static_cast<void>(transientPolicy.Evaluate(transientInput, At(0s)));
     transientInput.EnergySaver = true;
     static_cast<void>(transientPolicy.Evaluate(transientInput, At(15s)));
@@ -103,6 +103,60 @@ void TestBackgroundPressureGraceAndHysteresis() {
           "ending transient pressure must restart the hot stability window");
     Check(transientPolicy.Evaluate(transientInput, At(38s)).Residency == ResidencyPolicy::Hot,
           "warm state may promote after a complete post-pressure window");
+}
+
+void TestNeutralMemoryMaintainsButNeverCreatesHotState() {
+    AdaptiveResourcePolicy hotPolicy(TestConfig(), ResidencyPolicy::Hot);
+    AdaptiveResourcePolicyInput loadedHotInput{.UiResourcesLoaded = true};
+
+    auto maintained = hotPolicy.Evaluate(loadedHotInput, At(0s));
+    Check(maintained.Residency == ResidencyPolicy::Hot,
+          "neutral memory state must retain already loaded hot resources");
+    Check(maintained.Action == AdaptiveResourceAction::None,
+          "neutral memory state must not disturb already loaded hot resources");
+    Check(hotPolicy.Evaluate(loadedHotInput, At(60s)).Residency == ResidencyPolicy::Hot,
+          "neutral memory state must not expire an existing hot residency");
+
+    AdaptiveResourcePolicy warmPolicy(TestConfig());
+    AdaptiveResourcePolicyInput neutralInput;
+    static_cast<void>(warmPolicy.Evaluate(neutralInput, At(0s)));
+    auto stillWarm = warmPolicy.Evaluate(neutralInput, At(60s));
+    Check(stillWarm.Residency == ResidencyPolicy::Warm,
+          "neutral memory state must never promote a warm background to hot");
+    Check(stillWarm.Action == AdaptiveResourceAction::None,
+          "neutral memory state must never request speculative preloading");
+
+    AdaptiveResourcePolicy missingHotPolicy(TestConfig(), ResidencyPolicy::Hot);
+    auto missingHot = missingHotPolicy.Evaluate(neutralInput, At(0s));
+    Check(missingHot.BackgroundResidency == ResidencyPolicy::Warm,
+          "neutral memory state must demote a hot intent whose resources are absent");
+    Check(missingHot.Action == AdaptiveResourceAction::None,
+          "neutral memory state must not recreate absent hot resources");
+}
+
+void TestPreloadPermissionMustRemainStableForFullPromotionDelay() {
+    AdaptiveResourcePolicy policy(TestConfig());
+    AdaptiveResourcePolicyInput input{.PreloadAllowed = true};
+
+    static_cast<void>(policy.Evaluate(input, At(0s)));
+    Check(policy.Evaluate(input, At(19s)).Residency == ResidencyPolicy::Warm,
+          "preload permission must not promote before the full hot delay");
+
+    input.PreloadAllowed = false;
+    auto neutral = policy.Evaluate(input, At(20s));
+    Check(neutral.Residency == ResidencyPolicy::Warm, "losing preload permission must cancel a pending hot promotion");
+    Check(neutral.Action == AdaptiveResourceAction::None,
+          "losing preload permission must not request speculative resources");
+
+    input.PreloadAllowed = true;
+    static_cast<void>(policy.Evaluate(input, At(21s)));
+    Check(policy.Evaluate(input, At(40s)).Residency == ResidencyPolicy::Warm,
+          "renewed preload permission must restart the complete stability window");
+    auto restabilized = policy.Evaluate(input, At(41s));
+    Check(restabilized.Residency == ResidencyPolicy::Hot,
+          "continuous high-memory permission may promote after complete restabilization");
+    Check(restabilized.Action == AdaptiveResourceAction::PreloadUi,
+          "completed high-memory restabilization must request preloading");
 }
 
 void TestVisibleUiPinsAColdBackgroundDecision() {
@@ -153,7 +207,7 @@ void TestInteractionTemporarilyOverridesCold() {
 
 void TestClockRollbackRestartsStabilityWindows() {
     AdaptiveResourcePolicy policy(TestConfig());
-    AdaptiveResourcePolicyInput input;
+    AdaptiveResourcePolicyInput input{.PreloadAllowed = true};
     static_cast<void>(policy.Evaluate(input, At(100s)));
     static_cast<void>(policy.Evaluate(input, At(115s)));
 
@@ -173,7 +227,7 @@ void TestNegativeDurationsAreClamped() {
         .InteractionHotHold = -1ms,
     };
     AdaptiveResourcePolicy policy(config, ResidencyPolicy::Cold);
-    AdaptiveResourcePolicyInput input;
+    AdaptiveResourcePolicyInput input{.PreloadAllowed = true};
     Check(policy.Evaluate(input, At(0s)).Residency == ResidencyPolicy::Warm,
           "negative cold recovery delay must be clamped to zero");
     Check(policy.Evaluate(input, At(0s)).Residency == ResidencyPolicy::Hot,
@@ -193,6 +247,8 @@ int RunAdaptiveResourcePolicyTests() {
     TestWarmupAndActions();
     TestImmediateMemoryPressureAndStagedRecovery();
     TestBackgroundPressureGraceAndHysteresis();
+    TestNeutralMemoryMaintainsButNeverCreatesHotState();
+    TestPreloadPermissionMustRemainStableForFullPromotionDelay();
     TestVisibleUiPinsAColdBackgroundDecision();
     TestInteractionTemporarilyOverridesCold();
     TestClockRollbackRestartsStabilityWindows();

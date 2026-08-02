@@ -69,7 +69,9 @@ AdaptiveResourcePolicyDecision AdaptiveResourcePolicy::Evaluate(AdaptiveResource
 
     AdaptiveResourceAction action = AdaptiveResourceAction::None;
     if (effectiveResidency == ResidencyPolicy::Hot && !input.UiResourcesLoaded) {
-        action = AdaptiveResourceAction::PreloadUi;
+        if (foregroundDemand || (input.PreloadAllowed && !pressureActive)) {
+            action = AdaptiveResourceAction::PreloadUi;
+        }
     } else if (effectiveResidency != ResidencyPolicy::Hot && input.UiResourcesLoaded) {
         action = AdaptiveResourceAction::ReleaseUi;
     }
@@ -95,7 +97,6 @@ ResidencyPolicy AdaptiveResourcePolicy::BackgroundResidency() const noexcept {
 /*------------------------------------------------------------------------------------------------------------*/
 
 void AdaptiveResourcePolicy::Initialize(TimePoint now, bool pressureActive) noexcept {
-    m_backgroundResidencySince = now;
     if (pressureActive) {
         m_pressureSince = now;
     } else {
@@ -104,9 +105,9 @@ void AdaptiveResourcePolicy::Initialize(TimePoint now, bool pressureActive) noex
 }
 
 void AdaptiveResourcePolicy::ResetTemporalStateAfterClockRollback(TimePoint now, bool pressureActive) noexcept {
-    m_backgroundResidencySince = now;
     m_pressureSince.reset();
     m_healthySince.reset();
+    m_preloadAllowedSince.reset();
     m_interactionUntil.reset();
     if (pressureActive) {
         m_pressureSince = now;
@@ -115,10 +116,10 @@ void AdaptiveResourcePolicy::ResetTemporalStateAfterClockRollback(TimePoint now,
     }
 }
 
-void AdaptiveResourcePolicy::SetBackgroundResidency(ResidencyPolicy residency, TimePoint now) noexcept {
+void AdaptiveResourcePolicy::SetBackgroundResidency(ResidencyPolicy residency) noexcept {
     if (m_backgroundResidency == residency) return;
     m_backgroundResidency = residency;
-    m_backgroundResidencySince = now;
+    m_preloadAllowedSince.reset();
 }
 
 void AdaptiveResourcePolicy::UpdateBackgroundResidency(AdaptiveResourcePolicyInput const& input,
@@ -126,12 +127,13 @@ void AdaptiveResourcePolicy::UpdateBackgroundResidency(AdaptiveResourcePolicyInp
     const bool pressureActive = input.MemoryPressure || input.FullscreenOrPresentation || input.EnergySaver;
     if (pressureActive) {
         m_healthySince.reset();
+        m_preloadAllowedSince.reset();
         if (!m_pressureSince) {
             m_pressureSince = now;
         }
 
         if (input.MemoryPressure || ElapsedAtLeast(now, *m_pressureSince, m_config.BackgroundPressureToColdDelay)) {
-            SetBackgroundResidency(ResidencyPolicy::Cold, now);
+            SetBackgroundResidency(ResidencyPolicy::Cold);
         }
         return;
     }
@@ -139,22 +141,37 @@ void AdaptiveResourcePolicy::UpdateBackgroundResidency(AdaptiveResourcePolicyInp
     if (m_pressureSince) {
         m_pressureSince.reset();
         m_healthySince = now;
-        if (m_backgroundResidency != ResidencyPolicy::Cold) {
-            m_backgroundResidencySince = now;
-        }
+        m_preloadAllowedSince.reset();
     } else if (!m_healthySince) {
         m_healthySince = now;
     }
 
     if (m_backgroundResidency == ResidencyPolicy::Cold) {
         if (ElapsedAtLeast(now, *m_healthySince, m_config.ColdToWarmDelay)) {
-            SetBackgroundResidency(ResidencyPolicy::Warm, now);
+            SetBackgroundResidency(ResidencyPolicy::Warm);
+            if (input.PreloadAllowed) {
+                m_preloadAllowedSince = now;
+            }
         }
         return;
     }
 
-    if (m_backgroundResidency == ResidencyPolicy::Warm &&
-        ElapsedAtLeast(now, m_backgroundResidencySince, m_config.WarmToHotDelay)) {
-        SetBackgroundResidency(ResidencyPolicy::Hot, now);
+    if (m_backgroundResidency == ResidencyPolicy::Hot) {
+        if (!input.PreloadAllowed && !input.UiResourcesLoaded) {
+            SetBackgroundResidency(ResidencyPolicy::Warm);
+        }
+        return;
+    }
+
+    if (!input.PreloadAllowed) {
+        m_preloadAllowedSince.reset();
+        return;
+    }
+
+    if (!m_preloadAllowedSince) {
+        m_preloadAllowedSince = now;
+    }
+    if (ElapsedAtLeast(now, *m_preloadAllowedSince, m_config.WarmToHotDelay)) {
+        SetBackgroundResidency(ResidencyPolicy::Hot);
     }
 }

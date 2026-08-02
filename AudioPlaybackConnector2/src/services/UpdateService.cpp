@@ -30,7 +30,9 @@ ParsedVersion ParseVersion(std::wstring_view value) {
 
     size_t index = 0;
     size_t start = 0;
-    while (start <= value.size() && index < version.Parts.size()) {
+    while (start <= value.size()) {
+        if (index == version.Parts.size()) return {};
+
         const auto separator = value.find(L'.', start);
         const auto end = separator == std::wstring_view::npos ? value.size() : separator;
         const auto part = value.substr(start, end - start);
@@ -39,7 +41,9 @@ ParsedVersion ParseVersion(std::wstring_view value) {
         uint64_t parsed = 0;
         for (auto ch : part) {
             if (ch < L'0' || ch > L'9') return {};
-            parsed = (parsed * 10) + static_cast<uint64_t>(ch - L'0');
+            const auto digit = static_cast<uint64_t>(ch - L'0');
+            if (parsed > (std::numeric_limits<uint64_t>::max() - digit) / 10) return {};
+            parsed = (parsed * 10) + digit;
         }
         version.Parts[index++] = parsed;
 
@@ -218,10 +222,9 @@ auto UpdateCheckTask::promise_type::final_suspend() noexcept {
     struct FinalAwaiter {
         bool await_ready() noexcept { return false; }
 
-        void await_suspend(UpdateCheckTask::Handle handle) noexcept {
-            if (auto continuation = handle.promise().Continuation) {
-                continuation.resume();
-            }
+        std::coroutine_handle<> await_suspend(UpdateCheckTask::Handle handle) noexcept {
+            auto continuation = handle.promise().Continuation;
+            return continuation ? continuation : std::noop_coroutine();
         }
 
         void await_resume() noexcept {}
@@ -230,9 +233,9 @@ auto UpdateCheckTask::promise_type::final_suspend() noexcept {
     return FinalAwaiter{};
 }
 
-void UpdateCheckTask::await_suspend(std::coroutine_handle<> continuation) noexcept {
+UpdateCheckTask::Handle UpdateCheckTask::await_suspend(std::coroutine_handle<> continuation) noexcept {
     m_handle.promise().Continuation = continuation;
-    m_handle.resume();
+    return m_handle;
 }
 
 UpdateCheckResult UpdateCheckTask::await_resume() {

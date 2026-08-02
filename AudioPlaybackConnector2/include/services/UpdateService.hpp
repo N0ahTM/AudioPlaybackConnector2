@@ -51,7 +51,7 @@ public:
     }
 
     bool await_ready() const noexcept { return false; }
-    void await_suspend(std::coroutine_handle<> continuation) noexcept;
+    Handle await_suspend(std::coroutine_handle<> continuation) noexcept;
     UpdateCheckResult await_resume();
 
 private:

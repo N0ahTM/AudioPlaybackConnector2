@@ -86,10 +86,13 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="src\AdaptiveResourcePolicyTests.cpp" />
     <ClCompile Include="src\ReconnectControllerTests.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveResourcePolicy.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\ReconnectController.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveResourcePolicy.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\ReconnectController.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\ToastXmlSanitizer.hpp" />
   </ItemGroup>

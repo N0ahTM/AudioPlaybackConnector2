@@ -258,6 +258,8 @@ void TestToastXmlSanitization() {
 
 } // namespace
 
+int RunAdaptiveResourcePolicyTests();
+
 int main() {
     TestFullBackoffSequence();
     TestSuccessAndStaleTokens();
@@ -267,6 +269,7 @@ int main() {
     TestCommandProtocolTimeoutAndCancellation();
     TestCommandProtocolRejectsInvalidHeader();
     TestToastXmlSanitization();
+    g_failures += RunAdaptiveResourcePolicyTests();
 
     if (g_failures != 0) {
         std::cerr << g_failures << " core test(s) failed\n";

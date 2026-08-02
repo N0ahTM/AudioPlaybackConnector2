@@ -127,6 +127,7 @@
   <ItemGroup>
     <ClInclude Include="include\pch.h" />
     <ClInclude Include="include\app\ApplicationHost.hpp" />
+    <ClInclude Include="include\app\AdaptiveResourcePolicy.hpp" />
     <ClInclude Include="include\app\AutoReconnectPlanner.hpp" />
     <ClInclude Include="include\app\DeviceEventRouter.hpp" />
     <ClInclude Include="include\app\PowerTransitionCoordinator.hpp" />
@@ -186,6 +187,9 @@
       <PrecompiledHeader>Create</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="src\app\ApplicationHost.cpp" />
+    <ClCompile Include="src\app\AdaptiveResourcePolicy.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="src\app\AutoReconnectPlanner.cpp" />
     <ClCompile Include="src\app\DeviceEventRouter.cpp" />
     <ClCompile Include="src\app\PowerTransitionCoordinator.cpp" />

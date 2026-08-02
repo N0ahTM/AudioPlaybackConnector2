@@ -14,6 +14,8 @@ struct DumpState {
     MINIDUMP_MEMORY_LIST* memory{};
 };
 
+static DumpState const* g_dumpState = nullptr;
+
 static bool ReadDumpMemory(DumpState const& dump, DWORD64 address, void* buffer, DWORD size) {
     auto* out = static_cast<std::byte*>(buffer);
     if (dump.memory64 != nullptr) {
@@ -43,10 +45,8 @@ static bool ReadDumpMemory(DumpState const& dump, DWORD64 address, void* buffer,
     return false;
 }
 
-static BOOL CALLBACK
-ReadMemoryRoutine(HANDLE process, DWORD64 baseAddress, PVOID buffer, DWORD size, LPDWORD bytesRead) {
-    auto const dump = reinterpret_cast<DumpState const*>(process);
-    if (ReadDumpMemory(*dump, baseAddress, buffer, size)) {
+static BOOL CALLBACK ReadMemoryRoutine(HANDLE, DWORD64 baseAddress, PVOID buffer, DWORD size, LPDWORD bytesRead) {
+    if (g_dumpState != nullptr && ReadDumpMemory(*g_dumpState, baseAddress, buffer, size)) {
         *bytesRead = size;
         return TRUE;
     }
@@ -123,6 +123,7 @@ int wmain(int argc, wchar_t** argv) {
     if (MiniDumpReadDumpStream(base, MemoryListStream, &directory, &stream, &streamSize)) {
         dump.memory = static_cast<MINIDUMP_MEMORY_LIST*>(stream);
     }
+    g_dumpState = &dump;
 
     SymSetOptions(SYMOPT_LOAD_LINES | SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
     if (!SymInitializeW(GetCurrentProcess(), symbolPath, FALSE)) {
@@ -170,27 +171,29 @@ int wmain(int argc, wchar_t** argv) {
                     static_cast<unsigned long long>(exception->ExceptionRecord.ExceptionInformation[i]));
     }
 
-    auto* context = reinterpret_cast<CONTEXT*>(static_cast<std::byte*>(base) + exception->ThreadContext.Rva);
+    auto const* dumpContext =
+        reinterpret_cast<CONTEXT const*>(static_cast<std::byte*>(base) + exception->ThreadContext.Rva);
+    auto context = *dumpContext;
     std::printf("Context RIP=0x%llx RSP=0x%llx RBP=0x%llx\n\n",
-                static_cast<unsigned long long>(context->Rip),
-                static_cast<unsigned long long>(context->Rsp),
-                static_cast<unsigned long long>(context->Rbp));
+                static_cast<unsigned long long>(context.Rip),
+                static_cast<unsigned long long>(context.Rsp),
+                static_cast<unsigned long long>(context.Rbp));
 
     STACKFRAME64 frame{};
-    frame.AddrPC.Offset = context->Rip;
+    frame.AddrPC.Offset = context.Rip;
     frame.AddrPC.Mode = AddrModeFlat;
-    frame.AddrFrame.Offset = context->Rbp;
+    frame.AddrFrame.Offset = context.Rbp;
     frame.AddrFrame.Mode = AddrModeFlat;
-    frame.AddrStack.Offset = context->Rsp;
+    frame.AddrStack.Offset = context.Rsp;
     frame.AddrStack.Mode = AddrModeFlat;
 
     auto machine = static_cast<DWORD>(IMAGE_FILE_MACHINE_AMD64);
     for (int frameIndex = 0; frameIndex < 80; ++frameIndex) {
         if (!StackWalk64(machine,
-                         reinterpret_cast<HANDLE>(&dump),
+                         GetCurrentProcess(),
                          nullptr,
                          &frame,
-                         context,
+                         &context,
                          ReadMemoryRoutine,
                          SymFunctionTableAccess64,
                          SymGetModuleBase64,

@@ -129,6 +129,21 @@ jobs:
       shell: pwsh
       run: ./scripts/release/locate-msix.ps1 -Version '${{ steps.version.outputs.VERSION }}' -Configuration Release -Architecture x64
 
+    - name: Verify built MSIX metadata and payload
+      id: package
+      shell: pwsh
+      run: >
+        ./scripts/release/verify-msix-package.ps1
+        -MsixPath '${{ steps.msix.outputs.PATH }}'
+        -ExpectedPackageVersion '${{ steps.version.outputs.VERSION }}'
+        -ExpectedProcessorArchitecture x64
+        -ExpectedName N0ahTM.AudioPlaybackConnector2
+        -ExpectedPublisher 'CN=AudioPlaybackConnector2'
+        -RequiredEntries AudioPlaybackConnector2.exe,AudioPlaybackConnector2.Control.exe
+        -UniqueEntries AudioPlaybackConnector2.exe,AudioPlaybackConnector2.Control.exe
+        -RequireSignature
+        -WriteGitHubOutput
+
     - name: Collect dependencies
       id: deps
       shell: pwsh
@@ -163,7 +178,9 @@ jobs:
         $params = @{
           MsixUrl = $msixUrl
           AppInstallerUrl = $env:APPINSTALLER_URL
+          MsixPath = '${{ steps.msix.outputs.PATH }}'
           OutputPath = $outputPath
+          ExpectedPackageVersion = '${{ steps.version.outputs.VERSION }}'
           ProcessorArchitecture = 'x64'
         }
         if ($depsDir -and (Test-Path $depsDir)) {
@@ -177,8 +194,6 @@ jobs:
       id: report
       shell: pwsh
       run: |
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-
         $staging = Join-Path $env:RUNNER_TEMP 'release-dry-run'
         $depsTarget = Join-Path $staging 'dependencies'
         New-Item -ItemType Directory -Path $staging -Force | Out-Null
@@ -201,23 +216,12 @@ jobs:
         }
 
         $manifestJson = Join-Path $staging 'msix-manifest.json'
-        $zip = [System.IO.Compression.ZipFile]::OpenRead('${{ steps.msix.outputs.PATH }}')
-        try {
-          $entry = $zip.GetEntry('AppxManifest.xml')
-          $reader = [System.IO.StreamReader]::new($entry.Open())
-          try {
-            [xml]$manifest = $reader.ReadToEnd()
-            [pscustomobject]@{
-              Name = [string]$manifest.Package.Identity.Name
-              Publisher = [string]$manifest.Package.Identity.Publisher
-              Version = [string]$manifest.Package.Identity.Version
-            } | ConvertTo-Json | Set-Content -Path $manifestJson -Encoding utf8
-          } finally {
-            $reader.Dispose()
-          }
-        } finally {
-          $zip.Dispose()
-        }
+        [pscustomobject]@{
+          Name = '${{ steps.package.outputs.NAME }}'
+          Publisher = '${{ steps.package.outputs.PUBLISHER }}'
+          Version = '${{ steps.package.outputs.VERSION }}'
+          ProcessorArchitecture = '${{ steps.package.outputs.ARCHITECTURE }}'
+        } | ConvertTo-Json | Set-Content -Path $manifestJson -Encoding utf8
 
         $sizes = Get-ChildItem -Path $staging -Recurse -File |
           Sort-Object FullName |

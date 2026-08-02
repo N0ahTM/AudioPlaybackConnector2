@@ -12,6 +12,12 @@ $quadParts = $Version.Split(".")
 if ($quadParts.Count -ne 4 -or ($quadParts | Where-Object { $_ -notmatch "^\d+$" })) {
     throw "Version must be a four-part package version, for example 0.5.0.0."
 }
+foreach ($part in $quadParts) {
+    [uint64]$numericPart = 0
+    if (-not [uint64]::TryParse($part, [ref]$numericPart) -or $numericPart -gt [uint16]::MaxValue) {
+        throw "Every package version component must be between 0 and 65535."
+    }
+}
 
 $rcVersion = $Version -replace "\.", ","
 $utf8NoBom = [System.Text.UTF8Encoding]::new($false)

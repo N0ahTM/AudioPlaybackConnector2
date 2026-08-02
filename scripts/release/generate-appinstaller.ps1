@@ -5,10 +5,13 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$AppInstallerUrl,
 
-    [string]$ManifestPath = "AudioPlaybackConnector2 (Package)/Package.appxmanifest",
+    [Parameter(Mandatory = $true)]
+    [string]$MsixPath,
+
     [string]$PackageProjectPath = "AudioPlaybackConnector2 (Package)/AudioPlaybackConnector2 (Package).wapproj",
     [string]$OutputPath = (Join-Path ([System.IO.Path]::GetTempPath()) "AudioPlaybackConnector2.appinstaller"),
-    [string]$ProcessorArchitecture = "x64",
+    [string]$ExpectedPackageVersion = "",
+    [string]$ProcessorArchitecture = "",
 
     [string]$DependenciesDirectory = "",
     [string]$DependencyBaseUrl = ""
@@ -65,8 +68,14 @@ function Get-PackageMetadata {
     }
 }
 
-[xml]$manifest = [System.IO.File]::ReadAllText($ManifestPath)
-$identity = $manifest.Package.Identity
+$metadataParams = @{ MsixPath = $MsixPath }
+if (-not [string]::IsNullOrWhiteSpace($ExpectedPackageVersion)) {
+    $metadataParams["ExpectedPackageVersion"] = $ExpectedPackageVersion
+}
+if (-not [string]::IsNullOrWhiteSpace($ProcessorArchitecture)) {
+    $metadataParams["ExpectedProcessorArchitecture"] = $ProcessorArchitecture
+}
+$identity = & (Join-Path $PSScriptRoot "verify-msix-package.ps1") @metadataParams
 $hoursBetweenUpdateChecks = Get-HoursBetweenUpdateChecks -Path $PackageProjectPath
 
 $outputDirectory = Split-Path -Parent $OutputPath
@@ -90,7 +99,7 @@ try {
     $writer.WriteAttributeString("Name", $identity.Name)
     $writer.WriteAttributeString("Publisher", $identity.Publisher)
     $writer.WriteAttributeString("Version", $identity.Version)
-    $writer.WriteAttributeString("ProcessorArchitecture", $ProcessorArchitecture)
+    $writer.WriteAttributeString("ProcessorArchitecture", $identity.ProcessorArchitecture)
     $writer.WriteAttributeString("Uri", $MsixUrl)
     $writer.WriteEndElement()
 

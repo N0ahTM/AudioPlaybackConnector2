@@ -53,7 +53,9 @@ try {
     $params = @{
         MsixUrl = $msixUrl
         AppInstallerUrl = "https://n0ahtm.github.io/AudioPlaybackConnector2/AudioPlaybackConnector2.appinstaller"
+        MsixPath = $msix.Path
         OutputPath = $appInstallerPath
+        ExpectedPackageVersion = $Version
         ProcessorArchitecture = $Architecture
     }
     if (Test-Path $depsTargetDir) {

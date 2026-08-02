@@ -29,10 +29,31 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.tag }}
 
-    - name: Patch package version
+    - name: Download and verify release MSIX
+      id: msix
       shell: pwsh
-      run: ./scripts/release/update-package-version.ps1 -Version '${{ inputs.package_version }}'
+      run: |
+        $packageDir = Join-Path $env:RUNNER_TEMP 'package'
+        New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
+        gh release download '${{ inputs.tag }}' --repo '${{ github.repository }}' --dir $packageDir --pattern 'AudioPlaybackConnector2_*_x64.msix' --clobber
+        $packages = @(Get-ChildItem -Path $packageDir -Filter '*.msix' -File)
+        if ($packages.Count -ne 1) {
+          throw "Expected one x64 AudioPlaybackConnector2 MSIX asset, found $($packages.Count)."
+        }
+        ./scripts/release/verify-msix-package.ps1 `
+          -MsixPath $packages[0].FullName `
+          -ExpectedPackageVersion '${{ inputs.package_version }}' `
+          -ExpectedProcessorArchitecture x64 `
+          -ExpectedName N0ahTM.AudioPlaybackConnector2 `
+          -ExpectedPublisher 'CN=AudioPlaybackConnector2' `
+          -RequiredEntries AudioPlaybackConnector2.exe,AudioPlaybackConnector2.Control.exe `
+          -UniqueEntries AudioPlaybackConnector2.exe,AudioPlaybackConnector2.Control.exe `
+          -RequireSignature
+        "PATH=$($packages[0].FullName)" >> $env:GITHUB_OUTPUT
+        "NAME=$($packages[0].Name)" >> $env:GITHUB_OUTPUT
 
     - name: Download release dependencies
       id: deps
@@ -54,14 +75,15 @@ jobs:
     - name: Generate App Installer feed
       shell: pwsh
       run: |
-        $assetName = "AudioPlaybackConnector2_${{ inputs.package_version }}_x64.msix"
-        $msixUrl = "https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/$assetName"
+        $msixUrl = "https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/${{ steps.msix.outputs.NAME }}"
         $depBaseUrl = "https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}"
         New-Item -ItemType Directory -Path pages -Force | Out-Null
         $params = @{
           MsixUrl = $msixUrl
           AppInstallerUrl = $env:APPINSTALLER_URL
+          MsixPath = '${{ steps.msix.outputs.PATH }}'
           OutputPath = 'pages/AudioPlaybackConnector2.appinstaller'
+          ExpectedPackageVersion = '${{ inputs.package_version }}'
           ProcessorArchitecture = 'x64'
         }
         $depsDir = '${{ steps.deps.outputs.DIR }}'

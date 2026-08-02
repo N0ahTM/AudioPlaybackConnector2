@@ -27,13 +27,21 @@ jobs:
       id: version
       shell: pwsh
       run: |
-        $semver = "${{ inputs.semver }}"
+        $semver = $env:INPUT_SEMVER
         if ($semver -notmatch '^\d+\.\d+\.\d+$') {
           throw "Version must look like 0.6.0."
+        }
+        foreach ($part in $semver.Split('.')) {
+          [uint64]$component = 0
+          if (-not [uint64]::TryParse($part, [ref]$component) -or $component -gt [uint16]::MaxValue) {
+            throw 'Version contains an invalid MSIX component.'
+          }
         }
         "TAG=v$semver" >> $env:GITHUB_OUTPUT
         "SEMVER=$semver" >> $env:GITHUB_OUTPUT
         "VERSION=$semver.0" >> $env:GITHUB_OUTPUT
+      env:
+        INPUT_SEMVER: ${{ inputs.semver }}
 
     - name: Patch version into package metadata
       shell: pwsh
@@ -143,6 +151,9 @@ jobs:
         -UniqueEntries AudioPlaybackConnector2.exe,AudioPlaybackConnector2.Control.exe
         -RequireSignature
         -WriteGitHubOutput
+
+    - name: Run native regression tests
+      run: .\x64\Release\tests\AudioPlaybackConnector2.CoreTests.exe
 
     - name: Collect dependencies
       id: deps

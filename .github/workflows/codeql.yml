@@ -2,10 +2,12 @@ name: CodeQL Analysis
 
 on:
   workflow_dispatch:
-  # push:
-  #   branches: [ main ]
-  # pull_request:
-  #   branches: [ main ]
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    - cron: '31 3 * * 1'
 
 jobs:
   analyze:
@@ -41,6 +43,9 @@ jobs:
         /p:AppxPackageSigningEnabled=false
         /t:Rebuild
         /m:1
+
+    - name: Run native regression tests
+      run: .\x64\Release\tests\AudioPlaybackConnector2.CoreTests.exe
 
     - name: Perform CodeQL Analysis
       uses: github/codeql-action/analyze@v3

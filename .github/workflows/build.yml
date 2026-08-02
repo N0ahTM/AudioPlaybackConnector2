@@ -2,9 +2,9 @@ name: Build
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, develop ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, develop ]
 
 jobs:
   build:
@@ -80,6 +80,9 @@ jobs:
         /p:Platform=x64
         /p:AppxPackageSigningEnabled=false
         /t:Rebuild
+
+    - name: Run native regression tests
+      run: .\x64\Release\tests\AudioPlaybackConnector2.CoreTests.exe
 
     - name: Upload build artifact
       uses: actions/upload-artifact@v4

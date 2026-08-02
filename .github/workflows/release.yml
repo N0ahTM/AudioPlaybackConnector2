@@ -145,6 +145,9 @@ jobs:
         -RequireSignature
         -WriteGitHubOutput
 
+    - name: Run native regression tests
+      run: .\x64\Release\tests\AudioPlaybackConnector2.CoreTests.exe
+
     - name: Collect dependencies
       id: deps
       shell: pwsh

@@ -282,7 +282,6 @@ void ApplicationHost::PerformTeardown(bool saveLastConnected) noexcept {
         Gdiplus::GdiplusShutdown(m_gdiplusToken);
         m_gdiplusToken = 0;
     }
-    util::FlushInMemoryLogTailToFile(L"app-teardown");
 }
 
 void ApplicationHost::Shutdown() noexcept {

@@ -24,6 +24,7 @@ namespace details {
 constexpr DWORD c_exceptionCodeTerminate = 0xE0000001;
 constexpr DWORD c_exceptionCodeInvalidParameter = 0xE0000002;
 constexpr DWORD c_exceptionCodeSigAbort = 0xE0000003;
+constexpr std::size_t c_maxRetainedCrashReports = 5;
 
 std::atomic<bool> g_installed = false;
 std::atomic<bool> g_handlingCrash = false;
@@ -68,6 +69,84 @@ inline std::filesystem::path GetCrashDirectory() {
     auto dir = baseLogPath.parent_path() / L"CrashReports";
     if (!util::details::EnsureDirectory(dir)) return {};
     return dir;
+}
+
+inline std::filesystem::path GetMinimalCrashDirectory() {
+    std::wstring tempDirectory(MAX_PATH, L'\0');
+    auto length = GetTempPathW(static_cast<DWORD>(tempDirectory.size()), tempDirectory.data());
+    if (length == 0) return {};
+    if (length >= tempDirectory.size()) {
+        tempDirectory.resize(static_cast<size_t>(length) + 1);
+        length = GetTempPathW(static_cast<DWORD>(tempDirectory.size()), tempDirectory.data());
+        if (length == 0 || length >= tempDirectory.size()) return {};
+    }
+    tempDirectory.resize(length);
+    return std::filesystem::path(tempDirectory) / L"AudioPlaybackConnector2" / L"CrashReports";
+}
+
+inline std::vector<std::filesystem::path> GetCrashDirectories() {
+    std::vector<std::filesystem::path> directories;
+    if (auto primary = GetCrashDirectory(); !primary.empty()) {
+        directories.push_back(std::move(primary));
+    }
+    if (auto minimal = GetMinimalCrashDirectory();
+        !minimal.empty() &&
+        std::ranges::none_of(directories, [&](auto const& existing) { return existing == minimal; })) {
+        directories.push_back(std::move(minimal));
+    }
+    return directories;
+}
+
+inline void RetainNewestCrashReports(std::vector<std::filesystem::path> const& directories) noexcept {
+    struct ArtifactSet {
+        std::filesystem::path BasePath;
+        std::vector<std::filesystem::path> Files;
+        std::filesystem::file_time_type Newest{};
+    };
+
+    try {
+        std::vector<ArtifactSet> artifacts;
+        std::error_code ec;
+        for (auto const& directory : directories) {
+            if (!std::filesystem::exists(directory, ec)) {
+                ec.clear();
+                continue;
+            }
+            for (auto const& entry : std::filesystem::directory_iterator(directory, ec)) {
+                if (ec) break;
+                if (!entry.is_regular_file(ec)) {
+                    ec.clear();
+                    continue;
+                }
+                const auto extension = entry.path().extension();
+                if (extension != L".txt" && extension != L".dmp" && extension != L".prompted") continue;
+                if (!entry.path().stem().wstring().starts_with(L"Crash_")) continue;
+
+                auto basePath = entry.path();
+                basePath.replace_extension();
+                auto existing = std::ranges::find_if(
+                    artifacts, [&](auto const& artifact) { return artifact.BasePath == basePath; });
+                if (existing == artifacts.end()) {
+                    artifacts.push_back(ArtifactSet{std::move(basePath)});
+                    existing = std::prev(artifacts.end());
+                }
+                existing->Files.push_back(entry.path());
+                auto modified = entry.last_write_time(ec);
+                if (!ec && modified > existing->Newest) existing->Newest = modified;
+                ec.clear();
+            }
+            ec.clear();
+        }
+
+        std::ranges::sort(artifacts, [](auto const& left, auto const& right) { return left.Newest > right.Newest; });
+        for (std::size_t index = c_maxRetainedCrashReports; index < artifacts.size(); ++index) {
+            for (auto const& file : artifacts[index].Files) {
+                std::filesystem::remove(file, ec);
+                ec.clear();
+            }
+        }
+    } catch (...) {
+    }
 }
 
 inline std::wstring UrlEncode(std::wstring_view text) {
@@ -617,23 +696,31 @@ void InstallCrashHandlers() {
 
 void CheckAndPromptCrashReports() {
     try {
-        auto crashDir = details::GetCrashDirectory();
-        if (crashDir.empty() || !std::filesystem::exists(crashDir)) {
-            return;
-        }
+        auto crashDirectories = details::GetCrashDirectories();
+        details::RetainNewestCrashReports(crashDirectories);
 
         std::vector<std::filesystem::path> reportFiles;
         std::error_code ec;
-        for (const auto& entry : std::filesystem::directory_iterator(crashDir, ec)) {
-            if (!entry.is_regular_file(ec) || entry.path().extension() != L".txt") {
+        for (auto const& crashDirectory : crashDirectories) {
+            if (!std::filesystem::exists(crashDirectory, ec)) {
+                ec.clear();
                 continue;
             }
+            for (const auto& entry : std::filesystem::directory_iterator(crashDirectory, ec)) {
+                if (ec) break;
+                if (!entry.is_regular_file(ec) || entry.path().extension() != L".txt") {
+                    ec.clear();
+                    continue;
+                }
 
-            auto promptedMarker = entry.path();
-            promptedMarker.replace_extension(L".prompted");
-            if (!std::filesystem::exists(promptedMarker, ec)) {
-                reportFiles.push_back(entry.path());
+                auto promptedMarker = entry.path();
+                promptedMarker.replace_extension(L".prompted");
+                if (!std::filesystem::exists(promptedMarker, ec)) {
+                    reportFiles.push_back(entry.path());
+                }
+                ec.clear();
             }
+            ec.clear();
         }
 
         if (reportFiles.empty()) {

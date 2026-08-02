@@ -136,28 +136,28 @@ bool EnsureDirectory(std::filesystem::path const& path) {
     return !ec;
 }
 
-std::optional<std::wstring> TryGetCurrentPackageFullName() {
+std::optional<std::wstring> TryGetCurrentPackageFamilyName() {
     UINT32 length = 0;
-    LONG status = ::GetCurrentPackageFullName(&length, nullptr);
+    LONG status = ::GetCurrentPackageFamilyName(&length, nullptr);
     if (status != ERROR_INSUFFICIENT_BUFFER || length <= 1) {
         return std::nullopt;
     }
 
-    std::wstring fullName(length, L'\0');
-    status = ::GetCurrentPackageFullName(&length, fullName.data());
+    std::wstring familyName(length, L'\0');
+    status = ::GetCurrentPackageFamilyName(&length, familyName.data());
     if (status != ERROR_SUCCESS || length <= 1) {
         return std::nullopt;
     }
 
-    fullName.resize(length - 1);
-    return fullName;
+    familyName.resize(length - 1);
+    return familyName;
 }
 
 std::filesystem::path ResolvePackageLocalDirectory(std::wstring_view localAppDataRoot) {
     if (localAppDataRoot.empty()) return {};
-    auto packageFullName = TryGetCurrentPackageFullName();
-    if (!packageFullName || packageFullName->empty()) return {};
-    return std::filesystem::path(localAppDataRoot) / L"Packages" / *packageFullName / L"LocalCache" / L"Local" /
+    auto packageFamilyName = TryGetCurrentPackageFamilyName();
+    if (!packageFamilyName || packageFamilyName->empty()) return {};
+    return std::filesystem::path(localAppDataRoot) / L"Packages" / *packageFamilyName / L"LocalCache" / L"Local" /
            L"AudioPlaybackConnector2";
 }
 
@@ -300,15 +300,31 @@ struct Logger::Impl {
                 if (bytesWritten >= c_maxLogBytes) rotate();
                 if (!file) break;
 
-                auto const& msg = batch.front();
+                auto& msg = batch.front();
                 if (msg.size() > static_cast<std::size_t>(std::numeric_limits<DWORD>::max())) {
                     batch.pop();
                     continue;
                 }
-                DWORD written = 0;
-                if (WriteFile(file.get(), msg.data(), static_cast<DWORD>(msg.size()), &written, nullptr))
-                    bytesWritten += written;
 
+                std::size_t offset = 0;
+                while (offset < msg.size()) {
+                    DWORD written = 0;
+                    if (!WriteFile(file.get(),
+                                   msg.data() + offset,
+                                   static_cast<DWORD>(msg.size() - offset),
+                                   &written,
+                                   nullptr) ||
+                        written == 0) {
+                        break;
+                    }
+                    offset += written;
+                    bytesWritten += written;
+                }
+                if (offset != msg.size()) {
+                    if (offset > 0) msg.erase(0, offset);
+                    file.reset();
+                    break;
+                }
                 batch.pop();
             }
         };
@@ -336,6 +352,8 @@ struct Logger::Impl {
         };
 
         tryOpen();
+        auto retryDelay = std::chrono::milliseconds(100);
+        constexpr auto c_maxRetryDelay = std::chrono::milliseconds(5000);
 
         while (true) {
             std::queue<std::string> batch;
@@ -357,7 +375,7 @@ struct Logger::Impl {
             writeBatch(batch);
             if (!batch.empty() && !shouldExit) {
                 // File temporarily unavailable; prepend leftovers back to the queue.
-                std::lock_guard lock(QueueMutex);
+                std::unique_lock lock(QueueMutex);
                 std::queue<std::string> newQueue;
                 while (!batch.empty()) {
                     newQueue.push(std::move(batch.front()));
@@ -368,6 +386,11 @@ struct Logger::Impl {
                     Queue.pop();
                 }
                 Queue.swap(newQueue);
+
+                Cv.wait_for(lock, retryDelay, [this] { return ShutdownRequested; });
+                retryDelay = std::min(retryDelay * 2, c_maxRetryDelay);
+            } else {
+                retryDelay = std::chrono::milliseconds(100);
             }
             if (shouldExit) break;
         }

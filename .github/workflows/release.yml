@@ -14,6 +14,10 @@ on:
 env:
   APPINSTALLER_URL: https://n0ahtm.github.io/AudioPlaybackConnector2/AudioPlaybackConnector2.appinstaller
 
+concurrency:
+  group: audioplaybackconnector2-production-release
+  cancel-in-progress: false
+
 jobs:
   build-release:
     runs-on: windows-2022
@@ -24,19 +28,23 @@ jobs:
       semver: ${{ steps.version.outputs.SEMVER }}
       tag: ${{ steps.version.outputs.TAG }}
       version: ${{ steps.version.outputs.VERSION }}
+      msix_name: ${{ steps.msix.outputs.NAME }}
 
     steps:
     - name: Checkout
       uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+        fetch-depth: 0
 
     - name: Extract version from tag
       id: version
       shell: pwsh
       run: |
-        $tag = if ("${{ github.event_name }}" -eq "workflow_dispatch") {
-          "${{ inputs.tag }}"
+        $tag = if ($env:EVENT_NAME -eq "workflow_dispatch") {
+          $env:INPUT_TAG
         } else {
-          "${{ github.ref_name }}"
+          $env:REF_NAME
         }
         if ($tag -notmatch '^v\d+\.\d+\.\d+$') {
           throw "Release tag must look like v0.7.0."
@@ -47,6 +55,20 @@ jobs:
         "TAG=$tag" >> $env:GITHUB_OUTPUT
         "SEMVER=$semver" >> $env:GITHUB_OUTPUT
         "VERSION=$quad" >> $env:GITHUB_OUTPUT
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        INPUT_TAG: ${{ inputs.tag }}
+        REF_NAME: ${{ github.ref_name }}
+
+    - name: Verify exact tagged source checkout
+      shell: pwsh
+      run: |
+        $tag = '${{ steps.version.outputs.TAG }}'
+        $head = (git rev-parse HEAD).Trim()
+        $tagCommit = (git rev-parse "$tag^{commit}").Trim()
+        if ($head -ne $tagCommit) {
+          throw "Checked out commit $head does not match $tag ($tagCommit)."
+        }
 
     - name: Patch version into package metadata
       shell: pwsh
@@ -169,6 +191,13 @@ jobs:
         ./scripts/release/generate-appinstaller.ps1 @params
         "PATH=$outputPath" >> $env:GITHUB_OUTPUT
 
+    - name: Reject App Installer feed downgrades
+      shell: pwsh
+      run: >
+        ./scripts/release/assert-appinstaller-monotonic.ps1
+        -AppInstallerUrl '${{ env.APPINSTALLER_URL }}'
+        -CandidateVersion '${{ steps.version.outputs.VERSION }}'
+
     - name: Build release body
       id: body
       shell: pwsh
@@ -236,9 +265,37 @@ jobs:
       with:
         path: pages
 
-  deploy-pages:
+  publish-release:
     runs-on: ubuntu-latest
     needs: build-release
+    permissions:
+      contents: write
+
+    steps:
+    - name: Publish GitHub Release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: gh release edit "${{ needs.build-release.outputs.tag }}" --repo "${{ github.repository }}" --draft=false
+
+    - name: Verify public MSIX asset
+      shell: bash
+      run: |
+        asset_url="https://github.com/${{ github.repository }}/releases/download/${{ needs.build-release.outputs.tag }}/${{ needs.build-release.outputs.msix_name }}"
+        for attempt in {1..6}; do
+          if curl --fail --location --silent --show-error --head "$asset_url" > /dev/null; then
+            echo "Public MSIX verified: $asset_url"
+            exit 0
+          fi
+          if [ "$attempt" -lt 6 ]; then sleep 10; fi
+        done
+        echo "MSIX did not become publicly reachable: $asset_url" >&2
+        exit 1
+
+  deploy-pages:
+    runs-on: ubuntu-latest
+    needs:
+      - build-release
+      - publish-release
     permissions:
       pages: write
       id-token: write
@@ -251,17 +308,19 @@ jobs:
       id: deployment
       uses: actions/deploy-pages@v4
 
-  publish-release:
+  verify-release:
     runs-on: ubuntu-latest
     needs:
       - build-release
       - deploy-pages
     permissions:
-      contents: write
+      contents: read
 
     steps:
-    - name: Checkout
+    - name: Checkout exact release tag
       uses: actions/checkout@v4
+      with:
+        ref: ${{ needs.build-release.outputs.tag }}
 
     - name: Verify published App Installer feed
       shell: pwsh
@@ -269,8 +328,8 @@ jobs:
         ./scripts/release/verify-appinstaller-feed.ps1
         -AppInstallerUrl '${{ env.APPINSTALLER_URL }}'
         -ExpectedPackageVersion '${{ needs.build-release.outputs.version }}'
-
-    - name: Publish GitHub Release
-      env:
-        GH_TOKEN: ${{ github.token }}
-      run: gh release edit "${{ needs.build-release.outputs.tag }}" --repo "${{ github.repository }}" --draft=false
+        -ExpectedPackageName N0ahTM.AudioPlaybackConnector2
+        -ExpectedPublisher 'CN=AudioPlaybackConnector2'
+        -ExpectedProcessorArchitecture x64
+        -ExpectedPackageUri 'https://github.com/${{ github.repository }}/releases/download/${{ needs.build-release.outputs.tag }}/${{ needs.build-release.outputs.msix_name }}'
+        -VerifyPackageUri

@@ -15,9 +15,16 @@ on:
 env:
   APPINSTALLER_URL: https://n0ahtm.github.io/AudioPlaybackConnector2/AudioPlaybackConnector2.appinstaller
 
+concurrency:
+  group: audioplaybackconnector2-production-release
+  cancel-in-progress: false
+
 jobs:
   deploy-appinstaller:
     runs-on: windows-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      PACKAGE_VERSION: ${{ inputs.package_version }}
     permissions:
       contents: read
       pages: write
@@ -31,21 +38,48 @@ jobs:
       uses: actions/checkout@v4
       with:
         ref: ${{ inputs.tag }}
+        fetch-depth: 0
+
+    - name: Validate inputs and exact tagged source checkout
+      shell: pwsh
+      run: |
+        if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') {
+          throw 'Release tag must look like v0.7.0.'
+        }
+        $parts = $env:PACKAGE_VERSION.Split('.')
+        if ($parts.Count -ne 4) {
+          throw 'Package version must have four components.'
+        }
+        foreach ($part in $parts) {
+          [uint64]$component = 0
+          if (-not [uint64]::TryParse($part, [ref]$component) -or $component -gt [uint16]::MaxValue) {
+            throw 'Package version contains an invalid component.'
+          }
+        }
+        $head = (git rev-parse HEAD).Trim()
+        $tagCommit = (git rev-parse "$env:RELEASE_TAG^{commit}").Trim()
+        if ($head -ne $tagCommit) {
+          throw "Checked out commit $head does not match $env:RELEASE_TAG ($tagCommit)."
+        }
 
     - name: Download and verify release MSIX
       id: msix
       shell: pwsh
       run: |
+        $release = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json isDraft,isPrerelease | ConvertFrom-Json
+        if ($release.isDraft -or $release.isPrerelease) {
+          throw 'The App Installer feed may reference only a published, non-prerelease GitHub Release.'
+        }
         $packageDir = Join-Path $env:RUNNER_TEMP 'package'
         New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
-        gh release download '${{ inputs.tag }}' --repo '${{ github.repository }}' --dir $packageDir --pattern 'AudioPlaybackConnector2_*_x64.msix' --clobber
+        gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --dir $packageDir --pattern 'AudioPlaybackConnector2_*_x64.msix' --clobber
         $packages = @(Get-ChildItem -Path $packageDir -Filter '*.msix' -File)
         if ($packages.Count -ne 1) {
           throw "Expected one x64 AudioPlaybackConnector2 MSIX asset, found $($packages.Count)."
         }
         ./scripts/release/verify-msix-package.ps1 `
           -MsixPath $packages[0].FullName `
-          -ExpectedPackageVersion '${{ inputs.package_version }}' `
+          -ExpectedPackageVersion $env:PACKAGE_VERSION `
           -ExpectedProcessorArchitecture x64 `
           -ExpectedName N0ahTM.AudioPlaybackConnector2 `
           -ExpectedPublisher 'CN=AudioPlaybackConnector2' `
@@ -62,7 +96,7 @@ jobs:
         $depsDir = Join-Path $env:RUNNER_TEMP 'dependencies'
         New-Item -ItemType Directory -Path $depsDir -Force | Out-Null
         # Download any framework packages published alongside the release
-        gh release download "${{ inputs.tag }}" --repo "${{ github.repository }}" --dir $depsDir --pattern "*.appx" --pattern "*.msix" --clobber
+        gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --dir $depsDir --pattern "*.appx" --pattern "*.msix" --clobber
         # Remove the main app package so it is not treated as a dependency
         Get-ChildItem -Path $depsDir -File | Where-Object { $_.Name -like "AudioPlaybackConnector2_*.msix" } | Remove-Item
         if ((Get-ChildItem -Path $depsDir -File).Count -eq 0) {
@@ -75,23 +109,34 @@ jobs:
     - name: Generate App Installer feed
       shell: pwsh
       run: |
-        $msixUrl = "https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/${{ steps.msix.outputs.NAME }}"
-        $depBaseUrl = "https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}"
+        $msixUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:RELEASE_TAG/$env:MSIX_NAME"
+        $depBaseUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:RELEASE_TAG"
         New-Item -ItemType Directory -Path pages -Force | Out-Null
         $params = @{
           MsixUrl = $msixUrl
           AppInstallerUrl = $env:APPINSTALLER_URL
-          MsixPath = '${{ steps.msix.outputs.PATH }}'
+          MsixPath = $env:MSIX_PATH
           OutputPath = 'pages/AudioPlaybackConnector2.appinstaller'
-          ExpectedPackageVersion = '${{ inputs.package_version }}'
+          ExpectedPackageVersion = $env:PACKAGE_VERSION
           ProcessorArchitecture = 'x64'
         }
-        $depsDir = '${{ steps.deps.outputs.DIR }}'
+        $depsDir = $env:DEPENDENCIES_DIR
         if ($depsDir -and (Test-Path $depsDir) -and (Get-ChildItem -Path $depsDir -File).Count -gt 0) {
           $params['DependenciesDirectory'] = $depsDir
           $params['DependencyBaseUrl'] = $depBaseUrl
         }
         ./scripts/release/generate-appinstaller.ps1 @params
+      env:
+        MSIX_NAME: ${{ steps.msix.outputs.NAME }}
+        MSIX_PATH: ${{ steps.msix.outputs.PATH }}
+        DEPENDENCIES_DIR: ${{ steps.deps.outputs.DIR }}
+
+    - name: Reject App Installer feed downgrades
+      shell: pwsh
+      run: >
+        ./scripts/release/assert-appinstaller-monotonic.ps1
+        -AppInstallerUrl '${{ env.APPINSTALLER_URL }}'
+        -CandidateVersion $env:PACKAGE_VERSION
 
     - name: Configure GitHub Pages
       uses: actions/configure-pages@v5
@@ -110,4 +155,11 @@ jobs:
       run: >
         ./scripts/release/verify-appinstaller-feed.ps1
         -AppInstallerUrl '${{ env.APPINSTALLER_URL }}'
-        -ExpectedPackageVersion '${{ inputs.package_version }}'
+        -ExpectedPackageVersion $env:PACKAGE_VERSION
+        -ExpectedPackageName N0ahTM.AudioPlaybackConnector2
+        -ExpectedPublisher 'CN=AudioPlaybackConnector2'
+        -ExpectedProcessorArchitecture x64
+        -ExpectedPackageUri "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:RELEASE_TAG/$env:MSIX_NAME"
+        -VerifyPackageUri
+      env:
+        MSIX_NAME: ${{ steps.msix.outputs.NAME }}

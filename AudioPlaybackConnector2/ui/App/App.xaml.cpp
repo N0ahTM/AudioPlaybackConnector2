@@ -11,7 +11,9 @@
 /*//////// Constructors / Destructor /////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-winrt::AudioPlaybackConnector2::implementation::App::App() = default;
+winrt::AudioPlaybackConnector2::implementation::App::App() {
+    InitializeComponent();
+}
 
 winrt::AudioPlaybackConnector2::implementation::App::~App() {
     if (m_host) {

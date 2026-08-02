@@ -255,6 +255,7 @@ namespace winrt::AudioPlaybackConnector2::implementation {
 /*------------------------------------------------------------------------------------------------------------*/
 
 SettingsWindow::SettingsWindow() {
+    InitializeComponent();
     this->SystemBackdrop(winrt::Microsoft::UI::Xaml::Media::DesktopAcrylicBackdrop());
 }
 

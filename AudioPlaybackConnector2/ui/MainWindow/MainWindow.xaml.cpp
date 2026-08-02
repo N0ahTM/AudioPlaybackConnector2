@@ -15,3 +15,7 @@
 
 using namespace winrt;
 using namespace winrt::Microsoft::UI::Xaml;
+
+winrt::AudioPlaybackConnector2::implementation::MainWindow::MainWindow() {
+    InitializeComponent();
+}

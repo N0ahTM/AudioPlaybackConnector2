@@ -4,7 +4,7 @@
 
 namespace winrt::AudioPlaybackConnector2::implementation {
 struct MainWindow : MainWindowT<MainWindow> {
-    MainWindow() = default;
+    MainWindow();
 };
 } // namespace winrt::AudioPlaybackConnector2::implementation
 

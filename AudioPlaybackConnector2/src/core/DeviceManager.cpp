@@ -347,8 +347,11 @@ winrt::Windows::Foundation::IAsyncAction DeviceManager::ConnectAsync(winrt::hstr
     (void)co_await ConnectWithIntentAsync(std::move(deviceId), std::move(operation));
 }
 
-winrt::Windows::Foundation::IAsyncOperation<bool> DeviceManager::ConnectWithIntentAsync(winrt::hstring deviceId,
-                                                                                        OperationToken operation) {
+winrt::Windows::Foundation::IAsyncOperation<bool>
+DeviceManager::ConnectWithIntentAsync(winrt::hstring deviceId,
+                                      // The coroutine frame must own the token across suspension points.
+                                      // cppcheck-suppress passedByValue
+                                      OperationToken operation) {
     auto lifetime = shared_from_this();
     const std::wstring deviceIdKey = std::wstring(deviceId);
     const bool reportFailures = operation.Intent != ConnectionIntent::AutoReconnect;
@@ -380,7 +383,7 @@ winrt::Windows::Foundation::IAsyncOperation<bool> DeviceManager::ConnectWithInte
         if (openEnabledIncomingConnection) {
             DebugTrace(L"[DeviceManager] ConnectAsync opening enabled incoming connection: {0}",
                        std::wstring(deviceId));
-            co_return co_await ReconnectWithIntentAsync(std::move(deviceId), std::move(operation));
+            co_return co_await ReconnectWithIntentAsync(deviceId, operation);
         }
         DebugTrace(L"[DeviceManager] ConnectAsync requested: {0}", std::wstring(deviceId));
 
@@ -611,8 +614,11 @@ winrt::Windows::Foundation::IAsyncAction DeviceManager::ReconnectAsync(winrt::hs
     (void)co_await ReconnectWithIntentAsync(std::move(deviceId), std::move(operation));
 }
 
-winrt::Windows::Foundation::IAsyncOperation<bool> DeviceManager::ReconnectWithIntentAsync(winrt::hstring deviceId,
-                                                                                          OperationToken operation) {
+winrt::Windows::Foundation::IAsyncOperation<bool>
+DeviceManager::ReconnectWithIntentAsync(winrt::hstring deviceId,
+                                        // The coroutine frame must own the token across suspension points.
+                                        // cppcheck-suppress passedByValue
+                                        OperationToken operation) {
     auto lifetime = shared_from_this();
     try {
         if (deviceId.empty()) co_return false;
@@ -697,7 +703,7 @@ winrt::Windows::Foundation::IAsyncOperation<bool> DeviceManager::ReconnectWithIn
             co_return false;
         }
         if (!IsOperationCurrent(operation)) co_return false;
-        co_return co_await ConnectWithIntentAsync(std::move(deviceId), std::move(operation));
+        co_return co_await ConnectWithIntentAsync(deviceId, operation);
     } catch (winrt::hresult_error const& ex) {
         if (operation.Intent != ConnectionIntent::AutoReconnect && IsOperationCurrent(operation)) {
             ReportAsyncConnectionError(*this, deviceId, ex.message(), L"ReconnectAsync");
@@ -1079,6 +1085,8 @@ void DeviceManager::ReportConnectionFailure(winrt::hstring const& deviceId,
 winrt::Windows::Foundation::IAsyncOperation<bool>
 DeviceManager::ConnectInternalAsync(winrt::Windows::Devices::Enumeration::DeviceInformation device,
                                     bool openImmediately,
+                                    // The coroutine frame must own the token across suspension points.
+                                    // cppcheck-suppress passedByValue
                                     OperationToken operation,
                                     bool reportFailures) {
     auto lifetime = shared_from_this();

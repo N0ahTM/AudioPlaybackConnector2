@@ -259,6 +259,7 @@ void TestToastXmlSanitization() {
 } // namespace
 
 int RunAdaptiveResourcePolicyTests();
+int RunDevicePickerSnapshotTests();
 
 int main() {
     TestFullBackoffSequence();
@@ -270,6 +271,7 @@ int main() {
     TestCommandProtocolRejectsInvalidHeader();
     TestToastXmlSanitization();
     g_failures += RunAdaptiveResourcePolicyTests();
+    g_failures += RunDevicePickerSnapshotTests();
 
     if (g_failures != 0) {
         std::cerr << g_failures << " core test(s) failed\n";

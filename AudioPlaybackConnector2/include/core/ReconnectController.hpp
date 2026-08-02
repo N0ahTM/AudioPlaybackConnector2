@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Reconnect Controller //////////////////////////////////////////////////////////////////////////////*/
@@ -52,6 +53,7 @@ public:
     [[nodiscard]] bool HasPendingTimer(std::wstring_view deviceId) const;
     [[nodiscard]] bool HasAttemptInProgress(std::wstring_view deviceId) const;
     [[nodiscard]] bool HasPendingTimers() const;
+    [[nodiscard]] std::vector<std::wstring> PendingDeviceIds() const;
 
     [[nodiscard]] ScheduleDecision PrepareSchedule(std::wstring_view deviceId, bool blocked);
     [[nodiscard]] bool ClaimTimer(TimerToken const& token, bool blocked);

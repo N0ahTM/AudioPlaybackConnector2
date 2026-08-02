@@ -23,11 +23,15 @@ void DeviceDiscoveryService::Start() {
         auto guard = m_lock.lock_exclusive();
         watcherGeneration = ++m_watcherGeneration;
         m_watcherStopping = false;
+        m_enumerationComplete = false;
+        m_deviceCache.clear();
+        ++m_inventoryGeneration;
     }
 
     winrt::Windows::Devices::Enumeration::DeviceWatcher watcher{nullptr};
     winrt::event_token addedToken{};
     winrt::event_token removedToken{};
+    winrt::event_token enumerationCompletedToken{};
     try {
         auto weak = weak_from_this();
         auto selector = winrt::Windows::Media::Audio::AudioPlaybackConnection::GetDeviceSelector();
@@ -42,16 +46,24 @@ void DeviceDiscoveryService::Start() {
                 self->OnDeviceRemoved(watcherGeneration, sender, args);
             }
         });
+        enumerationCompletedToken = watcher.EnumerationCompleted([weak, watcherGeneration](auto const& sender, auto) {
+            if (auto self = weak.lock()) {
+                self->OnEnumerationCompleted(watcherGeneration, sender);
+            }
+        });
         watcher.Start();
         m_watcher = watcher;
         m_watcherAddedToken = addedToken;
         m_watcherRemovedToken = removedToken;
+        m_watcherEnumerationCompletedToken = enumerationCompletedToken;
         DebugTrace(L"[DeviceDiscoveryService] DeviceWatcher started");
+        InventoryChanged();
     } catch (winrt::hresult_error const& ex) {
         if (watcher) {
             try {
                 if (addedToken.value != 0) watcher.Added(addedToken);
                 if (removedToken.value != 0) watcher.Removed(removedToken);
+                if (enumerationCompletedToken.value != 0) watcher.EnumerationCompleted(enumerationCompletedToken);
             } catch (...) {
             }
         }
@@ -61,6 +73,7 @@ void DeviceDiscoveryService::Start() {
             try {
                 if (addedToken.value != 0) watcher.Added(addedToken);
                 if (removedToken.value != 0) watcher.Removed(removedToken);
+                if (enumerationCompletedToken.value != 0) watcher.EnumerationCompleted(enumerationCompletedToken);
             } catch (...) {
             }
         }
@@ -70,6 +83,7 @@ void DeviceDiscoveryService::Start() {
             try {
                 if (addedToken.value != 0) watcher.Added(addedToken);
                 if (removedToken.value != 0) watcher.Removed(removedToken);
+                if (enumerationCompletedToken.value != 0) watcher.EnumerationCompleted(enumerationCompletedToken);
             } catch (...) {
             }
         }
@@ -83,11 +97,14 @@ void DeviceDiscoveryService::Stop() {
     auto watcher = std::exchange(m_watcher, nullptr);
     auto addedToken = std::exchange(m_watcherAddedToken, {});
     auto removedToken = std::exchange(m_watcherRemovedToken, {});
+    auto enumerationCompletedToken = std::exchange(m_watcherEnumerationCompletedToken, {});
     std::uint64_t stoppedGeneration = 0;
     {
         auto guard = m_lock.lock_exclusive();
         stoppedGeneration = ++m_watcherGeneration;
         m_watcherStopping = true;
+        m_enumerationComplete = false;
+        ++m_inventoryGeneration;
     }
 
     try {
@@ -102,6 +119,7 @@ void DeviceDiscoveryService::Stop() {
     try {
         if (addedToken.value != 0) watcher.Added(addedToken);
         if (removedToken.value != 0) watcher.Removed(removedToken);
+        if (enumerationCompletedToken.value != 0) watcher.EnumerationCompleted(enumerationCompletedToken);
     } catch (winrt::hresult_error const& ex) {
         util::DebugTraceException(L"[DeviceDiscoveryService] Stop ERROR: failed to revoke watcher token", ex);
     } catch (std::exception const& ex) {
@@ -119,13 +137,38 @@ void DeviceDiscoveryService::Stop() {
 }
 
 void DeviceDiscoveryService::ClearCache() {
-    auto guard = m_lock.lock_exclusive();
-    m_deviceCache.clear();
+    bool changed = false;
+    {
+        auto guard = m_lock.lock_exclusive();
+        changed = !m_deviceCache.empty() || m_enumerationComplete;
+        m_deviceCache.clear();
+        m_enumerationComplete = false;
+        if (changed) ++m_inventoryGeneration;
+    }
+    if (changed) InventoryChanged();
 }
 
 bool DeviceDiscoveryService::ContainsDeviceId(std::wstring const& deviceId) const {
     auto guard = m_lock.lock_shared();
-    return m_deviceCache.count(deviceId) > 0;
+    return m_deviceCache.contains(deviceId);
+}
+
+apc::device_picker::DeviceInventorySnapshot DeviceDiscoveryService::GetInventorySnapshot() const {
+    auto guard = m_lock.lock_shared();
+    apc::device_picker::DeviceInventorySnapshot result;
+    result.Generation = m_inventoryGeneration;
+    result.EnumerationComplete = m_enumerationComplete;
+    result.Devices.reserve(m_deviceCache.size());
+    for (auto const& [id, name] : m_deviceCache) {
+        result.Devices.push_back({id, name});
+    }
+    std::ranges::sort(result.Devices, [](auto const& left, auto const& right) {
+        auto const leftName = left.Name.empty() ? std::wstring_view(left.Id) : std::wstring_view(left.Name);
+        auto const rightName = right.Name.empty() ? std::wstring_view(right.Id) : std::wstring_view(right.Name);
+        if (leftName != rightName) return leftName < rightName;
+        return left.Id < right.Id;
+    });
+    return result;
 }
 
 std::size_t DeviceDiscoveryService::CacheSize() const {
@@ -135,19 +178,33 @@ std::size_t DeviceDiscoveryService::CacheSize() const {
 
 winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
 DeviceDiscoveryService::RefreshAsync() {
+    std::uint64_t inventoryGenerationAtStart = 0;
+    {
+        auto guard = m_lock.lock_shared();
+        inventoryGenerationAtStart = m_inventoryGeneration;
+    }
     auto selector = winrt::Windows::Media::Audio::AudioPlaybackConnection::GetDeviceSelector();
     auto devices = co_await winrt::Windows::Devices::Enumeration::DeviceInformation::FindAllAsync(selector);
 
-    std::unordered_set<std::wstring> refreshed;
+    std::unordered_map<std::wstring, std::wstring> refreshed;
     refreshed.reserve(static_cast<size_t>(devices.Size()));
     for (auto const& device : devices) {
-        refreshed.insert(std::wstring(device.Id()));
+        refreshed.insert_or_assign(std::wstring(device.Id()), std::wstring(device.Name()));
     }
 
+    bool inventoryUpdated = false;
     {
         auto guard = m_lock.lock_exclusive();
-        m_deviceCache = std::move(refreshed);
+        if (m_inventoryGeneration == inventoryGenerationAtStart) {
+            inventoryUpdated = m_deviceCache != refreshed || !m_enumerationComplete;
+            if (inventoryUpdated) {
+                m_deviceCache = std::move(refreshed);
+                m_enumerationComplete = true;
+                ++m_inventoryGeneration;
+            }
+        }
     }
+    if (inventoryUpdated) InventoryChanged();
 
     co_return devices;
 }
@@ -159,22 +216,49 @@ DeviceDiscoveryService::RefreshAsync() {
 void DeviceDiscoveryService::OnDeviceAdded(std::uint64_t watcherGeneration,
                                            winrt::Windows::Devices::Enumeration::DeviceWatcher const&,
                                            winrt::Windows::Devices::Enumeration::DeviceInformation const& args) {
+    bool inventoryChanged = false;
     {
         auto guard = m_lock.lock_exclusive();
         if (m_watcherStopping || watcherGeneration != m_watcherGeneration) return;
-        m_deviceCache.insert(std::wstring(args.Id()));
+        auto id = std::wstring(args.Id());
+        auto name = std::wstring(args.Name());
+        auto [entry, inserted] = m_deviceCache.try_emplace(std::move(id), name);
+        inventoryChanged = inserted || entry->second != name;
+        if (inventoryChanged) {
+            entry->second = std::move(name);
+            ++m_inventoryGeneration;
+        }
     }
     DeviceAdded(args);
+    if (inventoryChanged) InventoryChanged();
 }
 
 void DeviceDiscoveryService::OnDeviceRemoved(
     std::uint64_t watcherGeneration,
     winrt::Windows::Devices::Enumeration::DeviceWatcher const&,
     winrt::Windows::Devices::Enumeration::DeviceInformationUpdate const& args) {
+    bool inventoryChanged = false;
     {
         auto guard = m_lock.lock_exclusive();
         if (m_watcherStopping || watcherGeneration != m_watcherGeneration) return;
-        m_deviceCache.erase(std::wstring(args.Id()));
+        inventoryChanged = m_deviceCache.erase(std::wstring(args.Id())) > 0;
+        if (inventoryChanged) ++m_inventoryGeneration;
     }
     DeviceRemoved(args);
+    if (inventoryChanged) InventoryChanged();
+}
+
+void DeviceDiscoveryService::OnEnumerationCompleted(std::uint64_t watcherGeneration,
+                                                    winrt::Windows::Devices::Enumeration::DeviceWatcher const&) {
+    bool inventoryChanged = false;
+    {
+        auto guard = m_lock.lock_exclusive();
+        if (m_watcherStopping || watcherGeneration != m_watcherGeneration) return;
+        if (!m_enumerationComplete) {
+            m_enumerationComplete = true;
+            ++m_inventoryGeneration;
+            inventoryChanged = true;
+        }
+    }
+    if (inventoryChanged) InventoryChanged();
 }

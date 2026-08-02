@@ -855,6 +855,20 @@ bool DeviceManager::IsDeviceBusy(winrt::hstring const& deviceId) const {
     return m_sessions.IsDeviceBusy(deviceId) || m_reconnectController.HasPendingTimer(deviceId);
 }
 
+apc::device_picker::DeviceActivitySnapshot DeviceManager::GetDevicePickerActivitySnapshot() const {
+    auto guard = m_lock.lock_shared();
+    auto result = m_sessions.GetDevicePickerActivitySnapshot();
+    for (auto& id : m_reconnectController.PendingDeviceIds()) {
+        result.BusyIds.insert(std::move(id));
+    }
+    return result;
+}
+
+apc::device_picker::DeviceInventorySnapshot DeviceManager::GetDevicePickerInventorySnapshot() const {
+    auto discoveryService = m_discoveryService;
+    return discoveryService ? discoveryService->GetInventorySnapshot() : apc::device_picker::DeviceInventorySnapshot{};
+}
+
 void DeviceManager::StartConnectionHeartbeat() {
     bool started = false;
     try {
@@ -1550,7 +1564,7 @@ void DeviceManager::PruneUserActionCascadeLocked(std::chrono::steady_clock::time
 }
 
 void DeviceManager::EnsureDiscoveryEventHandlers() {
-    if (m_discoveryDeviceAddedToken && m_discoveryDeviceRemovedToken) return;
+    if (m_discoveryDeviceAddedToken && m_discoveryDeviceRemovedToken && m_discoveryInventoryChangedToken) return;
 
     auto weak = weak_from_this();
     if (!m_discoveryDeviceAddedToken) {
@@ -1564,6 +1578,17 @@ void DeviceManager::EnsureDiscoveryEventHandlers() {
         m_discoveryDeviceRemovedToken = m_discoveryService->DeviceRemoved += [weak](auto device) {
             if (auto self = weak.lock()) {
                 self->OnDeviceRemoved(device);
+            }
+        };
+    }
+    if (!m_discoveryInventoryChangedToken) {
+        m_discoveryInventoryChangedToken = m_discoveryService->InventoryChanged += [weak]() {
+            if (auto self = weak.lock()) {
+                {
+                    auto guard = self->m_lock.lock_shared();
+                    if (self->m_shutdownForProcessExit) return;
+                }
+                self->DeviceInventoryChanged();
             }
         };
     }
@@ -1840,7 +1865,6 @@ void DeviceManager::OnDeviceRemoved(winrt::Windows::Devices::Enumeration::Device
             removedSessionWasOpen = info->IsOpen;
         }
     }
-
     if (removedSessionWasOpen) {
         Disconnect(args.Id(), *removedSessionWasOpen ? DisconnectReason::Unexpected : DisconnectReason::Cleanup);
     }

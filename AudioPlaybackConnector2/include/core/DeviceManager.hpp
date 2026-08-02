@@ -33,6 +33,7 @@ public:
                                     winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions,
                                     DeviceStatusKind>;
     using DeviceActivityEvent = Event<winrt::hstring>;
+    using DeviceInventoryChangedEvent = Event<>;
     using AutoReconnectTriggeredEvent = Event<winrt::hstring>;
     using AutoReconnectFailedEvent = Event<winrt::hstring>;
     using ReconnectOnConnectionLossPredicate = std::function<bool(winrt::hstring const&)>;
@@ -68,6 +69,8 @@ public:
     bool HasConnections() const;
     bool HasBusyOperations() const;
     bool IsDeviceBusy(winrt::hstring const& deviceId) const;
+    [[nodiscard]] apc::device_picker::DeviceActivitySnapshot GetDevicePickerActivitySnapshot() const;
+    [[nodiscard]] apc::device_picker::DeviceInventorySnapshot GetDevicePickerInventorySnapshot() const;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Events ////////////////////////////////////////////////////////////////////////////////////////////*/
@@ -78,6 +81,7 @@ public:
     ConnectionErrorEvent ConnectionError;
     DeviceStatusEvent DeviceStatusChanged;
     DeviceActivityEvent DeviceActivityChanged;
+    DeviceInventoryChangedEvent DeviceInventoryChanged;
     AutoReconnectTriggeredEvent AutoReconnectTriggered;
     AutoReconnectFailedEvent AutoReconnectFailed;
 
@@ -167,6 +171,7 @@ private:
     std::shared_ptr<DeviceDiscoveryService> m_discoveryService;
     std::size_t m_discoveryDeviceAddedToken = 0;
     std::size_t m_discoveryDeviceRemovedToken = 0;
+    std::size_t m_discoveryInventoryChangedToken = 0;
     mutable std::mutex m_heartbeatTimerMutex;
     winrt::Windows::System::Threading::ThreadPoolTimer m_heartbeatTimer{nullptr};
 };

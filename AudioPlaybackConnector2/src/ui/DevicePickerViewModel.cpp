@@ -2,9 +2,9 @@
 
 #include <ui/DevicePickerViewModel.hpp>
 
-#include <core/DeviceDisplay.hpp>
 #include <core/DeviceManager.hpp>
 #include <core/Settings.hpp>
+#include <core/StringResources.hpp>
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
@@ -18,90 +18,83 @@ void DevicePickerViewModel::SetSettings(std::weak_ptr<Settings> settings) {
     m_settings = std::move(settings);
 }
 
-void DevicePickerViewModel::SetDevices(
-    winrt::Windows::Devices::Enumeration::DeviceInformationCollection const& devices) {
-    m_devices.clear();
-    m_devices.reserve(devices.Size());
-    for (auto const& device : devices) {
-        auto id = device.Id();
-        auto name = device.Name();
-        if (name.empty()) {
-            name = id;
+void DevicePickerViewModel::SetDevices(winrt::Windows::Devices::Enumeration::DeviceInformationCollection const& devices,
+                                       TimePoint refreshedAt) {
+    std::vector<apc::device_picker::DeviceIdentity> inventory;
+    if (devices) {
+        inventory.reserve(devices.Size());
+        for (auto const& device : devices) {
+            inventory.push_back({
+                .Id = std::wstring(device.Id()),
+                .Name = std::wstring(device.Name()),
+            });
         }
-        m_devices.push_back({
-            .Id = id,
-            .Name = name,
-        });
     }
+    m_cache.ReplaceInventory(std::move(inventory), refreshedAt);
 }
 
-bool DevicePickerViewModel::Empty() const noexcept {
-    return m_devices.empty();
-}
-
-std::vector<DevicePickerItemViewModel> DevicePickerViewModel::SnapshotItems() const {
-    SettingsData settingsSnapshot;
-    bool hasSettings = false;
-    if (auto settings = m_settings.lock()) {
-        auto locked = settings->LockSharedData();
-        settingsSnapshot = *locked;
-        hasSettings = true;
-    }
-
-    std::vector<DevicePickerItemViewModel> items;
-    items.reserve(m_devices.size());
-    for (auto const& device : m_devices) {
-        auto deviceId = std::wstring(device.Id);
-        auto displayName = std::wstring(device.Name);
-        auto it = settingsSnapshot.Devices.end();
-        if (hasSettings) {
-            it = std::ranges::find_if(settingsSnapshot.Devices,
-                                      [&](auto const& knownDevice) { return knownDevice.Id == deviceId; });
-            if (it != settingsSnapshot.Devices.end()) {
-                auto knownName = it->Name.empty() ? std::wstring(device.Name) : it->Name;
-                displayName =
-                    apc::display::DeviceNameOrId(it->Id, knownName, it->Alias, settingsSnapshot.PrivacyModeEnabled);
-            } else if (settingsSnapshot.PrivacyModeEnabled) {
-                displayName = apc::display::DeviceNameOrId(deviceId, device.Name, {}, true);
-            }
-        }
-        if (displayName.empty()) {
-            displayName = deviceId;
-        }
-
-        items.push_back({
-            .Id = device.Id,
-            .Name = winrt::hstring(displayName),
-            .IsConnected = IsConnected(device.Id),
-            .IsBusy = IsBusy(device.Id),
-        });
-    }
-    return items;
-}
-
-bool DevicePickerViewModel::CanSelect(winrt::hstring const& id) const {
-    if (id.empty()) return false;
-    if (IsBusy(id)) return false;
-    return !IsConnected(id);
-}
-
-/*------------------------------------------------------------------------------------------------------------*/
-/*//////// Helpers ///////////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------*/
-
-bool DevicePickerViewModel::IsConnected(winrt::hstring const& id) const {
+bool DevicePickerViewModel::SynchronizeInventoryFromManager(TimePoint refreshedAt) {
     auto manager = m_manager.lock();
     if (!manager) return false;
 
-    for (const auto& connection : manager->GetConnectedDevices()) {
-        if (connection.Id == std::wstring(id)) {
-            return true;
-        }
+    auto inventory = manager->GetDevicePickerInventorySnapshot();
+    if (!m_sourceInventoryGeneration || *m_sourceInventoryGeneration != inventory.Generation ||
+        !m_cache.HasInventory()) {
+        m_cache.ReplaceInventory(std::move(inventory.Devices), refreshedAt);
+        m_sourceInventoryGeneration = inventory.Generation;
     }
-    return false;
+    if (!inventory.EnumerationComplete) m_cache.InvalidateInventory();
+    return inventory.EnumerationComplete;
 }
 
-bool DevicePickerViewModel::IsBusy(winrt::hstring const& id) const {
-    auto manager = m_manager.lock();
-    return manager && manager->IsDeviceBusy(id);
+void DevicePickerViewModel::InvalidateInventory() noexcept {
+    m_cache.InvalidateInventory();
+}
+
+void DevicePickerViewModel::Clear() noexcept {
+    m_cache.Clear();
+    m_sourceInventoryGeneration.reset();
+}
+
+bool DevicePickerViewModel::HasInventory() const noexcept {
+    return m_cache.HasInventory();
+}
+
+bool DevicePickerViewModel::IsInventoryFresh(TimePoint now) const noexcept {
+    return m_cache.IsInventoryFresh(now);
+}
+
+apc::device_picker::DevicePickerSnapshot const& DevicePickerViewModel::RefreshSnapshot(TimePoint now) {
+    apc::device_picker::DeviceActivitySnapshot activity;
+    if (auto manager = m_manager.lock()) {
+        activity = manager->GetDevicePickerActivitySnapshot();
+    }
+
+    std::vector<apc::device_picker::DevicePresentationSetting> presentationSettings;
+    bool privacyModeEnabled = false;
+    if (auto settings = m_settings.lock()) {
+        auto locked = settings->LockSharedData();
+        privacyModeEnabled = locked->PrivacyModeEnabled;
+        presentationSettings.reserve(locked->Devices.size());
+        for (auto const& device : locked->Devices) {
+            presentationSettings.push_back({
+                .Id = device.Id,
+                .Name = device.Name,
+                .Alias = device.Alias,
+            });
+        }
+    }
+
+    return m_cache.Refresh(
+        activity, presentationSettings, privacyModeEnabled, std::wstring_view(_("Privacy_RedactedDevice")), now);
+}
+
+apc::device_picker::DevicePickerSnapshot const& DevicePickerViewModel::CachedSnapshot() const noexcept {
+    return m_cache.CachedSnapshot();
+}
+
+bool DevicePickerViewModel::CanSelect(winrt::hstring const& id) {
+    if (id.empty()) return false;
+    static_cast<void>(RefreshSnapshot());
+    return m_cache.CanSelect(std::wstring_view(id));
 }

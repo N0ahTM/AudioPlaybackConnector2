@@ -51,14 +51,17 @@ private:
 
     void ApplyDeviceResults(winrt::Windows::Devices::Enumeration::DeviceInformationCollection const& devices,
                             bool blockingRefresh,
-                            uint64_t requestId);
-    void OnDeviceEnumerationFailed(bool blockingRefresh, uint64_t requestId);
+                            uint64_t requestId,
+                            uint64_t inventoryGenerationAtStart);
+    void OnDeviceInventoryChanged();
+    void OnDeviceEnumerationFailed(bool blockingRefresh, uint64_t requestId, uint64_t inventoryGenerationAtStart);
     void RebuildDeviceListFromCache(bool reconcilePendingActions = true);
-    winrt::Microsoft::UI::Xaml::Controls::ListViewItem BuildDeviceListItem(DevicePickerItemViewModel const& device);
+    winrt::Microsoft::UI::Xaml::Controls::ListViewItem
+    BuildDeviceListItem(apc::device_picker::DeviceSnapshotItem const& device);
     bool BeginPendingDeviceAction(winrt::hstring const& id);
     bool BeginPendingGlobalAction();
     bool IsDeviceActionPending(winrt::hstring const& id) const;
-    void ReconcilePendingActions(std::vector<DevicePickerItemViewModel> const& items);
+    void ReconcilePendingActions(std::vector<apc::device_picker::DeviceSnapshotItem> const& items);
     void ApplyGlobalActionState(bool visible, bool enabled);
     void SetRefreshIndicators(bool refreshing, bool blockingRefresh);
 
@@ -76,12 +79,14 @@ private:
     std::atomic<bool> m_suppressSelectionChanged = false;
     std::atomic<uint64_t> m_loadDevicesRequestId = 0;
     std::atomic<uint64_t> m_activeLoadRequestId = 0;
+    std::shared_ptr<apc::device_picker::DeviceInventoryGeneration> m_inventoryGeneration =
+        std::make_shared<apc::device_picker::DeviceInventoryGeneration>();
+    std::size_t m_deviceInventoryChangedToken = 0;
     mutable std::mutex m_refreshDevicesOpMutex;
     winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
         m_refreshDevicesOp{nullptr};
     std::unordered_map<std::wstring, std::chrono::steady_clock::time_point> m_pendingDeviceActions;
     std::chrono::steady_clock::time_point m_pendingGlobalActionStarted{};
-    std::chrono::steady_clock::time_point m_lastSuccessfulLoad{};
     bool m_pendingGlobalAction = false;
     std::atomic<bool> m_preparedForRelease = false;
 };

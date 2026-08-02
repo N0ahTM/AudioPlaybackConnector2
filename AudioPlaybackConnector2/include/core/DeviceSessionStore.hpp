@@ -1,5 +1,6 @@
 #pragma once
 
+#include <core/DevicePickerSnapshot.hpp>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -43,6 +44,7 @@ public:
     [[nodiscard]] std::optional<DeviceConnectionInfo> ExtractConnection(winrt::hstring const& deviceId);
     [[nodiscard]] std::vector<std::pair<std::wstring, DeviceConnectionInfo>> ExtractAllConnections();
     [[nodiscard]] std::vector<std::pair<std::wstring, DeviceConnectionInfo>> GetConnectionsSnapshot() const;
+    [[nodiscard]] apc::device_picker::DeviceActivitySnapshot GetDevicePickerActivitySnapshot() const;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Mutations //////////////////////////////////////////////////////////////////////////////////////*/

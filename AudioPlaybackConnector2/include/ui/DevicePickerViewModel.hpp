@@ -1,53 +1,47 @@
 #pragma once
 
+#include <core/DevicePickerSnapshot.hpp>
 #include <memory>
-#include <vector>
+#include <optional>
 
 class DeviceManager;
 class Settings;
-
-struct CachedDevicePickerDevice {
-    winrt::hstring Id;
-    winrt::hstring Name;
-};
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Device Picker View Model //////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-struct DevicePickerItemViewModel {
-    winrt::hstring Id;
-    winrt::hstring Name;
-    bool IsConnected = false;
-    bool IsBusy = false;
-};
-
 class DevicePickerViewModel {
 public:
+    using TimePoint = apc::device_picker::DevicePickerSnapshotCache::TimePoint;
+
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
     void SetDeviceManager(std::weak_ptr<DeviceManager> manager);
     void SetSettings(std::weak_ptr<Settings> settings);
-    void SetDevices(winrt::Windows::Devices::Enumeration::DeviceInformationCollection const& devices);
-    [[nodiscard]] bool Empty() const noexcept;
-    [[nodiscard]] std::vector<DevicePickerItemViewModel> SnapshotItems() const;
-    [[nodiscard]] bool CanSelect(winrt::hstring const& id) const;
+    void SetDevices(winrt::Windows::Devices::Enumeration::DeviceInformationCollection const& devices,
+                    TimePoint refreshedAt = apc::device_picker::DevicePickerSnapshotCache::Clock::now());
+    [[nodiscard]] bool SynchronizeInventoryFromManager(
+        TimePoint refreshedAt = apc::device_picker::DevicePickerSnapshotCache::Clock::now());
+    void InvalidateInventory() noexcept;
+    void Clear() noexcept;
+    [[nodiscard]] bool HasInventory() const noexcept;
+    [[nodiscard]] bool
+    IsInventoryFresh(TimePoint now = apc::device_picker::DevicePickerSnapshotCache::Clock::now()) const noexcept;
+    [[nodiscard]] apc::device_picker::DevicePickerSnapshot const&
+    RefreshSnapshot(TimePoint now = apc::device_picker::DevicePickerSnapshotCache::Clock::now());
+    [[nodiscard]] apc::device_picker::DevicePickerSnapshot const& CachedSnapshot() const noexcept;
+    [[nodiscard]] bool CanSelect(winrt::hstring const& id);
 
 private:
-    /*------------------------------------------------------------------------------------------------------------*/
-    /*//////// Helpers ///////////////////////////////////////////////////////////////////////////////////////////*/
-    /*------------------------------------------------------------------------------------------------------------*/
-
-    [[nodiscard]] bool IsConnected(winrt::hstring const& id) const;
-    [[nodiscard]] bool IsBusy(winrt::hstring const& id) const;
-
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
     std::weak_ptr<DeviceManager> m_manager;
     std::weak_ptr<Settings> m_settings;
-    std::vector<CachedDevicePickerDevice> m_devices;
+    apc::device_picker::DevicePickerSnapshotCache m_cache;
+    std::optional<std::uint64_t> m_sourceInventoryGeneration;
 };

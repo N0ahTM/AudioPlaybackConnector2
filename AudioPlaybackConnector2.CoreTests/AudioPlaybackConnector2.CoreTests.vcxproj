@@ -61,7 +61,7 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp23</LanguageStandard>
       <AdditionalIncludeDirectories>..\AudioPlaybackConnector2\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>APC_RECONNECT_CONTROLLER_STANDALONE;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>APC_DEVICE_PICKER_SNAPSHOT_STANDALONE;APC_RECONNECT_CONTROLLER_STANDALONE;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
     <Link>
@@ -87,12 +87,15 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\AdaptiveResourcePolicyTests.cpp" />
+    <ClCompile Include="src\DevicePickerSnapshotTests.cpp" />
     <ClCompile Include="src\ReconnectControllerTests.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveResourcePolicy.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\DevicePickerSnapshot.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\ReconnectController.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveResourcePolicy.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DevicePickerSnapshot.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\ReconnectController.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\ToastXmlSanitizer.hpp" />
   </ItemGroup>

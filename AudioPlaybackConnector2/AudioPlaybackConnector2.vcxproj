@@ -143,6 +143,7 @@
     <ClInclude Include="include\core\AudioConnectionService.hpp" />
     <ClInclude Include="include\core\DeviceDiscoveryService.hpp" />
     <ClInclude Include="include\core\DeviceManagerDiagnostics.hpp" />
+    <ClInclude Include="include\core\DevicePickerSnapshot.hpp" />
     <ClInclude Include="include\core\DeviceSessionStore.hpp" />
     <ClInclude Include="include\core\ReconnectController.hpp" />
     <ClInclude Include="include\core\DeviceManager.hpp" />
@@ -202,6 +203,9 @@
     <ClCompile Include="src\core\AudioConnectionService.cpp" />
     <ClCompile Include="src\core\DeviceDiscoveryService.cpp" />
     <ClCompile Include="src\core\DeviceManagerDiagnostics.cpp" />
+    <ClCompile Include="src\core\DevicePickerSnapshot.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="src\core\DeviceSessionStore.cpp" />
     <ClCompile Include="src\core\ReconnectController.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>

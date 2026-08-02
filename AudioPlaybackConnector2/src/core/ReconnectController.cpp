@@ -118,6 +118,15 @@ bool ReconnectController::HasPendingTimers() const {
         m_states, [](auto const& entry) { return entry.second.TimerPending || entry.second.AttemptInProgress; });
 }
 
+std::vector<std::wstring> ReconnectController::PendingDeviceIds() const {
+    std::vector<std::wstring> result;
+    result.reserve(m_states.size());
+    for (auto const& [id, state] : m_states) {
+        if (state.TimerPending || state.AttemptInProgress) result.push_back(id);
+    }
+    return result;
+}
+
 ReconnectController::ScheduleDecision ReconnectController::PrepareSchedule(std::wstring_view deviceId, bool blocked) {
     const auto key = DeviceKey(deviceId);
     auto& state = m_states[key];

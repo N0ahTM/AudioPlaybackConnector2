@@ -106,6 +106,26 @@ std::vector<std::pair<std::wstring, DeviceConnectionInfo>> DeviceSessionStore::G
     return result;
 }
 
+apc::device_picker::DeviceActivitySnapshot DeviceSessionStore::GetDevicePickerActivitySnapshot() const {
+    auto guard = m_lock.lock_shared();
+    apc::device_picker::DeviceActivitySnapshot result;
+    result.ConnectedIds.reserve(m_connections.size());
+    for (auto const& [id, connection] : m_connections) {
+        if (connection.IsOpen) result.ConnectedIds.insert(id);
+    }
+
+    result.BusyIds.reserve(m_connectingIds.size() + m_reconnectingIds.size() + m_disconnectingIds.size());
+    result.BusyIds.insert(m_reconnectingIds.begin(), m_reconnectingIds.end());
+    result.BusyIds.insert(m_disconnectingIds.begin(), m_disconnectingIds.end());
+    for (auto const& id : m_connectingIds) {
+        auto connection = m_connections.find(id);
+        if (connection == m_connections.end() || !connection->second.IsOpen) {
+            result.BusyIds.insert(id);
+        }
+    }
+    return result;
+}
+
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Mutations //////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/

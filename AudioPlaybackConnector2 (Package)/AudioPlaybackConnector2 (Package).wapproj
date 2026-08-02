@@ -171,10 +171,4 @@
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.0.1" />
   </ItemGroup>
   <Import Project="$(WapProjPath)\Microsoft.DesktopBridge.targets" />
-  <Target Name="BeforeGenerateAppxPackageRecipe">
-    <Message Importance="High" Text="Building AudioPlaybackConnector2.Control package payloads ($(Configuration))." />
-    <MSBuild Projects="..\AudioPlaybackConnector2.Control\AudioPlaybackConnector2.Control.vcxproj" Targets="Build" Properties="Configuration=$(Configuration);Platform=Win32;PreferredToolArchitecture=x64" />
-    <MSBuild Projects="..\AudioPlaybackConnector2.Control\AudioPlaybackConnector2.Control.vcxproj" Targets="Build" Properties="Configuration=$(Configuration);Platform=x64;PreferredToolArchitecture=x64" />
-    <MSBuild Projects="..\AudioPlaybackConnector2.Control\AudioPlaybackConnector2.Control.vcxproj" Targets="Build" Properties="Configuration=$(Configuration);Platform=ARM64;PreferredToolArchitecture=x64" />
-  </Target>
 </Project>

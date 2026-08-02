@@ -32,8 +32,9 @@ struct DevicePickerView : DevicePickerViewT<DevicePickerView> {
                     std::function<void(winrt::hstring)> onDeviceReconnect = nullptr,
                     std::function<void()> onDisconnectAll = nullptr,
                     std::function<void()> onReconnectAll = nullptr);
-    void LoadDevices();
+    [[nodiscard]] bool LoadDevices();
     void CancelLoadDevices();
+    void PrepareForRelease() noexcept;
     void RefreshDeviceStates();
 
 private:
@@ -80,7 +81,9 @@ private:
         m_refreshDevicesOp{nullptr};
     std::unordered_map<std::wstring, std::chrono::steady_clock::time_point> m_pendingDeviceActions;
     std::chrono::steady_clock::time_point m_pendingGlobalActionStarted{};
+    std::chrono::steady_clock::time_point m_lastSuccessfulLoad{};
     bool m_pendingGlobalAction = false;
+    std::atomic<bool> m_preparedForRelease = false;
 };
 } // namespace winrt::AudioPlaybackConnector2::implementation
 

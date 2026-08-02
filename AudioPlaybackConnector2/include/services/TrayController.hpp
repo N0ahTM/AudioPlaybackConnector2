@@ -45,6 +45,7 @@ public:
     void SetDeviceManager(std::shared_ptr<DeviceManager> deviceManager);
     void SetSettings(std::shared_ptr<Settings> settings);
     void PreloadDevicePicker();
+    void ReleaseDevicePicker();
     void Teardown() noexcept;
 
     /*------------------------------------------------------------------------------------------------------------*/
@@ -83,7 +84,8 @@ private:
     /*//////// Internal Helpers //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    void EnsureDevicePickerViewCreated();
+    [[nodiscard]] bool EnsureDevicePickerViewCreated() noexcept;
+    void ReleaseDevicePickerOnUIThread() noexcept;
     void LaunchBluetoothSettings();
     winrt::Microsoft::UI::Xaml::Controls::Flyout CreatePickerFlyout();
     void ReconcileTrayStateFromDeviceSnapshot(std::wstring_view reason);
@@ -131,5 +133,6 @@ private:
     std::atomic<PickerFlyoutState> m_pickerFlyoutState{PickerFlyoutState::Closed};
 
     bool m_devicePickerPreloaded = false;
+    bool m_releaseDevicePickerPending = false;
     std::atomic_bool m_isTearingDown = false;
 };

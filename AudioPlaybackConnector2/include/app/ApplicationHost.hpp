@@ -97,6 +97,7 @@ private:
     /*------------------------------------------------------------------------------------------------------------*/
 
     winrt::Microsoft::UI::Xaml::Window m_mainWindow{nullptr};
+    winrt::event_token m_mainWindowLoadedToken{};
     HWND m_hwnd = nullptr;
 
     std::shared_ptr<::Settings> m_settings;

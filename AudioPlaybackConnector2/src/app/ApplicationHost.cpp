@@ -272,6 +272,15 @@ void ApplicationHost::Start() {
 void ApplicationHost::PerformTeardown(bool saveLastConnected) noexcept {
     if (m_exiting.exchange(true)) return;
 
+    if (m_mainWindowLoadedToken.value != 0 && m_mainWindow) {
+        try {
+            if (auto root = m_mainWindow.Content().try_as<Controls::Grid>()) {
+                root.Loaded(m_mainWindowLoadedToken);
+            }
+        } catch (...) {
+        }
+        m_mainWindowLoadedToken = {};
+    }
     m_powerTransitionCoordinator.Cancel();
     m_commandLineControlServer.Stop();
     m_settingsWindowPresenter.Close();
@@ -345,8 +354,12 @@ void ApplicationHost::SetupMainWindow() {
     // Loaded fires after the element is added to the visual tree and XamlRoot
     // has been assigned, which is required for MenuFlyout anchoring.
     auto weak = weak_from_this();
-    root.Loaded([weak, root](auto&, auto&) {
+    m_mainWindowLoadedToken = root.Loaded([weak, root](auto&, auto&) {
         if (auto self = weak.lock()) {
+            if (self->m_mainWindowLoadedToken.value != 0) {
+                root.Loaded(self->m_mainWindowLoadedToken);
+                self->m_mainWindowLoadedToken = {};
+            }
             self->OnMainWindowLoaded(root);
         }
     });

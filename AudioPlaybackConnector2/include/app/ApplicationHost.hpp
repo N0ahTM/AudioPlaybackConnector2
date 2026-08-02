@@ -14,6 +14,7 @@
 #include <chrono>
 #include <mutex>
 #include <optional>
+#include <stop_token>
 #include <string_view>
 
 class DeviceManager;
@@ -69,7 +70,8 @@ private:
 
     void ShowSettingsWindow();
     void ExitApplication();
-    apc::control::Response HandleControlCommand(apc::control::Request const& request);
+    apc::control::Response
+    HandleControlCommand(apc::control::Request const& request, std::stop_token stopToken, std::uint64_t deadline);
     void PerformTeardown(bool saveLastConnected) noexcept;
     void RunOnUIThread(std::function<void()> work);
 

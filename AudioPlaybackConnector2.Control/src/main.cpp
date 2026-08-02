@@ -18,6 +18,7 @@ namespace {
 constexpr DWORD c_initialPipeWaitMs = 250;
 constexpr DWORD c_launchPipeWaitMs = 10000;
 constexpr DWORD c_retryIntervalMs = 200;
+constexpr DWORD c_pipeExchangeTimeoutMs = 35000;
 
 struct ParseResult {
     bool Send = false;
@@ -128,13 +129,22 @@ ParseResult ParseTargetOptions(apc::control::CommandType command, int startIndex
         } else if (EqualsIgnoreCase(arg, L"--raw")) {
             request.Flags |= apc::control::CommandFlagRaw;
         } else if (EqualsIgnoreCase(arg, L"--last")) {
+            if (request.Target != apc::control::TargetKind::None || positionalTarget) {
+                return Error(3, L"Only one device target selector is supported.\n");
+            }
             request.Target = apc::control::TargetKind::Last;
             request.Payload.clear();
         } else if (EqualsIgnoreCase(arg, L"--default")) {
+            if (request.Target != apc::control::TargetKind::None || positionalTarget) {
+                return Error(3, L"Only one device target selector is supported.\n");
+            }
             request.Target = apc::control::TargetKind::Default;
             request.Payload.clear();
         } else if (EqualsIgnoreCase(arg, L"--id") || EqualsIgnoreCase(arg, L"--name") ||
                    EqualsIgnoreCase(arg, L"--mac") || EqualsIgnoreCase(arg, L"--alias")) {
+            if (request.Target != apc::control::TargetKind::None || positionalTarget) {
+                return Error(3, L"Only one device target selector is supported.\n");
+            }
             auto value = ReadOptionValue(i, argc, argv);
             if (!value) return Error(3, L"Missing value for " + std::wstring(arg) + L".\n");
             request.Payload = std::move(*value);
@@ -144,6 +154,8 @@ ParseResult ParseTargetOptions(apc::control::CommandType command, int startIndex
             if (EqualsIgnoreCase(arg, L"--alias")) request.Target = apc::control::TargetKind::Alias;
         } else if (!arg.empty() && arg.front() == L'-') {
             return Error(3, L"Unknown option: " + std::wstring(arg) + L"\n");
+        } else if (request.Target != apc::control::TargetKind::None) {
+            return Error(3, L"A positional target cannot be combined with a target selector.\n");
         } else if (!positionalTarget) {
             positionalTarget = std::wstring(arg);
         } else {
@@ -230,6 +242,9 @@ ParseResult ParseAliasSetOptions(int startIndex, int argc, wchar_t** argv) {
             alias = std::move(*value);
         } else if (EqualsIgnoreCase(arg, L"--id") || EqualsIgnoreCase(arg, L"--name") ||
                    EqualsIgnoreCase(arg, L"--mac") || EqualsIgnoreCase(arg, L"--alias")) {
+            if (request.Target != apc::control::TargetKind::None || positionalTarget) {
+                return Error(3, L"Only one device target selector is supported.\n");
+            }
             auto value = ReadOptionValue(i, argc, argv);
             if (!value) return Error(3, L"Missing value for " + std::wstring(arg) + L".\n");
             request.Payload = std::move(*value);
@@ -428,8 +443,8 @@ bool TrySendOnce(apc::control::Request const& request, apc::control::Response& r
     const auto deadline = GetTickCount64() + waitMs;
 
     while (true) {
-        HANDLE pipe =
-            CreateFileW(pipeName.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+        HANDLE pipe = CreateFileW(
+            pipeName.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
         if (pipe != INVALID_HANDLE_VALUE) {
             const auto closePipe = [pipe]() { CloseHandle(pipe); };
             struct Guard {
@@ -437,8 +452,13 @@ bool TrySendOnce(apc::control::Request const& request, apc::control::Response& r
                 ~Guard() { Close(); }
             } guard{closePipe};
 
-            if (!apc::control::WriteRequest(pipe, request)) return false;
-            return apc::control::ReadResponse(pipe, response);
+            const auto exchangeDeadline = apc::control::DeadlineAfter(c_pipeExchangeTimeoutMs);
+            if (apc::control::WriteRequest(pipe, request, nullptr, exchangeDeadline) !=
+                apc::control::IoStatus::Success) {
+                return false;
+            }
+            return apc::control::ReadResponse(pipe, response, nullptr, exchangeDeadline) ==
+                   apc::control::IoStatus::Success;
         }
 
         const auto error = GetLastError();

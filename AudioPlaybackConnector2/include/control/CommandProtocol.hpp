@@ -80,6 +80,8 @@ struct Response {
     std::wstring Payload;
 };
 
+enum class IoStatus { Success, Timeout, Cancelled, Closed, InvalidData, Failed };
+
 inline std::wstring PipeName() {
     DWORD sessionId = 0;
     if (!ProcessIdToSessionId(GetCurrentProcessId(), &sessionId)) {
@@ -99,52 +101,112 @@ inline std::optional<uint32_t> PayloadByteCount(std::wstring_view payload) noexc
     return byteCount;
 }
 
-inline bool ReadExact(HANDLE pipe, void* buffer, uint32_t byteCount) noexcept {
+inline uint64_t DeadlineAfter(DWORD timeoutMs) noexcept {
+    return GetTickCount64() + timeoutMs;
+}
+
+inline DWORD RemainingWait(uint64_t deadline) noexcept {
+    if (deadline == 0) return INFINITE;
+    const auto now = GetTickCount64();
+    if (now >= deadline) return 0;
+    return static_cast<DWORD>(std::min<uint64_t>(deadline - now, MAXDWORD - 1));
+}
+
+inline IoStatus
+TransferExact(HANDLE pipe, void* buffer, uint32_t byteCount, bool write, HANDLE stopEvent, uint64_t deadline) noexcept {
+    struct EventHandle {
+        HANDLE Value = nullptr;
+        ~EventHandle() {
+            if (Value) CloseHandle(Value);
+        }
+    } event{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+    if (!event.Value) return IoStatus::Failed;
+
     auto* cursor = static_cast<uint8_t*>(buffer);
     uint32_t remaining = byteCount;
     while (remaining > 0) {
-        DWORD bytesRead = 0;
+        if (stopEvent && WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0) return IoStatus::Cancelled;
+        if (deadline != 0 && RemainingWait(deadline) == 0) return IoStatus::Timeout;
+
+        ResetEvent(event.Value);
+        OVERLAPPED overlapped{};
+        overlapped.hEvent = event.Value;
+        DWORD transferred = 0;
         const DWORD chunk = std::min<DWORD>(remaining, std::numeric_limits<DWORD>::max());
-        if (!ReadFile(pipe, cursor, chunk, &bytesRead, nullptr) || bytesRead == 0) return false;
-        cursor += bytesRead;
-        remaining -= bytesRead;
+        const BOOL started = write ? WriteFile(pipe, cursor, chunk, &transferred, &overlapped)
+                                   : ReadFile(pipe, cursor, chunk, &transferred, &overlapped);
+        if (!started) {
+            const auto error = GetLastError();
+            if (error != ERROR_IO_PENDING) {
+                if (error == ERROR_BROKEN_PIPE || error == ERROR_PIPE_NOT_CONNECTED || error == ERROR_NO_DATA) {
+                    return IoStatus::Closed;
+                }
+                return error == ERROR_OPERATION_ABORTED ? IoStatus::Cancelled : IoStatus::Failed;
+            }
+
+            HANDLE handles[]{event.Value, stopEvent};
+            const DWORD waitResult =
+                WaitForMultipleObjects(stopEvent ? 2u : 1u, handles, FALSE, RemainingWait(deadline));
+            if (waitResult == WAIT_TIMEOUT || (stopEvent && waitResult == WAIT_OBJECT_0 + 1)) {
+                CancelIoEx(pipe, &overlapped);
+                (void)GetOverlappedResult(pipe, &overlapped, &transferred, TRUE);
+                return waitResult == WAIT_TIMEOUT ? IoStatus::Timeout : IoStatus::Cancelled;
+            }
+            if (waitResult != WAIT_OBJECT_0) {
+                CancelIoEx(pipe, &overlapped);
+                (void)GetOverlappedResult(pipe, &overlapped, &transferred, TRUE);
+                return IoStatus::Failed;
+            }
+            if (!GetOverlappedResult(pipe, &overlapped, &transferred, FALSE)) {
+                const auto completionError = GetLastError();
+                if (completionError == ERROR_BROKEN_PIPE || completionError == ERROR_PIPE_NOT_CONNECTED ||
+                    completionError == ERROR_NO_DATA) {
+                    return IoStatus::Closed;
+                }
+                return completionError == ERROR_OPERATION_ABORTED ? IoStatus::Cancelled : IoStatus::Failed;
+            }
+        }
+
+        if (transferred == 0) return IoStatus::Closed;
+        cursor += transferred;
+        remaining -= transferred;
     }
-    return true;
+    return IoStatus::Success;
 }
 
-inline bool WriteExact(HANDLE pipe, const void* buffer, uint32_t byteCount) noexcept {
-    const auto* cursor = static_cast<const uint8_t*>(buffer);
-    uint32_t remaining = byteCount;
-    while (remaining > 0) {
-        DWORD bytesWritten = 0;
-        const DWORD chunk = std::min<DWORD>(remaining, std::numeric_limits<DWORD>::max());
-        if (!WriteFile(pipe, cursor, chunk, &bytesWritten, nullptr) || bytesWritten == 0) return false;
-        cursor += bytesWritten;
-        remaining -= bytesWritten;
-    }
-    return true;
+inline IoStatus ReadExact(HANDLE pipe, void* buffer, uint32_t byteCount, HANDLE stopEvent, uint64_t deadline) noexcept {
+    return TransferExact(pipe, buffer, byteCount, false, stopEvent, deadline);
 }
 
-inline bool ReadRequest(HANDLE pipe, Request& request) {
+inline IoStatus
+WriteExact(HANDLE pipe, const void* buffer, uint32_t byteCount, HANDLE stopEvent, uint64_t deadline) noexcept {
+    return TransferExact(pipe, const_cast<void*>(buffer), byteCount, true, stopEvent, deadline);
+}
+
+inline IoStatus ReadRequest(HANDLE pipe, Request& request, HANDLE stopEvent, uint64_t deadline) {
     RequestHeader header{};
-    if (!ReadExact(pipe, &header, sizeof(header))) return false;
+    auto status = ReadExact(pipe, &header, sizeof(header), stopEvent, deadline);
+    if (status != IoStatus::Success) return status;
     if (header.Magic != c_requestMagic || header.Version != c_protocolVersion ||
         !IsPayloadByteCountValid(header.PayloadBytes))
-        return false;
+        return IoStatus::InvalidData;
 
     std::wstring payload(header.PayloadBytes / sizeof(wchar_t), L'\0');
-    if (header.PayloadBytes > 0 && !ReadExact(pipe, payload.data(), header.PayloadBytes)) return false;
+    if (header.PayloadBytes > 0) {
+        status = ReadExact(pipe, payload.data(), header.PayloadBytes, stopEvent, deadline);
+        if (status != IoStatus::Success) return status;
+    }
 
     request.Command = static_cast<CommandType>(header.Command);
     request.Target = static_cast<TargetKind>(header.Target);
     request.Flags = header.Flags;
     request.Payload = std::move(payload);
-    return true;
+    return IoStatus::Success;
 }
 
-inline bool WriteRequest(HANDLE pipe, Request const& request) {
+inline IoStatus WriteRequest(HANDLE pipe, Request const& request, HANDLE stopEvent, uint64_t deadline) {
     auto payloadBytes = PayloadByteCount(request.Payload);
-    if (!payloadBytes) return false;
+    if (!payloadBytes) return IoStatus::InvalidData;
 
     RequestHeader header{};
     header.Command = static_cast<uint32_t>(request.Command);
@@ -152,35 +214,41 @@ inline bool WriteRequest(HANDLE pipe, Request const& request) {
     header.Flags = request.Flags;
     header.PayloadBytes = *payloadBytes;
 
-    return WriteExact(pipe, &header, sizeof(header)) &&
-           (*payloadBytes == 0 || WriteExact(pipe, request.Payload.data(), *payloadBytes));
+    auto status = WriteExact(pipe, &header, sizeof(header), stopEvent, deadline);
+    if (status != IoStatus::Success || *payloadBytes == 0) return status;
+    return WriteExact(pipe, request.Payload.data(), *payloadBytes, stopEvent, deadline);
 }
 
-inline bool ReadResponse(HANDLE pipe, Response& response) {
+inline IoStatus ReadResponse(HANDLE pipe, Response& response, HANDLE stopEvent, uint64_t deadline) {
     ResponseHeader header{};
-    if (!ReadExact(pipe, &header, sizeof(header))) return false;
+    auto status = ReadExact(pipe, &header, sizeof(header), stopEvent, deadline);
+    if (status != IoStatus::Success) return status;
     if (header.Magic != c_responseMagic || header.Version != c_protocolVersion ||
         !IsPayloadByteCountValid(header.PayloadBytes))
-        return false;
+        return IoStatus::InvalidData;
 
     std::wstring payload(header.PayloadBytes / sizeof(wchar_t), L'\0');
-    if (header.PayloadBytes > 0 && !ReadExact(pipe, payload.data(), header.PayloadBytes)) return false;
+    if (header.PayloadBytes > 0) {
+        status = ReadExact(pipe, payload.data(), header.PayloadBytes, stopEvent, deadline);
+        if (status != IoStatus::Success) return status;
+    }
 
     response.Code = static_cast<ExitCode>(header.ExitCode);
     response.Payload = std::move(payload);
-    return true;
+    return IoStatus::Success;
 }
 
-inline bool WriteResponse(HANDLE pipe, Response const& response) {
+inline IoStatus WriteResponse(HANDLE pipe, Response const& response, HANDLE stopEvent, uint64_t deadline) {
     auto payloadBytes = PayloadByteCount(response.Payload);
-    if (!payloadBytes) return false;
+    if (!payloadBytes) return IoStatus::InvalidData;
 
     ResponseHeader header{};
     header.ExitCode = static_cast<uint32_t>(response.Code);
     header.PayloadBytes = *payloadBytes;
 
-    return WriteExact(pipe, &header, sizeof(header)) &&
-           (*payloadBytes == 0 || WriteExact(pipe, response.Payload.data(), *payloadBytes));
+    auto status = WriteExact(pipe, &header, sizeof(header), stopEvent, deadline);
+    if (status != IoStatus::Success || *payloadBytes == 0) return status;
+    return WriteExact(pipe, response.Payload.data(), *payloadBytes, stopEvent, deadline);
 }
 
 } // namespace apc::control

@@ -38,7 +38,46 @@ struct ControlDeviceInfo {
 };
 
 constexpr DWORD c_controlDeviceRefreshTimeoutMs = 2500;
+constexpr DWORD c_controlWaitPollMs = 50;
 constexpr int c_hiddenAnchorCoordinate = -32000;
+
+enum class ControlWaitResult { Completed, Cancelled, TimedOut, Failed };
+
+template <typename TAsync>
+ControlWaitResult WaitForControlAsync(TAsync const& operation, std::stop_token stopToken, std::uint64_t deadline) {
+    std::shared_ptr<void> completed(CreateEventW(nullptr, TRUE, FALSE, nullptr), [](void* handle) noexcept {
+        if (handle) CloseHandle(static_cast<HANDLE>(handle));
+    });
+    if (!completed) return ControlWaitResult::Failed;
+
+    operation.Completed(
+        [completed](auto const&, auto const&) noexcept { SetEvent(static_cast<HANDLE>(completed.get())); });
+    while (true) {
+        if (stopToken.stop_requested()) {
+            operation.Cancel();
+            return ControlWaitResult::Cancelled;
+        }
+
+        const auto remaining = apc::control::RemainingWait(deadline);
+        if (remaining == 0) {
+            operation.Cancel();
+            return ControlWaitResult::TimedOut;
+        }
+        const auto waitResult =
+            WaitForSingleObject(static_cast<HANDLE>(completed.get()), std::min<DWORD>(remaining, c_controlWaitPollMs));
+        if (waitResult == WAIT_OBJECT_0) break;
+        if (waitResult != WAIT_TIMEOUT) {
+            operation.Cancel();
+            return ControlWaitResult::Failed;
+        }
+    }
+
+    switch (operation.Status()) {
+        case winrt::Windows::Foundation::AsyncStatus::Completed: return ControlWaitResult::Completed;
+        case winrt::Windows::Foundation::AsyncStatus::Canceled: return ControlWaitResult::Cancelled;
+        default: return ControlWaitResult::Failed;
+    }
+}
 
 bool IsMutatingControlCommand(apc::control::CommandType command) noexcept {
     using apc::control::CommandType;
@@ -103,34 +142,16 @@ void ConfigureHiddenMainWindowAnchor(HWND hwnd) noexcept {
     LogMainWindowAnchor(hwnd, L"configured-hidden-anchor");
 }
 
-std::optional<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
-TryRefreshControlDevices(std::shared_ptr<DeviceManager> const& manager) {
+std::optional<winrt::Windows::Devices::Enumeration::DeviceInformationCollection> TryRefreshControlDevices(
+    std::shared_ptr<DeviceManager> const& manager, std::stop_token stopToken, std::uint64_t commandDeadline) {
     if (!manager) return std::nullopt;
 
     try {
         auto operation = manager->RefreshDevicesAsync();
-        std::shared_ptr<void> completed(CreateEventW(nullptr, TRUE, FALSE, nullptr), [](void* handle) noexcept {
-            if (handle) {
-                CloseHandle(static_cast<HANDLE>(handle));
-            }
-        });
-        if (!completed) {
-            DebugTrace(L"[App] Control command device refresh skipped; failed to create wait event");
-            return std::nullopt;
-        }
-
-        operation.Completed(
-            [completed](auto const&, auto const&) noexcept { SetEvent(static_cast<HANDLE>(completed.get())); });
-
-        const DWORD waitResult =
-            WaitForSingleObject(static_cast<HANDLE>(completed.get()), c_controlDeviceRefreshTimeoutMs);
-        if (waitResult != WAIT_OBJECT_0) {
-            operation.Cancel();
+        const auto localDeadline = apc::control::DeadlineAfter(c_controlDeviceRefreshTimeoutMs);
+        const auto refreshDeadline = commandDeadline == 0 ? localDeadline : std::min(commandDeadline, localDeadline);
+        if (WaitForControlAsync(operation, stopToken, refreshDeadline) != ControlWaitResult::Completed) {
             DebugTrace(L"[App] Control command device refresh timed out");
-            return std::nullopt;
-        }
-
-        if (operation.Status() != winrt::Windows::Foundation::AsyncStatus::Completed) {
             return std::nullopt;
         }
 
@@ -509,9 +530,11 @@ void ApplicationHost::InitializeDeviceManager() {
 void ApplicationHost::InitializeCommandLineControl() {
     DebugTrace(L"[App] InitializeCommandLineControl()");
     auto weak = weak_from_this();
-    m_commandLineControlServer.Start([weak](apc::control::Request const& request) -> apc::control::Response {
+    m_commandLineControlServer.Start([weak](apc::control::Request const& request,
+                                            std::stop_token stopToken,
+                                            std::uint64_t deadline) -> apc::control::Response {
         if (auto self = weak.lock()) {
-            return self->HandleControlCommand(request);
+            return self->HandleControlCommand(request, stopToken, deadline);
         }
         return {apc::control::ExitCode::Unavailable, L""};
     });
@@ -803,7 +826,9 @@ void ApplicationHost::ExitApplication() {
     DebugTrace(L"[App] ExitApplication() complete");
 }
 
-apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Request const& request) {
+apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Request const& request,
+                                                             std::stop_token stopToken,
+                                                             std::uint64_t deadline) {
     using apc::control::CommandFlagJson;
     using apc::control::CommandFlagRaw;
     using apc::control::CommandType;
@@ -827,7 +852,8 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
         return {code, std::wstring(root.Stringify())};
     };
 
-    if (m_exiting.load() || !m_deviceManager || !m_settings) {
+    if (stopToken.stop_requested() || apc::control::RemainingWait(deadline) == 0 || m_exiting.load() ||
+        !m_deviceManager || !m_settings) {
         return makeResponse(ExitCode::Unavailable, _("Command_NotReady"));
     }
 
@@ -863,7 +889,7 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
         }
     }
 
-    auto buildDevices = [this](bool refreshLiveDevices) {
+    auto buildDevices = [this, stopToken, deadline](bool refreshLiveDevices) {
         std::unordered_map<std::wstring, ControlDeviceInfo> byId;
         auto upsert = [&byId](std::wstring id, std::wstring name, std::wstring alias, bool connected, bool known) {
             if (id.empty()) return;
@@ -880,7 +906,7 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
         };
 
         if (refreshLiveDevices) {
-            if (auto devices = TryRefreshControlDevices(m_deviceManager)) {
+            if (auto devices = TryRefreshControlDevices(m_deviceManager, stopToken, deadline)) {
                 for (auto const& device : *devices) {
                     upsert(std::wstring(device.Id()), std::wstring(device.Name()), L"", false, false);
                 }
@@ -1119,7 +1145,19 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
                                          FormatResource("Command_DeviceAlreadyConnected", target.Name));
         }
 
-        m_deviceManager->ConnectAsync(winrt::hstring(target.Id)).get();
+        auto connectOperation = m_deviceManager->ConnectAsync(winrt::hstring(target.Id));
+        const auto waitResult = WaitForControlAsync(connectOperation, stopToken, deadline);
+        if (waitResult != ControlWaitResult::Completed) {
+            const auto code =
+                waitResult == ControlWaitResult::Cancelled ? ExitCode::Unavailable : ExitCode::OperationFailed;
+            return makeOperationResponse(code,
+                                         action,
+                                         target.Id,
+                                         target.Name,
+                                         waitResult == ControlWaitResult::Cancelled
+                                             ? std::wstring(_("Command_NotReady"))
+                                             : FormatResource("Command_ConnectFailed", target.Name));
+        }
         if (!m_deviceManager->IsDeviceConnected(winrt::hstring(target.Id))) {
             return makeOperationResponse(ExitCode::OperationFailed,
                                          action,
@@ -1158,7 +1196,19 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
     };
 
     auto reconnectTarget = [&](TargetResolution const& target) -> Response {
-        m_deviceManager->ReconnectAsync(winrt::hstring(target.Id)).get();
+        auto reconnectOperation = m_deviceManager->ReconnectAsync(winrt::hstring(target.Id));
+        const auto waitResult = WaitForControlAsync(reconnectOperation, stopToken, deadline);
+        if (waitResult != ControlWaitResult::Completed) {
+            const auto code =
+                waitResult == ControlWaitResult::Cancelled ? ExitCode::Unavailable : ExitCode::OperationFailed;
+            return makeOperationResponse(code,
+                                         L"reconnect",
+                                         target.Id,
+                                         target.Name,
+                                         waitResult == ControlWaitResult::Cancelled
+                                             ? std::wstring(_("Command_NotReady"))
+                                             : FormatResource("Command_ReconnectFailed", target.Name));
+        }
         if (!m_deviceManager->IsDeviceConnected(winrt::hstring(target.Id))) {
             return makeOperationResponse(ExitCode::OperationFailed,
                                          L"reconnect",
@@ -1362,7 +1412,19 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
                 auto connected = m_deviceManager->GetConnectedDevices();
                 for (auto const& device : connected) {
                     if (!device.Id.empty()) {
-                        m_deviceManager->ReconnectAsync(winrt::hstring(device.Id)).get();
+                        auto operation = m_deviceManager->ReconnectAsync(winrt::hstring(device.Id));
+                        const auto waitResult = WaitForControlAsync(operation, stopToken, deadline);
+                        if (waitResult != ControlWaitResult::Completed) {
+                            const auto code = waitResult == ControlWaitResult::Cancelled ? ExitCode::Unavailable
+                                                                                         : ExitCode::OperationFailed;
+                            return makeOperationResponse(code,
+                                                         L"reconnect-all",
+                                                         device.Id,
+                                                         device.Name,
+                                                         waitResult == ControlWaitResult::Cancelled
+                                                             ? std::wstring(_("Command_NotReady"))
+                                                             : FormatResource("Command_ReconnectFailed", device.Name));
+                        }
                     }
                 }
                 return makeOperationResponse(

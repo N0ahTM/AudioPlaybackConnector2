@@ -128,6 +128,8 @@
     <ClInclude Include="include\pch.h" />
     <ClInclude Include="include\app\ApplicationHost.hpp" />
     <ClInclude Include="include\app\AdaptiveResourcePolicy.hpp" />
+    <ClInclude Include="include\app\ResourcePressureMonitor.hpp" />
+    <ClInclude Include="include\app\ResourcePressureState.hpp" />
     <ClInclude Include="include\app\AutoReconnectPlanner.hpp" />
     <ClInclude Include="include\app\DeviceEventRouter.hpp" />
     <ClInclude Include="include\app\PowerTransitionCoordinator.hpp" />
@@ -189,6 +191,12 @@
     </ClCompile>
     <ClCompile Include="src\app\ApplicationHost.cpp" />
     <ClCompile Include="src\app\AdaptiveResourcePolicy.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="src\app\ResourcePressureMonitor.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="src\app\ResourcePressureState.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="src\app\AutoReconnectPlanner.cpp" />

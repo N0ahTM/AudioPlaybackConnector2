@@ -29,6 +29,12 @@
     <ClCompile Include="src\app\AdaptiveResourcePolicy.cpp">
       <Filter>src\app</Filter>
     </ClCompile>
+    <ClCompile Include="src\app\ResourcePressureMonitor.cpp">
+      <Filter>src\app</Filter>
+    </ClCompile>
+    <ClCompile Include="src\app\ResourcePressureState.cpp">
+      <Filter>src\app</Filter>
+    </ClCompile>
     <ClCompile Include="src\app\AutoReconnectPlanner.cpp">
       <Filter>src\app</Filter>
     </ClCompile>
@@ -140,6 +146,12 @@
       <Filter>include\app</Filter>
     </ClInclude>
     <ClInclude Include="include\app\AdaptiveResourcePolicy.hpp">
+      <Filter>include\app</Filter>
+    </ClInclude>
+    <ClInclude Include="include\app\ResourcePressureMonitor.hpp">
+      <Filter>include\app</Filter>
+    </ClInclude>
+    <ClInclude Include="include\app\ResourcePressureState.hpp">
       <Filter>include\app</Filter>
     </ClInclude>
     <ClInclude Include="include\app\AutoReconnectPlanner.hpp">

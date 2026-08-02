@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <cwctype>
-#include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -373,19 +372,6 @@ std::optional<std::wstring> CurrentPackageFamilyName() {
     return familyName;
 }
 
-std::filesystem::path CurrentExecutablePath() {
-    std::wstring path(MAX_PATH, L'\0');
-    DWORD actual = 0;
-    while (true) {
-        actual = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
-        if (actual == 0) return {};
-        if (actual < path.size()) break;
-        path.resize(path.size() * 2);
-    }
-    path.resize(actual);
-    return path;
-}
-
 bool LaunchPackagedApp() {
     auto familyName = CurrentPackageFamilyName();
     if (!familyName) return false;
@@ -397,45 +383,6 @@ bool LaunchPackagedApp() {
     info.lpFile = target.c_str();
     info.nShow = SW_SHOWNORMAL;
     return ShellExecuteExW(&info) == TRUE;
-}
-
-bool LaunchLooseApp() {
-    const auto controlPath = CurrentExecutablePath();
-    if (controlPath.empty()) return false;
-
-    std::vector<std::filesystem::path> candidates;
-    const auto controlDir = controlPath.parent_path();
-    candidates.push_back(controlDir / L"AudioPlaybackConnector2.exe");
-    candidates.push_back(controlDir / L"AudioPlaybackConnector2" / L"AudioPlaybackConnector2.exe");
-    candidates.push_back(controlDir.parent_path() / L"AudioPlaybackConnector2" / L"AudioPlaybackConnector2.exe");
-
-    for (auto const& candidate : candidates) {
-        if (!std::filesystem::exists(candidate)) continue;
-
-        std::wstring commandLine = L"\"" + candidate.wstring() + L"\"";
-        STARTUPINFOW startupInfo{sizeof(startupInfo)};
-        PROCESS_INFORMATION processInfo{};
-        if (CreateProcessW(candidate.c_str(),
-                           commandLine.data(),
-                           nullptr,
-                           nullptr,
-                           FALSE,
-                           DETACHED_PROCESS,
-                           nullptr,
-                           candidate.parent_path().c_str(),
-                           &startupInfo,
-                           &processInfo)) {
-            CloseHandle(processInfo.hThread);
-            CloseHandle(processInfo.hProcess);
-            return true;
-        }
-    }
-
-    return false;
-}
-
-bool LaunchTrayApp() {
-    return LaunchPackagedApp() || LaunchLooseApp();
 }
 
 bool TrySendOnce(apc::control::Request const& request, apc::control::Response& response, DWORD waitMs) {
@@ -476,7 +423,7 @@ bool SendRequest(apc::control::Request const& request, apc::control::Response& r
     if (TrySendOnce(request, response, c_initialPipeWaitMs)) return true;
 
     if (request.Command == apc::control::CommandType::Status) return false;
-    if (!LaunchTrayApp()) return false;
+    if (!LaunchPackagedApp()) return false;
 
     return TrySendOnce(request, response, c_launchPipeWaitMs);
 }

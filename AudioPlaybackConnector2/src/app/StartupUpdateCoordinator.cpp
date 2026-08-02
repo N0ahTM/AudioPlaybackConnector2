@@ -27,7 +27,7 @@ winrt::Windows::Foundation::IAsyncAction StartupUpdateCoordinator::CheckForUpdat
     bool shouldCheck = false;
     {
         auto locked = settings.LockSharedData();
-        shouldCheck = locked->LastUpdateCheckUnixSeconds <= 0 ||
+        shouldCheck = locked->LastUpdateCheckUnixSeconds <= 0 || locked->LastUpdateCheckUnixSeconds > now ||
                       now - locked->LastUpdateCheckUnixSeconds >= c_startupUpdateCheckInterval.count();
     }
 
@@ -41,7 +41,7 @@ winrt::Windows::Foundation::IAsyncAction StartupUpdateCoordinator::CheckForUpdat
     if (exiting.load() || !notificationService) co_return;
     if (result.Status == UpdateCheckStatus::Failed) co_return;
 
-    bool notificationQueued = false;
+    bool notificationShown = false;
     bool shouldNotify = false;
     {
         auto locked = settings.LockSharedData();
@@ -51,13 +51,13 @@ winrt::Windows::Foundation::IAsyncAction StartupUpdateCoordinator::CheckForUpdat
 
     if (shouldNotify) {
         if (exiting.load()) co_return;
-        notificationQueued = notificationService->ShowUpdateAvailable(result.LatestVersion);
+        notificationShown = notificationService->ShowUpdateAvailable(result.LatestVersion);
     }
 
     {
         auto locked = settings.LockExclusiveData();
         locked->LastUpdateCheckUnixSeconds = now;
-        if (notificationQueued) {
+        if (notificationShown) {
             locked->LastNotifiedUpdateVersion = result.LatestVersion;
         }
     }

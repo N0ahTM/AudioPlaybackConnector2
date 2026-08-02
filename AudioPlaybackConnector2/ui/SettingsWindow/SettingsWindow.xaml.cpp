@@ -1260,9 +1260,12 @@ winrt::fire_and_forget SettingsWindow::SyncStartupTaskStateAsync() {
         DebugTrace(L"[SettingsWindow] SyncStartupTaskStateAsync failed: unknown exception");
     }
 
-    co_await ui;
-    if (requestId == m_startupRequestId.load()) {
-        SetStartupTaskBusy(false);
+    try {
+        co_await ui;
+        if (requestId == m_startupRequestId.load()) {
+            SetStartupTaskBusy(false);
+        }
+    } catch (...) {
     }
 }
 
@@ -1307,15 +1310,18 @@ winrt::fire_and_forget SettingsWindow::ApplyStartWithWindowsAsync(bool on) {
     }
 
     if (revertToggle) {
-        co_await ui;
-        if (requestId != m_startupRequestId.load()) co_return;
-        SetStartupTaskBusy(false);
-        if (auto settingsController = m_settingsController) {
-            settingsController->SetStartWithWindows(!on);
+        try {
+            co_await ui;
+            if (requestId != m_startupRequestId.load()) co_return;
+            SetStartupTaskBusy(false);
+            if (auto settingsController = m_settingsController) {
+                settingsController->SetStartWithWindows(!on);
+            }
+            m_suppressStartupToggle = true;
+            StartWithWindowsToggle().IsOn(!on);
+            m_suppressStartupToggle = false;
+        } catch (...) {
         }
-        m_suppressStartupToggle = true;
-        StartWithWindowsToggle().IsOn(!on);
-        m_suppressStartupToggle = false;
     }
 }
 

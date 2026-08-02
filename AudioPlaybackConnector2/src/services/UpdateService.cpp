@@ -12,6 +12,7 @@ constexpr std::wstring_view c_cachedAppInstallerFileName = L"AudioPlaybackConnec
 constexpr auto c_updateCheckTimeout = std::chrono::seconds{10};
 constexpr size_t c_maxReleaseJsonCharacters = 128 * 1024;
 constexpr uint64_t c_maxAppInstallerBytes = 1024 * 1024;
+std::atomic_bool g_appInstallerLaunchInProgress = false;
 
 struct ParsedVersion {
     std::array<uint64_t, 4> Parts{};
@@ -183,7 +184,9 @@ winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Storage::StorageFile
     auto requestTimedOut = std::make_shared<std::atomic<bool>>(false);
     auto request = client.GetAsync(winrt::Windows::Foundation::Uri(winrt::hstring(c_appInstallerUrl)));
     auto requestTimer = CreateOperationTimeout(request, requestTimedOut);
+    auto requestTimerGuard = wil::scope_exit([&]() noexcept { CancelOperationTimeout(requestTimer); });
     auto response = co_await request;
+    requestTimerGuard.release();
     CancelOperationTimeout(requestTimer);
     if (!response.IsSuccessStatusCode()) {
         auto message =
@@ -197,9 +200,12 @@ winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Storage::StorageFile
         throw winrt::hresult_error(E_FAIL, winrt::hstring(L"App Installer feed was too large"));
     }
 
+    auto readTimedOut = std::make_shared<std::atomic<bool>>(false);
     auto read = content.ReadAsStringAsync();
-    auto readTimer = CreateOperationTimeout(read, requestTimedOut);
+    auto readTimer = CreateOperationTimeout(read, readTimedOut);
+    auto readTimerGuard = wil::scope_exit([&]() noexcept { CancelOperationTimeout(readTimer); });
     auto xml = co_await read;
+    readTimerGuard.release();
     CancelOperationTimeout(readTimer);
     if (xml.size() > c_maxAppInstallerBytes) {
         throw winrt::hresult_error(E_FAIL, winrt::hstring(L"App Installer feed was too large"));
@@ -359,6 +365,13 @@ std::wstring_view UpdateService::LatestReleasePageUrl() {
 }
 
 winrt::fire_and_forget UpdateService::LaunchAppInstallerAsync() {
+    bool expected = false;
+    if (!g_appInstallerLaunchInProgress.compare_exchange_strong(expected, true)) {
+        DebugTrace(L"[UpdateService] App Installer launch already in progress");
+        co_return;
+    }
+    auto launchGuard = wil::scope_exit([]() noexcept { g_appInstallerLaunchInProgress = false; });
+
     try {
         auto file = co_await DownloadAppInstallerFileAsync();
         if (co_await winrt::Windows::System::Launcher::LaunchFileAsync(file)) {

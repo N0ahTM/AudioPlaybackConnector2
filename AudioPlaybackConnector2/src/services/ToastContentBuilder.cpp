@@ -1,26 +1,11 @@
 #include <pch.h>
 
 #include <services/ToastContentBuilder.hpp>
+#include <services/ToastXmlSanitizer.hpp>
 
 namespace {
 std::wstring_view AsView(winrt::hstring const& value) {
     return std::wstring_view(value.c_str(), value.size());
-}
-
-std::wstring XmlEscape(std::wstring_view value) {
-    std::wstring result;
-    result.reserve(value.size());
-    for (auto ch : value) {
-        switch (ch) {
-            case L'&': result += L"&amp;"; break;
-            case L'<': result += L"&lt;"; break;
-            case L'>': result += L"&gt;"; break;
-            case L'"': result += L"&quot;"; break;
-            case L'\'': result += L"&apos;"; break;
-            default: result += ch; break;
-        }
-    }
-    return result;
 }
 
 std::wstring UrlDecodeComponent(std::wstring_view value) {
@@ -145,13 +130,13 @@ std::wstring ToastXmlBuilder::Build() const {
     std::wstring xml = L"<toast";
     if (!m_duration.empty()) {
         xml += L" duration=\"";
-        xml += XmlEscape(m_duration);
+        xml += apc::toast::EscapeXml(m_duration);
         xml += L"\"";
     }
     xml += L"><visual><binding template=\"ToastGeneric\">";
     if (!m_appLogoOverride.empty()) {
         xml += L"<image placement=\"appLogoOverride\" hint-crop=\"circle\" src=\"";
-        xml += XmlEscape(m_appLogoOverride);
+        xml += apc::toast::EscapeXml(m_appLogoOverride);
         xml += L"\"/>";
     }
     AppendText(xml, m_title);
@@ -164,16 +149,16 @@ std::wstring ToastXmlBuilder::Build() const {
     xml += L"</binding></visual>";
     if (!m_actionText.empty()) {
         xml += L"<actions><action content=\"";
-        xml += XmlEscape(m_actionText);
+        xml += apc::toast::EscapeXml(m_actionText);
         xml += L"\" arguments=\"";
-        xml += XmlEscape(AsView(m_actionArguments));
+        xml += apc::toast::EscapeXml(AsView(m_actionArguments));
         xml += L"\"/></actions>";
     }
     if (m_silentAudio) {
         xml += L"<audio silent=\"true\"/>";
     } else if (!m_audioSrc.empty()) {
         xml += L"<audio src=\"";
-        xml += XmlEscape(m_audioSrc);
+        xml += apc::toast::EscapeXml(m_audioSrc);
         xml += L"\"/>";
     }
     xml += L"</toast>";
@@ -184,6 +169,6 @@ void ToastXmlBuilder::AppendText(std::wstring& xml, std::wstring_view text, std:
     xml += L"<text";
     xml += attributes;
     xml += L">";
-    xml += XmlEscape(text);
+    xml += apc::toast::EscapeXml(text);
     xml += L"</text>";
 }

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -61,17 +62,14 @@ private:
         uint64_t Generation = 0;
     };
 
+    void TeardownCore(bool clearCallbacks);
     [[nodiscard]] StatusNotificationTagReservation ReserveStatusNotificationTag();
-    [[nodiscard]] bool IsStatusNotificationGenerationCurrent(uint64_t generation) const;
+    void RollbackStatusNotificationTag(StatusNotificationTagReservation&& reservation);
     [[nodiscard]] bool ShouldShowNotifications() const;
-    // NOTE: This is a coroutine. All parameters are passed by value intentionally to ensure
-    // they remain valid across suspension points. Do NOT change to const&.
-    winrt::fire_and_forget ShowToastAsync(std::wstring xml,
-                                          winrt::hstring group,
-                                          winrt::hstring tag,
-                                          std::vector<winrt::hstring> tagsToRemove,
-                                          uint64_t generation,
-                                          winrt::Windows::Foundation::DateTime expiration);
+    winrt::fire_and_forget RemoveStaleStatusToastsAsync(
+        winrt::Microsoft::Windows::AppNotifications::AppNotificationManager notificationManager,
+        winrt::hstring group,
+        std::vector<winrt::hstring> tagsToRemove);
     bool ShowStatusToast(std::wstring const& xml, winrt::Windows::Foundation::DateTime const& expiration);
 
     /*------------------------------------------------------------------------------------------------------------*/
@@ -86,5 +84,7 @@ private:
     uint64_t m_statusNotificationGeneration = 0;
     bool m_notificationsRegistered = false;
     bool m_isTearingDown = false;
+    std::mutex m_lifecycleMutex;
+    std::mutex m_statusNotificationMutex;
     mutable wil::srwlock m_lock;
 };

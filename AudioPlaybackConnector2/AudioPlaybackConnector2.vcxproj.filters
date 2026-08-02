@@ -202,6 +202,9 @@
     <ClInclude Include="include\services\ToastContentBuilder.hpp">
       <Filter>include\services</Filter>
     </ClInclude>
+    <ClInclude Include="include\services\ToastXmlSanitizer.hpp">
+      <Filter>include\services</Filter>
+    </ClInclude>
     <ClInclude Include="include\services\TrayController.hpp">
       <Filter>include\services</Filter>
     </ClInclude>

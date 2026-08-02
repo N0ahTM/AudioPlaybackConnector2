@@ -414,7 +414,15 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) {
     }
 
     if (m_notificationService && !willAutoReconnect) {
-        m_notificationService->ShowAppStarted();
+        try {
+            m_notificationService->ShowAppStarted();
+        } catch (winrt::hresult_error const& ex) {
+            util::DebugTraceException(L"[App] startup notification failed", ex);
+        } catch (std::exception const& ex) {
+            util::DebugTraceException(L"[App] startup notification failed", ex);
+        } catch (...) {
+            util::DebugTraceUnknownException(L"[App] startup notification failed");
+        }
     }
     TryAutoReconnect();
     {
@@ -668,11 +676,19 @@ void ApplicationHost::HandlePowerResume() {
 }
 
 winrt::fire_and_forget ApplicationHost::CheckForUpdatesOnStartupAsync() {
-    auto lifetime = shared_from_this();
-    auto settings = m_settings;
-    auto notificationService = m_notificationService;
-    if (m_exiting.load() || !settings || !notificationService) co_return;
-    co_await StartupUpdateCoordinator::CheckForUpdatesAsync(*settings, notificationService, m_exiting);
+    try {
+        auto lifetime = shared_from_this();
+        auto settings = m_settings;
+        auto notificationService = m_notificationService;
+        if (m_exiting.load() || !settings || !notificationService) co_return;
+        co_await StartupUpdateCoordinator::CheckForUpdatesAsync(*settings, notificationService, m_exiting);
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(L"[App] Startup update check failed", ex);
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[App] Startup update check failed", ex);
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[App] Startup update check failed");
+    }
 }
 
 void ApplicationHost::RunOnUIThread(std::function<void()> work) {
@@ -1480,12 +1496,14 @@ void ApplicationHost::ScheduleDeferredSettingsSave() {
     auto weak = weak_from_this();
     auto module = GetModuleHandleW(nullptr);
     [](std::weak_ptr<ApplicationHost> weak, HINSTANCE module) -> winrt::fire_and_forget {
-        co_await winrt::resume_after(std::chrono::milliseconds(300));
-        auto self = weak.lock();
-        if (!self) co_return;
-        self->m_settingsSavePending = false;
-        if (self->m_exiting.load() || !self->m_settings) co_return;
+        auto pendingGuard = wil::scope_exit([weak]() noexcept {
+            if (auto self = weak.lock()) self->m_settingsSavePending = false;
+        });
         try {
+            co_await winrt::resume_after(std::chrono::milliseconds(300));
+            auto self = weak.lock();
+            if (!self) co_return;
+            if (self->m_exiting.load() || !self->m_settings) co_return;
             self->m_settings->Save(module);
         } catch (winrt::hresult_error const& ex) {
             util::DebugTraceException(L"[App] Deferred settings save ERROR", ex);

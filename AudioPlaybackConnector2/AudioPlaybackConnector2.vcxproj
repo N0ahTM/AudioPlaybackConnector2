@@ -150,6 +150,7 @@
     <ClInclude Include="include\services\StartupTaskController.hpp" />
     <ClInclude Include="include\services\CommandLineControlServer.hpp" />
     <ClInclude Include="include\services\ToastContentBuilder.hpp" />
+    <ClInclude Include="include\services\ToastXmlSanitizer.hpp" />
     <ClInclude Include="include\services\TrayController.hpp" />
     <ClInclude Include="include\services\UpdateService.hpp" />
     <ClInclude Include="include\ui\ButtonHelpers.hpp" />

@@ -2,11 +2,15 @@
 #include <core/Settings.hpp>
 #include <util/Util.hpp>
 
+#include <unordered_set>
+
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Helpers ///////////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
 namespace {
+constexpr uint64_t c_maxSettingsFileBytes = 4 * 1024 * 1024;
+
 bool GetOptionalBoolean(winrt::Windows::Data::Json::JsonObject const& json, winrt::hstring const& key, bool fallback) {
     if (!json.HasKey(key)) return fallback;
     auto value = json.Lookup(key);
@@ -25,9 +29,16 @@ int64_t
 GetOptionalInt64(winrt::Windows::Data::Json::JsonObject const& json, winrt::hstring const& key, int64_t fallback) {
     if (!json.HasKey(key)) return fallback;
     auto value = json.Lookup(key);
-    return value.ValueType() == winrt::Windows::Data::Json::JsonValueType::Number
-               ? static_cast<int64_t>(value.GetNumber())
-               : fallback;
+    if (value.ValueType() != winrt::Windows::Data::Json::JsonValueType::Number) return fallback;
+
+    constexpr double c_int64Min = -9223372036854775808.0;
+    constexpr double c_int64ExclusiveMax = 9223372036854775808.0;
+    const auto number = value.GetNumber();
+    if (!std::isfinite(number) || std::trunc(number) != number || number < c_int64Min ||
+        number >= c_int64ExclusiveMax) {
+        return fallback;
+    }
+    return static_cast<int64_t>(number);
 }
 
 int32_t
@@ -37,7 +48,8 @@ GetOptionalInt32(winrt::Windows::Data::Json::JsonObject const& json, winrt::hstr
     if (value.ValueType() != winrt::Windows::Data::Json::JsonValueType::Number) return fallback;
 
     auto number = value.GetNumber();
-    if (number < static_cast<double>(std::numeric_limits<int32_t>::min()) ||
+    if (!std::isfinite(number) || std::trunc(number) != number ||
+        number < static_cast<double>(std::numeric_limits<int32_t>::min()) ||
         number > static_cast<double>(std::numeric_limits<int32_t>::max())) {
         return fallback;
     }
@@ -97,6 +109,7 @@ void BackupUnreadableSettingsFile(std::filesystem::path const& path) noexcept {
 /*------------------------------------------------------------------------------------------------------------*/
 
 void Settings::Load(HINSTANCE hInst) {
+    auto persistenceGuard = std::scoped_lock(m_persistenceMutex);
     std::filesystem::path path;
     try {
         path = GetPath(hInst);
@@ -106,11 +119,20 @@ void Settings::Load(HINSTANCE hInst) {
             path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
         if (!hFile) return;
 
+        LARGE_INTEGER fileSize{};
+        THROW_IF_WIN32_BOOL_FALSE(GetFileSizeEx(hFile.get(), &fileSize));
+        THROW_HR_IF(HRESULT_FROM_WIN32(ERROR_FILE_TOO_LARGE),
+                    fileSize.QuadPart < 0 || static_cast<uint64_t>(fileSize.QuadPart) > c_maxSettingsFileBytes);
+
         std::string buf;
+        buf.reserve(static_cast<size_t>(fileSize.QuadPart));
         DWORD read = 0;
         char tmp[4096];
-        while (ReadFile(hFile.get(), tmp, sizeof(tmp), &read, nullptr) && read > 0)
+        while (true) {
+            THROW_IF_WIN32_BOOL_FALSE(ReadFile(hFile.get(), tmp, sizeof(tmp), &read, nullptr));
+            if (read == 0) break;
             buf.append(tmp, read);
+        }
 
         if (buf.empty()) return;
 
@@ -132,6 +154,8 @@ void Settings::Load(HINSTANCE hInst) {
         std::wstring defaultDeviceId;
         std::vector<DeviceSettings> devices;
         std::vector<std::wstring> lastConnectedIds;
+        std::unordered_set<std::wstring> deviceIds;
+        std::unordered_set<std::wstring> connectedIds;
 
         const bool legacyGlobalAutoReconnect = GetOptionalBoolean(json, L"globalAutoReconnect", false);
         globalConnectOnStartup = GetOptionalBoolean(json, L"globalConnectOnStartup", legacyGlobalAutoReconnect);
@@ -177,7 +201,7 @@ void Settings::Load(HINSTANCE hInst) {
                     auto obj = val.GetObject();
                     DeviceSettings ds;
                     ds.Id = GetOptionalString(obj, L"id", L"");
-                    if (ds.Id.empty()) continue;
+                    if (ds.Id.empty() || !deviceIds.insert(ds.Id).second) continue;
                     ds.Name = GetOptionalString(obj, L"name", L"");
                     ds.Alias = GetOptionalString(obj, L"alias", L"");
                     const bool legacyAutoReconnect = GetOptionalBoolean(obj, L"autoReconnect", false);
@@ -193,8 +217,11 @@ void Settings::Load(HINSTANCE hInst) {
 
         if (auto array = GetOptionalArray(json, L"lastConnectedIds")) {
             for (auto val : array) {
-                if (val.ValueType() == winrt::Windows::Data::Json::JsonValueType::String)
-                    lastConnectedIds.push_back(std::wstring(val.GetString()));
+                if (val.ValueType() != winrt::Windows::Data::Json::JsonValueType::String) continue;
+                auto id = std::wstring(val.GetString());
+                if (!id.empty() && connectedIds.insert(id).second) {
+                    lastConnectedIds.push_back(std::move(id));
+                }
             }
         }
 
@@ -225,7 +252,8 @@ void Settings::Load(HINSTANCE hInst) {
     }
 }
 
-void Settings::Save(HINSTANCE hInst) {
+bool Settings::Save(HINSTANCE hInst) {
+    auto persistenceGuard = std::scoped_lock(m_persistenceMutex);
     try {
         SettingsData snapshot;
         {
@@ -316,6 +344,7 @@ void Settings::Save(HINSTANCE hInst) {
         THROW_IF_WIN32_BOOL_FALSE(
             MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH));
         cleanupTmp.release(); // rename succeeded — nothing to clean up
+        return true;
     } catch (winrt::hresult_error const& ex) {
         DebugTrace(L"[Settings] Save ERROR (hresult): {0}", ex.message());
     } catch (std::exception const& ex) {
@@ -323,6 +352,7 @@ void Settings::Save(HINSTANCE hInst) {
     } catch (...) {
         DebugTrace(L"[Settings] Save ERROR: Unknown exception");
     }
+    return false;
 }
 
 /*------------------------------------------------------------------------------------------------------------*/

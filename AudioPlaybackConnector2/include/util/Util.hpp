@@ -320,8 +320,13 @@ inline SettingsWindowPlacement CalculateSettingsWindowPlacementForSize(SIZE size
 
 inline SettingsWindowPlacement
 CalculateSettingsWindowPlacementFromBounds(POINT position, SIZE size, UINT persistedDpi = USER_DEFAULT_SCREEN_DPI) {
-    RECT desiredRect{
-        position.x, position.y, position.x + std::max<int32_t>(1, size.cx), position.y + std::max<int32_t>(1, size.cy)};
+    const auto desiredRight = std::clamp<int64_t>(static_cast<int64_t>(position.x) + std::max<int32_t>(1, size.cx),
+                                                  std::numeric_limits<int32_t>::min(),
+                                                  std::numeric_limits<int32_t>::max());
+    const auto desiredBottom = std::clamp<int64_t>(static_cast<int64_t>(position.y) + std::max<int32_t>(1, size.cy),
+                                                   std::numeric_limits<int32_t>::min(),
+                                                   std::numeric_limits<int32_t>::max());
+    RECT desiredRect{position.x, position.y, static_cast<int32_t>(desiredRight), static_cast<int32_t>(desiredBottom)};
     auto monitor = MonitorFromRect(&desiredRect, MONITOR_DEFAULTTONEAREST);
     auto workArea = GetMonitorWorkArea(monitor);
     auto dpi = GetMonitorDpi(monitor);

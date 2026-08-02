@@ -1,5 +1,7 @@
 #pragma once
 
+#include <mutex>
+
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Data Structures ///////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
@@ -80,7 +82,7 @@ public:
     /*------------------------------------------------------------------------------------------------------------*/
 
     void Load(HINSTANCE hInst);
-    void Save(HINSTANCE hInst);
+    bool Save(HINSTANCE hInst);
 
     auto LockShared() const { return m_lock.lock_shared(); }
     auto LockExclusive() { return m_lock.lock_exclusive(); }
@@ -107,5 +109,6 @@ private:
 
     SettingsData m_data;
     mutable wil::srwlock m_lock;
+    std::mutex m_persistenceMutex;
     static constexpr auto c_fileName = L"AudioPlaybackConnector2.json";
 };

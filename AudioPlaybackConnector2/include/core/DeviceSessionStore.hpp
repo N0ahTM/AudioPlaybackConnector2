@@ -34,14 +34,12 @@ public:
     [[nodiscard]] std::vector<DeviceConnectionInfo> ConnectedDevices() const;
     [[nodiscard]] bool HasConnections() const;
     [[nodiscard]] bool HasBusyOperations() const;
-    [[nodiscard]] bool HasBusyOperationsExcept(winrt::hstring const& deviceId) const;
     [[nodiscard]] bool IsDeviceBusy(winrt::hstring const& deviceId) const;
     [[nodiscard]] bool HasConnection(winrt::hstring const& deviceId) const;
     [[nodiscard]] std::optional<DeviceConnectionInfo> FindConnection(winrt::hstring const& deviceId) const;
     [[nodiscard]] bool IsDisconnecting(winrt::hstring const& deviceId) const;
     [[nodiscard]] bool IsReconnecting(winrt::hstring const& deviceId) const;
     [[nodiscard]] bool IsConnecting(winrt::hstring const& deviceId) const;
-    [[nodiscard]] std::vector<winrt::Windows::Media::Audio::AudioPlaybackConnection> TakeZombieConnections();
     [[nodiscard]] std::optional<DeviceConnectionInfo> ExtractConnection(winrt::hstring const& deviceId);
     [[nodiscard]] std::vector<std::pair<std::wstring, DeviceConnectionInfo>> ExtractAllConnections();
     [[nodiscard]] std::vector<std::pair<std::wstring, DeviceConnectionInfo>> GetConnectionsSnapshot() const;
@@ -61,7 +59,6 @@ public:
     void UnmarkReconnecting(winrt::hstring const& deviceId);
     void MarkConnecting(winrt::hstring const& deviceId);
     void UnmarkConnecting(winrt::hstring const& deviceId);
-    void AddZombie(winrt::Windows::Media::Audio::AudioPlaybackConnection connection);
 
 private:
     /*------------------------------------------------------------------------------------------------------------*/
@@ -70,12 +67,10 @@ private:
 
     using ConnectionMap = std::unordered_map<std::wstring, DeviceConnectionInfo>;
     using DeviceIdSet = std::unordered_set<std::wstring>;
-    using ZombieConnectionList = std::vector<winrt::Windows::Media::Audio::AudioPlaybackConnection>;
 
     ConnectionMap m_connections;
     DeviceIdSet m_disconnectingIds;
     DeviceIdSet m_reconnectingIds;
     DeviceIdSet m_connectingIds;
-    ZombieConnectionList m_zombieConnections;
     mutable wil::srwlock m_lock;
 };

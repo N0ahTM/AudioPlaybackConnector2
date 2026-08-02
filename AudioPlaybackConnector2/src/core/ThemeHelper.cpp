@@ -91,7 +91,9 @@ void ThemeHelper::OnSettingChange(HWND, LPARAM lParam) {
 
 ThemeHelper::ThemeChangedToken ThemeHelper::AddThemeChangedHandler(ThemeChangedHandler handler) {
     auto& state = GetStaticState();
+    const auto currentTheme = GetSystemTheme();
     auto guard = state.lock.lock_exclusive();
+    if (!state.lastTheme) state.lastTheme = currentTheme;
     auto token = state.nextToken++;
     state.handlers.push_back({token, std::make_shared<HandlerState>(std::move(handler))});
     return token;

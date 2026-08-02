@@ -11,6 +11,7 @@
 #include <services/TrayController.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include <optional>
 #include <string_view>
@@ -111,6 +112,7 @@ private:
     static constexpr UINT_PTR c_timerAnimation = 0x41504332;
     static constexpr UINT_PTR c_timerTransientTrayError = 0x41504333;
     static constexpr UINT c_transientTrayErrorMs = 3000;
+    std::chrono::steady_clock::time_point m_trayErrorUntil{};
     ULONG_PTR m_gdiplusToken = 0;
     bool m_notificationsAvailable = false;
     std::atomic<bool> m_exiting = false;

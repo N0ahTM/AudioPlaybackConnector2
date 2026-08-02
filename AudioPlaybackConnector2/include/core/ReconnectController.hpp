@@ -1,8 +1,11 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <string_view>
 #include <unordered_map>
-#include <unordered_set>
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Reconnect Controller //////////////////////////////////////////////////////////////////////////////*/
@@ -14,12 +17,21 @@ public:
     /*//////// Data Structures ///////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
+    struct TimerToken {
+        std::wstring DeviceId;
+        std::uint64_t GlobalGeneration = 0;
+        std::uint64_t DeviceGeneration = 0;
+        std::size_t Attempt = 0;
+    };
+
     struct ScheduleDecision {
         bool ShouldSchedule = false;
         bool NotifyFailed = false;
+        bool AttemptCompleted = false;
         std::size_t Attempt = 0;
         std::size_t MaxAttempts = 0;
         std::chrono::seconds Delay{};
+        TimerToken Token;
     };
 
     /*------------------------------------------------------------------------------------------------------------*/
@@ -31,32 +43,41 @@ public:
     void AllowReconnects();
     void CancelPendingReconnects();
     void ClearTracking();
-    void BeginManualReconnect(winrt::hstring const& deviceId);
-    void ClearAttempts(winrt::hstring const& deviceId);
-    void MarkUserCancelled(winrt::hstring const& deviceId);
-    void ClearUserCancellationIfNoTimer(winrt::hstring const& deviceId);
-    void ClearCancelled(winrt::hstring const& deviceId);
-    [[nodiscard]] bool IsCancelled(winrt::hstring const& deviceId) const;
+    void BeginManualOperation(std::wstring_view deviceId);
+    void CancelDevice(std::wstring_view deviceId);
+    void CompleteConnectionSucceeded(std::wstring_view deviceId);
+    [[nodiscard]] bool IsCancelled(std::wstring_view deviceId) const;
     [[nodiscard]] bool AllReconnectsCancelled() const;
-    [[nodiscard]] std::size_t Attempts(winrt::hstring const& deviceId) const;
-    [[nodiscard]] bool HasPendingTimer(winrt::hstring const& deviceId) const;
+    [[nodiscard]] std::size_t Attempts(std::wstring_view deviceId) const;
+    [[nodiscard]] bool HasPendingTimer(std::wstring_view deviceId) const;
+    [[nodiscard]] bool HasAttemptInProgress(std::wstring_view deviceId) const;
     [[nodiscard]] bool HasPendingTimers() const;
 
-    [[nodiscard]] ScheduleDecision PrepareSchedule(winrt::hstring const& deviceId, bool blocked);
-    [[nodiscard]] std::size_t StartTimer(winrt::hstring const& deviceId);
-    [[nodiscard]] bool
-    ShouldSkipTimer(winrt::hstring const& deviceId, bool shutdownForProcessExit, std::size_t timerGeneration) const;
-    void CompleteTimer(winrt::hstring const& deviceId, std::size_t timerGeneration);
-    void HandleTimerCreateFailed(winrt::hstring const& deviceId, std::size_t timerGeneration);
+    [[nodiscard]] ScheduleDecision PrepareSchedule(std::wstring_view deviceId, bool blocked);
+    [[nodiscard]] bool ClaimTimer(TimerToken const& token, bool blocked);
+    [[nodiscard]] ScheduleDecision CompleteAttemptFailed(TimerToken const& token);
+    void CompleteAttemptSucceeded(TimerToken const& token);
+    void HandleTimerCreateFailed(TimerToken const& token);
 
 private:
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Data Structures ///////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
+
+    struct DeviceState {
+        std::size_t CompletedAttempts = 0;
+        std::uint64_t Generation = 0;
+        bool TimerPending = false;
+        bool AttemptInProgress = false;
+        bool UserCancelled = false;
+        bool FailureNotified = false;
+    };
+
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    std::unordered_set<std::wstring> m_cancelledReconnectIds;
-    std::unordered_map<std::wstring, std::size_t> m_reconnectTimerCounts;
-    std::unordered_map<std::wstring, std::size_t> m_reconnectAttempts;
-    std::size_t m_timerGeneration = 0;
+    std::unordered_map<std::wstring, DeviceState> m_states;
+    std::uint64_t m_globalGeneration = 0;
     bool m_allReconnectsCancelled = false;
 };

@@ -688,7 +688,14 @@ void ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstri
 
     const bool hasBusyOperations = m_deviceManager->HasBusyOperations();
     const bool hasConnections = m_deviceManager->HasConnections();
-    const bool showTransientError = forceErrorWhenIdle && !hasConnections && !hasBusyOperations;
+    const auto now = std::chrono::steady_clock::now();
+    if (forceErrorWhenIdle) {
+        m_trayErrorUntil = now + std::chrono::milliseconds(c_transientTrayErrorMs);
+    }
+    if (hasConnections) {
+        m_trayErrorUntil = {};
+    }
+    const bool showTransientError = !hasConnections && !hasBusyOperations && now < m_trayErrorUntil;
 
     TrayIconState desiredState = TrayIconState::Idle;
     if (hasConnections) {
@@ -697,15 +704,17 @@ void ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstri
         KillTimer(m_hwnd, c_timerTransientTrayError);
     } else if (hasBusyOperations) {
         desiredState = TrayIconState::Connecting;
-        KillTimer(m_hwnd, c_timerTransientTrayError);
         SetTimer(m_hwnd, c_timerAnimation, 75, nullptr);
     } else if (showTransientError) {
         desiredState = TrayIconState::Error;
         KillTimer(m_hwnd, c_timerAnimation);
-        SetTimer(m_hwnd, c_timerTransientTrayError, c_transientTrayErrorMs, nullptr);
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(m_trayErrorUntil - now);
+        const auto delay = static_cast<UINT>(std::clamp<std::int64_t>(remaining.count(), 1, UINT_MAX));
+        SetTimer(m_hwnd, c_timerTransientTrayError, delay, nullptr);
     } else {
         KillTimer(m_hwnd, c_timerAnimation);
         KillTimer(m_hwnd, c_timerTransientTrayError);
+        m_trayErrorUntil = {};
     }
 
     DebugTrace(L"[App] RefreshTrayVisualState reason={0} forceErrorWhenIdle={1} hasConnections={2} "

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <memory>
 
@@ -41,5 +42,6 @@ private:
 
     std::atomic<bool>& m_exiting;
     bool m_powerSuspended = false;
+    std::chrono::steady_clock::time_point m_lastResumeHandledAt{};
     winrt::Windows::System::Threading::ThreadPoolTimer m_resumeReconnectTimer{nullptr};
 };

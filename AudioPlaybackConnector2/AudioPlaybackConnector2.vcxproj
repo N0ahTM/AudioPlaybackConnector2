@@ -198,7 +198,9 @@
     <ClCompile Include="src\core\DeviceDiscoveryService.cpp" />
     <ClCompile Include="src\core\DeviceManagerDiagnostics.cpp" />
     <ClCompile Include="src\core\DeviceSessionStore.cpp" />
-    <ClCompile Include="src\core\ReconnectController.cpp" />
+    <ClCompile Include="src\core\ReconnectController.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="src\core\DeviceManager.cpp" />
     <ClCompile Include="src\services\NotificationService.cpp" />
     <ClCompile Include="src\services\SettingsController.cpp" />

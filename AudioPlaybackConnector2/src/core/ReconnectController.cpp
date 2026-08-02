@@ -1,4 +1,10 @@
+#ifdef APC_RECONNECT_CONTROLLER_STANDALONE
+#include <algorithm>
+#include <ranges>
+#include <string>
+#else
 #include <pch.h>
+#endif
 
 #include <core/ReconnectController.hpp>
 
@@ -16,7 +22,7 @@ std::chrono::seconds GetReconnectDelay(std::size_t attempt) {
     return std::chrono::seconds(delay);
 }
 
-std::wstring DeviceKey(winrt::hstring const& deviceId) {
+std::wstring DeviceKey(std::wstring_view deviceId) {
     return std::wstring(deviceId);
 }
 } // namespace
@@ -34,137 +40,170 @@ void ReconnectController::AllowReconnects() {
 }
 
 void ReconnectController::CancelPendingReconnects() {
-    ++m_timerGeneration;
+    ++m_globalGeneration;
     m_allReconnectsCancelled = true;
-    m_reconnectAttempts.clear();
-    m_cancelledReconnectIds.clear();
-    m_reconnectTimerCounts.clear();
-    DebugTrace(L"[ReconnectController] Pending reconnects cancelled");
-}
-
-void ReconnectController::ClearTracking() {
-    ++m_timerGeneration;
-    m_reconnectAttempts.clear();
-    m_cancelledReconnectIds.clear();
-    m_reconnectTimerCounts.clear();
-}
-
-void ReconnectController::BeginManualReconnect(winrt::hstring const& deviceId) {
-    const auto key = DeviceKey(deviceId);
-    m_allReconnectsCancelled = false;
-    m_cancelledReconnectIds.erase(key);
-    m_reconnectAttempts.erase(key);
-}
-
-void ReconnectController::ClearAttempts(winrt::hstring const& deviceId) {
-    m_reconnectAttempts.erase(DeviceKey(deviceId));
-}
-
-void ReconnectController::MarkUserCancelled(winrt::hstring const& deviceId) {
-    const auto key = DeviceKey(deviceId);
-    m_cancelledReconnectIds.insert(key);
-    m_reconnectAttempts.erase(key);
-}
-
-void ReconnectController::ClearUserCancellationIfNoTimer(winrt::hstring const& deviceId) {
-    const auto key = DeviceKey(deviceId);
-    if (m_reconnectTimerCounts[key] == 0) {
-        m_reconnectTimerCounts.erase(key);
-        m_cancelledReconnectIds.erase(key);
+    for (auto& [id, state] : m_states) {
+        (void)id;
+        ++state.Generation;
+        state.CompletedAttempts = 0;
+        state.TimerPending = false;
+        state.AttemptInProgress = false;
+        state.UserCancelled = true;
+        state.FailureNotified = false;
     }
 }
 
-void ReconnectController::ClearCancelled(winrt::hstring const& deviceId) {
-    m_cancelledReconnectIds.erase(DeviceKey(deviceId));
+void ReconnectController::ClearTracking() {
+    ++m_globalGeneration;
+    m_states.clear();
 }
 
-bool ReconnectController::IsCancelled(winrt::hstring const& deviceId) const {
-    return m_cancelledReconnectIds.count(DeviceKey(deviceId)) > 0;
+void ReconnectController::BeginManualOperation(std::wstring_view deviceId) {
+    m_allReconnectsCancelled = false;
+    auto& state = m_states[DeviceKey(deviceId)];
+    ++state.Generation;
+    state.CompletedAttempts = 0;
+    state.TimerPending = false;
+    state.AttemptInProgress = false;
+    state.UserCancelled = false;
+    state.FailureNotified = false;
+}
+
+void ReconnectController::CancelDevice(std::wstring_view deviceId) {
+    auto& state = m_states[DeviceKey(deviceId)];
+    ++state.Generation;
+    state.CompletedAttempts = 0;
+    state.TimerPending = false;
+    state.AttemptInProgress = false;
+    state.UserCancelled = true;
+    state.FailureNotified = false;
+}
+
+void ReconnectController::CompleteConnectionSucceeded(std::wstring_view deviceId) {
+    auto& state = m_states[DeviceKey(deviceId)];
+    ++state.Generation;
+    state.CompletedAttempts = 0;
+    state.TimerPending = false;
+    state.AttemptInProgress = false;
+    state.UserCancelled = false;
+    state.FailureNotified = false;
+}
+
+bool ReconnectController::IsCancelled(std::wstring_view deviceId) const {
+    auto iter = m_states.find(DeviceKey(deviceId));
+    return iter != m_states.end() && iter->second.UserCancelled;
 }
 
 bool ReconnectController::AllReconnectsCancelled() const {
     return m_allReconnectsCancelled;
 }
 
-std::size_t ReconnectController::Attempts(winrt::hstring const& deviceId) const {
-    if (auto iter = m_reconnectAttempts.find(DeviceKey(deviceId)); iter != m_reconnectAttempts.end()) {
-        return iter->second;
-    }
-    return 0;
+std::size_t ReconnectController::Attempts(std::wstring_view deviceId) const {
+    auto iter = m_states.find(DeviceKey(deviceId));
+    return iter == m_states.end() ? 0 : iter->second.CompletedAttempts;
 }
 
-bool ReconnectController::HasPendingTimer(winrt::hstring const& deviceId) const {
-    auto iter = m_reconnectTimerCounts.find(DeviceKey(deviceId));
-    return iter != m_reconnectTimerCounts.end() && iter->second > 0;
+bool ReconnectController::HasPendingTimer(std::wstring_view deviceId) const {
+    auto iter = m_states.find(DeviceKey(deviceId));
+    return iter != m_states.end() && (iter->second.TimerPending || iter->second.AttemptInProgress);
+}
+
+bool ReconnectController::HasAttemptInProgress(std::wstring_view deviceId) const {
+    auto iter = m_states.find(DeviceKey(deviceId));
+    return iter != m_states.end() && iter->second.AttemptInProgress;
 }
 
 bool ReconnectController::HasPendingTimers() const {
-    return std::ranges::any_of(m_reconnectTimerCounts, [](auto const& entry) { return entry.second > 0; });
+    return std::ranges::any_of(
+        m_states, [](auto const& entry) { return entry.second.TimerPending || entry.second.AttemptInProgress; });
 }
 
-ReconnectController::ScheduleDecision ReconnectController::PrepareSchedule(winrt::hstring const& deviceId,
-                                                                           bool blocked) {
+ReconnectController::ScheduleDecision ReconnectController::PrepareSchedule(std::wstring_view deviceId, bool blocked) {
     const auto key = DeviceKey(deviceId);
+    auto& state = m_states[key];
     ScheduleDecision decision;
     decision.MaxAttempts = c_maxReconnectAttempts;
 
-    if (blocked) {
-        m_cancelledReconnectIds.insert(key);
+    if (blocked || m_allReconnectsCancelled || state.UserCancelled || state.TimerPending || state.AttemptInProgress) {
         return decision;
     }
 
-    auto& attempts = m_reconnectAttempts[key];
-    if (attempts >= c_maxReconnectAttempts) {
-        decision.NotifyFailed = attempts == c_maxReconnectAttempts;
-        attempts = c_maxReconnectAttempts + 1;
-        m_cancelledReconnectIds.insert(key);
+    if (state.CompletedAttempts >= c_maxReconnectAttempts) {
+        if (!state.FailureNotified) {
+            state.FailureNotified = true;
+            decision.NotifyFailed = true;
+        }
         return decision;
     }
 
     decision.ShouldSchedule = true;
-    decision.Attempt = ++attempts;
+    decision.Attempt = state.CompletedAttempts + 1;
     decision.Delay = GetReconnectDelay(decision.Attempt);
+    decision.Token = TimerToken{key, m_globalGeneration, state.Generation, decision.Attempt};
+    state.TimerPending = true;
     return decision;
 }
 
-std::size_t ReconnectController::StartTimer(winrt::hstring const& deviceId) {
-    const auto key = DeviceKey(deviceId);
-    m_cancelledReconnectIds.erase(key);
-    ++m_reconnectTimerCounts[key];
-    return m_timerGeneration;
-}
-
-bool ReconnectController::ShouldSkipTimer(winrt::hstring const& deviceId,
-                                          bool shutdownForProcessExit,
-                                          std::size_t timerGeneration) const {
-    return shutdownForProcessExit || m_allReconnectsCancelled || timerGeneration != m_timerGeneration ||
-           m_cancelledReconnectIds.count(DeviceKey(deviceId)) > 0;
-}
-
-void ReconnectController::CompleteTimer(winrt::hstring const& deviceId, std::size_t timerGeneration) {
-    if (timerGeneration != m_timerGeneration) return;
-
-    const auto key = DeviceKey(deviceId);
-    auto iter = m_reconnectTimerCounts.find(key);
-    if (iter == m_reconnectTimerCounts.end()) return;
-
-    if (iter->second > 1) {
-        --iter->second;
-    } else {
-        m_reconnectTimerCounts.erase(iter);
-        m_cancelledReconnectIds.erase(key);
+bool ReconnectController::ClaimTimer(TimerToken const& token, bool blocked) {
+    auto iter = m_states.find(token.DeviceId);
+    if (blocked || m_allReconnectsCancelled || token.GlobalGeneration != m_globalGeneration || iter == m_states.end()) {
+        return false;
     }
+
+    auto& state = iter->second;
+    if (token.DeviceGeneration != state.Generation || token.Attempt != state.CompletedAttempts + 1 ||
+        !state.TimerPending || state.AttemptInProgress || state.UserCancelled) {
+        return false;
+    }
+
+    state.TimerPending = false;
+    state.AttemptInProgress = true;
+    return true;
 }
 
-void ReconnectController::HandleTimerCreateFailed(winrt::hstring const& deviceId, std::size_t timerGeneration) {
-    if (timerGeneration != m_timerGeneration) return;
+ReconnectController::ScheduleDecision ReconnectController::CompleteAttemptFailed(TimerToken const& token) {
+    ScheduleDecision decision;
+    decision.MaxAttempts = c_maxReconnectAttempts;
+    auto iter = m_states.find(token.DeviceId);
+    if (token.GlobalGeneration != m_globalGeneration || iter == m_states.end()) return decision;
 
-    auto iter = m_reconnectTimerCounts.find(DeviceKey(deviceId));
-    if (iter == m_reconnectTimerCounts.end()) return;
+    auto& state = iter->second;
+    if (token.DeviceGeneration != state.Generation || token.Attempt != state.CompletedAttempts + 1 ||
+        !state.AttemptInProgress) {
+        return decision;
+    }
 
-    if (iter->second > 1) {
-        --iter->second;
-    } else {
-        m_reconnectTimerCounts.erase(iter);
+    state.AttemptInProgress = false;
+    state.CompletedAttempts = token.Attempt;
+    decision.AttemptCompleted = true;
+    if (state.CompletedAttempts >= c_maxReconnectAttempts && !state.FailureNotified) {
+        state.FailureNotified = true;
+        decision.NotifyFailed = true;
+    }
+    return decision;
+}
+
+void ReconnectController::CompleteAttemptSucceeded(TimerToken const& token) {
+    auto iter = m_states.find(token.DeviceId);
+    if (token.GlobalGeneration != m_globalGeneration || iter == m_states.end()) return;
+
+    auto& state = iter->second;
+    if (token.DeviceGeneration != state.Generation || !state.AttemptInProgress) return;
+
+    ++state.Generation;
+    state.CompletedAttempts = 0;
+    state.TimerPending = false;
+    state.AttemptInProgress = false;
+    state.UserCancelled = false;
+    state.FailureNotified = false;
+}
+
+void ReconnectController::HandleTimerCreateFailed(TimerToken const& token) {
+    auto iter = m_states.find(token.DeviceId);
+    if (token.GlobalGeneration != m_globalGeneration || iter == m_states.end()) return;
+
+    auto& state = iter->second;
+    if (token.DeviceGeneration == state.Generation && token.Attempt == state.CompletedAttempts + 1) {
+        state.TimerPending = false;
     }
 }

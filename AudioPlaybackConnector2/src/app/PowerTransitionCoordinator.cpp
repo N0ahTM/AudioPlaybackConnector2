@@ -6,6 +6,7 @@
 
 namespace {
 constexpr std::chrono::seconds c_resumeReconnectDelay{10};
+constexpr std::chrono::seconds c_duplicateResumeWindow{2};
 } // namespace
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -50,6 +51,14 @@ void PowerTransitionCoordinator::HandleResume(std::shared_ptr<DeviceManager> dev
                                               std::function<void()> reconnectAfterDelay) noexcept {
     try {
         if (m_exiting.load()) return;
+
+        const auto now = std::chrono::steady_clock::now();
+        if (!m_powerSuspended && m_lastResumeHandledAt != std::chrono::steady_clock::time_point{} &&
+            now - m_lastResumeHandledAt < c_duplicateResumeWindow) {
+            DebugTrace(L"[PowerTransitionCoordinator] Duplicate power resume ignored");
+            return;
+        }
+        m_lastResumeHandledAt = now;
 
         if (m_powerSuspended) {
             m_powerSuspended = false;

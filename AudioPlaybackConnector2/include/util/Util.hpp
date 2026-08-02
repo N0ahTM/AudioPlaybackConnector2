@@ -142,15 +142,6 @@ inline HWND GetWindowHandle(winrt::Microsoft::UI::Xaml::Window const& window) {
     return hwnd;
 }
 
-inline void ApplyNativeMicaBackdrop(HWND hwnd) {
-    if (!hwnd) return;
-
-    // DWMWA_SYSTEMBACKDROP_TYPE is ignored on unsupported Windows builds.
-    // 2 is DWMSBT_MAINWINDOW, the DWM-native Mica backdrop.
-    int backdropType = 2;
-    DwmSetWindowAttribute(hwnd, static_cast<DWORD>(38), &backdropType, sizeof(backdropType));
-}
-
 inline std::wstring ReplacePlaceholders(std::wstring_view templateStr, std::wstring_view replacement) {
     std::wstring result;
     size_t pos = 0;

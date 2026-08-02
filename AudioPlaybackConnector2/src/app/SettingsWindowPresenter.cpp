@@ -58,10 +58,6 @@ void SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settings
             appWindow.Resize({placement.size.cx, placement.size.cy});
         }
 
-        if (auto hwnd = util::GetWindowHandle(m_settingsWindow)) {
-            util::ApplyNativeMicaBackdrop(hwnd);
-        }
-
         m_settingsWindow.Activate();
 
         m_saveSettingsOnClose = std::move(saveSettings);

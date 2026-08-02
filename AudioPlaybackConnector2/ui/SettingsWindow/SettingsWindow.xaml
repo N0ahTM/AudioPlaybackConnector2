@@ -10,7 +10,7 @@
     mc:Ignorable="d">
 
     <Window.SystemBackdrop>
-        <DesktopAcrylicBackdrop />
+        <MicaBackdrop />
     </Window.SystemBackdrop>
 
     <Grid

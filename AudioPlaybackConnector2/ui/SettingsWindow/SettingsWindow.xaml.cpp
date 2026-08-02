@@ -256,7 +256,13 @@ namespace winrt::AudioPlaybackConnector2::implementation {
 
 SettingsWindow::SettingsWindow() {
     InitializeComponent();
-    this->SystemBackdrop(winrt::Microsoft::UI::Xaml::Media::DesktopAcrylicBackdrop());
+}
+
+SettingsWindow::~SettingsWindow() {
+    StopPlacementSaveTimer();
+    if (m_themeChangedToken != 0) {
+        ThemeHelper::RemoveThemeChangedHandler(m_themeChangedToken);
+    }
 }
 
 LRESULT CALLBACK SettingsWindow::SettingsWindowSubclassProc(
@@ -270,7 +276,10 @@ LRESULT CALLBACK SettingsWindow::SettingsWindowSubclassProc(
         return 0;
     }
 
-    if (self && msg == WM_EXITSIZEMOVE) {
+    if (self && msg == WM_CLOSE) {
+        self->StopPlacementSaveTimer();
+        (void)self->StoreCurrentPlacement();
+    } else if (self && msg == WM_EXITSIZEMOVE) {
         self->QueuePlacementSave();
     } else if (self && msg == WM_WINDOWPOSCHANGED) {
         self->QueuePlacementSave();
@@ -279,8 +288,13 @@ LRESULT CALLBACK SettingsWindow::SettingsWindowSubclassProc(
     if (msg == WM_NCDESTROY) {
         RemoveWindowSubclass(hwnd, SettingsWindowSubclassProc, uIdSubclass);
         if (self) {
+            self->StopPlacementSaveTimer();
+            self->m_placementSaveTimer = nullptr;
+            if (self->m_themeChangedToken != 0) {
+                ThemeHelper::RemoveThemeChangedHandler(self->m_themeChangedToken);
+                self->m_themeChangedToken = 0;
+            }
             self->m_capturePlacementChanges = false;
-            ++self->m_placementSaveRequestId;
             self->m_subclassInstalled = false;
         }
     }
@@ -293,6 +307,8 @@ LRESULT CALLBACK SettingsWindow::SettingsWindowSubclassProc(
 /*------------------------------------------------------------------------------------------------------------*/
 
 void SettingsWindow::RootGrid_Loaded(IInspectable const&, RoutedEventArgs const&) {
+    if (std::exchange(m_loaded, true)) return;
+
     LocalizeSettingsText();
 
     SetAutomationName(ConnectOnStartupToggle(), _("Settings_ConnectOnStartup"));
@@ -304,7 +320,9 @@ void SettingsWindow::RootGrid_Loaded(IInspectable const&, RoutedEventArgs const&
     SetAutomationName(LanguageComboBox(), _("Settings_Language"));
 
     InitializeSettingsContent();
+    m_suppressNavigationSelection = true;
     SettingsNavigation().SelectedItem(DevicesNavItem());
+    m_suppressNavigationSelection = false;
     ShowSettingsPage(SettingsPage::Devices);
 
     bool restoredPlacement = false;
@@ -316,20 +334,25 @@ void SettingsWindow::RootGrid_Loaded(IInspectable const&, RoutedEventArgs const&
     } else {
         SettingsNavigation().OpenPaneLength(CalculateNavigationPaneLength());
     }
+    m_adaptiveLayoutReady = true;
 
-    // Extend content into title bar for seamless Mica look (Windows 11 style).
     this->ExtendsContentIntoTitleBar(true);
     this->SetTitleBar(TitleBarArea());
 
     auto hwnd = util::GetWindowHandle(*this);
     if (hwnd) {
-        util::ApplyNativeMicaBackdrop(hwnd);
-
         DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
         DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
 
-        BOOL dark = ThemeHelper::GetSystemTheme() == Theme::Dark;
-        DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+        ApplyCurrentWindowTheme(hwnd);
+        if (m_themeChangedToken == 0) {
+            auto weak = get_weak();
+            m_themeChangedToken = ThemeHelper::AddThemeChangedHandler([weak]() {
+                if (auto self = weak.get()) {
+                    self->ApplyCurrentWindowTheme(util::GetWindowHandle(*self));
+                }
+            });
+        }
 
         auto appWindow = this->AppWindow();
         if (appWindow) {
@@ -448,27 +471,51 @@ void SettingsWindow::RevealAtTarget(HWND hwnd) {
 
 void SettingsWindow::QueuePlacementSave() {
     if (!m_capturePlacementChanges) return;
-    if (!StoreCurrentPlacement()) return;
+    try {
+        if (!m_placementSaveTimer) {
+            m_placementSaveTimer = DispatcherQueue().CreateTimer();
+            m_placementSaveTimer.Interval(c_placementSaveDelay);
+            m_placementSaveTimer.IsRepeating(false);
+            auto weak = get_weak();
+            m_placementSaveTimer.Tick([weak](auto const&, auto const&) noexcept {
+                if (auto self = weak.get()) self->SavePlacementNow();
+            });
+        }
 
-    auto requestId = ++m_placementSaveRequestId;
-    SavePlacementAfterDelayAsync(requestId);
+        m_placementSaveTimer.Stop();
+        m_placementSaveTimer.Start();
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(L"[SettingsWindow] QueuePlacementSave failed", ex);
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[SettingsWindow] QueuePlacementSave failed", ex);
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[SettingsWindow] QueuePlacementSave failed");
+    }
 }
 
-winrt::fire_and_forget SettingsWindow::SavePlacementAfterDelayAsync(uint64_t requestId) {
-    auto lifetime = get_strong();
-    try {
-        co_await winrt::resume_after(c_placementSaveDelay);
+void SettingsWindow::ApplyCurrentWindowTheme(HWND hwnd) noexcept {
+    if (!hwnd) return;
+    BOOL dark = ThemeHelper::GetSystemTheme() == Theme::Dark;
+    (void)DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+}
 
-        if (requestId != m_placementSaveRequestId.load()) co_return;
-        if (auto controller = m_settingsController) {
-            controller->Save();
-        }
+void SettingsWindow::SavePlacementNow() noexcept {
+    try {
+        if (!StoreCurrentPlacement()) return;
+        if (auto controller = m_settingsController) controller->Save();
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] SavePlacementAfterDelayAsync failed", ex);
+        util::DebugTraceException(L"[SettingsWindow] SavePlacementNow failed", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] SavePlacementAfterDelayAsync failed", ex);
+        util::DebugTraceException(L"[SettingsWindow] SavePlacementNow failed", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[SettingsWindow] SavePlacementAfterDelayAsync failed");
+        util::DebugTraceUnknownException(L"[SettingsWindow] SavePlacementNow failed");
+    }
+}
+
+void SettingsWindow::StopPlacementSaveTimer() noexcept {
+    try {
+        if (m_placementSaveTimer) m_placementSaveTimer.Stop();
+    } catch (...) {
     }
 }
 
@@ -604,6 +651,8 @@ void SettingsWindow::StreamDeckSetupButton_Click(IInspectable const&, RoutedEven
 
 void SettingsWindow::SettingsNavigation_SelectionChanged(IInspectable const&,
                                                          NavigationViewSelectionChangedEventArgs const& args) {
+    if (m_suppressNavigationSelection) return;
+
     auto selected = args.SelectedItem().try_as<NavigationViewItem>();
     if (!selected) return;
 
@@ -622,7 +671,7 @@ void SettingsWindow::SettingsNavigation_SelectionChanged(IInspectable const&,
         ShowSettingsPage(SettingsPage::About);
     }
 
-    ApplyAdaptiveLayout();
+    if (m_adaptiveLayoutReady) ApplyAdaptiveLayout();
 }
 
 void SettingsWindow::SettingsContentHost_SizeChanged(IInspectable const&, SizeChangedEventArgs const&) {
@@ -647,7 +696,7 @@ void SettingsWindow::LanguageComboBox_SelectionChanged(IInspectable const&, Sele
 }
 
 void SettingsWindow::ResetWindowPlacement() {
-    ++m_placementSaveRequestId;
+    StopPlacementSaveTimer();
     m_capturePlacementChanges = false;
 
     if (auto controller = m_settingsController) {

@@ -41,6 +41,40 @@ const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const baseIcon = readBaseIcon();
 const pollIntervalMs = 5000;
 const connectingFrameMs = 260;
+const statusCacheTtlMs = 1000;
+
+type StatusCacheEntry = {
+  expiresAt: number;
+  value?: Apc2Response;
+  inFlight?: Promise<Apc2Response | undefined>;
+};
+
+class SharedStatusPoller {
+  private readonly listeners = new Map<string, () => Promise<void>>();
+  private timer: ReturnType<typeof setInterval> | undefined;
+
+  add(actionId: string, listener: () => Promise<void>): void {
+    this.listeners.set(actionId, listener);
+    if (!this.timer) {
+      this.timer = setInterval(() => {
+        const updates = [...this.listeners.values()].map((update) => update());
+        void Promise.allSettled(updates);
+      }, pollIntervalMs);
+    }
+  }
+
+  remove(actionId: string): void {
+    this.listeners.delete(actionId);
+    if (this.listeners.size === 0 && this.timer) {
+      clearInterval(this.timer);
+      this.timer = undefined;
+    }
+  }
+}
+
+const sharedStatusPoller = new SharedStatusPoller();
+const statusCache = new Map<string, StatusCacheEntry>();
+let statusCacheGeneration = 0;
 
 function readBaseIcon(): string | undefined {
   try {
@@ -72,6 +106,36 @@ async function runApc2ctl(settings: ActionSettings | undefined, args: string[]):
   }
 
   return JSON.parse(output) as Apc2Response;
+}
+
+async function readCachedStatus(
+  settings: ActionSettings | undefined,
+  args: string[]
+): Promise<Apc2Response | undefined> {
+  const key = JSON.stringify([resolveApc2ctl(settings), args]);
+  const now = Date.now();
+  const cached = statusCache.get(key);
+  if (cached?.inFlight) return cached.inFlight;
+  if (cached && cached.expiresAt > now) return cached.value;
+
+  const generation = statusCacheGeneration;
+  const inFlight = runApc2ctl(settings, args);
+  statusCache.set(key, { expiresAt: 0, inFlight });
+  try {
+    const value = await inFlight;
+    if (generation === statusCacheGeneration && statusCache.get(key)?.inFlight === inFlight) {
+      statusCache.set(key, { expiresAt: Date.now() + statusCacheTtlMs, value });
+    }
+    return value;
+  } catch (error) {
+    if (statusCache.get(key)?.inFlight === inFlight) statusCache.delete(key);
+    throw error;
+  }
+}
+
+function invalidateStatusCache(): void {
+  statusCacheGeneration += 1;
+  statusCache.clear();
 }
 
 function iconColor(state: VisualState): string {
@@ -135,7 +199,7 @@ async function setVisual(
 }
 
 async function readDefaultStatus(settings: ActionSettings | undefined): Promise<{ state: VisualState; label?: string }> {
-  const defaultDevice = await runApc2ctl(settings, ["default", "show", "--json"]);
+  const defaultDevice = await readCachedStatus(settings, ["default", "show", "--json"]);
   if (!defaultDevice?.resolved) {
     return { state: "offline", label: defaultDevice?.displayName };
   }
@@ -147,16 +211,18 @@ async function readDefaultStatus(settings: ActionSettings | undefined): Promise<
 }
 
 async function readGlobalStatus(settings: ActionSettings | undefined): Promise<{ state: VisualState; label?: string }> {
-  const status = await runApc2ctl(settings, ["status", "--json"]);
+  const status = await readCachedStatus(settings, ["status", "--json"]);
   const count = status?.connectedCount ?? 0;
   const label = count > 1 ? `${count} devices` : status?.connectedDevices?.[0]?.displayName;
   return { state: count > 0 ? "connected" : "offline", label };
 }
 
 class Apc2CommandAction extends SingletonAction<ActionSettings> {
-  private readonly pollers = new Map<string, ReturnType<typeof setInterval>>();
   private readonly animations = new Map<string, ReturnType<typeof setInterval>>();
-  private readonly pollsInFlight = new Set<string>();
+  private readonly delayedRefreshes = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly commandsInFlight = new Set<string>();
+  private readonly updateGenerations = new Map<string, number>();
+  private readonly visibleActions = new Set<string>();
 
   constructor(
     private readonly args: string[],
@@ -167,16 +233,24 @@ class Apc2CommandAction extends SingletonAction<ActionSettings> {
   }
 
   override async onWillAppear(event: WillAppearEvent<ActionSettings>): Promise<void> {
+    this.visibleActions.add(event.action.id);
     this.startPolling(event);
     await this.updateStatus(event);
   }
 
   override onWillDisappear(event: WillDisappearEvent<ActionSettings>): void {
+    this.visibleActions.delete(event.action.id);
+    this.invalidateVisualUpdates(event.action.id);
     this.stopPolling(event.action.id);
     this.stopAnimation(event.action.id);
+    this.stopDelayedRefresh(event.action.id);
   }
 
   override async onKeyDown(event: KeyDownEvent<ActionSettings>): Promise<void> {
+    if (this.commandsInFlight.has(event.action.id)) return;
+
+    this.commandsInFlight.add(event.action.id);
+    this.invalidateVisualUpdates(event.action.id);
     this.startConnectingAnimation(event);
     try {
       const response = await runApc2ctl(event.payload.settings, [...this.args, "--json"]);
@@ -185,34 +259,42 @@ class Apc2CommandAction extends SingletonAction<ActionSettings> {
       }
 
       this.stopAnimation(event.action.id);
+      this.commandsInFlight.delete(event.action.id);
+      invalidateStatusCache();
+      if (!this.visibleActions.has(event.action.id)) return;
       await event.action.showOk();
       await this.updateStatus(event, response?.displayName || response?.message);
-      setTimeout(() => void this.updateStatus(event), 1500);
+      if (!this.visibleActions.has(event.action.id)) return;
+      this.stopDelayedRefresh(event.action.id);
+      this.delayedRefreshes.set(
+        event.action.id,
+        setTimeout(() => {
+          this.delayedRefreshes.delete(event.action.id);
+          void this.updateStatus(event);
+        }, 1500)
+      );
     } catch (error) {
       this.stopAnimation(event.action.id);
+      this.commandsInFlight.delete(event.action.id);
       streamDeck.logger.error("AudioPlaybackConnector2 command failed", error);
-      await setVisual(event, "error");
-      await event.action.showAlert();
+      if (this.visibleActions.has(event.action.id)) {
+        await setVisual(event, "error");
+        await event.action.showAlert();
+      }
     }
   }
 
   private startPolling(event: WillAppearEvent<ActionSettings>): void {
+    if (this.scope === "open") return;
     this.stopPolling(event.action.id);
-    this.pollers.set(
+    sharedStatusPoller.add(
       event.action.id,
-      setInterval(() => {
-        void this.updateStatus(event);
-      }, pollIntervalMs)
+      () => this.updateStatus(event)
     );
   }
 
   private stopPolling(actionId: string): void {
-    const poller = this.pollers.get(actionId);
-    if (poller) {
-      clearInterval(poller);
-      this.pollers.delete(actionId);
-    }
-    this.pollsInFlight.delete(actionId);
+    sharedStatusPoller.remove(actionId);
   }
 
   private startConnectingAnimation(event: KeyDownEvent<ActionSettings>): void {
@@ -236,14 +318,30 @@ class Apc2CommandAction extends SingletonAction<ActionSettings> {
     }
   }
 
+  private stopDelayedRefresh(actionId: string): void {
+    const refresh = this.delayedRefreshes.get(actionId);
+    if (refresh) {
+      clearTimeout(refresh);
+      this.delayedRefreshes.delete(actionId);
+    }
+  }
+
+  private invalidateVisualUpdates(actionId: string): void {
+    this.updateGenerations.set(actionId, (this.updateGenerations.get(actionId) ?? 0) + 1);
+  }
+
   private async updateStatus(
     event: WillAppearEvent<ActionSettings> | KeyDownEvent<ActionSettings>,
     overrideLabel?: string
   ): Promise<void> {
-    if (this.pollsInFlight.has(event.action.id)) return;
-    this.pollsInFlight.add(event.action.id);
+    const actionId = event.action.id;
+    if (!this.visibleActions.has(actionId) || this.commandsInFlight.has(actionId)) return;
+
+    const generation = (this.updateGenerations.get(actionId) ?? 0) + 1;
+    this.updateGenerations.set(actionId, generation);
     try {
       if (this.scope === "open") {
+        if (this.updateGenerations.get(actionId) !== generation || !this.visibleActions.has(actionId)) return;
         await setVisual(event, "offline", overrideLabel || this.fallbackTitle, 0, false);
         return;
       }
@@ -252,12 +350,19 @@ class Apc2CommandAction extends SingletonAction<ActionSettings> {
         this.scope === "default"
           ? await readDefaultStatus(event.payload.settings)
           : await readGlobalStatus(event.payload.settings);
+      if (
+        this.updateGenerations.get(actionId) !== generation ||
+        !this.visibleActions.has(actionId) ||
+        this.commandsInFlight.has(actionId)
+      ) {
+        return;
+      }
       await setVisual(event, status.state, overrideLabel || status.label || this.fallbackTitle);
     } catch (error) {
       streamDeck.logger.error("AudioPlaybackConnector2 status failed", error);
-      await setVisual(event, "error", this.fallbackTitle);
-    } finally {
-      this.pollsInFlight.delete(event.action.id);
+      if (this.updateGenerations.get(actionId) === generation && this.visibleActions.has(actionId)) {
+        await setVisual(event, "error", this.fallbackTitle);
+      }
     }
   }
 }

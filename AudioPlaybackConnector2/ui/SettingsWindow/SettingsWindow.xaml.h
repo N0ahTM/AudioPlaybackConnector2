@@ -9,6 +9,7 @@
 namespace winrt::AudioPlaybackConnector2::implementation {
 struct SettingsWindow : SettingsWindowT<SettingsWindow> {
     SettingsWindow();
+    ~SettingsWindow();
 
     void RootGrid_Loaded(winrt::Windows::Foundation::IInspectable const& sender,
                          winrt::Microsoft::UI::Xaml::RoutedEventArgs const& e);
@@ -57,8 +58,11 @@ private:
 
     void InitializeSettingsContent();
     void LocalizeSettingsText();
+    void ApplyCurrentWindowTheme(HWND hwnd) noexcept;
     void RevealAtTarget(HWND hwnd);
     void QueuePlacementSave();
+    void SavePlacementNow() noexcept;
+    void StopPlacementSaveTimer() noexcept;
     bool StoreCurrentPlacement();
     void ResetWindowPlacement();
     void ApplyAdaptiveLayout();
@@ -89,22 +93,25 @@ private:
     winrt::fire_and_forget SyncStartupTaskStateAsync();
     winrt::fire_and_forget ApplyStartWithWindowsAsync(bool on);
     winrt::fire_and_forget RunManualUpdateCheckAsync();
-    winrt::fire_and_forget SavePlacementAfterDelayAsync(uint64_t requestId);
     winrt::fire_and_forget ClearAliasSavedAfterDelayAsync(uint64_t requestId);
     util::SettingsWindowPlacement m_defaultPlacement = util::CalculateSettingsWindowPlacement();
     util::SettingsWindowPlacement m_targetPlacement = util::CalculateSettingsWindowPlacement();
-    std::atomic_uint64_t m_placementSaveRequestId = 0;
+    winrt::Microsoft::UI::Dispatching::DispatcherQueueTimer m_placementSaveTimer{nullptr};
     std::atomic_uint64_t m_aliasSavedRequestId = 0;
     std::atomic_uint64_t m_startupRequestId = 0;
     std::atomic_uint64_t m_updateCheckRequestId = 0;
     std::shared_ptr<ISettingsController> m_settingsController;
     std::wstring m_aliasSavedDeviceId;
+    std::size_t m_themeChangedToken = 0;
     SettingsPage m_currentPage = SettingsPage::Devices;
     bool m_suppressStartupToggle = false;
     bool m_suppressLanguageSelection = false;
+    bool m_suppressNavigationSelection = false;
     bool m_subclassInstalled = false;
     bool m_contentInitialized = false;
     bool m_capturePlacementChanges = false;
+    bool m_adaptiveLayoutReady = false;
+    bool m_loaded = false;
 };
 } // namespace winrt::AudioPlaybackConnector2::implementation
 

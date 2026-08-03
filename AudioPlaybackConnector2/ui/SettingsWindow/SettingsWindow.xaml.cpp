@@ -13,6 +13,7 @@
 #include <ui/ButtonHelpers.hpp>
 #include <util/Logger.hpp>
 #include <util/Util.hpp>
+#include <ui/XamlWindowInterop.hpp>
 
 #include <winrt/Windows.ApplicationModel.DataTransfer.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.h>

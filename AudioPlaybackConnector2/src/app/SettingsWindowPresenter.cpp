@@ -5,6 +5,7 @@
 #include <SettingsWindow/SettingsWindow.xaml.h>
 #include <services/TrayController.hpp>
 #include <services/UpdateCoordinator.hpp>
+#include <ui/XamlWindowInterop.hpp>
 #include <util/Util.hpp>
 
 /*------------------------------------------------------------------------------------------------------------*/

@@ -4,7 +4,7 @@
 #include <services/SettingsController.hpp>
 #include <services/UpdateService.hpp>
 #include <ui/SettingsViewModel.hpp>
-#include <util/Util.hpp>
+#include <ui/WindowPlacement.hpp>
 
 class UpdateCoordinator;
 

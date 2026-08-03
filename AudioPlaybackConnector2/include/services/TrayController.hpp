@@ -3,7 +3,7 @@
 #include <ui/TrayIcon.hpp>
 #include <ui/TrayContextMenu.hpp>
 #include <DevicePickerView/DevicePickerView.xaml.h>
-#include <util/Util.hpp>
+#include <ui/WindowPlacement.hpp>
 
 #include <functional>
 #include <memory>

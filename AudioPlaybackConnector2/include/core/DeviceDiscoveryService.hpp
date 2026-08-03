@@ -5,7 +5,7 @@
 #include <memory>
 #include <mutex>
 #include <unordered_map>
-#include <util/Util.hpp>
+#include <util/Event.hpp>
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Device Discovery Service //////////////////////////////////////////////////////////////////////////*/

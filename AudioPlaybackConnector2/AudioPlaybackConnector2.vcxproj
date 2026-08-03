@@ -139,6 +139,7 @@
     <ClInclude Include="include\app\StartupUpdateCoordinator.hpp" />
     <ClInclude Include="include\control\CommandProtocol.hpp" />
     <ClInclude Include="include\control\CommandPipeSecurity.hpp" />
+    <ClInclude Include="include\util\Event.hpp" />
     <ClInclude Include="include\util\Logger.hpp" />
     <ClInclude Include="include\util\Util.hpp" />
     <ClInclude Include="include\core\StringResources.hpp" />
@@ -167,6 +168,8 @@
     <ClInclude Include="include\ui\SettingsViewModel.hpp" />
     <ClInclude Include="include\ui\TrayIcon.hpp" />
     <ClInclude Include="include\ui\TrayContextMenu.hpp" />
+    <ClInclude Include="include\ui\XamlWindowInterop.hpp" />
+    <ClInclude Include="include\ui\WindowPlacement.hpp" />
     <Midl Include="ui\DevicePickerView\DevicePickerView.idl" />
     <ClInclude Include="ui\DevicePickerView\DevicePickerView.xaml.h">
       <DependentUpon>ui\DevicePickerView\DevicePickerView.xaml</DependentUpon>
@@ -194,54 +197,17 @@
       <PrecompiledHeader>Create</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="src\app\ApplicationHost.cpp" />
-    <ClCompile Include="src\app\AdaptiveResourcePolicy.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="src\app\ResourcePressureMonitor.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="src\app\ResourcePressureState.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="src\app\AutoReconnectPlanner.cpp" />
-    <ClCompile Include="src\app\DeviceEventRouter.cpp" />
-    <ClCompile Include="src\app\PowerTransitionCoordinator.cpp" />
     <ClCompile Include="src\app\SettingsWindowPresenter.cpp" />
-    <ClCompile Include="src\app\SingleInstanceGuard.cpp" />
     <ClCompile Include="src\app\StartupUpdateCoordinator.cpp" />
-    <ClCompile Include="src\core\StringResources.cpp" />
     <ClCompile Include="src\core\ThemeHelper.cpp" />
-    <ClCompile Include="src\core\Settings.cpp" />
-    <ClCompile Include="src\core\AudioConnectionService.cpp" />
-    <ClCompile Include="src\core\DeviceDiscoveryService.cpp" />
-    <ClCompile Include="src\core\DeviceManagerDiagnostics.cpp" />
-    <ClCompile Include="src\core\DevicePickerSnapshot.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="src\core\DeviceSessionStore.cpp" />
-    <ClCompile Include="src\core\ReconnectController.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="src\core\DeviceManager.cpp" />
     <ClCompile Include="src\services\NotificationService.cpp" />
-    <ClCompile Include="src\services\UpdateCoordinator.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="src\services\SettingsController.cpp" />
-    <ClCompile Include="src\services\StartupTaskController.cpp" />
-    <ClCompile Include="src\services\CommandLineControlServer.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
-    <ClCompile Include="src\services\ToastContentBuilder.cpp" />
     <ClCompile Include="src\services\TrayController.cpp" />
-    <ClCompile Include="src\services\UpdateService.cpp" />
     <ClCompile Include="src\ui\DevicePickerViewModel.cpp" />
     <ClCompile Include="src\ui\FlyoutPresenterStyle.cpp" />
     <ClCompile Include="src\ui\SettingsViewModel.cpp" />
     <ClCompile Include="src\ui\TrayIcon.cpp" />
     <ClCompile Include="src\ui\TrayContextMenu.cpp" />
     <ClCompile Include="src\util\CrashHandler.cpp" />
-    <ClCompile Include="src\util\Logger.cpp" />
     <ClCompile Include="ui\DevicePickerView\DevicePickerView.xaml.cpp">
       <DependentUpon>ui\DevicePickerView\DevicePickerView.xaml</DependentUpon>
     </ClCompile>
@@ -271,6 +237,12 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\AudioPlaybackConnector2.CoreRuntime\AudioPlaybackConnector2.CoreRuntime.vcxproj">
+      <Project>{A7031B3F-1284-4EC5-A9B3-B7F6BCF82613}</Project>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

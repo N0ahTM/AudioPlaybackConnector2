@@ -15,6 +15,7 @@
 #include <services/UpdateService.hpp>
 #include <ui/TrayContextMenu.hpp>
 #include <ui/TrayIcon.hpp>
+#include <ui/XamlWindowInterop.hpp>
 #include <util/CrashHandler.hpp>
 #include <util/Util.hpp>
 

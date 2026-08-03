@@ -154,9 +154,6 @@
     <Content Include="Images\Wide310x150Logo.scale-150.png" />
     <Content Include="Images\Wide310x150Logo.scale-200.png" />
     <Content Include="Images\Wide310x150Logo.scale-400.png" />
-    <Content Include="..\$(Platform)\$(Configuration)\AudioPlaybackConnector2.Control.exe">
-      <Link>AudioPlaybackConnector2.Control.exe</Link>
-    </Content>
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\AudioPlaybackConnector2.Control\AudioPlaybackConnector2.Control.vcxproj">

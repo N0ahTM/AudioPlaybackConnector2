@@ -238,20 +238,20 @@ void TrayController::ShowTrayMenu() {
     }
 }
 
-void TrayController::ShowDevicePicker() noexcept try {
-    if (m_isTearingDown.load()) return;
+bool TrayController::ShowDevicePicker(bool toggleIfOpen) noexcept try {
+    if (m_isTearingDown.load()) return false;
     DebugTrace(L"[TrayController] OnTrayIconLeftClick()");
 
     auto const flyoutState = m_pickerFlyoutState.load();
     if (flyoutState == PickerFlyoutState::Open && m_pickerFlyout) {
         NotifyResourceStateChanged(true);
-        TryHideDevicePicker();
-        return;
+        if (toggleIfOpen) TryHideDevicePicker();
+        return true;
     }
 
     if (flyoutState != PickerFlyoutState::Closed) {
         DebugTrace(L"[TrayController] Picker flyout state is not closed, ignoring click");
-        return;
+        return false;
     }
 
     if (m_suppressNextTraySelectAfterPickerClosedOverTrayIcon) {
@@ -260,24 +260,24 @@ void TrayController::ShowDevicePicker() noexcept try {
         m_suppressNextTraySelectAfterPickerClosedOverTrayIcon = false;
         if (elapsedSinceDismiss < c_trayLightDismissSuppressMs) {
             DebugTrace(L"[TrayController] Picker flyout reopen suppressed after tray light-dismiss");
-            return;
+            if (toggleIfOpen) return false;
         }
     }
 
     auto rect = m_trayIcon->GetIconRect();
     if (!rect) {
         DebugTrace(L"[TrayController] ERROR: GetIconRect() returned null");
-        return;
+        return false;
     }
 
     auto root = m_mainWindow.Content().as<Controls::Grid>();
     if (!root) {
         DebugTrace(L"[TrayController] ERROR: MainWindow.Content() is not a Grid");
-        return;
+        return false;
     }
 
     if (!EnsureDevicePickerViewCreated()) {
-        return;
+        return false;
     }
     ReconcileTrayStateFromDeviceSnapshot(L"flyout-open-before-load");
 
@@ -289,19 +289,19 @@ void TrayController::ShowDevicePicker() noexcept try {
         m_pickerFlyout = nullptr;
         NotifyResourceStateChanged(false);
         util::DebugTraceException(L"[TrayController] ERROR: failed to create picker flyout", ex);
-        return;
+        return false;
     } catch (std::exception const& ex) {
         m_pickerFlyoutState.store(PickerFlyoutState::Closed);
         m_pickerFlyout = nullptr;
         NotifyResourceStateChanged(false);
         util::DebugTraceException(L"[TrayController] ERROR: failed to create picker flyout", ex);
-        return;
+        return false;
     } catch (...) {
         m_pickerFlyoutState.store(PickerFlyoutState::Closed);
         m_pickerFlyout = nullptr;
         NotifyResourceStateChanged(false);
         util::DebugTraceUnknownException(L"[TrayController] ERROR: failed to create picker flyout");
-        return;
+        return false;
     }
 
     auto impl = m_devicePickerView.as<winrt::AudioPlaybackConnector2::implementation::DevicePickerView>();
@@ -330,21 +330,25 @@ void TrayController::ShowDevicePicker() noexcept try {
     try {
         m_pickerFlyout.ShowAt(root, options);
         resetTopmost.release();
+        return true;
     } catch (winrt::hresult_error const& ex) {
         m_pickerFlyoutState.store(PickerFlyoutState::Closed);
         m_pickerFlyout = nullptr;
         NotifyResourceStateChanged(false);
         util::DebugTraceException(L"[TrayController] ERROR: failed to show picker flyout", ex);
+        return false;
     } catch (std::exception const& ex) {
         m_pickerFlyoutState.store(PickerFlyoutState::Closed);
         m_pickerFlyout = nullptr;
         NotifyResourceStateChanged(false);
         util::DebugTraceException(L"[TrayController] ERROR: failed to show picker flyout", ex);
+        return false;
     } catch (...) {
         m_pickerFlyoutState.store(PickerFlyoutState::Closed);
         m_pickerFlyout = nullptr;
         NotifyResourceStateChanged(false);
         util::DebugTraceUnknownException(L"[TrayController] ERROR: failed to show picker flyout");
+        return false;
     }
 } catch (winrt::hresult_error const& ex) {
     TryHideDevicePicker();
@@ -352,18 +356,21 @@ void TrayController::ShowDevicePicker() noexcept try {
     m_pickerFlyout = nullptr;
     NotifyResourceStateChanged(false);
     util::DebugTraceException(L"[TrayController] ERROR: unexpected device picker show failure", ex);
+    return false;
 } catch (std::exception const& ex) {
     TryHideDevicePicker();
     m_pickerFlyoutState.store(PickerFlyoutState::Closed);
     m_pickerFlyout = nullptr;
     NotifyResourceStateChanged(false);
     util::DebugTraceException(L"[TrayController] ERROR: unexpected device picker show failure", ex);
+    return false;
 } catch (...) {
     TryHideDevicePicker();
     m_pickerFlyoutState.store(PickerFlyoutState::Closed);
     m_pickerFlyout = nullptr;
     NotifyResourceStateChanged(false);
     util::DebugTraceUnknownException(L"[TrayController] ERROR: unexpected device picker show failure");
+    return false;
 }
 
 void TrayController::UpdateTooltip(std::wstring_view text) {
@@ -504,7 +511,7 @@ void TrayController::HandleTrayMessage([[maybe_unused]] WPARAM wParam, LPARAM lP
                 break;
             }
             if (shouldProcess(m_lastLeftClickTick, c_clickDebounceMs)) {
-                ShowDevicePicker();
+                (void)ShowDevicePicker();
             }
             break;
 

@@ -61,12 +61,12 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp23</LanguageStandard>
       <AdditionalIncludeDirectories>..\AudioPlaybackConnector2\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>APC_DEVICE_PICKER_SNAPSHOT_STANDALONE;APC_RECONNECT_CONTROLLER_STANDALONE;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>APC_ALLOW_UNPACKAGED_CONTROL;APC_COMMAND_PIPE_SERVER_STANDALONE;APC_COMMAND_PIPE_SERVER_TESTING;APC_DEVICE_PICKER_SNAPSHOT_STANDALONE;APC_RECONNECT_CONTROLLER_STANDALONE;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>WindowsApp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>WindowsApp.lib;advapi32.lib;runtimeobject.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
@@ -88,25 +88,37 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\AdaptiveResourcePolicyTests.cpp" />
+    <ClCompile Include="src\CommandLineControlServerTests.cpp" />
+    <ClCompile Include="src\CommandClientTests.cpp" />
+    <ClCompile Include="src\ControlUiActionGateTests.cpp" />
+    <ClCompile Include="src\ControlTargetMatcherTests.cpp" />
     <ClCompile Include="src\DevicePickerSnapshotTests.cpp" />
     <ClCompile Include="src\ReconnectControllerTests.cpp" />
     <ClCompile Include="src\ResourcePressureMonitorTests.cpp" />
     <ClCompile Include="src\UpdateCoordinatorTests.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveResourcePolicy.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\control\CommandClient.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\ResourcePressureMonitor.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\ResourcePressureState.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\UpdateCoordinator.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\DevicePickerSnapshot.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\ReconnectController.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\services\CommandLineControlServer.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveResourcePolicy.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\ControlUiActionGate.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandClient.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandPipeSecurity.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandProtocol.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\control\ControlTargetMatcher.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResourcePressureMonitor.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResourcePressureState.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\UpdateCoordinator.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DevicePickerSnapshot.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\ReconnectController.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\ToastXmlSanitizer.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\services\CommandLineControlServer.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

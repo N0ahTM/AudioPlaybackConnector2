@@ -104,7 +104,7 @@
       <SDLCheck>true</SDLCheck>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>shell32.lib;gdiplus.lib;gdi32.lib;comctl32.lib;shlwapi.lib;dwmapi.lib;shcore.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>shell32.lib;gdiplus.lib;gdi32.lib;comctl32.lib;shlwapi.lib;dwmapi.lib;shcore.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
@@ -128,6 +128,7 @@
     <ClInclude Include="include\pch.h" />
     <ClInclude Include="include\app\ApplicationHost.hpp" />
     <ClInclude Include="include\app\AdaptiveResourcePolicy.hpp" />
+    <ClInclude Include="include\app\ControlUiActionGate.hpp" />
     <ClInclude Include="include\app\ResourcePressureMonitor.hpp" />
     <ClInclude Include="include\app\ResourcePressureState.hpp" />
     <ClInclude Include="include\app\AutoReconnectPlanner.hpp" />
@@ -137,6 +138,7 @@
     <ClInclude Include="include\app\SingleInstanceGuard.hpp" />
     <ClInclude Include="include\app\StartupUpdateCoordinator.hpp" />
     <ClInclude Include="include\control\CommandProtocol.hpp" />
+    <ClInclude Include="include\control\CommandPipeSecurity.hpp" />
     <ClInclude Include="include\util\Logger.hpp" />
     <ClInclude Include="include\util\Util.hpp" />
     <ClInclude Include="include\core\StringResources.hpp" />
@@ -152,6 +154,7 @@
     <ClInclude Include="include\services\NotificationService.hpp" />
     <ClInclude Include="include\services\UpdateCoordinator.hpp" />
     <ClInclude Include="include\services\SettingsController.hpp" />
+    <ClInclude Include="include\control\ControlTargetMatcher.hpp" />
     <ClInclude Include="include\services\StartupTaskController.hpp" />
     <ClInclude Include="include\services\CommandLineControlServer.hpp" />
     <ClInclude Include="include\services\ToastContentBuilder.hpp" />
@@ -226,7 +229,9 @@
     </ClCompile>
     <ClCompile Include="src\services\SettingsController.cpp" />
     <ClCompile Include="src\services\StartupTaskController.cpp" />
-    <ClCompile Include="src\services\CommandLineControlServer.cpp" />
+    <ClCompile Include="src\services\CommandLineControlServer.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="src\services\ToastContentBuilder.cpp" />
     <ClCompile Include="src\services\TrayController.cpp" />
     <ClCompile Include="src\services\UpdateService.cpp" />

@@ -19,10 +19,10 @@ public:
 
     ~SettingsWindowPresenter();
 
-    void Show(std::shared_ptr<ISettingsController> settingsController,
-              std::shared_ptr<TrayController> trayController,
-              std::shared_ptr<UpdateCoordinator> updateCoordinator,
-              std::function<void()> saveSettings);
+    [[nodiscard]] bool Show(std::shared_ptr<ISettingsController> settingsController,
+                            std::shared_ptr<TrayController> trayController,
+                            std::shared_ptr<UpdateCoordinator> updateCoordinator,
+                            std::function<void()> saveSettings);
     void Close() noexcept;
 
 private:

@@ -27,7 +27,7 @@
         <desktop:Extension Category="windows.toastNotificationActivation">
           <desktop:ToastNotificationActivation ToastActivatorCLSID="8d5b3b0d-1d44-4e94-a58c-2d345b8ff9e8" />
         </desktop:Extension>
-        <uap3:Extension Category="windows.appExecutionAlias" Executable="AudioPlaybackConnector2.Control.exe" EntryPoint="Windows.FullTrustApplication">
+        <uap3:Extension Category="windows.appExecutionAlias" Executable="AudioPlaybackConnector2.Control\AudioPlaybackConnector2.Control.exe" EntryPoint="Windows.FullTrustApplication">
           <uap3:AppExecutionAlias>
             <desktop:ExecutionAlias Alias="apc2ctl.exe" />
           </uap3:AppExecutionAlias>

@@ -15,7 +15,7 @@ SettingsWindowPresenter::~SettingsWindowPresenter() {
     Close();
 }
 
-void SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settingsController,
+bool SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settingsController,
                                    std::shared_ptr<TrayController> trayController,
                                    std::shared_ptr<UpdateCoordinator> updateCoordinator,
                                    std::function<void()> saveSettings) {
@@ -26,8 +26,9 @@ void SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settings
             ShowWindow(hwnd, IsIconic(hwnd) ? SW_RESTORE : SW_SHOW);
             SetForegroundWindow(hwnd);
             DebugTrace(L"[SettingsWindowPresenter] SettingsWindow brought to foreground");
+            return true;
         }
-        return;
+        return false;
     }
 
     try {
@@ -67,18 +68,22 @@ void SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settings
         m_settingsWindowClosedToken = m_settingsWindow.Closed([this](auto&, auto&) { HandleWindowClosed(); });
         m_settingsWindowClosedTokenRegistered = true;
         DebugTrace(L"[SettingsWindowPresenter] SettingsWindow created off-screen (hidden until ready)");
+        return true;
     } catch (winrt::hresult_error const& ex) {
         DebugTrace(L"[SettingsWindowPresenter] ERROR: Failed to create SettingsWindow: 0x{0:08X} {1}",
                    static_cast<uint32_t>(ex.code()),
                    ex.message());
         m_settingsWindow = nullptr;
+        return false;
     } catch (std::exception const& ex) {
         DebugTrace(L"[SettingsWindowPresenter] ERROR: Failed to create SettingsWindow: {0}",
                    util::Utf8ToUtf16(ex.what()));
         m_settingsWindow = nullptr;
+        return false;
     } catch (...) {
         DebugTrace(L"[SettingsWindowPresenter] ERROR: Failed to create SettingsWindow");
         m_settingsWindow = nullptr;
+        return false;
     }
 }
 

@@ -252,8 +252,11 @@ void TestParallelSingleFlightStress() {
     }
 
     start.arrive_and_wait();
-    while (prepared.load() != callerCount)
-        prepared.wait(prepared.load());
+    auto preparedCount = prepared.load();
+    while (preparedCount != callerCount) {
+        prepared.wait(preparedCount);
+        preparedCount = prepared.load();
+    }
     Check(backend->WaitForCalls(1), "parallel callers must start one backend request");
     Check(backend->Calls() == 1, "all parallel callers must join exactly one flight");
     backend->Release(0);

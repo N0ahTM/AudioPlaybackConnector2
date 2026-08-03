@@ -71,7 +71,7 @@ public:
     /*------------------------------------------------------------------------------------------------------------*/
 
     void ShowTrayMenu();
-    void ShowDevicePicker() noexcept;
+    [[nodiscard]] bool ShowDevicePicker(bool toggleIfOpen = true) noexcept;
     void UpdateTooltip(std::wstring_view text);
     void UpdateTooltipFromConnections();
     void RefreshDevicePickerState(bool reconcileTrayState = true);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <app/AdaptiveResourcePolicy.hpp>
+#include <app/ControlUiActionGate.hpp>
 #include <app/DeviceEventRouter.hpp>
 #include <app/PowerTransitionCoordinator.hpp>
 #include <app/ResourcePressureMonitor.hpp>
@@ -46,6 +47,7 @@ public:
     void Shutdown() noexcept;
 
 private:
+    using ControlUiActionResult = ControlUiActionGate::Result;
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Setup /////////////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
@@ -77,12 +79,14 @@ private:
     /*//////// Actions ///////////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    void ShowSettingsWindow();
+    [[nodiscard]] bool ShowSettingsWindow();
     void ExitApplication();
     apc::control::Response
     HandleControlCommand(apc::control::Request const& request, std::stop_token stopToken, std::uint64_t deadline);
     void PerformTeardown(bool saveLastConnected) noexcept;
     void RunOnUIThread(std::function<void()> work);
+    ControlUiActionResult
+    RunControlUiAction(std::function<bool()> work, std::stop_token stopToken, std::uint64_t deadline);
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Device Event Handlers /////////////////////////////////////////////////////////////////////////////*/

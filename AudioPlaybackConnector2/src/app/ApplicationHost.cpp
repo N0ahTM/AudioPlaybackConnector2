@@ -5,6 +5,7 @@
 #include <MainWindow/MainWindow.xaml.h>
 #include <app/AutoReconnectPlanner.hpp>
 #include <app/StartupUpdateCoordinator.hpp>
+#include <control/ControlTargetMatcher.hpp>
 #include <core/DeviceDisplay.hpp>
 #include <core/DeviceManager.hpp>
 #include <core/Settings.hpp>
@@ -505,7 +506,7 @@ void ApplicationHost::InitializeTray() {
     }
     m_trayController->SetCallbacks(
         [weak]() {
-            if (auto self = weak.lock()) self->ShowSettingsWindow();
+            if (auto self = weak.lock()) (void)self->ShowSettingsWindow();
         },
         [weak]() {
             if (auto self = weak.lock()) self->ExitApplication();
@@ -585,7 +586,8 @@ void ApplicationHost::InitializeCommandLineControl() {
         }
         return {apc::control::ExitCode::Unavailable, L""};
     });
-    DebugTrace(L"[App] Command line control server started");
+    DebugTrace(m_commandLineControlServer.IsRunning() ? L"[App] Command line control server started"
+                                                      : L"[App] Command line control server retry scheduled");
 }
 
 void ApplicationHost::InitializeAdaptiveResources() noexcept {
@@ -933,6 +935,60 @@ void ApplicationHost::RunOnUIThread(std::function<void()> work) {
     }
 }
 
+ApplicationHost::ControlUiActionResult
+ApplicationHost::RunControlUiAction(std::function<bool()> work, std::stop_token stopToken, std::uint64_t deadline) {
+    if (m_exiting.load() || !m_dispatcherQueue || stopToken.stop_requested()) {
+        return ControlUiActionResult::Failed;
+    }
+    if (m_dispatcherQueue.HasThreadAccess()) {
+        try {
+            return !m_exiting.load() && work() ? ControlUiActionResult::Succeeded : ControlUiActionResult::Failed;
+        } catch (...) {
+            return ControlUiActionResult::Failed;
+        }
+    }
+
+    struct ActionState {
+        ActionState() { Completed.create(); }
+        wil::unique_event Completed;
+        ControlUiActionGate Gate;
+    };
+    auto state = std::make_shared<ActionState>();
+    auto weak = weak_from_this();
+    if (!m_dispatcherQueue.TryEnqueue(winrt::Microsoft::UI::Dispatching::DispatcherQueuePriority::Normal,
+                                      [weak, state, work = std::move(work)]() mutable noexcept {
+                                          if (!state->Gate.TryBegin()) {
+                                              state->Completed.SetEvent();
+                                              return;
+                                          }
+                                          bool succeeded = false;
+                                          try {
+                                              auto self = weak.lock();
+                                              if (self && !self->m_exiting.load()) {
+                                                  succeeded = work();
+                                              }
+                                          } catch (...) {
+                                          }
+                                          state->Gate.Complete(succeeded);
+                                          state->Completed.SetEvent();
+                                      })) {
+        return ControlUiActionResult::Failed;
+    }
+
+    while (true) {
+        if (stopToken.stop_requested() || m_exiting.load()) {
+            return state->Gate.CancelOrClassify();
+        }
+        const auto remaining = apc::control::RemainingWait(deadline);
+        if (remaining == 0) return state->Gate.CancelOrClassify();
+        const auto waitResult = WaitForSingleObject(state->Completed.get(), std::min<DWORD>(remaining, 100));
+        if (waitResult == WAIT_OBJECT_0) {
+            return state->Gate.CurrentResult();
+        }
+        if (waitResult != WAIT_TIMEOUT) return state->Gate.CancelOrClassify();
+    }
+}
+
 void ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstring_view reason) {
     if (m_exiting.load() || !m_trayController || !m_deviceManager) {
         DebugTrace(L"[App] RefreshTrayVisualState skipped reason={0} exiting={1} hasTrayController={2} "
@@ -1044,11 +1100,11 @@ void ApplicationHost::TeardownDeviceEvents() {
     m_deviceEventRouter.Detach();
 }
 
-void ApplicationHost::ShowSettingsWindow() {
-    if (m_exiting.load()) return;
+bool ApplicationHost::ShowSettingsWindow() {
+    if (m_exiting.load()) return false;
     DebugTrace(L"[App] ShowSettingsWindow()");
     auto weak = weak_from_this();
-    m_settingsWindowPresenter.Show(m_settingsController, m_trayController, m_updateCoordinator, [weak]() {
+    return m_settingsWindowPresenter.Show(m_settingsController, m_trayController, m_updateCoordinator, [weak]() {
         auto self = weak.lock();
         if (!self || !self->m_settings) return;
         self->m_settings->Save(GetModuleHandleW(nullptr));
@@ -1315,15 +1371,18 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
 
         std::vector<ControlDeviceInfo> matches;
         if (commandRequest.Target == TargetKind::Auto) {
-            for (auto const& device : devices) {
-                if (EqualsIgnoreCase(device.Id, commandRequest.Payload)) {
-                    matches.push_back(device);
-                }
-            }
-            if (!matches.empty()) return matchOne(std::move(matches), commandRequest.Payload);
+            std::vector<apc::control::TargetCandidateView> candidates;
+            candidates.reserve(devices.size());
+            for (auto const& device : devices)
+                candidates.push_back({device.Id, device.Name, device.Alias});
+            const auto selection = apc::control::FindAutoTargetMatches(candidates, commandRequest.Payload);
+            matches.reserve(selection.Indices.size());
+            for (auto index : selection.Indices)
+                matches.push_back(devices[index]);
+            return matchOne(std::move(matches), commandRequest.Payload);
         }
 
-        if (commandRequest.Target == TargetKind::Mac || commandRequest.Target == TargetKind::Auto) {
+        if (commandRequest.Target == TargetKind::Mac) {
             const auto queryHex = NormalizeHex(commandRequest.Payload);
             if (queryHex.size() >= 6) {
                 matches.clear();
@@ -1332,12 +1391,12 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
                         matches.push_back(device);
                     }
                 }
-                if (!matches.empty() || commandRequest.Target == TargetKind::Mac)
-                    return matchOne(std::move(matches), commandRequest.Payload);
+                return matchOne(std::move(matches), commandRequest.Payload);
             }
+            return matchOne({}, commandRequest.Payload);
         }
 
-        if (commandRequest.Target == TargetKind::Alias || commandRequest.Target == TargetKind::Auto) {
+        if (commandRequest.Target == TargetKind::Alias) {
             matches.clear();
             for (auto const& device : devices) {
                 if (EqualsIgnoreCase(device.Alias, commandRequest.Payload)) {
@@ -1352,11 +1411,10 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
                     matches.push_back(device);
                 }
             }
-            if (!matches.empty() || commandRequest.Target == TargetKind::Alias)
-                return matchOne(std::move(matches), commandRequest.Payload);
+            return matchOne(std::move(matches), commandRequest.Payload);
         }
 
-        if (commandRequest.Target == TargetKind::Name || commandRequest.Target == TargetKind::Auto) {
+        if (commandRequest.Target == TargetKind::Name) {
             matches.clear();
             for (auto const& device : devices) {
                 if (EqualsIgnoreCase(device.Name, commandRequest.Payload)) {
@@ -1389,9 +1447,7 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
         auto connectOperation = m_deviceManager->ConnectAsync(winrt::hstring(target.Id));
         const auto waitResult = WaitForControlAsync(connectOperation, stopToken, deadline);
         if (waitResult != ControlWaitResult::Completed) {
-            const auto code =
-                waitResult == ControlWaitResult::Cancelled ? ExitCode::Unavailable : ExitCode::OperationFailed;
-            return makeOperationResponse(code,
+            return makeOperationResponse(ExitCode::Indeterminate,
                                          action,
                                          target.Id,
                                          target.Name,
@@ -1440,9 +1496,7 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
         auto reconnectOperation = m_deviceManager->ReconnectAsync(winrt::hstring(target.Id));
         const auto waitResult = WaitForControlAsync(reconnectOperation, stopToken, deadline);
         if (waitResult != ControlWaitResult::Completed) {
-            const auto code =
-                waitResult == ControlWaitResult::Cancelled ? ExitCode::Unavailable : ExitCode::OperationFailed;
-            return makeOperationResponse(code,
+            return makeOperationResponse(ExitCode::Indeterminate,
                                          L"reconnect",
                                          target.Id,
                                          target.Name,
@@ -1466,21 +1520,44 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
     };
 
     auto showDevicePicker = [&]() -> Response {
-        RunOnUIThread([weak = weak_from_this()]() {
-            if (auto self = weak.lock(); self && self->m_trayController) {
-                self->m_trayController->ShowDevicePicker();
-            }
-        });
-        return makeOperationResponse(ExitCode::Success, L"show", L"", L"", _("Command_ShowOpened"));
+        const auto result = RunControlUiAction(
+            [weak = weak_from_this()]() {
+                auto self = weak.lock();
+                return self && self->m_trayController && self->m_trayController->ShowDevicePicker(false);
+            },
+            stopToken,
+            deadline);
+        const auto code =
+            result == ControlUiActionResult::Succeeded
+                ? ExitCode::Success
+                : (result == ControlUiActionResult::Indeterminate ? ExitCode::Indeterminate : ExitCode::Unavailable);
+        return makeOperationResponse(code,
+                                     L"show",
+                                     L"",
+                                     L"",
+                                     result == ControlUiActionResult::Succeeded ? std::wstring(_("Command_ShowOpened"))
+                                                                                : std::wstring(_("Command_NotReady")));
     };
 
     auto showSettings = [&]() -> Response {
-        RunOnUIThread([weak = weak_from_this()]() {
-            if (auto self = weak.lock()) {
-                self->ShowSettingsWindow();
-            }
-        });
-        return makeOperationResponse(ExitCode::Success, L"settings", L"", L"", _("Command_SettingsOpened"));
+        const auto result = RunControlUiAction(
+            [weak = weak_from_this()]() {
+                auto self = weak.lock();
+                return self && self->ShowSettingsWindow();
+            },
+            stopToken,
+            deadline);
+        const auto code =
+            result == ControlUiActionResult::Succeeded
+                ? ExitCode::Success
+                : (result == ControlUiActionResult::Indeterminate ? ExitCode::Indeterminate : ExitCode::Unavailable);
+        return makeOperationResponse(code,
+                                     L"settings",
+                                     L"",
+                                     L"",
+                                     result == ControlUiActionResult::Succeeded
+                                         ? std::wstring(_("Command_SettingsOpened"))
+                                         : std::wstring(_("Command_NotReady")));
     };
 
     auto showDefault = [&]() -> Response {
@@ -1656,9 +1733,7 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
                         auto operation = m_deviceManager->ReconnectAsync(winrt::hstring(device.Id));
                         const auto waitResult = WaitForControlAsync(operation, stopToken, deadline);
                         if (waitResult != ControlWaitResult::Completed) {
-                            const auto code = waitResult == ControlWaitResult::Cancelled ? ExitCode::Unavailable
-                                                                                         : ExitCode::OperationFailed;
-                            return makeOperationResponse(code,
+                            return makeOperationResponse(ExitCode::Indeterminate,
                                                          L"reconnect-all",
                                                          device.Id,
                                                          device.Name,
@@ -1698,13 +1773,13 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
         }
     } catch (winrt::hresult_error const& ex) {
         util::DebugTraceException(L"[App] HandleControlCommand ERROR", ex);
-        return makeResponse(ExitCode::OperationFailed, ex.message().c_str());
+        return {ExitCode::Indeterminate, L""};
     } catch (std::exception const& ex) {
         util::DebugTraceException(L"[App] HandleControlCommand ERROR", ex);
-        return makeResponse(ExitCode::OperationFailed, util::Utf8ToUtf16(ex.what()));
+        return {ExitCode::Indeterminate, L""};
     } catch (...) {
         util::DebugTraceUnknownException(L"[App] HandleControlCommand ERROR");
-        return makeResponse(ExitCode::OperationFailed, _("UnknownError"));
+        return {ExitCode::Indeterminate, L""};
     }
 }
 

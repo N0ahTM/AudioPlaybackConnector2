@@ -86,6 +86,9 @@
     <ClCompile Include="src\services\NotificationService.cpp">
       <Filter>src\services</Filter>
     </ClCompile>
+    <ClCompile Include="src\services\UpdateCoordinator.cpp">
+      <Filter>src\services</Filter>
+    </ClCompile>
     <ClCompile Include="src\services\SettingsController.cpp">
       <Filter>src\services</Filter>
     </ClCompile>
@@ -212,6 +215,9 @@
       <Filter>include\core</Filter>
     </ClInclude>
     <ClInclude Include="include\services\NotificationService.hpp">
+      <Filter>include\services</Filter>
+    </ClInclude>
+    <ClInclude Include="include\services\UpdateCoordinator.hpp">
       <Filter>include\services</Filter>
     </ClInclude>
     <ClInclude Include="include\services\SettingsController.hpp">

@@ -220,38 +220,7 @@ winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Storage::StorageFile
 }
 } // namespace
 
-UpdateCheckTask UpdateCheckTask::promise_type::get_return_object() noexcept {
-    return UpdateCheckTask{UpdateCheckTask::Handle::from_promise(*this)};
-}
-
-auto UpdateCheckTask::promise_type::final_suspend() noexcept {
-    struct FinalAwaiter {
-        bool await_ready() noexcept { return false; }
-
-        std::coroutine_handle<> await_suspend(UpdateCheckTask::Handle handle) noexcept {
-            auto continuation = handle.promise().Continuation;
-            return continuation ? continuation : std::noop_coroutine();
-        }
-
-        void await_resume() noexcept {}
-    };
-
-    return FinalAwaiter{};
-}
-
-UpdateCheckTask::Handle UpdateCheckTask::await_suspend(std::coroutine_handle<> continuation) noexcept {
-    m_handle.promise().Continuation = continuation;
-    return m_handle;
-}
-
-UpdateCheckResult UpdateCheckTask::await_resume() {
-    if (m_handle.promise().Exception) {
-        std::rethrow_exception(m_handle.promise().Exception);
-    }
-    return std::move(m_handle.promise().Result);
-}
-
-UpdateCheckTask UpdateService::CheckForUpdatesAsync() {
+UpdateCheckTask UpdateService::CheckForUpdatesAsync(std::stop_token stopToken) {
     UpdateCheckResult result;
     result.CurrentVersion = CurrentVersionString();
     result.ReleaseUrl = std::wstring(c_latestReleasePageUrl);
@@ -259,13 +228,29 @@ UpdateCheckTask UpdateService::CheckForUpdatesAsync() {
     auto requestTimedOut = std::make_shared<std::atomic<bool>>(false);
 
     try {
+        if (stopToken.stop_requested()) {
+            result.Status = UpdateCheckStatus::Cancelled;
+            result.ErrorMessage = L"Update check cancelled";
+            co_return result;
+        }
         co_await winrt::resume_background();
+        if (stopToken.stop_requested()) {
+            result.Status = UpdateCheckStatus::Cancelled;
+            result.ErrorMessage = L"Update check cancelled";
+            co_return result;
+        }
 
         winrt::Windows::Web::Http::HttpClient client;
         client.DefaultRequestHeaders().UserAgent().TryParseAdd(L"AudioPlaybackConnector2");
         client.DefaultRequestHeaders().Accept().TryParseAdd(L"application/vnd.github+json");
 
         auto request = client.GetAsync(winrt::Windows::Foundation::Uri(winrt::hstring(c_latestReleaseApiUrl)));
+        std::stop_callback requestCancellation(stopToken, [request]() noexcept {
+            try {
+                request.Cancel();
+            } catch (...) {
+            }
+        });
         auto timeoutTimer = CreateOperationTimeout(request, requestTimedOut);
         auto timeoutGuard = wil::scope_exit([&]() noexcept { CancelOperationTimeout(timeoutTimer); });
         auto response = co_await request;
@@ -284,11 +269,22 @@ UpdateCheckTask UpdateService::CheckForUpdatesAsync() {
             co_return result;
         }
         auto bodyRead = content.ReadAsStringAsync();
+        std::stop_callback bodyReadCancellation(stopToken, [bodyRead]() noexcept {
+            try {
+                bodyRead.Cancel();
+            } catch (...) {
+            }
+        });
         auto bodyTimeoutTimer = CreateOperationTimeout(bodyRead, requestTimedOut);
         auto bodyTimeoutGuard = wil::scope_exit([&]() noexcept { CancelOperationTimeout(bodyTimeoutTimer); });
         auto body = co_await bodyRead;
         bodyTimeoutGuard.release();
         CancelOperationTimeout(bodyTimeoutTimer);
+        if (stopToken.stop_requested()) {
+            result.Status = UpdateCheckStatus::Cancelled;
+            result.ErrorMessage = L"Update check cancelled";
+            co_return result;
+        }
         if (body.size() > c_maxReleaseJsonCharacters) {
             result.ErrorMessage = L"GitHub release response was too large";
             co_return result;
@@ -326,14 +322,29 @@ UpdateCheckTask UpdateService::CheckForUpdatesAsync() {
                                                                            : UpdateCheckStatus::UpToDate;
         co_return result;
     } catch (winrt::hresult_error const& ex) {
-        result.ErrorMessage =
-            requestTimedOut->load()
-                ? L"Update check timed out"
-                : std::format(L"0x{:08X} {}", static_cast<uint32_t>(ex.code()), std::wstring(ex.message()));
+        if (stopToken.stop_requested()) {
+            result.Status = UpdateCheckStatus::Cancelled;
+            result.ErrorMessage = L"Update check cancelled";
+        } else {
+            result.ErrorMessage =
+                requestTimedOut->load()
+                    ? L"Update check timed out"
+                    : std::format(L"0x{:08X} {}", static_cast<uint32_t>(ex.code()), std::wstring(ex.message()));
+        }
     } catch (std::exception const& ex) {
-        result.ErrorMessage = util::Utf8ToUtf16(ex.what());
+        if (stopToken.stop_requested()) {
+            result.Status = UpdateCheckStatus::Cancelled;
+            result.ErrorMessage = L"Update check cancelled";
+        } else {
+            result.ErrorMessage = util::Utf8ToUtf16(ex.what());
+        }
     } catch (...) {
-        result.ErrorMessage = L"Unknown update check error";
+        if (stopToken.stop_requested()) {
+            result.Status = UpdateCheckStatus::Cancelled;
+            result.ErrorMessage = L"Update check cancelled";
+        } else {
+            result.ErrorMessage = L"Unknown update check error";
+        }
     }
 
     co_return result;

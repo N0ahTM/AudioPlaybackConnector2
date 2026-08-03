@@ -10,6 +10,8 @@
 #include <core/Settings.hpp>
 #include <core/StringResources.hpp>
 #include <core/ThemeHelper.hpp>
+#include <services/UpdateCoordinator.hpp>
+#include <services/UpdateService.hpp>
 #include <ui/TrayContextMenu.hpp>
 #include <ui/TrayIcon.hpp>
 #include <util/CrashHandler.hpp>
@@ -282,6 +284,9 @@ void ApplicationHost::PerformTeardown(bool saveLastConnected) noexcept {
         m_mainWindowLoadedToken = {};
     }
     m_powerTransitionCoordinator.Cancel();
+    if (m_updateCoordinator) {
+        m_updateCoordinator->Shutdown();
+    }
     m_commandLineControlServer.Stop();
     m_settingsWindowPresenter.Close();
     TeardownDeviceEvents();
@@ -307,6 +312,7 @@ void ApplicationHost::PerformTeardown(bool saveLastConnected) noexcept {
         m_deviceManager.reset();
     }
     m_notificationService.reset();
+    m_updateCoordinator.reset();
     m_trayController.reset();
     if (m_gdiplusToken) {
         Gdiplus::GdiplusShutdown(m_gdiplusToken);
@@ -398,6 +404,10 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) {
         StringResources::Instance().Initialize(GetModuleHandleW(nullptr), locked->Language);
     }
     DebugTrace(L"[App] StringResources initialized");
+
+    m_updateCoordinator = std::make_shared<UpdateCoordinator>(
+        [](std::stop_token stopToken) { return UpdateService::CheckForUpdatesAsync(stopToken); });
+    DebugTrace(L"[App] UpdateCoordinator initialized");
 
     Gdiplus::GdiplusStartupInput gdiplusStartupInput;
     if (Gdiplus::GdiplusStartup(&m_gdiplusToken, &gdiplusStartupInput, nullptr) != Gdiplus::Ok) {
@@ -527,9 +537,9 @@ void ApplicationHost::InitializeNotifications() {
             });
         }
     });
-    m_notificationsAvailable = m_notificationService->Initialize(
+    const auto notificationsAvailable = m_notificationService->Initialize(
         winrt::hstring(_("AppName")), winrt::Windows::Foundation::Uri(L"ms-appx:///Images/Square44x44Logo.png"));
-    DebugTrace(L"[App] Notifications available: {0}", m_notificationsAvailable);
+    DebugTrace(L"[App] Notifications available: {0}", notificationsAvailable);
 }
 
 void ApplicationHost::InitializeDeviceManager() {
@@ -693,8 +703,10 @@ winrt::fire_and_forget ApplicationHost::CheckForUpdatesOnStartupAsync() {
         auto lifetime = shared_from_this();
         auto settings = m_settings;
         auto notificationService = m_notificationService;
-        if (m_exiting.load() || !settings || !notificationService) co_return;
-        co_await StartupUpdateCoordinator::CheckForUpdatesAsync(*settings, notificationService, m_exiting);
+        auto updateCoordinator = m_updateCoordinator;
+        if (m_exiting.load() || !settings || !notificationService || !updateCoordinator) co_return;
+        co_await StartupUpdateCoordinator::CheckForUpdatesAsync(
+            *settings, notificationService, updateCoordinator, m_exiting);
     } catch (winrt::hresult_error const& ex) {
         util::DebugTraceException(L"[App] Startup update check failed", ex);
     } catch (std::exception const& ex) {
@@ -836,7 +848,7 @@ void ApplicationHost::ShowSettingsWindow() {
     if (m_exiting.load()) return;
     DebugTrace(L"[App] ShowSettingsWindow()");
     auto weak = weak_from_this();
-    m_settingsWindowPresenter.Show(m_settingsController, m_trayController, [weak]() {
+    m_settingsWindowPresenter.Show(m_settingsController, m_trayController, m_updateCoordinator, [weak]() {
         auto self = weak.lock();
         if (!self || !self->m_settings) return;
         self->m_settings->Save(GetModuleHandleW(nullptr));
@@ -1529,7 +1541,7 @@ void ApplicationHost::ScheduleDeferredSettingsSave() {
 }
 
 void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
-    if (m_exiting.load() || !m_settings || !m_deviceManager || !m_notificationService || !m_trayController) return;
+    if (m_exiting.load() || !m_settings || !m_deviceManager || !m_trayController) return;
     DebugTrace(L"[App] OnDeviceConnected: {0}", std::wstring(id));
 
     if (!m_deviceManager->IsDeviceConnected(id)) {
@@ -1601,30 +1613,34 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
         util::DebugTraceUnknownException(L"[App] OnDeviceConnected reconnect-on-loss sync ERROR");
     }
 
-    try {
-        m_notificationService->ShowDeviceConnected(id, ResolveKnownDeviceName(id));
-    } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[App] OnDeviceConnected notification ERROR", ex);
-    } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[App] OnDeviceConnected notification ERROR", ex);
-    } catch (...) {
-        util::DebugTraceUnknownException(L"[App] OnDeviceConnected notification ERROR");
+    if (m_notificationService) {
+        try {
+            m_notificationService->ShowDeviceConnected(id, ResolveKnownDeviceName(id));
+        } catch (winrt::hresult_error const& ex) {
+            util::DebugTraceException(L"[App] OnDeviceConnected notification ERROR", ex);
+        } catch (std::exception const& ex) {
+            util::DebugTraceException(L"[App] OnDeviceConnected notification ERROR", ex);
+        } catch (...) {
+            util::DebugTraceUnknownException(L"[App] OnDeviceConnected notification ERROR");
+        }
     }
 
     RefreshTrayVisualState(false, L"device-connected");
 }
 
 void ApplicationHost::OnDeviceDisconnected(winrt::hstring const& id) {
-    if (m_exiting.load() || !m_settings || !m_notificationService || !m_trayController) return;
+    if (m_exiting.load() || !m_settings || !m_trayController) return;
     DebugTrace(L"[App] OnDeviceDisconnected: {0}", std::wstring(id));
 
     winrt::hstring deviceName = ResolveKnownDeviceName(id);
-    try {
-        m_notificationService->ShowDeviceDisconnected(id, deviceName);
-    } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[App] OnDeviceDisconnected notification ERROR", ex);
-    } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[App] OnDeviceDisconnected notification ERROR", ex);
+    if (m_notificationService) {
+        try {
+            m_notificationService->ShowDeviceDisconnected(id, deviceName);
+        } catch (winrt::hresult_error const& ex) {
+            util::DebugTraceException(L"[App] OnDeviceDisconnected notification ERROR", ex);
+        } catch (std::exception const& ex) {
+            util::DebugTraceException(L"[App] OnDeviceDisconnected notification ERROR", ex);
+        }
     }
 
     RefreshTrayVisualState(false, L"device-disconnected");
@@ -1641,30 +1657,34 @@ void ApplicationHost::OnConnectionError(winrt::hstring const& id, winrt::hstring
 }
 
 void ApplicationHost::OnAutoReconnectTriggered(winrt::hstring const& id) {
-    if (m_exiting.load() || !m_settings || !m_notificationService) return;
+    if (m_exiting.load() || !m_settings) return;
     DebugTrace(L"[App] OnAutoReconnectTriggered: {0}", std::wstring(id));
 
     winrt::hstring deviceName = ResolveKnownDeviceName(id);
-    try {
-        m_notificationService->ShowAutoReconnect(id, deviceName);
-    } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[App] OnAutoReconnectTriggered notification ERROR", ex);
-    } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[App] OnAutoReconnectTriggered notification ERROR", ex);
+    if (m_notificationService) {
+        try {
+            m_notificationService->ShowAutoReconnect(id, deviceName);
+        } catch (winrt::hresult_error const& ex) {
+            util::DebugTraceException(L"[App] OnAutoReconnectTriggered notification ERROR", ex);
+        } catch (std::exception const& ex) {
+            util::DebugTraceException(L"[App] OnAutoReconnectTriggered notification ERROR", ex);
+        }
     }
 }
 
 void ApplicationHost::OnAutoReconnectFailed(winrt::hstring const& id) {
-    if (m_exiting.load() || !m_settings || !m_notificationService) return;
+    if (m_exiting.load() || !m_settings) return;
     DebugTrace(L"[App] OnAutoReconnectFailed: {0}", std::wstring(id));
 
     winrt::hstring deviceName = ResolveKnownDeviceName(id);
-    try {
-        m_notificationService->ShowAutoReconnectFailed(id, deviceName);
-    } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[App] OnAutoReconnectFailed notification ERROR", ex);
-    } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[App] OnAutoReconnectFailed notification ERROR", ex);
+    if (m_notificationService) {
+        try {
+            m_notificationService->ShowAutoReconnectFailed(id, deviceName);
+        } catch (winrt::hresult_error const& ex) {
+            util::DebugTraceException(L"[App] OnAutoReconnectFailed notification ERROR", ex);
+        } catch (std::exception const& ex) {
+            util::DebugTraceException(L"[App] OnAutoReconnectFailed notification ERROR", ex);
+        }
     }
 }
 

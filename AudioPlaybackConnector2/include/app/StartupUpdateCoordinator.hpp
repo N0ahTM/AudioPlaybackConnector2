@@ -4,6 +4,7 @@
 
 class NotificationService;
 class Settings;
+class UpdateCoordinator;
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Startup Update Coordinator ////////////////////////////////////////////////////////////////////////*/
@@ -15,6 +16,9 @@ public:
     /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    static winrt::Windows::Foundation::IAsyncAction CheckForUpdatesAsync(
-        Settings& settings, std::shared_ptr<NotificationService> notificationService, std::atomic<bool>& exiting);
+    static winrt::Windows::Foundation::IAsyncAction
+    CheckForUpdatesAsync(Settings& settings,
+                         std::shared_ptr<NotificationService> notificationService,
+                         std::shared_ptr<UpdateCoordinator> updateCoordinator,
+                         std::atomic<bool>& exiting);
 };

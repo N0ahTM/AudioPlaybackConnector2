@@ -19,6 +19,7 @@
 
 class DeviceManager;
 class Settings;
+class UpdateCoordinator;
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Application Host //////////////////////////////////////////////////////////////////////////////////*/
@@ -106,6 +107,7 @@ private:
     winrt::Microsoft::UI::Dispatching::DispatcherQueue m_dispatcherQueue{nullptr};
 
     std::shared_ptr<NotificationService> m_notificationService;
+    std::shared_ptr<UpdateCoordinator> m_updateCoordinator;
     std::shared_ptr<TrayController> m_trayController;
     CommandLineControlServer m_commandLineControlServer;
     std::mutex m_controlMutationMutex;
@@ -117,7 +119,6 @@ private:
     static constexpr UINT c_transientTrayErrorMs = 3000;
     std::chrono::steady_clock::time_point m_trayErrorUntil{};
     ULONG_PTR m_gdiplusToken = 0;
-    bool m_notificationsAvailable = false;
     std::atomic<bool> m_exiting = false;
     std::atomic<bool> m_settingsSavePending = false;
     PowerTransitionCoordinator m_powerTransitionCoordinator{m_exiting};

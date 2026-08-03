@@ -4,6 +4,7 @@
 
 #include <SettingsWindow/SettingsWindow.xaml.h>
 #include <services/TrayController.hpp>
+#include <services/UpdateCoordinator.hpp>
 #include <util/Util.hpp>
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -16,6 +17,7 @@ SettingsWindowPresenter::~SettingsWindowPresenter() {
 
 void SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settingsController,
                                    std::shared_ptr<TrayController> trayController,
+                                   std::shared_ptr<UpdateCoordinator> updateCoordinator,
                                    std::function<void()> saveSettings) {
     DebugTrace(L"[SettingsWindowPresenter] Show()");
     if (m_settingsWindow) {
@@ -47,6 +49,7 @@ void SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settings
         auto impl = m_settingsWindow.as<winrt::AudioPlaybackConnector2::implementation::SettingsWindow>();
         if (impl) {
             impl->SetSettingsController(std::move(settingsController));
+            impl->SetUpdateCoordinator(std::move(updateCoordinator));
             impl->SetDefaultPlacement(defaultPlacement);
             impl->SetTargetPlacement(placement);
         }

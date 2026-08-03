@@ -8,6 +8,7 @@
 #include <core/StringResources.hpp>
 #include <core/ThemeHelper.hpp>
 #include <services/StartupTaskController.hpp>
+#include <services/UpdateCoordinator.hpp>
 #include <services/UpdateService.hpp>
 #include <ui/ButtonHelpers.hpp>
 #include <util/Logger.hpp>
@@ -1155,11 +1156,17 @@ winrt::fire_and_forget SettingsWindow::RunManualUpdateCheckAsync() {
     winrt::apartment_context ui;
 
     try {
-        auto result = co_await UpdateService::CheckForUpdatesAsync();
+        UpdateCheckResult result;
+        if (m_updateCoordinator) {
+            result = co_await m_updateCoordinator->CheckForUpdatesAsync(UpdateCheckReason::Manual);
+        } else {
+            result = co_await UpdateService::CheckForUpdatesAsync();
+        }
         co_await ui;
 
         if (requestId != m_updateCheckRequestId.load()) co_return;
         SetUpdateCheckBusy(false);
+        if (result.Status == UpdateCheckStatus::Cancelled) co_return;
         ShowUpdateCheckResult(result);
         completed = true;
     } catch (winrt::hresult_error const& ex) {
@@ -1212,6 +1219,7 @@ void SettingsWindow::ShowUpdateCheckResult(UpdateCheckResult const& result) {
             UpdateInfoBar().Title(winrt::hstring(_("Settings_UpdateCurrent_Title")));
             UpdateInfoBar().Message(winrt::hstring(_("Settings_UpdateCurrent_Message")));
             break;
+        case UpdateCheckStatus::Cancelled: return;
         case UpdateCheckStatus::Failed:
         default:
             UpdateInfoBar().Severity(InfoBarSeverity::Error);
@@ -1651,6 +1659,10 @@ void SettingsWindow::RebuildDeviceList() {
 
 void SettingsWindow::SetSettingsController(std::shared_ptr<ISettingsController> controller) {
     m_settingsController = std::move(controller);
+}
+
+void SettingsWindow::SetUpdateCoordinator(std::shared_ptr<UpdateCoordinator> coordinator) {
+    m_updateCoordinator = std::move(coordinator);
 }
 
 void SettingsWindow::SetDefaultPlacement(util::SettingsWindowPlacement placement) {

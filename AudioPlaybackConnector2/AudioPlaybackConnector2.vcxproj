@@ -150,6 +150,7 @@
     <ClInclude Include="include\core\ReconnectController.hpp" />
     <ClInclude Include="include\core\DeviceManager.hpp" />
     <ClInclude Include="include\services\NotificationService.hpp" />
+    <ClInclude Include="include\services\UpdateCoordinator.hpp" />
     <ClInclude Include="include\services\SettingsController.hpp" />
     <ClInclude Include="include\services\StartupTaskController.hpp" />
     <ClInclude Include="include\services\CommandLineControlServer.hpp" />
@@ -220,6 +221,9 @@
     </ClCompile>
     <ClCompile Include="src\core\DeviceManager.cpp" />
     <ClCompile Include="src\services\NotificationService.cpp" />
+    <ClCompile Include="src\services\UpdateCoordinator.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="src\services\SettingsController.cpp" />
     <ClCompile Include="src\services\StartupTaskController.cpp" />
     <ClCompile Include="src\services\CommandLineControlServer.cpp" />

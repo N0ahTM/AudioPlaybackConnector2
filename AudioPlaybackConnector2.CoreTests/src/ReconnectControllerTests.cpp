@@ -261,6 +261,7 @@ void TestToastXmlSanitization() {
 int RunAdaptiveResourcePolicyTests();
 int RunDevicePickerSnapshotTests();
 int RunResourcePressureMonitorTests();
+int RunUpdateCoordinatorTests();
 
 int main() {
     TestFullBackoffSequence();
@@ -274,6 +275,7 @@ int main() {
     g_failures += RunAdaptiveResourcePolicyTests();
     g_failures += RunDevicePickerSnapshotTests();
     g_failures += RunResourcePressureMonitorTests();
+    g_failures += RunUpdateCoordinatorTests();
 
     if (g_failures != 0) {
         std::cerr << g_failures << " core test(s) failed\n";

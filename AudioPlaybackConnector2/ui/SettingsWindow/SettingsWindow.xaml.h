@@ -6,6 +6,8 @@
 #include <ui/SettingsViewModel.hpp>
 #include <util/Util.hpp>
 
+class UpdateCoordinator;
+
 namespace winrt::AudioPlaybackConnector2::implementation {
 struct SettingsWindow : SettingsWindowT<SettingsWindow> {
     SettingsWindow();
@@ -47,6 +49,7 @@ struct SettingsWindow : SettingsWindowT<SettingsWindow> {
     void LanguageComboBox_SelectionChanged(winrt::Windows::Foundation::IInspectable const& sender,
                                            winrt::Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const& e);
     void SetSettingsController(std::shared_ptr<ISettingsController> controller);
+    void SetUpdateCoordinator(std::shared_ptr<UpdateCoordinator> coordinator);
     void SetDefaultPlacement(util::SettingsWindowPlacement placement);
     void SetTargetPlacement(util::SettingsWindowPlacement placement);
 
@@ -101,6 +104,7 @@ private:
     std::atomic_uint64_t m_startupRequestId = 0;
     std::atomic_uint64_t m_updateCheckRequestId = 0;
     std::shared_ptr<ISettingsController> m_settingsController;
+    std::shared_ptr<UpdateCoordinator> m_updateCoordinator;
     std::wstring m_aliasSavedDeviceId;
     std::size_t m_themeChangedToken = 0;
     SettingsPage m_currentPage = SettingsPage::Devices;

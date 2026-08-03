@@ -5,6 +5,7 @@
 
 class ISettingsController;
 class TrayController;
+class UpdateCoordinator;
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Settings Window Presenter /////////////////////////////////////////////////////////////////////////*/
@@ -20,6 +21,7 @@ public:
 
     void Show(std::shared_ptr<ISettingsController> settingsController,
               std::shared_ptr<TrayController> trayController,
+              std::shared_ptr<UpdateCoordinator> updateCoordinator,
               std::function<void()> saveSettings);
     void Close() noexcept;
 

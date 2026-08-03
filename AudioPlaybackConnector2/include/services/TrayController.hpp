@@ -28,6 +28,7 @@ public:
     using DeviceActionCallback = std::move_only_function<void(winrt::hstring)>;
     using BulkDeviceActionCallback = std::move_only_function<void()>;
     using ToggleDeviceCallback = std::move_only_function<void()>;
+    using ResourceStateChangedCallback = std::move_only_function<void(bool userInteraction)>;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Lifecycle /////////////////////////////////////////////////////////////////////////////////////////*/
@@ -44,9 +45,12 @@ public:
     void Initialize(HWND hwnd, winrt::Microsoft::UI::Xaml::Window mainWindow);
     void SetDeviceManager(std::shared_ptr<DeviceManager> deviceManager);
     void SetSettings(std::shared_ptr<Settings> settings);
-    void PreloadDevicePicker();
-    void ReleaseDevicePicker();
+    void PreloadDevicePicker() noexcept;
+    void ReleaseDevicePicker() noexcept;
     void Teardown() noexcept;
+    [[nodiscard]] bool IsDevicePickerLoaded() const noexcept;
+    [[nodiscard]] bool IsDevicePickerPreloadInitialized() const noexcept;
+    [[nodiscard]] bool IsDevicePickerVisibleOrTransitioning() const noexcept;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Callbacks /////////////////////////////////////////////////////////////////////////////////////////*/
@@ -60,13 +64,14 @@ public:
                       ToggleDeviceCallback toggleDevice,
                       BulkDeviceActionCallback disconnectAll = nullptr,
                       BulkDeviceActionCallback reconnectAll = nullptr);
+    void SetResourceStateChangedCallback(ResourceStateChangedCallback callback);
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Actions ///////////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
     void ShowTrayMenu();
-    void ShowDevicePicker();
+    void ShowDevicePicker() noexcept;
     void UpdateTooltip(std::wstring_view text);
     void UpdateTooltipFromConnections();
     void RefreshDevicePickerState(bool reconcileTrayState = true);
@@ -76,7 +81,7 @@ public:
     void SetState(TrayIconState state);
     [[nodiscard]] util::SettingsWindowPlacement GetSettingsWindowPlacement() const;
 
-    void HandleTrayMessage(WPARAM wParam, LPARAM lParam);
+    void HandleTrayMessage(WPARAM wParam, LPARAM lParam) noexcept;
     [[nodiscard]] UINT TrayCallbackMessage() const noexcept { return m_trayCallbackMsg; }
 
 private:
@@ -85,6 +90,7 @@ private:
     /*------------------------------------------------------------------------------------------------------------*/
 
     [[nodiscard]] bool EnsureDevicePickerViewCreated() noexcept;
+    void TryHideDevicePicker() noexcept;
     void ReleaseDevicePickerOnUIThread() noexcept;
     void LaunchBluetoothSettings();
     winrt::Microsoft::UI::Xaml::Controls::Flyout CreatePickerFlyout();
@@ -92,6 +98,7 @@ private:
     [[nodiscard]] util::SettingsWindowPlacement CalculateSettingsWindowPlacement() const;
     [[nodiscard]] bool IsCursorOverTrayIcon() const;
     void OnTrayIconDoubleClick();
+    void NotifyResourceStateChanged(bool userInteraction) noexcept;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
@@ -115,6 +122,7 @@ private:
     BulkDeviceActionCallback m_disconnectAllCallback;
     BulkDeviceActionCallback m_reconnectAllCallback;
     ToggleDeviceCallback m_toggleDeviceCallback;
+    ResourceStateChangedCallback m_resourceStateChangedCallback;
 
     UINT m_trayCallbackMsg = WM_APP + 1;
     std::size_t m_themeChangedToken = 0;
@@ -132,7 +140,7 @@ private:
     };
     std::atomic<PickerFlyoutState> m_pickerFlyoutState{PickerFlyoutState::Closed};
 
-    bool m_devicePickerPreloaded = false;
+    bool m_devicePickerPreloadInitialized = false;
     bool m_releaseDevicePickerPending = false;
     std::atomic_bool m_isTearingDown = false;
 };

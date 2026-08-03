@@ -1,11 +1,14 @@
 #include <app/ResourcePressureMonitor.hpp>
 #include <app/ResourcePressureState.hpp>
 
+#include <windows.h>
+
 #include <atomic>
 #include <array>
 #include <chrono>
 #include <condition_variable>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <string_view>
 #include <thread>
@@ -33,6 +36,7 @@ void TestReducerHandlesMemoryTransitionsAndPartialFailures() {
     auto low = reducer.Apply({.LowMemorySignaled = true, .HighMemorySignaled = false});
     Check(low.Memory == MemoryPressureState::Low && low.IsMemoryPressure(),
           "a signaled low-memory object must take priority");
+    Check(low.IsBackgroundConstrained(), "acute low-memory state must suppress all optional background work");
 
     auto unchanged = reducer.Apply({});
     Check(unchanged.Memory == MemoryPressureState::Low, "failed probes must preserve the last reliable memory state");
@@ -83,6 +87,107 @@ void TestReducerPreservesIndependentSignals() {
 
     auto app = reducer.Apply({.UserActivity = UserActivityState::ImmersiveApp});
     Check(app.IsBackgroundConstrained(), "an immersive app must constrain background preloading");
+}
+
+void TestFailedProbesRevokePositiveAuthorization() {
+    ResourcePressureStateReducer reducer;
+    auto authorized = reducer.Apply({
+        .LowMemorySignaled = false,
+        .HighMemorySignaled = true,
+        .UserActivity = UserActivityState::Available,
+        .EnergySaver = false,
+    });
+    Check(authorized.CanPreload(), "fresh positive probes must authorize preloading");
+
+    auto stale = reducer.Apply({
+        .MemoryProbeAttempted = true,
+        .UserActivityProbeAttempted = true,
+        .EnergySaverProbeAttempted = true,
+    });
+    Check(stale.Memory == MemoryPressureState::Unknown && stale.UserActivity == UserActivityState::Unknown &&
+              !stale.EnergySaver.has_value(),
+          "failed probes must revoke stale positive memory, activity, and power authorization");
+    Check(!stale.CanPreload() && stale.IsBackgroundConstrained(),
+          "stale positive signals must never complete a speculative preload window");
+
+    auto low = reducer.Apply({.LowMemorySignaled = true, .MemoryProbeAttempted = true});
+    auto failedAfterLow = reducer.Apply({.MemoryProbeAttempted = true});
+    Check(low.IsMemoryPressure() && failedAfterLow.IsMemoryPressure(),
+          "failed memory probes must conservatively preserve a known acute low-memory state");
+}
+
+void TestPartialMemoryProbeFailuresRemainFailClosed() {
+    ResourcePressureStateReducer reducer;
+    auto missingLow = reducer.Apply({.HighMemorySignaled = true, .MemoryProbeAttempted = true});
+    Check(missingLow.Memory == MemoryPressureState::Unknown && !missingLow.CanPreload(),
+          "a high-memory signal cannot authorize preloading when the low-memory probe failed");
+
+    auto high = reducer.Apply({.LowMemorySignaled = false, .HighMemorySignaled = true});
+    Check(high.Memory == MemoryPressureState::High, "two complete memory probes may authorize a high state");
+    auto missingHigh = reducer.Apply({.LowMemorySignaled = false, .MemoryProbeAttempted = true});
+    Check(missingHigh.Memory == MemoryPressureState::Neutral && !missingHigh.CanPreload(),
+          "a cleared low-memory probe must revoke high authorization when the high probe fails");
+
+    auto low = reducer.Apply({.LowMemorySignaled = true, .MemoryProbeAttempted = true});
+    Check(low.Memory == MemoryPressureState::Low,
+          "an acute low-memory signal must remain actionable even when the high-memory probe fails");
+    auto incompleteRecovery = reducer.Apply({.LowMemorySignaled = false, .MemoryProbeAttempted = true});
+    Check(incompleteRecovery.Memory == MemoryPressureState::Neutral && !incompleteRecovery.CanPreload(),
+          "a cleared low-memory object may end acute pressure without inventing high capacity");
+    auto completeRecovery = reducer.Apply({.LowMemorySignaled = false, .HighMemorySignaled = false});
+    Check(completeRecovery.Memory == MemoryPressureState::Neutral,
+          "two complete negative probes may clear an acute low-memory state");
+}
+
+void TestSnapshotFreshnessFailsClosed() {
+    using Clock = std::chrono::steady_clock;
+    auto const now = Clock::time_point{} + 100s;
+    Check(IsResourcePressureSnapshotFresh(now - 74s, now, 75s),
+          "a recent resource snapshot must remain usable inside its freshness window");
+    Check(!IsResourcePressureSnapshotFresh(now - 75s, now, 75s),
+          "a resource snapshot must expire exactly at its maximum age");
+    Check(!IsResourcePressureSnapshotFresh(std::nullopt, now, 75s),
+          "a missing resource snapshot must never authorize optional work");
+    Check(!IsResourcePressureSnapshotFresh(now + 1s, now, 75s),
+          "a future resource timestamp must fail closed after a clock anomaly");
+    Check(!IsResourcePressureSnapshotFresh(now, now, 0ms),
+          "a non-positive freshness window must disable positive authorization");
+}
+
+void TestIncompleteMemoryProbesPauseSignalWaits() {
+    auto incomplete = PlanMemoryNotificationWaits(std::nullopt, false);
+    Check(!incomplete.ArmLow && !incomplete.ArmHigh,
+          "incomplete memory probes must pause both waits until the periodic poll retries them");
+
+    auto neutral = PlanMemoryNotificationWaits(false, false);
+    Check(neutral.ArmLow && neutral.ArmHigh, "complete neutral probes must monitor both pressure transitions");
+    auto low = PlanMemoryNotificationWaits(true, false);
+    Check(!low.ArmLow && low.ArmHigh, "a signaled low wait must stay paused while high recovery remains monitored");
+    auto high = PlanMemoryNotificationWaits(false, true);
+    Check(high.ArmLow && !high.ArmHigh, "a signaled high wait must stay paused while low pressure remains monitored");
+    auto conflicting = PlanMemoryNotificationWaits(true, true);
+    Check(!conflicting.ArmLow && !conflicting.ArmHigh,
+          "contradictory signaled notifications must pause both waits instead of creating a callback storm");
+}
+
+void TestPositiveAuthorizationAndAdaptivePollCadence() {
+    Check(IsPositiveResourceAuthorizationCurrent(11, 11),
+          "the UI snapshot that observed the latest constraint may make a new decision");
+    Check(!IsPositiveResourceAuthorizationCurrent(10, 11),
+          "an older UI snapshot must not override a newer constrained worker snapshot");
+
+    ResourcePressureValues desktop{
+        .Memory = MemoryPressureState::High,
+        .UserActivity = UserActivityState::Available,
+        .EnergySaver = false,
+    };
+    Check(!ShouldUseConstrainedPollInterval(desktop, true),
+          "active desktop monitoring must retain the responsive poll cadence");
+    desktop.UserActivity = UserActivityState::Fullscreen;
+    Check(ShouldUseConstrainedPollInterval(desktop, true),
+          "stable fullscreen activity must use the low-wakeup constrained cadence");
+    Check(!ShouldUseConstrainedPollInterval(desktop, false),
+          "incomplete probes must retry promptly instead of hiding uncertainty behind a slow cadence");
 }
 
 bool WaitFor(std::condition_variable& changed, std::mutex& mutex, std::chrono::milliseconds timeout, auto&& predicate) {
@@ -143,10 +248,12 @@ void TestMonitorCanStopFromItsOwnCallback() {
     std::condition_variable changed;
     bool callbackReturned = false;
     bool callbackRestartRejected = false;
+    std::atomic_bool stopOnNextCallback = true;
     ResourcePressureMonitor* monitorAddress = nullptr;
 
     ResourcePressureMonitor monitor(
         [&](ResourcePressureSnapshot const&) {
+            if (!stopOnNextCallback.exchange(false)) return;
             monitorAddress->Stop();
             callbackRestartRejected = !monitorAddress->Start();
             {
@@ -158,12 +265,103 @@ void TestMonitorCanStopFromItsOwnCallback() {
         {.PollInterval = 25ms});
     monitorAddress = &monitor;
 
-    Check(monitor.Start(), "self-stopping monitor must start");
+    static_cast<void>(monitor.Start());
     Check(WaitFor(changed, mutex, 2s, [&] { return callbackReturned; }),
           "Stop from a public callback must not deadlock");
     Check(!monitor.IsRunning(), "self-stop must leave the monitor stopped");
     Check(callbackRestartRejected, "restart from an active callback must be rejected instead of overlapping contexts");
     Check(monitor.Start(), "restart after a self-stopping callback must wait for retirement and then succeed");
+    monitor.Stop();
+}
+
+void TestMonitorCanBeDestroyedFromItsOwnCallback() {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::atomic_bool startReturned = false;
+    bool destroyed = false;
+    std::unique_ptr<ResourcePressureMonitor> monitor;
+    monitor = std::make_unique<ResourcePressureMonitor>(
+        [&](ResourcePressureSnapshot const&) {
+            while (!startReturned.load()) {
+                std::this_thread::yield();
+            }
+            monitor.reset();
+            {
+                std::scoped_lock lock(mutex);
+                destroyed = true;
+            }
+            changed.notify_all();
+        },
+        ResourcePressureMonitor::Config{.PollInterval = 25ms});
+
+    auto* monitorAddress = monitor.get();
+    Check(monitorAddress->Start(), "self-destroying monitor must start");
+    startReturned.store(true);
+    Check(WaitFor(changed, mutex, 2s, [&] { return destroyed; }),
+          "destruction from a public callback must not deadlock");
+    Check(!monitor, "self-destruction must release the monitor instance");
+}
+
+void TestExternalStopWaitsForSelfStoppedCallback() {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool callbackEntered = false;
+    bool releaseCallback = false;
+    std::atomic_bool externalStopEntered = false;
+    std::atomic_bool externalStopReturned = false;
+    ResourcePressureMonitor* monitorAddress = nullptr;
+    ResourcePressureMonitor monitor(
+        [&](ResourcePressureSnapshot const&) {
+            monitorAddress->Stop();
+            std::unique_lock lock(mutex);
+            callbackEntered = true;
+            changed.notify_all();
+            changed.wait(lock, [&] { return releaseCallback; });
+        },
+        {.PollInterval = 25ms});
+    monitorAddress = &monitor;
+
+    static_cast<void>(monitor.Start());
+    Check(WaitFor(changed, mutex, 2s, [&] { return callbackEntered; }),
+          "self-stopping callback must enter its controlled wait");
+
+    std::thread externalStop([&] {
+        externalStopEntered.store(true);
+        changed.notify_all();
+        monitor.Stop();
+        externalStopReturned.store(true);
+        changed.notify_all();
+    });
+    {
+        std::unique_lock lock(mutex);
+        Check(changed.wait_for(lock, 2s, [&] { return externalStopEntered.load(); }),
+              "external Stop thread must enter before its barrier is evaluated");
+        static_cast<void>(changed.wait_for(lock, 100ms, [&] { return externalStopReturned.load(); }));
+        Check(!externalStopReturned.load(), "an external Stop must remain a barrier for a self-stopped callback");
+        releaseCallback = true;
+    }
+    changed.notify_all();
+    externalStop.join();
+    Check(externalStopReturned.load(), "external Stop must finish after the public callback returns");
+}
+
+void TestMonitorPublishesPeriodicLivenessHeartbeat() {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::size_t callbacks = 0;
+    ResourcePressureMonitor monitor(
+        [&](ResourcePressureSnapshot const&) {
+            {
+                std::scoped_lock lock(mutex);
+                ++callbacks;
+            }
+            changed.notify_all();
+        },
+        {.PollInterval = 25ms, .ConstrainedPollInterval = 25ms, .SnapshotHeartbeatInterval = 75ms});
+
+    Check(monitor.Start(), "heartbeat monitor must start");
+    Check(WaitFor(changed, mutex, 2s, [&] { return callbacks >= 2; }),
+          "unchanged sensor values must still publish a bounded liveness heartbeat");
     monitor.Stop();
 }
 
@@ -191,13 +389,41 @@ void TestConcurrentStartAndStopRemainSafe() {
     Check(!startFailed.load(), "concurrent starts must not lose threadpool resource initialization");
     Check(!monitor.IsRunning(), "a final stop must win after concurrent lifecycle operations");
 }
+
+void TestRepeatedLifecycleDoesNotLeakHandles() {
+    ResourcePressureMonitor monitor([](ResourcePressureSnapshot const&) {}, {.PollInterval = 25ms});
+    Check(monitor.Start(), "handle lifecycle warmup must start");
+    monitor.Stop();
+
+    DWORD handlesBefore = 0;
+    DWORD handlesAfter = 0;
+    Check(GetProcessHandleCount(GetCurrentProcess(), &handlesBefore) != FALSE,
+          "test process handle baseline must be observable");
+    for (std::size_t iteration = 0; iteration < 100; ++iteration) {
+        Check(monitor.Start(), "repeated resource monitor start must succeed");
+        monitor.Stop();
+    }
+    Check(GetProcessHandleCount(GetCurrentProcess(), &handlesAfter) != FALSE,
+          "test process handle result must be observable");
+    Check(handlesAfter <= handlesBefore + 2,
+          "repeated resource monitor start/stop must not retain notification, timer, or wait handles");
+}
 } // namespace
 
 int RunResourcePressureMonitorTests() {
     TestReducerHandlesMemoryTransitionsAndPartialFailures();
     TestReducerPreservesIndependentSignals();
+    TestFailedProbesRevokePositiveAuthorization();
+    TestPartialMemoryProbeFailuresRemainFailClosed();
+    TestSnapshotFreshnessFailsClosed();
+    TestIncompleteMemoryProbesPauseSignalWaits();
+    TestPositiveAuthorizationAndAdaptivePollCadence();
     TestMonitorLifecycleAndLateCallbackBarrier();
     TestMonitorCanStopFromItsOwnCallback();
+    TestMonitorCanBeDestroyedFromItsOwnCallback();
+    TestExternalStopWaitsForSelfStoppedCallback();
+    TestMonitorPublishesPeriodicLivenessHeartbeat();
     TestConcurrentStartAndStopRemainSafe();
+    TestRepeatedLifecycleDoesNotLeakHandles();
     return g_failures;
 }

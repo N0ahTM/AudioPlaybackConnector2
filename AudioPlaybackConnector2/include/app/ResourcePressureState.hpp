@@ -1,5 +1,7 @@
 #pragma once
 
+#include <chrono>
+#include <cstdint>
 #include <optional>
 
 enum class MemoryPressureState { Unknown, Low, Neutral, High };
@@ -32,6 +34,14 @@ struct ResourcePressureProbe {
     std::optional<bool> HighMemorySignaled;
     std::optional<UserActivityState> UserActivity;
     std::optional<bool> EnergySaver;
+    bool MemoryProbeAttempted = false;
+    bool UserActivityProbeAttempted = false;
+    bool EnergySaverProbeAttempted = false;
+};
+
+struct MemoryNotificationWaitPlan {
+    bool ArmLow = false;
+    bool ArmHigh = false;
 };
 
 class ResourcePressureStateReducer {
@@ -42,3 +52,12 @@ public:
 private:
     ResourcePressureValues m_current;
 };
+
+[[nodiscard]] bool IsResourcePressureSnapshotFresh(std::optional<std::chrono::steady_clock::time_point> observedAt,
+                                                   std::chrono::steady_clock::time_point now,
+                                                   std::chrono::milliseconds maximumAge) noexcept;
+[[nodiscard]] bool IsPositiveResourceAuthorizationCurrent(std::uint64_t appliedSequence,
+                                                          std::uint64_t latestConstrainedSequence) noexcept;
+[[nodiscard]] bool ShouldUseConstrainedPollInterval(ResourcePressureValues const& values, bool probesComplete) noexcept;
+[[nodiscard]] MemoryNotificationWaitPlan PlanMemoryNotificationWaits(std::optional<bool> lowMemorySignaled,
+                                                                     std::optional<bool> highMemorySignaled) noexcept;

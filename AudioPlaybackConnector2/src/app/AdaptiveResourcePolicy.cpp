@@ -23,6 +23,60 @@ AdaptiveResourcePolicy::TimePoint SaturatingAdd(AdaptiveResourcePolicy::TimePoin
 }
 } // namespace
 
+AdaptiveActionRetryBackoff::AdaptiveActionRetryBackoff(std::chrono::milliseconds initialDelay,
+                                                       std::chrono::milliseconds maximumDelay) noexcept
+    : m_initialDelay(std::max(initialDelay, std::chrono::milliseconds{1})),
+      m_maximumDelay(std::max(maximumDelay, m_initialDelay)), m_currentDelay(m_initialDelay) {}
+
+std::chrono::milliseconds AdaptiveActionRetryBackoff::RecordFailure() noexcept {
+    auto const delay = m_currentDelay;
+    if (m_currentDelay >= m_maximumDelay) return delay;
+
+    auto const remaining = m_maximumDelay - m_currentDelay;
+    m_currentDelay = remaining < m_currentDelay ? m_maximumDelay : m_currentDelay * 2;
+    return delay;
+}
+
+void AdaptiveActionRetryBackoff::Reset() noexcept {
+    m_currentDelay = m_initialDelay;
+}
+
+std::chrono::milliseconds AdaptiveActionRetryBackoff::CurrentDelay() const noexcept {
+    return m_currentDelay;
+}
+
+std::uint64_t AdaptiveScheduleState::Supersede() noexcept {
+    ++m_generation;
+    if (m_generation == 0) ++m_generation;
+    m_win32NotBefore.reset();
+    m_active = true;
+    return m_generation;
+}
+
+bool AdaptiveScheduleState::SetWin32NotBefore(std::uint64_t generation, TimePoint notBefore) noexcept {
+    if (generation != m_generation || !m_active) return false;
+    m_win32NotBefore = notBefore;
+    return true;
+}
+
+bool AdaptiveScheduleState::Consume(std::uint64_t generation) noexcept {
+    if (generation != m_generation || !m_active) return false;
+    m_win32NotBefore.reset();
+    m_active = false;
+    return true;
+}
+
+bool AdaptiveScheduleState::ConsumeWin32IfDue(TimePoint now) noexcept {
+    if (!m_active || !m_win32NotBefore || now < *m_win32NotBefore) return false;
+    m_win32NotBefore.reset();
+    m_active = false;
+    return true;
+}
+
+std::uint64_t AdaptiveScheduleState::Generation() const noexcept {
+    return m_generation;
+}
+
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Constructors //////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
@@ -68,7 +122,7 @@ AdaptiveResourcePolicyDecision AdaptiveResourcePolicy::Evaluate(AdaptiveResource
     m_effectiveResidency = effectiveResidency;
 
     AdaptiveResourceAction action = AdaptiveResourceAction::None;
-    if (effectiveResidency == ResidencyPolicy::Hot && !input.UiResourcesLoaded) {
+    if (effectiveResidency == ResidencyPolicy::Hot && (!input.UiResourcesLoaded || !input.UiResourcesInitialized)) {
         if (foregroundDemand || (input.PreloadAllowed && !pressureActive)) {
             action = AdaptiveResourceAction::PreloadUi;
         }
@@ -85,6 +139,7 @@ AdaptiveResourcePolicyDecision AdaptiveResourcePolicy::Evaluate(AdaptiveResource
         .BackgroundResidencyChanged = m_backgroundResidency != previousBackgroundResidency,
         .Pinned = pinned,
         .ReleaseDeferred = foregroundDemand && m_backgroundResidency != ResidencyPolicy::Hot,
+        .ReevaluateAt = NextReevaluation(input, now, foregroundDemand),
     };
 }
 
@@ -157,7 +212,7 @@ void AdaptiveResourcePolicy::UpdateBackgroundResidency(AdaptiveResourcePolicyInp
     }
 
     if (m_backgroundResidency == ResidencyPolicy::Hot) {
-        if (!input.PreloadAllowed && !input.UiResourcesLoaded) {
+        if (!input.PreloadAllowed && (!input.UiResourcesLoaded || !input.UiResourcesInitialized)) {
             SetBackgroundResidency(ResidencyPolicy::Warm);
         }
         return;
@@ -174,4 +229,30 @@ void AdaptiveResourcePolicy::UpdateBackgroundResidency(AdaptiveResourcePolicyInp
     if (ElapsedAtLeast(now, *m_preloadAllowedSince, m_config.WarmToHotDelay)) {
         SetBackgroundResidency(ResidencyPolicy::Hot);
     }
+}
+
+std::optional<AdaptiveResourcePolicy::TimePoint> AdaptiveResourcePolicy::NextReevaluation(
+    AdaptiveResourcePolicyInput const& input, TimePoint now, bool foregroundDemand) const noexcept {
+    std::optional<TimePoint> next;
+    auto consider = [&](TimePoint candidate) noexcept {
+        if (candidate < now) candidate = now;
+        if (!next || candidate < *next) next = candidate;
+    };
+
+    const bool pressureActive = input.MemoryPressure || input.FullscreenOrPresentation || input.EnergySaver;
+    if (pressureActive) {
+        if (!input.MemoryPressure && m_backgroundResidency != ResidencyPolicy::Cold && m_pressureSince) {
+            consider(SaturatingAdd(*m_pressureSince, m_config.BackgroundPressureToColdDelay));
+        }
+    } else if (m_backgroundResidency == ResidencyPolicy::Cold && m_healthySince) {
+        consider(SaturatingAdd(*m_healthySince, m_config.ColdToWarmDelay));
+    } else if (m_backgroundResidency == ResidencyPolicy::Warm && input.PreloadAllowed && m_preloadAllowedSince) {
+        consider(SaturatingAdd(*m_preloadAllowedSince, m_config.WarmToHotDelay));
+    }
+
+    if (foregroundDemand && !input.UiVisible && !input.UiPinned && m_backgroundResidency != ResidencyPolicy::Hot &&
+        m_interactionUntil) {
+        consider(*m_interactionUntil);
+    }
+    return next;
 }

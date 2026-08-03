@@ -17,6 +17,8 @@ class ResourcePressureMonitor {
 public:
     struct Config {
         std::chrono::milliseconds PollInterval{std::chrono::seconds{5}};
+        std::chrono::milliseconds ConstrainedPollInterval{std::chrono::seconds{30}};
+        std::chrono::milliseconds SnapshotHeartbeatInterval{std::chrono::seconds{30}};
     };
 
     using Callback = std::function<void(ResourcePressureSnapshot const&)>;

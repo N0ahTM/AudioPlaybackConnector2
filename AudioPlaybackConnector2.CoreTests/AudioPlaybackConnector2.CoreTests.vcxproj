@@ -66,7 +66,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>WindowsApp.lib;advapi32.lib;runtimeobject.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>WindowsApp.lib;advapi32.lib;bcrypt.lib;runtimeobject.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
@@ -94,6 +94,7 @@
     <ClCompile Include="src\CommandClientTests.cpp" />
     <ClCompile Include="src\ControlUiActionGateTests.cpp" />
     <ClCompile Include="src\ControlTargetMatcherTests.cpp" />
+    <ClCompile Include="src\CoreUiProtocolTests.cpp" />
     <ClCompile Include="src\DevicePickerSnapshotTests.cpp" />
     <ClCompile Include="src\ReconnectControllerTests.cpp" />
     <ClCompile Include="src\ResourcePressureMonitorTests.cpp" />
@@ -121,6 +122,8 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandPipeSecurity.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandProtocol.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\ControlTargetMatcher.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\ipc\CoreUiProtocol.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsLimits.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResourcePressureMonitor.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResourcePressureState.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\SingleInstanceGuard.hpp" />
@@ -131,6 +134,12 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\util\RuntimeApartment.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\ToastXmlSanitizer.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\CommandLineControlServer.hpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\AudioPlaybackConnector2.Ipc\AudioPlaybackConnector2.Ipc.vcxproj">
+      <Project>{C52FC647-44A9-402A-9CA7-2344A1AC34C9}</Project>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

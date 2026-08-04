@@ -63,6 +63,7 @@ StartupUpdateCoordinator::CheckForUpdatesAsync(Settings& settings,
 
     {
         auto locked = settings.LockExclusiveData();
+        locked.MarkChanged();
         locked->LastUpdateCheckUnixSeconds = now;
         if (notificationShown) {
             locked->LastNotifiedUpdateVersion = result.LatestVersion;

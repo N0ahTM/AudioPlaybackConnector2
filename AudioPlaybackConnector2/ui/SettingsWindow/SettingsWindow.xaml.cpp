@@ -5,6 +5,7 @@
 #endif
 
 #include <core/Settings.hpp>
+#include <core/SettingsLimits.hpp>
 #include <core/StringResources.hpp>
 #include <core/ThemeHelper.hpp>
 #include <services/StartupTaskController.hpp>
@@ -592,7 +593,7 @@ void SettingsWindow::ResetWindowPlacementButton_Click(IInspectable const&, Route
 
 void SettingsWindow::DefaultLastConnectedButton_Click(IInspectable const&, RoutedEventArgs const&) {
     if (auto controller = m_settingsController) {
-        controller->SetDefaultDeviceMode(DefaultDeviceMode::LastConnected);
+        controller->ClearDefaultDevice();
     }
     RebuildDeviceList();
 }
@@ -1493,6 +1494,7 @@ void SettingsWindow::RebuildDeviceList() {
         auto aliasBox = TextBox();
         aliasBox.HorizontalAlignment(HorizontalAlignment::Stretch);
         aliasBox.MinWidth(0);
+        aliasBox.MaxLength(static_cast<int32_t>(apc::limits::c_maxDeviceAliasCharacters));
         aliasBox.PlaceholderText(winrt::hstring(_("Settings_DeviceAliasPlaceholder")));
         aliasBox.Text(winrt::hstring(dev.Alias));
         apc::ui::SetTooltipText(aliasBox, winrt::hstring(_("Settings_DeviceAlias")));

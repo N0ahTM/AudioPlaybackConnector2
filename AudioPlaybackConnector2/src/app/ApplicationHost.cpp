@@ -9,6 +9,7 @@
 #include <core/DeviceDisplay.hpp>
 #include <core/DeviceManager.hpp>
 #include <core/Settings.hpp>
+#include <core/SettingsLimits.hpp>
 #include <core/StringResources.hpp>
 #include <core/ThemeHelper.hpp>
 #include <services/UpdateCoordinator.hpp>
@@ -2149,7 +2150,7 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
         return;
     }
     m_powerTransitionCoordinator.NotifyDeviceConnected(std::wstring_view(id));
-    if (!m_settings || !m_trayController) return;
+    if (!m_settings) return;
 
     winrt::hstring rawDeviceName = id;
     if (auto displayName = m_deviceManager->GetConnectionDisplayName(id)) {
@@ -2157,13 +2158,21 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
     }
 
     auto const idString = std::wstring(id);
-    auto const deviceName = std::wstring(rawDeviceName);
+    const bool validDeviceId =
+        !idString.empty() && apc::limits::IsBoundedUtf16(idString, apc::limits::c_maxDeviceIdCharacters);
+    auto deviceName =
+        apc::limits::TruncateUtf16(std::wstring_view(rawDeviceName), apc::limits::c_maxDeviceNameCharacters);
+    if (deviceName.empty()) {
+        deviceName = apc::limits::TruncateUtf16(idString, apc::limits::c_maxDeviceNameCharacters);
+    }
     bool addedNew = false;
     bool settingsChanged = false;
     try {
         auto locked = m_settings->LockExclusiveData();
-        bool alreadyKnown = std::ranges::any_of(locked->Devices, [&](const auto& d) { return d.Id == id; });
-        if (!alreadyKnown) {
+        auto existingDevice = std::ranges::find_if(locked->Devices, [&](const auto& d) { return d.Id == id; });
+        if (existingDevice == locked->Devices.end() && validDeviceId &&
+            locked->Devices.size() < apc::limits::c_maxPersistedDeviceCount) {
+            locked.MarkChanged();
             DeviceSettings newDevice;
             newDevice.Id = idString;
             newDevice.Name = deviceName;
@@ -2172,16 +2181,20 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
             locked->Devices.push_back(std::move(newDevice));
             addedNew = true;
             settingsChanged = true;
-        } else {
-            auto existingDevice = std::ranges::find_if(locked->Devices, [&](const auto& d) { return d.Id == id; });
-            if (existingDevice != locked->Devices.end() && existingDevice->Name != deviceName) {
-                existingDevice->Name = deviceName;
-                settingsChanged = true;
-            }
+        } else if (existingDevice != locked->Devices.end() && existingDevice->Name != deviceName) {
+            locked.MarkChanged();
+            existingDevice->Name = deviceName;
+            settingsChanged = true;
         }
 
-        settingsChanged =
-            AutoReconnectPlanner::PromoteMostRecentlyConnected(locked->LastConnectedIds, idString) || settingsChanged;
+        const bool mruWillChange =
+            validDeviceId && (locked->LastConnectedIds.empty() || locked->LastConnectedIds.front() != idString ||
+                              std::ranges::count(locked->LastConnectedIds, idString) != 1);
+        if (mruWillChange) {
+            locked.MarkChanged();
+            settingsChanged = AutoReconnectPlanner::PromoteMostRecentlyConnected(locked->LastConnectedIds, idString) ||
+                              settingsChanged;
+        }
     } catch (winrt::hresult_error const& ex) {
         util::DebugTraceException(L"[App] OnDeviceConnected settings update ERROR", ex);
         return;
@@ -2232,7 +2245,7 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
 }
 
 void ApplicationHost::OnDeviceDisconnected(winrt::hstring const& id) {
-    if (m_exiting.load() || !m_settings || !m_trayController) return;
+    if (m_exiting.load() || !m_settings) return;
     DebugTrace(L"[App] OnDeviceDisconnected: {0}", std::wstring(id));
 
     winrt::hstring deviceName = ResolveKnownDeviceName(id);

@@ -338,13 +338,19 @@ int RunCommandClientTests();
 int RunCommandLineControlServerTests();
 int RunControlUiActionGateTests();
 int RunControlTargetMatcherTests();
+int RunCoreUiProtocolTests();
+int RunCoreUiProtocolPeer(std::wstring_view bootstrapToken);
 int RunDevicePickerSnapshotTests();
 int RunResourcePressureMonitorTests();
 int RunRuntimeApartmentTests();
 int RunSingleInstanceGuardTests();
 int RunUpdateCoordinatorTests();
 
-int main() {
+int wmain(int argc, wchar_t* argv[]) {
+    if (argc == 3 && std::wstring_view(argv[1]) == L"--core-ui-peer") {
+        return RunCoreUiProtocolPeer(argv[2]);
+    }
+    if (argc != 1) return 2;
     TestFullBackoffSequence();
     TestSuccessAndStaleTokens();
     TestCancellationAndTimerCreationFailure();
@@ -362,6 +368,7 @@ int main() {
     g_failures += RunCommandLineControlServerTests();
     g_failures += RunControlUiActionGateTests();
     g_failures += RunControlTargetMatcherTests();
+    g_failures += RunCoreUiProtocolTests();
     g_failures += RunDevicePickerSnapshotTests();
     g_failures += RunResourcePressureMonitorTests();
     g_failures += RunRuntimeApartmentTests();

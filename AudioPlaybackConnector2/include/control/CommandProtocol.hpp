@@ -4,6 +4,7 @@
 #include <appmodel.h>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -223,25 +224,33 @@ inline DWORD RemainingWait(uint64_t deadline) noexcept {
     return static_cast<DWORD>(std::min<uint64_t>(deadline - now, MAXDWORD - 1));
 }
 
-inline IoStatus
-TransferExact(HANDLE pipe, void* buffer, uint32_t byteCount, bool write, HANDLE stopEvent, uint64_t deadline) noexcept {
+inline IoStatus TransferExact(HANDLE pipe,
+                              void* buffer,
+                              uint32_t byteCount,
+                              bool write,
+                              HANDLE stopEvent,
+                              uint64_t deadline,
+                              HANDLE completionEvent = nullptr,
+                              HANDLE shutdownEvent = nullptr) noexcept {
     struct EventHandle {
         HANDLE Value = nullptr;
         ~EventHandle() {
             if (Value) CloseHandle(Value);
         }
-    } event{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
-    if (!event.Value) return IoStatus::Failed;
+    } ownedEvent{completionEvent ? nullptr : CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+    if (!completionEvent) completionEvent = ownedEvent.Value;
+    if (!completionEvent || completionEvent == stopEvent || completionEvent == shutdownEvent) return IoStatus::Failed;
 
     auto* cursor = static_cast<uint8_t*>(buffer);
     uint32_t remaining = byteCount;
     while (remaining > 0) {
         if (stopEvent && WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0) return IoStatus::Cancelled;
+        if (shutdownEvent && WaitForSingleObject(shutdownEvent, 0) == WAIT_OBJECT_0) return IoStatus::Cancelled;
         if (deadline != 0 && RemainingWait(deadline) == 0) return IoStatus::Timeout;
 
-        ResetEvent(event.Value);
+        ResetEvent(completionEvent);
         OVERLAPPED overlapped{};
-        overlapped.hEvent = event.Value;
+        overlapped.hEvent = completionEvent;
         DWORD transferred = 0;
         const DWORD chunk = std::min<DWORD>(remaining, std::numeric_limits<DWORD>::max());
         const BOOL started = write ? WriteFile(pipe, cursor, chunk, &transferred, &overlapped)
@@ -255,10 +264,14 @@ TransferExact(HANDLE pipe, void* buffer, uint32_t byteCount, bool write, HANDLE 
                 return error == ERROR_OPERATION_ABORTED ? IoStatus::Cancelled : IoStatus::Failed;
             }
 
-            HANDLE handles[]{event.Value, stopEvent};
+            std::array<HANDLE, 3> handles{completionEvent, nullptr, nullptr};
+            DWORD handleCount = 1;
+            if (stopEvent) handles[handleCount++] = stopEvent;
+            if (shutdownEvent && shutdownEvent != stopEvent) handles[handleCount++] = shutdownEvent;
             const DWORD waitResult =
-                WaitForMultipleObjects(stopEvent ? 2u : 1u, handles, FALSE, RemainingWait(deadline));
-            if (waitResult == WAIT_TIMEOUT || (stopEvent && waitResult == WAIT_OBJECT_0 + 1)) {
+                WaitForMultipleObjects(handleCount, handles.data(), FALSE, RemainingWait(deadline));
+            if (waitResult == WAIT_TIMEOUT ||
+                (waitResult > WAIT_OBJECT_0 && waitResult < WAIT_OBJECT_0 + handleCount)) {
                 CancelIoEx(pipe, &overlapped);
                 (void)GetOverlappedResult(pipe, &overlapped, &transferred, TRUE);
                 return waitResult == WAIT_TIMEOUT ? IoStatus::Timeout : IoStatus::Cancelled;
@@ -281,17 +294,30 @@ TransferExact(HANDLE pipe, void* buffer, uint32_t byteCount, bool write, HANDLE 
         if (transferred == 0) return IoStatus::Closed;
         cursor += transferred;
         remaining -= transferred;
+        if (shutdownEvent && WaitForSingleObject(shutdownEvent, 0) == WAIT_OBJECT_0) return IoStatus::Cancelled;
     }
     return IoStatus::Success;
 }
 
-inline IoStatus ReadExact(HANDLE pipe, void* buffer, uint32_t byteCount, HANDLE stopEvent, uint64_t deadline) noexcept {
-    return TransferExact(pipe, buffer, byteCount, false, stopEvent, deadline);
+inline IoStatus ReadExact(HANDLE pipe,
+                          void* buffer,
+                          uint32_t byteCount,
+                          HANDLE stopEvent,
+                          uint64_t deadline,
+                          HANDLE completionEvent = nullptr,
+                          HANDLE shutdownEvent = nullptr) noexcept {
+    return TransferExact(pipe, buffer, byteCount, false, stopEvent, deadline, completionEvent, shutdownEvent);
 }
 
-inline IoStatus
-WriteExact(HANDLE pipe, const void* buffer, uint32_t byteCount, HANDLE stopEvent, uint64_t deadline) noexcept {
-    return TransferExact(pipe, const_cast<void*>(buffer), byteCount, true, stopEvent, deadline);
+inline IoStatus WriteExact(HANDLE pipe,
+                           const void* buffer,
+                           uint32_t byteCount,
+                           HANDLE stopEvent,
+                           uint64_t deadline,
+                           HANDLE completionEvent = nullptr,
+                           HANDLE shutdownEvent = nullptr) noexcept {
+    return TransferExact(
+        pipe, const_cast<void*>(buffer), byteCount, true, stopEvent, deadline, completionEvent, shutdownEvent);
 }
 
 inline IoStatus ReadRequest(HANDLE pipe, Request& request, HANDLE stopEvent, uint64_t deadline) {

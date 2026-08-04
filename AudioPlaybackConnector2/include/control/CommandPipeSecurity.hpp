@@ -5,7 +5,10 @@
 #include <sddl.h>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -280,8 +283,36 @@ inline std::optional<ExecutableFileIdentity> ExecutableIdentityFromPath(std::wst
         if (rawFile == INVALID_HANDLE_VALUE) return std::nullopt;
         details::ScopedHandle file(rawFile);
         FILE_ID_INFO info{};
-        if (!GetFileInformationByHandleEx(file.Get(), FileIdInfo, &info, sizeof(info))) return std::nullopt;
-        return ExecutableFileIdentity{info.VolumeSerialNumber, info.FileId};
+        if (GetFileInformationByHandleEx(file.Get(), FileIdInfo, &info, sizeof(info))) {
+            return ExecutableFileIdentity{info.VolumeSerialNumber, info.FileId};
+        }
+
+        // FileIdInfo is not implemented by every filesystem used for unpackaged development and test runs.
+        const auto fileIdError = GetLastError();
+        if (fileIdError != ERROR_INVALID_FUNCTION && fileIdError != ERROR_INVALID_PARAMETER &&
+            fileIdError != ERROR_NOT_SUPPORTED) {
+            return std::nullopt;
+        }
+        std::array<wchar_t, MAX_PATH + 1> fileSystemName{};
+        if (!GetVolumeInformationByHandleW(file.Get(),
+                                           nullptr,
+                                           0,
+                                           nullptr,
+                                           nullptr,
+                                           nullptr,
+                                           fileSystemName.data(),
+                                           static_cast<DWORD>(fileSystemName.size())) ||
+            CompareStringOrdinal(fileSystemName.data(), -1, L"NTFS", -1, TRUE) != CSTR_EQUAL) {
+            return std::nullopt;
+        }
+        BY_HANDLE_FILE_INFORMATION legacy{};
+        if (!GetFileInformationByHandle(file.Get(), &legacy)) return std::nullopt;
+        FILE_ID_128 legacyId{};
+        const std::uint64_t fileIndex =
+            (static_cast<std::uint64_t>(legacy.nFileIndexHigh) << 32) | legacy.nFileIndexLow;
+        if (fileIndex == 0 || legacy.dwVolumeSerialNumber == 0) return std::nullopt;
+        std::memcpy(legacyId.Identifier, &fileIndex, sizeof(fileIndex));
+        return ExecutableFileIdentity{legacy.dwVolumeSerialNumber, legacyId};
     } catch (...) {
         return std::nullopt;
     }

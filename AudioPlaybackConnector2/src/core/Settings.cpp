@@ -1,5 +1,6 @@
 #include <pch.h>
 #include <core/Settings.hpp>
+#include <core/SettingsLimits.hpp>
 #include <util/Util.hpp>
 
 #include <unordered_set>
@@ -9,7 +10,41 @@
 /*------------------------------------------------------------------------------------------------------------*/
 
 namespace {
-constexpr uint64_t c_maxSettingsFileBytes = 4 * 1024 * 1024;
+std::wstring BoundedString(winrt::hstring const& value, std::size_t limit) {
+    return apc::limits::TruncateUtf16(std::wstring_view(value), limit);
+}
+
+bool IsPersistable(SettingsData const& data) {
+    if (data.Devices.size() > apc::limits::c_maxPersistedDeviceCount ||
+        data.LastConnectedIds.size() > apc::limits::c_maxPersistedDeviceCount ||
+        !apc::limits::IsSupportedLanguage(data.Language) ||
+        !apc::limits::IsBoundedUtf16(data.LastNotifiedUpdateVersion, apc::limits::c_maxVersionCharacters) ||
+        !apc::limits::IsBoundedUtf16(data.DefaultDeviceId, apc::limits::c_maxDeviceIdCharacters) ||
+        ((data.DefaultDevice == DefaultDeviceMode::SpecificDevice) != !data.DefaultDeviceId.empty())) {
+        return false;
+    }
+    if (data.SettingsWindowBounds && (data.SettingsWindowBounds->Width <= 0 || data.SettingsWindowBounds->Height <= 0 ||
+                                      data.SettingsWindowBounds->Dpi < apc::limits::c_minWindowDpi ||
+                                      data.SettingsWindowBounds->Dpi > apc::limits::c_maxWindowDpi)) {
+        return false;
+    }
+    std::unordered_set<std::wstring_view> deviceIds;
+    deviceIds.reserve(data.Devices.size());
+    for (auto const& device : data.Devices) {
+        if (device.Id.empty() || !apc::limits::IsBoundedUtf16(device.Id, apc::limits::c_maxDeviceIdCharacters) ||
+            !apc::limits::IsBoundedUtf16(device.Name, apc::limits::c_maxDeviceNameCharacters) ||
+            !apc::limits::IsBoundedUtf16(device.Alias, apc::limits::c_maxDeviceAliasCharacters) ||
+            !deviceIds.insert(device.Id).second) {
+            return false;
+        }
+    }
+    std::unordered_set<std::wstring_view> recentIds;
+    recentIds.reserve(data.LastConnectedIds.size());
+    return std::ranges::all_of(data.LastConnectedIds, [&](std::wstring const& id) {
+        return !id.empty() && apc::limits::IsBoundedUtf16(id, apc::limits::c_maxDeviceIdCharacters) &&
+               recentIds.insert(id).second;
+    });
+}
 
 bool GetOptionalBoolean(winrt::Windows::Data::Json::JsonObject const& json, winrt::hstring const& key, bool fallback) {
     if (!json.HasKey(key)) return fallback;
@@ -124,7 +159,8 @@ void Settings::Load(HINSTANCE hInst) {
         LARGE_INTEGER fileSize{};
         THROW_IF_WIN32_BOOL_FALSE(GetFileSizeEx(hFile.get(), &fileSize));
         THROW_HR_IF(HRESULT_FROM_WIN32(ERROR_FILE_TOO_LARGE),
-                    fileSize.QuadPart < 0 || static_cast<uint64_t>(fileSize.QuadPart) > c_maxSettingsFileBytes);
+                    fileSize.QuadPart < 0 ||
+                        static_cast<uint64_t>(fileSize.QuadPart) > apc::limits::c_maxSettingsFileBytes);
 
         std::string buf;
         buf.reserve(static_cast<size_t>(fileSize.QuadPart));
@@ -168,17 +204,21 @@ void Settings::Load(HINSTANCE hInst) {
         showNotifications = GetOptionalBoolean(json, L"showNotifications", showNotifications);
         privacyModeEnabled = GetOptionalBoolean(json, L"privacyModeEnabled", privacyModeEnabled);
         lastUpdateCheckUnixSeconds = GetOptionalInt64(json, L"lastUpdateCheckUnixSeconds", lastUpdateCheckUnixSeconds);
-        lastNotifiedUpdateVersion = GetOptionalString(json, L"lastNotifiedUpdateVersion", L"");
+        lastNotifiedUpdateVersion = BoundedString(GetOptionalString(json, L"lastNotifiedUpdateVersion", L""),
+                                                  apc::limits::c_maxVersionCharacters);
         defaultDevice = ParseDefaultDeviceMode(std::wstring(GetOptionalString(json, L"defaultDeviceMode", L"")));
         defaultDeviceId = GetOptionalString(json, L"defaultDeviceId", L"");
+        if (defaultDevice != DefaultDeviceMode::SpecificDevice ||
+            !apc::limits::IsBoundedUtf16(defaultDeviceId, apc::limits::c_maxDeviceIdCharacters)) {
+            defaultDeviceId.clear();
+        }
         if (defaultDeviceId.empty()) {
             defaultDevice = DefaultDeviceMode::LastConnected;
         }
 
         {
             auto lang = GetOptionalString(json, L"language", L"system");
-            language = lang.empty() ? L"system" : std::wstring(lang);
-            if (language == L"en" && PRIMARYLANGID(GetUserDefaultUILanguage()) != LANG_ENGLISH) language = L"system";
+            language = apc::limits::IsSupportedLanguage(lang) ? std::wstring(lang) : L"system";
         }
 
         if (auto boundsJson = GetOptionalObject(json, L"settingsWindowBounds")) {
@@ -189,7 +229,8 @@ void Settings::Load(HINSTANCE hInst) {
             bounds.Height = GetOptionalInt32(boundsJson, L"height", 0);
             const auto dpi = GetOptionalInt32(boundsJson, L"dpi", USER_DEFAULT_SCREEN_DPI);
             bounds.Dpi = dpi > 0 ? static_cast<uint32_t>(dpi) : USER_DEFAULT_SCREEN_DPI;
-            if (bounds.Width > 0 && bounds.Height > 0) {
+            if (bounds.Width > 0 && bounds.Height > 0 && bounds.Dpi >= apc::limits::c_minWindowDpi &&
+                bounds.Dpi <= apc::limits::c_maxWindowDpi) {
                 settingsWindowBounds = bounds;
             } else {
                 DebugTrace(L"[Settings] Load WARNING: ignoring invalid settings window bounds");
@@ -199,13 +240,22 @@ void Settings::Load(HINSTANCE hInst) {
         if (auto array = GetOptionalArray(json, L"devices")) {
             for (auto val : array) {
                 try {
+                    if (devices.size() >= apc::limits::c_maxPersistedDeviceCount) {
+                        DebugTrace(L"[Settings] Load WARNING: ignoring devices beyond the supported limit");
+                        break;
+                    }
                     if (val.ValueType() != winrt::Windows::Data::Json::JsonValueType::Object) continue;
                     auto obj = val.GetObject();
                     DeviceSettings ds;
                     ds.Id = GetOptionalString(obj, L"id", L"");
-                    if (ds.Id.empty() || !deviceIds.insert(ds.Id).second) continue;
-                    ds.Name = GetOptionalString(obj, L"name", L"");
-                    ds.Alias = GetOptionalString(obj, L"alias", L"");
+                    if (ds.Id.empty() || !apc::limits::IsBoundedUtf16(ds.Id, apc::limits::c_maxDeviceIdCharacters) ||
+                        !deviceIds.insert(ds.Id).second) {
+                        continue;
+                    }
+                    ds.Name =
+                        BoundedString(GetOptionalString(obj, L"name", L""), apc::limits::c_maxDeviceNameCharacters);
+                    ds.Alias =
+                        BoundedString(GetOptionalString(obj, L"alias", L""), apc::limits::c_maxDeviceAliasCharacters);
                     const bool legacyAutoReconnect = GetOptionalBoolean(obj, L"autoReconnect", false);
                     ds.ConnectOnStartup = GetOptionalBoolean(obj, L"connectOnStartup", legacyAutoReconnect);
                     ds.ReconnectOnConnectionLoss =
@@ -219,9 +269,11 @@ void Settings::Load(HINSTANCE hInst) {
 
         if (auto array = GetOptionalArray(json, L"lastConnectedIds")) {
             for (auto val : array) {
+                if (lastConnectedIds.size() >= apc::limits::c_maxPersistedDeviceCount) break;
                 if (val.ValueType() != winrt::Windows::Data::Json::JsonValueType::String) continue;
                 auto id = std::wstring(val.GetString());
-                if (!id.empty() && connectedIds.insert(id).second) {
+                if (!id.empty() && apc::limits::IsBoundedUtf16(id, apc::limits::c_maxDeviceIdCharacters) &&
+                    connectedIds.insert(id).second) {
                     lastConnectedIds.push_back(std::move(id));
                 }
             }
@@ -264,6 +316,10 @@ bool Settings::Save(HINSTANCE hInst) {
             revisionAtSnapshot = m_revision.load(std::memory_order_acquire);
             if (revisionAtSnapshot == m_savedRevision.load(std::memory_order_acquire)) return true;
             snapshot = m_data;
+        }
+        if (!IsPersistable(snapshot)) {
+            DebugTrace(L"[Settings] Save ERROR: refusing invalid or oversized in-memory settings");
+            return false;
         }
 
         winrt::Windows::Data::Json::JsonObject json;
@@ -329,6 +385,10 @@ bool Settings::Save(HINSTANCE hInst) {
         json.Insert(L"lastConnectedIds", lastArr);
 
         auto utf8 = util::Utf16ToUtf8(json.Stringify());
+        if (utf8.size() > apc::limits::c_maxSettingsFileBytes) {
+            DebugTrace(L"[Settings] Save ERROR: serialized settings exceed the supported size");
+            return false;
+        }
         auto path = GetPath(hInst);
         auto tmp = path;
         tmp += L".tmp";

@@ -60,19 +60,20 @@ struct SettingsData {
 template <typename Guard> class LockedMutableSettingsDataReference {
 public:
     LockedMutableSettingsDataReference(Guard guard, SettingsData& data, std::atomic<std::uint64_t>& revision)
-        : m_guard(std::move(guard)), m_data(data), m_revision(&revision), m_original(data) {}
+        : m_guard(std::move(guard)), m_data(data), m_revision(&revision) {}
 
     LockedMutableSettingsDataReference(LockedMutableSettingsDataReference const&) = delete;
     LockedMutableSettingsDataReference& operator=(LockedMutableSettingsDataReference const&) = delete;
     LockedMutableSettingsDataReference(LockedMutableSettingsDataReference&& other) noexcept
         : m_guard(std::move(other.m_guard)), m_data(other.m_data), m_revision(std::exchange(other.m_revision, nullptr)),
-          m_original(std::move(other.m_original)) {}
+          m_changed(std::exchange(other.m_changed, false)) {}
     LockedMutableSettingsDataReference& operator=(LockedMutableSettingsDataReference&&) = delete;
 
     ~LockedMutableSettingsDataReference() {
-        if (m_revision && m_data != m_original) m_revision->fetch_add(1, std::memory_order_release);
+        if (m_revision && m_changed) m_revision->fetch_add(1, std::memory_order_release);
     }
 
+    void MarkChanged() noexcept { m_changed = true; }
     SettingsData* operator->() { return &m_data; }
     SettingsData& operator*() { return m_data; }
     SettingsData& Get() { return m_data; }
@@ -81,7 +82,7 @@ private:
     Guard m_guard;
     SettingsData& m_data;
     std::atomic<std::uint64_t>* m_revision;
-    SettingsData m_original;
+    bool m_changed = false;
 };
 
 /*------------------------------------------------------------------------------------------------------------*/

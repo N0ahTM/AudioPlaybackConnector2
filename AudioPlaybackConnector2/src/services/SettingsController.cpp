@@ -3,6 +3,15 @@
 #include <services/SettingsController.hpp>
 
 #include <core/DeviceManager.hpp>
+#include <core/SettingsLimits.hpp>
+
+namespace {
+
+[[nodiscard]] bool IsValidDeviceId(std::wstring_view value) noexcept {
+    return !value.empty() && apc::limits::IsBoundedUtf16(value, apc::limits::c_maxDeviceIdCharacters);
+}
+
+} // namespace
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Constructors / Destructor /////////////////////////////////////////////////////////////////////////*/
@@ -31,6 +40,7 @@ void SettingsController::SetGlobalConnectOnStartup(bool enabled) {
     {
         auto locked = m_settings->LockExclusiveData();
         if (locked->GlobalConnectOnStartup == enabled) return;
+        locked.MarkChanged();
         locked->GlobalConnectOnStartup = enabled;
     }
 
@@ -44,6 +54,7 @@ void SettingsController::SetGlobalReconnectOnConnectionLoss(bool enabled) {
     {
         auto locked = m_settings->LockExclusiveData();
         if (locked->GlobalReconnectOnConnectionLoss == enabled) return;
+        locked.MarkChanged();
         locked->GlobalReconnectOnConnectionLoss = enabled;
         devices = locked->Devices;
     }
@@ -69,6 +80,7 @@ void SettingsController::SetAllowIncomingConnections(bool enabled) {
     {
         auto locked = m_settings->LockExclusiveData();
         if (locked->AllowIncomingConnections == enabled) return;
+        locked.MarkChanged();
         locked->AllowIncomingConnections = enabled;
     }
 
@@ -84,6 +96,7 @@ void SettingsController::SetStartWithWindows(bool enabled) {
     {
         auto locked = m_settings->LockExclusiveData();
         if (locked->StartWithWindows == enabled) return;
+        locked.MarkChanged();
         locked->StartWithWindows = enabled;
     }
     m_settings->Save(GetModuleHandleW(nullptr));
@@ -94,6 +107,7 @@ void SettingsController::SetShowNotifications(bool enabled) {
     {
         auto locked = m_settings->LockExclusiveData();
         if (locked->ShowNotifications == enabled) return;
+        locked.MarkChanged();
         locked->ShowNotifications = enabled;
     }
     m_settings->Save(GetModuleHandleW(nullptr));
@@ -103,10 +117,13 @@ void SettingsController::SetLanguage(std::wstring language) {
     if (!m_settings) return;
     if (language.empty()) {
         language = L"system";
+    } else if (!apc::limits::IsSupportedLanguage(language)) {
+        return;
     }
     {
         auto locked = m_settings->LockExclusiveData();
         if (locked->Language == language) return;
+        locked.MarkChanged();
         locked->Language = std::move(language);
     }
     m_settings->Save(GetModuleHandleW(nullptr));
@@ -118,6 +135,7 @@ void SettingsController::SetPrivacyMode(bool enabled) {
     {
         auto locked = m_settings->LockExclusiveData();
         if (locked->PrivacyModeEnabled == enabled) return;
+        locked.MarkChanged();
         locked->PrivacyModeEnabled = enabled;
     }
     m_settings->Save(GetModuleHandleW(nullptr));
@@ -125,12 +143,16 @@ void SettingsController::SetPrivacyMode(bool enabled) {
 }
 
 bool SettingsController::SetSettingsWindowBounds(PersistedWindowBounds bounds) {
-    if (!m_settings) return false;
+    if (!m_settings || bounds.Width <= 0 || bounds.Height <= 0 || bounds.Dpi < apc::limits::c_minWindowDpi ||
+        bounds.Dpi > apc::limits::c_maxWindowDpi) {
+        return false;
+    }
 
     bool changed = false;
     {
         auto locked = m_settings->LockExclusiveData();
         if (locked->SettingsWindowBounds != bounds) {
+            locked.MarkChanged();
             locked->SettingsWindowBounds = bounds;
             changed = true;
         }
@@ -146,6 +168,7 @@ bool SettingsController::ClearSettingsWindowBounds() {
     {
         auto locked = m_settings->LockExclusiveData();
         if (locked->SettingsWindowBounds) {
+            locked.MarkChanged();
             locked->SettingsWindowBounds.reset();
             changed = true;
         }
@@ -161,7 +184,7 @@ void SettingsController::Save() {
 }
 
 void SettingsController::SetDeviceConnectOnStartup(std::wstring const& deviceId, bool enabled) {
-    if (!m_settings) return;
+    if (!m_settings || !IsValidDeviceId(deviceId)) return;
 
     bool changed = false;
     {
@@ -169,6 +192,7 @@ void SettingsController::SetDeviceConnectOnStartup(std::wstring const& deviceId,
         for (auto& device : locked->Devices) {
             if (device.Id == deviceId) {
                 if (device.ConnectOnStartup == enabled) return;
+                locked.MarkChanged();
                 device.ConnectOnStartup = enabled;
                 changed = true;
                 break;
@@ -181,7 +205,7 @@ void SettingsController::SetDeviceConnectOnStartup(std::wstring const& deviceId,
 }
 
 void SettingsController::SetDeviceReconnectOnConnectionLoss(std::wstring const& deviceId, bool enabled) {
-    if (!m_settings) return;
+    if (!m_settings || !IsValidDeviceId(deviceId)) return;
 
     bool changed = false;
     bool globalReconnectOnConnectionLoss = false;
@@ -190,6 +214,7 @@ void SettingsController::SetDeviceReconnectOnConnectionLoss(std::wstring const& 
         for (auto& device : locked->Devices) {
             if (device.Id == deviceId) {
                 if (device.ReconnectOnConnectionLoss == enabled) return;
+                locked.MarkChanged();
                 device.ReconnectOnConnectionLoss = enabled;
                 changed = true;
                 break;
@@ -209,7 +234,11 @@ void SettingsController::SetDeviceReconnectOnConnectionLoss(std::wstring const& 
 bool SettingsController::SetDeviceAlias(std::wstring const& deviceId,
                                         std::wstring alias,
                                         std::wstring const& deviceName) {
-    if (!m_settings || deviceId.empty()) return false;
+    if (!m_settings || !IsValidDeviceId(deviceId) ||
+        !apc::limits::IsBoundedUtf16(alias, apc::limits::c_maxDeviceAliasCharacters)) {
+        return false;
+    }
+    auto boundedName = apc::limits::TruncateUtf16(deviceName, apc::limits::c_maxDeviceNameCharacters);
 
     bool changed = false;
     bool deviceExists = false;
@@ -218,21 +247,24 @@ bool SettingsController::SetDeviceAlias(std::wstring const& deviceId,
         for (auto& device : locked->Devices) {
             if (device.Id == deviceId) {
                 deviceExists = true;
-                if (!deviceName.empty() && device.Name != deviceName) {
-                    device.Name = deviceName;
+                if (!boundedName.empty() && device.Name != boundedName) {
+                    locked.MarkChanged();
+                    device.Name = boundedName;
                     changed = true;
                 }
                 if (device.Alias != alias) {
+                    locked.MarkChanged();
                     device.Alias = std::move(alias);
                     changed = true;
                 }
                 break;
             }
         }
-        if (!deviceExists && !alias.empty()) {
+        if (!deviceExists && !alias.empty() && locked->Devices.size() < apc::limits::c_maxPersistedDeviceCount) {
+            locked.MarkChanged();
             locked->Devices.push_back(
                 DeviceSettings{.Id = deviceId,
-                               .Name = deviceName,
+                               .Name = std::move(boundedName),
                                .Alias = std::move(alias),
                                .ConnectOnStartup = locked->GlobalConnectOnStartup,
                                .ReconnectOnConnectionLoss = locked->GlobalReconnectOnConnectionLoss});
@@ -247,42 +279,24 @@ bool SettingsController::SetDeviceAlias(std::wstring const& deviceId,
     return deviceExists;
 }
 
-void SettingsController::SetDefaultDeviceMode(DefaultDeviceMode mode) {
-    if (!m_settings) return;
-
-    bool changed = false;
-    {
-        auto locked = m_settings->LockExclusiveData();
-        if (locked->DefaultDevice != mode) {
-            locked->DefaultDevice = mode;
-            changed = true;
-        }
-        if (mode == DefaultDeviceMode::LastConnected && !locked->DefaultDeviceId.empty()) {
-            locked->DefaultDeviceId.clear();
-            changed = true;
-        }
-    }
-    if (changed) {
-        m_settings->Save(GetModuleHandleW(nullptr));
-        NotifyPresentationChanged();
-    }
-}
-
 void SettingsController::SetDefaultDeviceId(std::wstring const& deviceId) {
     if (!m_settings) return;
     if (deviceId.empty()) {
-        SetDefaultDeviceMode(DefaultDeviceMode::LastConnected);
+        ClearDefaultDevice();
         return;
     }
+    if (!IsValidDeviceId(deviceId)) return;
 
     bool changed = false;
     {
         auto locked = m_settings->LockExclusiveData();
         if (locked->DefaultDevice != DefaultDeviceMode::SpecificDevice) {
+            locked.MarkChanged();
             locked->DefaultDevice = DefaultDeviceMode::SpecificDevice;
             changed = true;
         }
         if (locked->DefaultDeviceId != deviceId) {
+            locked.MarkChanged();
             locked->DefaultDeviceId = deviceId;
             changed = true;
         }
@@ -294,7 +308,22 @@ void SettingsController::SetDefaultDeviceId(std::wstring const& deviceId) {
 }
 
 void SettingsController::ClearDefaultDevice() {
-    SetDefaultDeviceMode(DefaultDeviceMode::LastConnected);
+    if (!m_settings) return;
+
+    bool changed = false;
+    {
+        auto locked = m_settings->LockExclusiveData();
+        if (locked->DefaultDevice != DefaultDeviceMode::LastConnected || !locked->DefaultDeviceId.empty()) {
+            locked.MarkChanged();
+            locked->DefaultDevice = DefaultDeviceMode::LastConnected;
+            locked->DefaultDeviceId.clear();
+            changed = true;
+        }
+    }
+    if (changed) {
+        m_settings->Save(GetModuleHandleW(nullptr));
+        NotifyPresentationChanged();
+    }
 }
 
 std::size_t SettingsController::ConnectedDeviceCount() const {
@@ -305,7 +334,7 @@ std::size_t SettingsController::ConnectedDeviceCount() const {
 }
 
 void SettingsController::ForgetDevice(std::wstring const& deviceId) {
-    if (!m_settings) return;
+    if (!m_settings || !IsValidDeviceId(deviceId)) return;
     bool changed = false;
     bool globalReconnectOnConnectionLoss = false;
     {
@@ -319,6 +348,7 @@ void SettingsController::ForgetDevice(std::wstring const& deviceId) {
             changed = true;
         }
         changed = changed || devicesRemoved > 0 || lastConnectedRemoved > 0;
+        if (changed) locked.MarkChanged();
         globalReconnectOnConnectionLoss = locked->GlobalReconnectOnConnectionLoss;
     }
     if (!changed) return;

@@ -1,4 +1,5 @@
 #include <app/AutoReconnectPlanner.hpp>
+#include <core/SettingsLimits.hpp>
 
 #include <iostream>
 #include <string_view>
@@ -69,6 +70,29 @@ void TestReconnectPlanHonorsPerDevicePolicyWithoutMruHistory() {
           "disabled startup policies must produce no reconnect work");
 }
 
+void TestReconnectPlanRejectsInvalidAndExcessState() {
+    std::wstring invalidUtf16(1, static_cast<wchar_t>(0xD800));
+    std::vector<std::wstring> ids{L"valid"};
+    Check(!AutoReconnectPlanner::PromoteMostRecentlyConnected(ids, invalidUtf16) && ids.size() == 1,
+          "invalid UTF-16 device ids must not enter MRU state");
+
+    SettingsData settings;
+    settings.GlobalConnectOnStartup = true;
+    settings.Devices.reserve(apc::limits::c_maxPersistedDeviceCount + 1);
+    for (std::size_t index = 0; index < apc::limits::c_maxPersistedDeviceCount; ++index) {
+        settings.Devices.push_back(Device(L"device-" + std::to_wstring(index)));
+    }
+    settings.Devices.push_back(Device(L"beyond-limit", true));
+    auto plan = AutoReconnectPlanner::BuildReconnectPlan(settings);
+    Check(plan.size() == apc::limits::c_maxPersistedDeviceCount &&
+              std::ranges::find(plan, L"beyond-limit") == plan.end(),
+          "reconnect planning must remain bounded when in-memory state exceeds persistence limits");
+
+    settings.GlobalConnectOnStartup = false;
+    Check(!AutoReconnectPlanner::HasReconnectTargets(settings),
+          "target probing must ignore state beyond the supported device bound");
+}
+
 } // namespace
 
 int RunAutoReconnectPlannerTests() {
@@ -76,5 +100,6 @@ int RunAutoReconnectPlannerTests() {
     TestMostRecentlyConnectedPromotionRemovesDuplicates();
     TestReconnectPlanHonorsAllSavedDevicePolicies();
     TestReconnectPlanHonorsPerDevicePolicyWithoutMruHistory();
+    TestReconnectPlanRejectsInvalidAndExcessState();
     return g_failures;
 }

@@ -507,6 +507,7 @@ void TestSettingsRevisionTracksOnlyCommittedMutations() {
     Check(!settings.HasUnsavedChanges(), "a no-op exclusive settings access must remain clean");
     {
         auto locked = settings.LockExclusiveData();
+        locked.MarkChanged();
         locked->ShowNotifications = !locked->ShowNotifications;
     }
     Check(settings.HasUnsavedChanges(), "an actual settings mutation must advance the revision");

@@ -2,11 +2,13 @@
 
 #include <app/AdaptiveResourcePolicy.hpp>
 #include <app/ControlUiActionGate.hpp>
+#include <app/DeferredSaveCoordinator.hpp>
 #include <app/DeviceEventRouter.hpp>
 #include <app/PowerTransitionCoordinator.hpp>
 #include <app/ResourcePressureMonitor.hpp>
 #include <app/SettingsWindowPresenter.hpp>
 #include <app/SingleInstanceGuard.hpp>
+#include <app/UiRefreshCoalescer.hpp>
 
 #include <services/CommandLineControlServer.hpp>
 #include <services/NotificationService.hpp>
@@ -16,6 +18,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -53,7 +56,10 @@ private:
     /*------------------------------------------------------------------------------------------------------------*/
 
     void SetupMainWindow();
-    void OnMainWindowLoaded(winrt::Microsoft::UI::Xaml::Controls::Grid const& root);
+    void StartMainWindowLoadedWatchdog();
+    void StopMainWindowLoadedWatchdog() noexcept;
+    void OnMainWindowLoaded(winrt::Microsoft::UI::Xaml::Controls::Grid const& root) noexcept;
+    void FailStartup(std::wstring_view stage) noexcept;
     void InitializeTray();
     void InitializeNotifications();
     void InitializeDeviceManager();
@@ -63,12 +69,25 @@ private:
     void TeardownDeviceEvents();
     void TryAutoReconnect();
     winrt::fire_and_forget CheckForUpdatesOnStartupAsync();
-    void SaveLastConnectedDevices(bool saveImmediately = false);
+    [[nodiscard]] bool FlushSettingsNow(unsigned int maximumAttempts = 1) noexcept;
     void ScheduleDeferredSettingsSave();
+    [[nodiscard]] bool ScheduleDeferredSettingsSaveTimer(DeferredSaveCoordinator::WorkerToken worker,
+                                                         std::chrono::milliseconds delay,
+                                                         bool resetFailures = false) noexcept;
+    void RunDeferredSettingsSaveAttempt(DeferredSaveCoordinator::WorkerToken worker) noexcept;
+    void CancelDeferredSettingsSaveTimer() noexcept;
     void HandlePowerSuspend();
     void HandlePowerResume();
     void ToggleLastConnectedDeviceFromTray();
-    void RefreshTrayVisualState(bool forceErrorWhenIdle = false, std::wstring_view reason = L"unspecified");
+    [[nodiscard]] bool RefreshTrayVisualState(bool forceErrorWhenIdle = false,
+                                              std::wstring_view reason = L"unspecified");
+    void ScheduleDeviceVisualRefresh(bool forceErrorWhenIdle = false,
+                                     bool inventoryChanged = false,
+                                     bool refreshTray = true);
+    void QueueDeviceVisualRefreshDrain() noexcept;
+    void DrainDeviceVisualRefresh() noexcept;
+    [[nodiscard]] bool ScheduleNativeDeviceVisualRefreshRetry(std::chrono::milliseconds delay) noexcept;
+    void CancelNativeDeviceVisualRefreshRetry() noexcept;
     void HandleResourcePressureSnapshot(ResourcePressureSnapshot snapshot);
     void EvaluateAdaptiveResources(bool userInteraction, std::wstring_view reason) noexcept;
     void ScheduleAdaptiveResourceEvaluation(std::optional<AdaptiveResourcePolicy::TimePoint> reevaluateAt) noexcept;
@@ -80,11 +99,14 @@ private:
     /*------------------------------------------------------------------------------------------------------------*/
 
     [[nodiscard]] bool ShowSettingsWindow();
-    void ExitApplication();
+    void ExitApplication() noexcept;
+    [[nodiscard]] bool CloseMainWindow(std::wstring_view reason) noexcept;
     apc::control::Response
     HandleControlCommand(apc::control::Request const& request, std::stop_token stopToken, std::uint64_t deadline);
-    void PerformTeardown(bool saveLastConnected) noexcept;
-    void RunOnUIThread(std::function<void()> work);
+    [[nodiscard]] bool PerformTeardown(bool saveSettings) noexcept;
+    [[nodiscard]] bool RunOnUIThread(std::function<void()> work) noexcept;
+    [[nodiscard]] bool QueueUiFallbackWork(std::function<void()> work) noexcept;
+    void DrainUiFallbackWork() noexcept;
     ControlUiActionResult
     RunControlUiAction(std::function<bool()> work, std::stop_token stopToken, std::uint64_t deadline);
 
@@ -104,6 +126,10 @@ private:
 
     static LRESULT CALLBACK
     SubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) noexcept;
+    static void CALLBACK DeferredSettingsSaveTimerCallback(PTP_CALLBACK_INSTANCE, void* context, PTP_TIMER) noexcept;
+    static void CALLBACK DeviceVisualRefreshRetryTimerCallback(PTP_CALLBACK_INSTANCE,
+                                                               void* context,
+                                                               PTP_TIMER) noexcept;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
@@ -117,20 +143,33 @@ private:
     std::shared_ptr<::DeviceManager> m_deviceManager;
     std::shared_ptr<ISettingsController> m_settingsController;
     winrt::Microsoft::UI::Dispatching::DispatcherQueue m_dispatcherQueue{nullptr};
+    winrt::Microsoft::UI::Dispatching::DispatcherQueueTimer m_mainWindowLoadedWatchdog{nullptr};
 
     std::shared_ptr<NotificationService> m_notificationService;
     std::shared_ptr<UpdateCoordinator> m_updateCoordinator;
     std::shared_ptr<TrayController> m_trayController;
     CommandLineControlServer m_commandLineControlServer;
     std::mutex m_controlMutationMutex;
+    std::mutex m_uiFallbackWorkMutex;
+    std::deque<std::function<void()>> m_uiFallbackWork;
+    bool m_uiFallbackMessagePending = false;
     DeviceEventRouter m_deviceEventRouter;
     SingleInstanceGuard m_singleInstanceGuard;
     static inline UINT s_wmTaskbarCreated = 0;
     static constexpr UINT_PTR c_timerAnimation = 0x41504332;
     static constexpr UINT_PTR c_timerTransientTrayError = 0x41504333;
     static constexpr UINT_PTR c_timerAdaptiveResources = 0x41504334;
+    static constexpr UINT_PTR c_timerDeviceVisualRefreshRetry = 0x41504335;
+    static constexpr UINT_PTR c_timerDeferredSettingsSaveRetry = 0x41504336;
+    static constexpr UINT c_messageDrainUiFallbackWork = WM_APP + 2;
+    static constexpr UINT c_messageDrainDeviceVisualRefresh = WM_APP + 3;
     static constexpr UINT c_transientTrayErrorMs = 3000;
+    static constexpr UiRefreshCoalescer::Flags c_visualRefreshRequested = 1U << 0;
+    static constexpr UiRefreshCoalescer::Flags c_visualRefreshForceError = 1U << 1;
+    static constexpr UiRefreshCoalescer::Flags c_visualRefreshInventoryChanged = 1U << 2;
     std::chrono::steady_clock::time_point m_trayErrorUntil{};
+    std::wstring m_transientTrayErrorTooltip;
+    bool m_connectingAnimationTimerActive = false;
     AdaptiveResourcePolicy m_adaptiveResourcePolicy;
     ResourcePressureValues m_resourcePressureValues;
     std::unique_ptr<ResourcePressureMonitor> m_resourcePressureMonitor;
@@ -143,7 +182,18 @@ private:
     std::uint64_t m_latestConstrainedResourcePressureSequence = 0;
     ULONG_PTR m_gdiplusToken = 0;
     std::atomic<bool> m_exiting = false;
-    std::atomic<bool> m_settingsSavePending = false;
+    std::atomic<bool> m_started = false;
+    std::atomic<bool> m_teardownWindowCloseSucceeded = true;
+    bool m_windowSubclassInstalled = false;
+    DeferredSaveCoordinator m_settingsSaveCoordinator;
+    std::mutex m_settingsSaveTimerMutex;
+    wil::unique_threadpool_timer m_settingsSaveTimer;
+    std::optional<DeferredSaveCoordinator::WorkerToken> m_settingsSaveWorker;
+    unsigned int m_settingsSaveConsecutiveFailures = 0;
+    UiRefreshCoalescer m_deviceVisualRefreshCoalescer;
+    unsigned int m_deviceVisualRefreshConsecutiveFailures = 0;
+    std::mutex m_deviceVisualRefreshRetryTimerMutex;
+    wil::unique_threadpool_timer m_deviceVisualRefreshRetryTimer;
     PowerTransitionCoordinator m_powerTransitionCoordinator{m_exiting};
     SettingsWindowPresenter m_settingsWindowPresenter;
 };

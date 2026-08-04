@@ -36,6 +36,8 @@ struct DevicePickerView : DevicePickerViewT<DevicePickerView> {
     void CancelLoadDevices();
     void PrepareForRelease() noexcept;
     void RefreshDeviceStates();
+    [[nodiscard]] bool InvalidateDeviceInventory();
+    void SetPresentationActive(bool active) noexcept;
 
 private:
     void OnCloseClicked(winrt::Windows::Foundation::IInspectable const&,
@@ -52,16 +54,18 @@ private:
     void ApplyDeviceResults(winrt::Windows::Devices::Enumeration::DeviceInformationCollection const& devices,
                             bool blockingRefresh,
                             uint64_t requestId,
-                            uint64_t inventoryGenerationAtStart);
-    void OnDeviceInventoryChanged();
-    void OnDeviceEnumerationFailed(bool blockingRefresh, uint64_t requestId, uint64_t inventoryGenerationAtStart);
-    void RebuildDeviceListFromCache(bool reconcilePendingActions = true);
+                            uint64_t inventoryGenerationAtStart) noexcept;
+    void
+    OnDeviceEnumerationFailed(bool blockingRefresh, uint64_t requestId, uint64_t inventoryGenerationAtStart) noexcept;
+    void RebuildDeviceListFromCache(bool reconcilePendingActions = true, bool forceRender = false);
     winrt::Microsoft::UI::Xaml::Controls::ListViewItem
     BuildDeviceListItem(apc::device_picker::DeviceSnapshotItem const& device);
     bool BeginPendingDeviceAction(winrt::hstring const& id);
     bool BeginPendingGlobalAction();
     bool IsDeviceActionPending(winrt::hstring const& id) const;
     void ReconcilePendingActions(std::vector<apc::device_picker::DeviceSnapshotItem> const& items);
+    void SchedulePendingActionExpiry() noexcept;
+    void StopPendingActionTimer() noexcept;
     void ApplyGlobalActionState(bool visible, bool enabled);
     void SetRefreshIndicators(bool refreshing, bool blockingRefresh);
 
@@ -81,13 +85,16 @@ private:
     std::atomic<uint64_t> m_activeLoadRequestId = 0;
     std::shared_ptr<apc::device_picker::DeviceInventoryGeneration> m_inventoryGeneration =
         std::make_shared<apc::device_picker::DeviceInventoryGeneration>();
-    std::size_t m_deviceInventoryChangedToken = 0;
+    std::atomic_bool m_presentationActive = false;
     mutable std::mutex m_refreshDevicesOpMutex;
     winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
         m_refreshDevicesOp{nullptr};
     std::unordered_map<std::wstring, std::chrono::steady_clock::time_point> m_pendingDeviceActions;
     std::chrono::steady_clock::time_point m_pendingGlobalActionStarted{};
     bool m_pendingGlobalAction = false;
+    winrt::Microsoft::UI::Dispatching::DispatcherQueueTimer m_pendingActionTimer{nullptr};
+    std::uint64_t m_renderedSnapshotGeneration = 0;
+    bool m_hasRenderedSnapshot = false;
     std::atomic<bool> m_preparedForRelease = false;
 };
 } // namespace winrt::AudioPlaybackConnector2::implementation

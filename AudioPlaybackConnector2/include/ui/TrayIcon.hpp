@@ -27,7 +27,8 @@ public:
     void SetState(TrayIconState state);
     void SetTooltip(std::wstring_view text);
     void UpdateTheme();
-    void AdvanceConnectingFrame();
+    [[nodiscard]] bool AdvanceConnectingFrame();
+    [[nodiscard]] bool ApplyPendingUpdates();
     std::optional<RECT> GetIconRect() const;
     void Remove();
 
@@ -37,7 +38,7 @@ private:
     /*------------------------------------------------------------------------------------------------------------*/
 
     void CreateAllIcons();
-    void RefreshIcon(bool logSuccess);
+    [[nodiscard]] bool RefreshIcon(bool applyShell, bool logSuccess);
     static wil::unique_hicon CreateIconFromImage(Gdiplus::Bitmap& source, int size, Gdiplus::Color color);
     static int GetBestIconSizeIndex();
 
@@ -55,6 +56,8 @@ private:
     uint8_t m_connectingFrame = 0;
     bool m_initialized = false;
     bool m_registered = false;
+    bool m_iconDirty = true;
+    bool m_tooltipDirty = true;
 
     static constexpr GUID c_trayGuid = {0xcf5eeb74, 0x90fb, 0x441e, {0xbf, 0x17, 0x72, 0x84, 0x02, 0x0e, 0xf0, 0x5c}};
     static constexpr int SIZE_COUNT = 4;

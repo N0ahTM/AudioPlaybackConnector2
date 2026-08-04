@@ -1,6 +1,16 @@
 #pragma once
 
+#include <windows.h>
+
+#include <wil/resource.h>
+
+#include <filesystem>
+#include <atomic>
 #include <mutex>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Data Structures ///////////////////////////////////////////////////////////////////////////////////*/
@@ -12,6 +22,8 @@ struct DeviceSettings {
     std::wstring Alias;
     bool ConnectOnStartup = false;
     bool ReconnectOnConnectionLoss = false;
+
+    bool operator==(DeviceSettings const&) const = default;
 };
 
 enum class DefaultDeviceMode { LastConnected, SpecificDevice };
@@ -41,6 +53,35 @@ struct SettingsData {
     std::wstring DefaultDeviceId;
     std::vector<DeviceSettings> Devices;
     std::vector<std::wstring> LastConnectedIds;
+
+    bool operator==(SettingsData const&) const = default;
+};
+
+template <typename Guard> class LockedMutableSettingsDataReference {
+public:
+    LockedMutableSettingsDataReference(Guard guard, SettingsData& data, std::atomic<std::uint64_t>& revision)
+        : m_guard(std::move(guard)), m_data(data), m_revision(&revision), m_original(data) {}
+
+    LockedMutableSettingsDataReference(LockedMutableSettingsDataReference const&) = delete;
+    LockedMutableSettingsDataReference& operator=(LockedMutableSettingsDataReference const&) = delete;
+    LockedMutableSettingsDataReference(LockedMutableSettingsDataReference&& other) noexcept
+        : m_guard(std::move(other.m_guard)), m_data(other.m_data), m_revision(std::exchange(other.m_revision, nullptr)),
+          m_original(std::move(other.m_original)) {}
+    LockedMutableSettingsDataReference& operator=(LockedMutableSettingsDataReference&&) = delete;
+
+    ~LockedMutableSettingsDataReference() {
+        if (m_revision && m_data != m_original) m_revision->fetch_add(1, std::memory_order_release);
+    }
+
+    SettingsData* operator->() { return &m_data; }
+    SettingsData& operator*() { return m_data; }
+    SettingsData& Get() { return m_data; }
+
+private:
+    Guard m_guard;
+    SettingsData& m_data;
+    std::atomic<std::uint64_t>* m_revision;
+    SettingsData m_original;
 };
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -83,6 +124,9 @@ public:
 
     void Load(HINSTANCE hInst);
     bool Save(HINSTANCE hInst);
+    [[nodiscard]] bool HasUnsavedChanges() const noexcept {
+        return m_revision.load(std::memory_order_acquire) != m_savedRevision.load(std::memory_order_acquire);
+    }
 
     auto LockShared() const { return m_lock.lock_shared(); }
     auto LockExclusive() { return m_lock.lock_exclusive(); }
@@ -92,8 +136,8 @@ public:
                                                                                                m_data);
     }
     auto LockExclusiveData() {
-        return LockedSettingsDataReference<SettingsData, decltype(m_lock.lock_exclusive())>(m_lock.lock_exclusive(),
-                                                                                            m_data);
+        auto guard = m_lock.lock_exclusive();
+        return LockedMutableSettingsDataReference<decltype(guard)>(std::move(guard), m_data, m_revision);
     }
 
 private:
@@ -110,5 +154,7 @@ private:
     SettingsData m_data;
     mutable wil::srwlock m_lock;
     std::mutex m_persistenceMutex;
+    std::atomic<std::uint64_t> m_revision{0};
+    std::atomic<std::uint64_t> m_savedRevision{0};
     static constexpr auto c_fileName = L"AudioPlaybackConnector2.json";
 };

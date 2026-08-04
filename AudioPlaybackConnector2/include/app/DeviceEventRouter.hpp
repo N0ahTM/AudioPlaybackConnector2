@@ -16,7 +16,7 @@ public:
     /*//////// Type Aliases //////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    using UiDispatcher = std::function<void(std::function<void()> work)>;
+    using UiDispatcher = std::function<bool(std::function<void()> work)>;
 
     struct Callbacks {
         std::function<void(winrt::hstring const& id)> DeviceConnected;
@@ -27,6 +27,7 @@ public:
         std::function<void(winrt::hstring const& id, winrt::hstring const& status, DeviceStatusKind statusKind)>
             DeviceStatusChanged;
         std::function<void()> DeviceActivityChanged;
+        std::function<void()> DeviceInventoryChanged;
     };
 
     /*------------------------------------------------------------------------------------------------------------*/
@@ -50,7 +51,7 @@ private:
     /*//////// Helpers ///////////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    static void Dispatch(std::shared_ptr<State> const& state, std::function<void()> work);
+    [[nodiscard]] static bool Dispatch(std::shared_ptr<State> const& state, std::function<void()> work) noexcept;
     void ResetTokens() noexcept;
 
     /*------------------------------------------------------------------------------------------------------------*/
@@ -67,4 +68,5 @@ private:
     std::size_t m_autoReconnectFailedToken = 0;
     std::size_t m_deviceStatusChangedToken = 0;
     std::size_t m_deviceActivityChangedToken = 0;
+    std::size_t m_deviceInventoryChangedToken = 0;
 };

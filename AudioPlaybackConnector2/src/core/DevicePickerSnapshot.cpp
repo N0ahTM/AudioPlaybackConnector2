@@ -49,6 +49,7 @@ void DevicePickerSnapshotCache::ReplaceInventory(std::vector<DeviceIdentity> dev
 }
 
 void DevicePickerSnapshotCache::InvalidateInventory() noexcept {
+    if (m_inventoryInvalidated) return;
     m_inventoryInvalidated = true;
     AdvanceGeneration(m_inventoryGeneration);
     m_snapshot.InventoryFresh = false;
@@ -90,7 +91,6 @@ DevicePickerSnapshot const& DevicePickerSnapshotCache::Refresh(DeviceActivitySna
 
     DevicePickerSnapshot next;
     next.Generation = m_snapshot.Generation;
-    AdvanceGeneration(next.Generation);
     next.InventoryGeneration = m_inventoryGeneration;
     next.ConnectedDeviceCount = activity.ConnectedIds.size();
     next.InventoryFresh = IsInventoryFresh(now);
@@ -121,6 +121,10 @@ DevicePickerSnapshot const& DevicePickerSnapshotCache::Refresh(DeviceActivitySna
         next.Items.push_back(std::move(item));
     }
 
+    const bool presentationUnchanged = next.ConnectedDeviceCount == m_snapshot.ConnectedDeviceCount &&
+                                       next.PrivacyModeEnabled == m_snapshot.PrivacyModeEnabled &&
+                                       next.Items == m_snapshot.Items;
+    if (!presentationUnchanged) AdvanceGeneration(next.Generation);
     m_snapshot = std::move(next);
     return m_snapshot;
 }

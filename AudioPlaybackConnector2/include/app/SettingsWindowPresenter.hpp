@@ -17,24 +17,32 @@ public:
     /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
+    SettingsWindowPresenter();
     ~SettingsWindowPresenter();
 
     [[nodiscard]] bool Show(std::shared_ptr<ISettingsController> settingsController,
                             std::shared_ptr<TrayController> trayController,
                             std::shared_ptr<UpdateCoordinator> updateCoordinator,
                             std::function<void()> saveSettings);
-    void Close() noexcept;
+    [[nodiscard]] bool Close(bool saveOnClose = true) noexcept;
 
 private:
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    void HandleWindowClosed() noexcept;
-    void RevokeWindowClosedHandler() noexcept;
+    struct PresenterState;
+    struct WindowState;
 
-    winrt::Microsoft::UI::Xaml::Window m_settingsWindow{nullptr};
-    winrt::event_token m_settingsWindowClosedToken{};
-    std::function<void()> m_saveSettingsOnClose;
-    bool m_settingsWindowClosedTokenRegistered = false;
+    static bool CloseWindow(std::shared_ptr<PresenterState> const& owner,
+                            std::shared_ptr<WindowState> const& state,
+                            bool saveOnClose) noexcept;
+    static void HandleWindowClosed(std::shared_ptr<PresenterState> const& owner,
+                                   std::shared_ptr<WindowState> const& state,
+                                   winrt::Microsoft::UI::Xaml::Window const& closedWindow) noexcept;
+    static void RevokeWindowClosedHandler(std::shared_ptr<WindowState> const& state) noexcept;
+    static void AbandonWindow(std::shared_ptr<PresenterState> const& owner,
+                              std::shared_ptr<WindowState> const& state) noexcept;
+
+    std::shared_ptr<PresenterState> m_state;
 };

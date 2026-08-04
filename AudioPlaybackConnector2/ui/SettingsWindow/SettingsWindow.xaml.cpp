@@ -268,7 +268,7 @@ SettingsWindow::~SettingsWindow() {
 }
 
 LRESULT CALLBACK SettingsWindow::SettingsWindowSubclassProc(
-    HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) {
+    HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) noexcept try {
     auto self = reinterpret_cast<SettingsWindow*>(dwRefData);
     if (msg == WM_GETMINMAXINFO) {
         auto minSize = util::GetSettingsWindowMinTrackSize(hwnd);
@@ -301,6 +301,9 @@ LRESULT CALLBACK SettingsWindow::SettingsWindowSubclassProc(
         }
     }
 
+    return DefSubclassProc(hwnd, msg, wParam, lParam);
+} catch (...) {
+    OutputDebugStringW(L"[AudioPlaybackConnector2] SettingsWindow subclass callback failed\n");
     return DefSubclassProc(hwnd, msg, wParam, lParam);
 }
 

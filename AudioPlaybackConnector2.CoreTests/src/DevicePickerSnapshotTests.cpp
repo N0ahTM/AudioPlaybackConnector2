@@ -39,7 +39,11 @@ void TestInventoryFreshnessAndInvalidation() {
     DeviceActivitySnapshot activity;
     auto const firstInventoryGeneration = cache.Refresh(activity, {}, false, L"Private", At(6s)).InventoryGeneration;
     cache.InvalidateInventory();
+    auto const invalidatedInventoryGeneration = cache.CachedSnapshot().InventoryGeneration;
+    cache.InvalidateInventory();
     Check(!cache.IsInventoryFresh(At(6s)), "an inventory event must invalidate even a young snapshot");
+    Check(cache.CachedSnapshot().InventoryGeneration == invalidatedInventoryGeneration,
+          "repeated invalidation of an already stale inventory must be idempotent");
     auto const& invalidated = cache.Refresh(activity, {}, false, L"Private", At(6s));
     Check(!invalidated.InventoryFresh, "invalid freshness must be visible in the published snapshot");
     Check(invalidated.InventoryGeneration != firstInventoryGeneration,
@@ -114,13 +118,25 @@ void TestPrivacyAndSnapshotGeneration() {
     Check(first.Items[1].Name == L"Speaker", "redaction must not destroy the cached native name");
 
     auto second = cache.Refresh(idle, settings, true, L"Private device", At(2s));
-    Check(second.Generation > first.Generation, "every coherent refresh must publish a new snapshot generation");
+    Check(second.Generation == first.Generation, "an identical refresh must retain the published snapshot generation");
     Check(cache.CanSelect(L"a") && cache.CanSelect(L"b"), "idle discovered devices must remain selectable");
+
+    cache.InvalidateInventory();
+    auto metadataOnly = cache.Refresh(idle, settings, true, L"Private device", At(2s));
+    Check(metadataOnly.Generation == second.Generation,
+          "inventory metadata changes without presentation changes must not invalidate the XAML render key");
+
+    idle.BusyIds.insert(L"a");
+    auto changed = cache.Refresh(idle, settings, true, L"Private device", At(3s));
+    Check(changed.Generation > second.Generation, "a presentation change must publish a new snapshot generation");
+    auto unchanged = cache.Refresh(idle, settings, true, L"Private device", At(4s));
+    Check(unchanged.Generation == changed.Generation,
+          "a repeated presentation snapshot must not advance its generation");
 
     cache.Clear();
     Check(!cache.HasInventory() && cache.CachedSnapshot().Items.empty(),
           "release must discard both native inventory and presentation rows");
-    Check(cache.CachedSnapshot().Generation > second.Generation,
+    Check(cache.CachedSnapshot().Generation > unchanged.Generation,
           "releasing a cache must not make snapshot generations move backwards");
 }
 } // namespace

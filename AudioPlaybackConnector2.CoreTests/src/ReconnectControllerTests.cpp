@@ -332,12 +332,16 @@ void TestToastXmlSanitization() {
 } // namespace
 
 int RunAdaptiveResourcePolicyTests();
+int RunAppWorkCoordinatorTests();
+int RunAutoReconnectPlannerTests();
 int RunCommandClientTests();
 int RunCommandLineControlServerTests();
 int RunControlUiActionGateTests();
 int RunControlTargetMatcherTests();
 int RunDevicePickerSnapshotTests();
 int RunResourcePressureMonitorTests();
+int RunRuntimeApartmentTests();
+int RunSingleInstanceGuardTests();
 int RunUpdateCoordinatorTests();
 
 int main() {
@@ -352,12 +356,16 @@ int main() {
     TestCommandProtocolRejectsInvalidHeader();
     TestToastXmlSanitization();
     g_failures += RunAdaptiveResourcePolicyTests();
+    g_failures += RunAppWorkCoordinatorTests();
+    g_failures += RunAutoReconnectPlannerTests();
     g_failures += RunCommandClientTests();
     g_failures += RunCommandLineControlServerTests();
     g_failures += RunControlUiActionGateTests();
     g_failures += RunControlTargetMatcherTests();
     g_failures += RunDevicePickerSnapshotTests();
     g_failures += RunResourcePressureMonitorTests();
+    g_failures += RunRuntimeApartmentTests();
+    g_failures += RunSingleInstanceGuardTests();
     g_failures += RunUpdateCoordinatorTests();
 
     if (g_failures != 0) {

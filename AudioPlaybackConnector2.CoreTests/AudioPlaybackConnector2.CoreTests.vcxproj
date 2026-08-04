@@ -60,8 +60,8 @@
       <SDLCheck>true</SDLCheck>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp23</LanguageStandard>
-      <AdditionalIncludeDirectories>..\AudioPlaybackConnector2\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>APC_ALLOW_UNPACKAGED_CONTROL;APC_COMMAND_PIPE_SERVER_STANDALONE;APC_COMMAND_PIPE_SERVER_TESTING;APC_DEVICE_PICKER_SNAPSHOT_STANDALONE;APC_RECONNECT_CONTROLLER_STANDALONE;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\AudioPlaybackConnector2\include;..\packages\Microsoft.Windows.ImplementationLibrary.1.0.260126.7\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>APC_ALLOW_UNPACKAGED_CONTROL;APC_AUTO_RECONNECT_PLANNER_STANDALONE;APC_COMMAND_PIPE_SERVER_STANDALONE;APC_COMMAND_PIPE_SERVER_TESTING;APC_DEVICE_PICKER_SNAPSHOT_STANDALONE;APC_RECONNECT_CONTROLLER_STANDALONE;APC_SINGLE_INSTANCE_GUARD_STANDALONE;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
     <Link>
@@ -88,6 +88,8 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\AdaptiveResourcePolicyTests.cpp" />
+    <ClCompile Include="src\AppWorkCoordinatorTests.cpp" />
+    <ClCompile Include="src\AutoReconnectPlannerTests.cpp" />
     <ClCompile Include="src\CommandLineControlServerTests.cpp" />
     <ClCompile Include="src\CommandClientTests.cpp" />
     <ClCompile Include="src\ControlUiActionGateTests.cpp" />
@@ -95,11 +97,15 @@
     <ClCompile Include="src\DevicePickerSnapshotTests.cpp" />
     <ClCompile Include="src\ReconnectControllerTests.cpp" />
     <ClCompile Include="src\ResourcePressureMonitorTests.cpp" />
+    <ClCompile Include="src\RuntimeApartmentTests.cpp" />
+    <ClCompile Include="src\SingleInstanceGuardTests.cpp" />
     <ClCompile Include="src\UpdateCoordinatorTests.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveResourcePolicy.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\AutoReconnectPlanner.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\control\CommandClient.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\ResourcePressureMonitor.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\ResourcePressureState.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\SingleInstanceGuard.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\UpdateCoordinator.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\DevicePickerSnapshot.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\ReconnectController.cpp" />
@@ -107,6 +113,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveResourcePolicy.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AutoReconnectPlanner.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\DeferredSaveCoordinator.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResumeReconnectAttemptState.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ControlUiActionGate.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandClient.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandPipeSecurity.hpp" />
@@ -114,9 +123,12 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\ControlTargetMatcher.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResourcePressureMonitor.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResourcePressureState.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\SingleInstanceGuard.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\UiRefreshCoalescer.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\UpdateCoordinator.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DevicePickerSnapshot.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\ReconnectController.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\util\RuntimeApartment.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\ToastXmlSanitizer.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\CommandLineControlServer.hpp" />
   </ItemGroup>

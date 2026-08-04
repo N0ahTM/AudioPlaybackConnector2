@@ -1,5 +1,3 @@
-#include <pch.h>
-
 #include <app/SingleInstanceGuard.hpp>
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -8,18 +6,24 @@
 
 bool SingleInstanceGuard::TryAcquire(std::wstring_view mutexName) noexcept {
     if (mutexName.empty()) return false;
+    if (m_mutex) return std::wstring_view(m_mutexName) == mutexName;
 
-    m_mutex.reset(CreateMutexW(nullptr, TRUE, std::wstring(mutexName).c_str()));
-    if (!m_mutex) return false;
+    try {
+        std::wstring name(mutexName);
+        auto rawMutex = CreateMutexW(nullptr, FALSE, name.c_str());
+        auto const createError = GetLastError();
+        wil::unique_handle mutex(rawMutex);
+        if (!mutex || createError == ERROR_ALREADY_EXISTS) return false;
 
-    if (GetLastError() == ERROR_ALREADY_EXISTS) {
-        m_mutex.reset();
+        m_mutex = std::move(mutex);
+        m_mutexName = std::move(name);
+        return true;
+    } catch (...) {
         return false;
     }
-
-    return true;
 }
 
 void SingleInstanceGuard::Release() noexcept {
     m_mutex.reset();
+    m_mutexName.clear();
 }

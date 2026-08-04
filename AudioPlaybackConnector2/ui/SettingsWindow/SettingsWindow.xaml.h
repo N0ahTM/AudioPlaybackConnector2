@@ -57,7 +57,7 @@ private:
     enum class SettingsPage { Devices, App, Privacy, StreamDeck, Help, About };
 
     static LRESULT CALLBACK SettingsWindowSubclassProc(
-        HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData);
+        HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) noexcept;
 
     void InitializeSettingsContent();
     void LocalizeSettingsText();

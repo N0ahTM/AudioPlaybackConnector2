@@ -1,5 +1,6 @@
 #pragma once
 
+#include <core/DeviceSessionStore.hpp>
 #include <ui/TrayIcon.hpp>
 #include <ui/TrayContextMenu.hpp>
 #include <DevicePickerView/DevicePickerView.xaml.h>
@@ -73,10 +74,12 @@ public:
     void ShowTrayMenu();
     [[nodiscard]] bool ShowDevicePicker(bool toggleIfOpen = true) noexcept;
     void UpdateTooltip(std::wstring_view text);
-    void UpdateTooltipFromConnections();
-    void RefreshDevicePickerState(bool reconcileTrayState = true);
+    void UpdateTooltipFromConnections(std::vector<DeviceConnectionInfo> const& connected);
+    [[nodiscard]] bool RefreshDevicePickerState() noexcept;
+    [[nodiscard]] bool InvalidateDevicePickerInventory() noexcept;
     void OnThemeChanged();
-    void AdvanceConnectingFrame();
+    [[nodiscard]] bool AdvanceConnectingFrame() noexcept;
+    [[nodiscard]] bool ApplyPendingTrayUpdates() noexcept;
     void Reregister();
     void SetState(TrayIconState state);
     [[nodiscard]] util::SettingsWindowPlacement GetSettingsWindowPlacement() const;
@@ -94,7 +97,6 @@ private:
     void ReleaseDevicePickerOnUIThread() noexcept;
     void LaunchBluetoothSettings();
     winrt::Microsoft::UI::Xaml::Controls::Flyout CreatePickerFlyout();
-    void ReconcileTrayStateFromDeviceSnapshot(std::wstring_view reason);
     [[nodiscard]] util::SettingsWindowPlacement CalculateSettingsWindowPlacement() const;
     [[nodiscard]] bool IsCursorOverTrayIcon() const;
     void OnTrayIconDoubleClick();
@@ -142,5 +144,6 @@ private:
 
     bool m_devicePickerPreloadInitialized = false;
     bool m_releaseDevicePickerPending = false;
+    bool m_pickerRefreshPending = false;
     std::atomic_bool m_isTearingDown = false;
 };

@@ -19,6 +19,11 @@
 
 enum class DeviceStatusKind { None, Ready, Connecting, Reconnecting, Connected, Error };
 
+struct DeviceTrayPresentationSnapshot {
+    std::vector<DeviceConnectionInfo> ConnectedDevices;
+    bool HasBusyOperations = false;
+};
+
 class DeviceManager : public std::enable_shared_from_this<DeviceManager> {
 public:
     /*------------------------------------------------------------------------------------------------------------*/
@@ -71,6 +76,7 @@ public:
     bool IsDeviceBusy(winrt::hstring const& deviceId) const;
     [[nodiscard]] apc::device_picker::DeviceActivitySnapshot GetDevicePickerActivitySnapshot() const;
     [[nodiscard]] apc::device_picker::DeviceInventorySnapshot GetDevicePickerInventorySnapshot() const;
+    [[nodiscard]] DeviceTrayPresentationSnapshot GetTrayPresentationSnapshot() const;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Events ////////////////////////////////////////////////////////////////////////////////////////////*/

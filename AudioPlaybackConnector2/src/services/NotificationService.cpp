@@ -58,21 +58,37 @@ bool NotificationService::Initialize(winrt::hstring const& appName, winrt::Windo
 
         auto notificationManager = AppNotifications::AppNotificationManager::Default();
         auto weak = weak_from_this();
-        auto notificationInvokedToken = notificationManager.NotificationInvoked([weak](auto const&, auto const& args) {
-            if (auto self = weak.lock()) {
-                self->OnNotificationInvoked(args);
-            }
-        });
+        auto notificationInvokedToken =
+            notificationManager.NotificationInvoked([weak](auto const&, auto const& args) noexcept {
+                try {
+                    if (auto self = weak.lock()) {
+                        self->OnNotificationInvoked(args);
+                    }
+                } catch (...) {
+                    util::DebugTraceUnknownException(L"[NotificationService] notification callback failed");
+                }
+            });
         bool registrationAttempted = false;
         auto registrationGuard = wil::scope_exit([&]() noexcept {
-            try {
-                if (notificationInvokedToken.value) {
+            if (notificationInvokedToken.value) {
+                try {
                     notificationManager.NotificationInvoked(notificationInvokedToken);
+                } catch (winrt::hresult_error const& ex) {
+                    util::DebugTraceException(L"[NotificationService] Registration rollback callback revoke failed",
+                                              ex);
+                } catch (...) {
+                    util::DebugTraceUnknownException(
+                        L"[NotificationService] Registration rollback callback revoke failed");
                 }
-                if (registrationAttempted) {
+            }
+            if (registrationAttempted) {
+                try {
                     notificationManager.Unregister();
+                } catch (winrt::hresult_error const& ex) {
+                    util::DebugTraceException(L"[NotificationService] Registration rollback unregister failed", ex);
+                } catch (...) {
+                    util::DebugTraceUnknownException(L"[NotificationService] Registration rollback unregister failed");
                 }
-            } catch (...) {
             }
         });
 
@@ -114,33 +130,48 @@ void NotificationService::Teardown() noexcept {
 }
 
 void NotificationService::TeardownCore(bool clearCallbacks) {
-    std::lock_guard statusLock(m_statusNotificationMutex);
     AppNotifications::AppNotificationManager notificationManager{nullptr};
     winrt::event_token notificationInvokedToken{};
     bool notificationsRegistered = false;
 
     {
-        auto guard = m_lock.lock_exclusive();
-        m_isTearingDown = true;
-        notificationManager = std::exchange(m_notificationManager, nullptr);
-        notificationInvokedToken = std::exchange(m_notificationInvokedToken, {});
-        notificationsRegistered = std::exchange(m_notificationsRegistered, false);
-        if (clearCallbacks) {
-            m_reconnectCallback = nullptr;
-            m_shouldShowNotificationCallback = nullptr;
+        std::lock_guard statusLock(m_statusNotificationMutex);
+        {
+            auto guard = m_lock.lock_exclusive();
+            m_isTearingDown = true;
+            notificationManager = std::exchange(m_notificationManager, nullptr);
+            notificationInvokedToken = std::exchange(m_notificationInvokedToken, {});
+            notificationsRegistered = std::exchange(m_notificationsRegistered, false);
+            if (clearCallbacks) {
+                m_reconnectCallback = nullptr;
+                m_shouldShowNotificationCallback = nullptr;
+            }
+            m_statusNotificationTags.clear();
+            ++m_statusNotificationGeneration;
         }
-        m_statusNotificationTags.clear();
-        ++m_statusNotificationGeneration;
     }
 
-    try {
-        if (notificationManager && notificationInvokedToken.value) {
+    if (notificationManager && notificationInvokedToken.value) {
+        try {
             notificationManager.NotificationInvoked(notificationInvokedToken);
+        } catch (winrt::hresult_error const& ex) {
+            util::DebugTraceException(L"[NotificationService] Failed to revoke notification callback", ex);
+        } catch (std::exception const& ex) {
+            util::DebugTraceException(L"[NotificationService] Failed to revoke notification callback", ex);
+        } catch (...) {
+            util::DebugTraceUnknownException(L"[NotificationService] Failed to revoke notification callback");
         }
-        if (notificationManager && notificationsRegistered) {
+    }
+    if (notificationManager && notificationsRegistered) {
+        try {
             notificationManager.Unregister();
+        } catch (winrt::hresult_error const& ex) {
+            util::DebugTraceException(L"[NotificationService] Failed to unregister notification manager", ex);
+        } catch (std::exception const& ex) {
+            util::DebugTraceException(L"[NotificationService] Failed to unregister notification manager", ex);
+        } catch (...) {
+            util::DebugTraceUnknownException(L"[NotificationService] Failed to unregister notification manager");
         }
-    } catch (...) {
     }
 }
 
@@ -380,8 +411,10 @@ void NotificationService::OnNotificationInvoked(AppNotifications::AppNotificatio
         auto deviceId = ToastArguments::Find(parsedArguments, L"deviceId");
 
         if (action && *action == L"openUpdate") {
-            auto guard = m_lock.lock_shared();
-            if (m_isTearingDown) return;
+            {
+                auto guard = m_lock.lock_shared();
+                if (m_isTearingDown) return;
+            }
             DebugTrace(L"[NotificationService] App notification invoked: action=openUpdate");
             UpdateService::LaunchAppInstallerAsync();
             return;
@@ -398,9 +431,13 @@ void NotificationService::OnNotificationInvoked(AppNotifications::AppNotificatio
                    *deviceId);
 
         if (action && (*action == L"reconnect" || *action == L"retry")) {
-            auto guard = m_lock.lock_shared();
-            if (m_isTearingDown) return;
-            if (m_reconnectCallback) m_reconnectCallback(winrt::hstring(*deviceId));
+            ReconnectRequestedCallback reconnectCallback;
+            {
+                auto guard = m_lock.lock_shared();
+                if (m_isTearingDown) return;
+                reconnectCallback = m_reconnectCallback;
+            }
+            if (reconnectCallback) reconnectCallback(winrt::hstring(*deviceId));
         }
     } catch (winrt::hresult_error const& ex) {
         util::DebugTraceException(L"[NotificationService] App notification activation failed", ex);

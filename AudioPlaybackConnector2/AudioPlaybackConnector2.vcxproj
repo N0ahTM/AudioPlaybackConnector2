@@ -129,14 +129,18 @@
     <ClInclude Include="include\app\ApplicationHost.hpp" />
     <ClInclude Include="include\app\AdaptiveResourcePolicy.hpp" />
     <ClInclude Include="include\app\ControlUiActionGate.hpp" />
+    <ClInclude Include="include\app\DeferredSaveCoordinator.hpp" />
     <ClInclude Include="include\app\ResourcePressureMonitor.hpp" />
     <ClInclude Include="include\app\ResourcePressureState.hpp" />
     <ClInclude Include="include\app\AutoReconnectPlanner.hpp" />
     <ClInclude Include="include\app\DeviceEventRouter.hpp" />
     <ClInclude Include="include\app\PowerTransitionCoordinator.hpp" />
+    <ClInclude Include="include\app\ResumeReconnectAttemptState.hpp" />
     <ClInclude Include="include\app\SettingsWindowPresenter.hpp" />
     <ClInclude Include="include\app\SingleInstanceGuard.hpp" />
     <ClInclude Include="include\app\StartupUpdateCoordinator.hpp" />
+    <ClInclude Include="include\app\UiRefreshCoalescer.hpp" />
+    <ClInclude Include="include\util\RuntimeApartment.hpp" />
     <ClInclude Include="include\control\CommandProtocol.hpp" />
     <ClInclude Include="include\control\CommandPipeSecurity.hpp" />
     <ClInclude Include="include\util\Event.hpp" />
@@ -197,6 +201,7 @@
       <PrecompiledHeader>Create</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="src\app\ApplicationHost.cpp" />
+    <ClCompile Include="src\app\ApplicationHostDeferredSave.cpp" />
     <ClCompile Include="src\app\SettingsWindowPresenter.cpp" />
     <ClCompile Include="src\app\StartupUpdateCoordinator.cpp" />
     <ClCompile Include="src\core\ThemeHelper.cpp" />

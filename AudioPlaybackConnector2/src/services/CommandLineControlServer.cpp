@@ -4,8 +4,7 @@
 
 #include <control/CommandPipeSecurity.hpp>
 #include <services/CommandLineControlServer.hpp>
-
-#include <roapi.h>
+#include <util/RuntimeApartment.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -107,17 +106,6 @@ FILETIME AbsoluteDeadline(std::uint64_t deadline) noexcept {
     return value;
 }
 
-class RoApartment {
-public:
-    RoApartment() noexcept : m_result(RoInitialize(RO_INIT_MULTITHREADED)) {}
-    ~RoApartment() {
-        if (SUCCEEDED(m_result)) RoUninitialize();
-    }
-    [[nodiscard]] bool Ready() const noexcept { return SUCCEEDED(m_result); }
-
-private:
-    HRESULT m_result = E_FAIL;
-};
 } // namespace
 
 struct CommandLineControlServer::RequestRecord {
@@ -692,7 +680,7 @@ void CALLBACK CommandLineControlServer::OnHandlerReady(PTP_CALLBACK_INSTANCE cal
     std::shared_ptr<RequestRecord> acknowledgementRecord;
     if (canRun) {
         try {
-            RoApartment apartment;
+            util::RuntimeApartment apartment;
             if (apartment.Ready()) {
                 g_activeHandlerServer = owner;
                 executionRecord = owner->ExecuteOnce(request,

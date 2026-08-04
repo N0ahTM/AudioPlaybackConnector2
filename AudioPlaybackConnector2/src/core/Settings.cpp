@@ -110,6 +110,8 @@ void BackupUnreadableSettingsFile(std::filesystem::path const& path) noexcept {
 
 void Settings::Load(HINSTANCE hInst) {
     auto persistenceGuard = std::scoped_lock(m_persistenceMutex);
+    m_revision.store(0, std::memory_order_release);
+    m_savedRevision.store(0, std::memory_order_release);
     std::filesystem::path path;
     try {
         path = GetPath(hInst);
@@ -256,8 +258,11 @@ bool Settings::Save(HINSTANCE hInst) {
     auto persistenceGuard = std::scoped_lock(m_persistenceMutex);
     try {
         SettingsData snapshot;
+        std::uint64_t revisionAtSnapshot = 0;
         {
             auto guard = m_lock.lock_shared();
+            revisionAtSnapshot = m_revision.load(std::memory_order_acquire);
+            if (revisionAtSnapshot == m_savedRevision.load(std::memory_order_acquire)) return true;
             snapshot = m_data;
         }
 
@@ -344,6 +349,7 @@ bool Settings::Save(HINSTANCE hInst) {
         THROW_IF_WIN32_BOOL_FALSE(
             MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH));
         cleanupTmp.release(); // rename succeeded — nothing to clean up
+        m_savedRevision.store(revisionAtSnapshot, std::memory_order_release);
         return true;
     } catch (winrt::hresult_error const& ex) {
         DebugTrace(L"[Settings] Save ERROR (hresult): {0}", ex.message());

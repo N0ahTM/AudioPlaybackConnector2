@@ -411,28 +411,17 @@ DeviceManager::ConnectWithIntentAsync(winrt::hstring deviceId,
         }
         if (!IsOperationCurrent(operation)) co_return false;
 
-        // ID-only cache (no DeviceInformation caching anymore to avoid lifetime issues).
-        bool knownDeviceId = false;
-        knownDeviceId = m_discoveryService && m_discoveryService->ContainsDeviceId(deviceIdKey);
-
-        auto devices = co_await m_discoveryService->RefreshAsync();
+        const bool knownDeviceId = m_discoveryService && m_discoveryService->ContainsDeviceId(deviceIdKey);
+        auto targetDevice =
+            co_await winrt::Windows::Devices::Enumeration::DeviceInformation::CreateFromIdAsync(deviceId);
         if (!IsOperationCurrent(operation)) co_return false;
-
-        winrt::Windows::Devices::Enumeration::DeviceInformation targetDevice{nullptr};
-        for (auto const& device : devices) {
-            if (device.Id() == deviceId) {
-                targetDevice = device;
-                break;
-            }
-        }
 
         if (targetDevice) {
             co_return co_await ConnectInternalAsync(targetDevice, true, operation, reportFailures);
         }
 
         if (knownDeviceId) {
-            DebugTrace(L"[DeviceManager] ConnectAsync known ID no longer present after refresh: {0}",
-                       std::wstring(deviceId));
+            DebugTrace(L"[DeviceManager] ConnectAsync known ID could not be resolved: {0}", std::wstring(deviceId));
         }
 
         if (reportFailures && IsOperationCurrent(operation)) {
@@ -867,6 +856,14 @@ apc::device_picker::DeviceActivitySnapshot DeviceManager::GetDevicePickerActivit
 apc::device_picker::DeviceInventorySnapshot DeviceManager::GetDevicePickerInventorySnapshot() const {
     auto discoveryService = m_discoveryService;
     return discoveryService ? discoveryService->GetInventorySnapshot() : apc::device_picker::DeviceInventorySnapshot{};
+}
+
+DeviceTrayPresentationSnapshot DeviceManager::GetTrayPresentationSnapshot() const {
+    auto guard = m_lock.lock_shared();
+    DeviceTrayPresentationSnapshot snapshot;
+    snapshot.ConnectedDevices = m_sessions.ConnectedDevices();
+    snapshot.HasBusyOperations = m_sessions.HasBusyOperations() || m_reconnectController.HasPendingTimers();
+    return snapshot;
 }
 
 void DeviceManager::StartConnectionHeartbeat() {

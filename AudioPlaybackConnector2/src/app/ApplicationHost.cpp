@@ -17,6 +17,7 @@
 #include <ui/TrayIcon.hpp>
 #include <ui/XamlWindowInterop.hpp>
 #include <util/CrashHandler.hpp>
+#include <util/Logger.hpp>
 #include <util/Util.hpp>
 
 #include <cwctype>
@@ -46,6 +47,7 @@ constexpr DWORD c_controlDeviceRefreshTimeoutMs = 2500;
 constexpr DWORD c_controlWaitPollMs = 50;
 constexpr int c_hiddenAnchorCoordinate = -32000;
 constexpr auto c_resourcePressureSnapshotMaximumAge = std::chrono::seconds{75};
+constexpr auto c_mainWindowLoadedTimeout = std::chrono::seconds{15};
 
 enum class ControlWaitResult { Completed, Cancelled, TimedOut, Failed };
 
@@ -248,6 +250,12 @@ void InsertDeviceJson(winrt::Windows::Data::Json::JsonObject& object, ControlDev
     object.Insert(L"privacyRedacted", JsonValue::CreateBooleanValue(redact));
 }
 
+[[noreturn]] void TerminateAfterWindowCloseFailure(std::wstring_view reason) noexcept {
+    DebugTrace(L"[App] FATAL: window teardown failed reason={0}; terminating process", reason);
+    util::FlushInMemoryLogTailToFile(reason, ERROR_PROCESS_ABORTED);
+    ExitProcess(ERROR_PROCESS_ABORTED);
+}
+
 } // namespace
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -267,17 +275,34 @@ ApplicationHost::~ApplicationHost() {
 /*------------------------------------------------------------------------------------------------------------*/
 
 void ApplicationHost::Start() {
+    bool expected = false;
+    if (!m_started.compare_exchange_strong(expected, true)) {
+        DebugTrace(L"[App] Start ignored because initialization already began");
+        return;
+    }
     if (!m_singleInstanceGuard.TryAcquire(L"AudioPlaybackConnector2_SingleInstance_v2")) {
         ExitProcess(0);
         return;
     }
     DebugTrace(L"[App] OnLaunched started");
-    SetupMainWindow();
+    try {
+        SetupMainWindow();
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(L"[App] Main window setup failed", ex);
+        FailStartup(L"main-window-setup-hresult");
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[App] Main window setup failed", ex);
+        FailStartup(L"main-window-setup-standard");
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[App] Main window setup failed");
+        FailStartup(L"main-window-setup-unknown");
+    }
 }
 
-void ApplicationHost::PerformTeardown(bool saveLastConnected) noexcept {
-    if (m_exiting.exchange(true)) return;
+bool ApplicationHost::PerformTeardown(bool saveSettings) noexcept {
+    if (m_exiting.exchange(true)) return m_teardownWindowCloseSucceeded.load();
 
+    StopMainWindowLoadedWatchdog();
     if (m_resourcePressureMonitor) {
         m_resourcePressureMonitor->Stop();
         m_resourcePressureMonitor.reset();
@@ -290,6 +315,15 @@ void ApplicationHost::PerformTeardown(bool saveLastConnected) noexcept {
         m_adaptiveResourceFallbackTimer = nullptr;
     }
     static_cast<void>(m_adaptiveScheduleState.Supersede());
+    m_deviceVisualRefreshCoalescer.Cancel();
+    m_settingsSaveCoordinator.Cancel();
+    CancelDeferredSettingsSaveTimer();
+    CancelNativeDeviceVisualRefreshRetry();
+    {
+        std::scoped_lock lock(m_uiFallbackWorkMutex);
+        m_uiFallbackWork.clear();
+        m_uiFallbackMessagePending = false;
+    }
 
     if (m_mainWindowLoadedToken.value != 0 && m_mainWindow) {
         try {
@@ -301,18 +335,28 @@ void ApplicationHost::PerformTeardown(bool saveLastConnected) noexcept {
         m_mainWindowLoadedToken = {};
     }
     m_powerTransitionCoordinator.Cancel();
+    auto const settingsWindowClosed = m_settingsWindowPresenter.Close(false);
+    m_teardownWindowCloseSucceeded.store(settingsWindowClosed);
     if (m_updateCoordinator) {
         m_updateCoordinator->Shutdown();
     }
     m_commandLineControlServer.Stop();
-    m_settingsWindowPresenter.Close();
     TeardownDeviceEvents();
     if (m_hwnd) {
         try {
             KillTimer(m_hwnd, c_timerAnimation);
             KillTimer(m_hwnd, c_timerTransientTrayError);
             KillTimer(m_hwnd, c_timerAdaptiveResources);
-            RemoveWindowSubclass(m_hwnd, SubclassProc, 1);
+            KillTimer(m_hwnd, c_timerDeviceVisualRefreshRetry);
+            KillTimer(m_hwnd, c_timerDeferredSettingsSaveRetry);
+            m_connectingAnimationTimerActive = false;
+            if (m_windowSubclassInstalled) {
+                if (RemoveWindowSubclass(m_hwnd, SubclassProc, 1)) {
+                    m_windowSubclassInstalled = false;
+                } else {
+                    DebugTrace(L"[App] ERROR: failed to remove MainWindow subclass: {0}", GetLastError());
+                }
+            }
         } catch (...) {
         }
     }
@@ -322,8 +366,8 @@ void ApplicationHost::PerformTeardown(bool saveLastConnected) noexcept {
     if (m_notificationService) {
         m_notificationService->Teardown();
     }
-    if (saveLastConnected) {
-        SaveLastConnectedDevices(/*saveImmediately=*/true);
+    if (saveSettings) {
+        static_cast<void>(FlushSettingsNow(3));
     }
     if (m_deviceManager) {
         m_deviceManager->ShutdownForProcessExit();
@@ -336,10 +380,11 @@ void ApplicationHost::PerformTeardown(bool saveLastConnected) noexcept {
         Gdiplus::GdiplusShutdown(m_gdiplusToken);
         m_gdiplusToken = 0;
     }
+    return settingsWindowClosed;
 }
 
 void ApplicationHost::Shutdown() noexcept {
-    PerformTeardown(/*saveLastConnected=*/false);
+    static_cast<void>(PerformTeardown(/*saveSettings=*/true));
 }
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -361,12 +406,14 @@ void ApplicationHost::SetupMainWindow() {
     auto content = m_mainWindow.Content();
     if (!content) {
         DebugTrace(L"[App] ERROR: MainWindow.Content() is null!");
+        FailStartup(L"main-window-content-null");
         return;
     }
 
-    auto root = content.as<Controls::Grid>();
+    auto root = content.try_as<Controls::Grid>();
     if (!root) {
         DebugTrace(L"[App] ERROR: MainWindow.Content() is not a Grid!");
+        FailStartup(L"main-window-content-type");
         return;
     }
 
@@ -378,30 +425,66 @@ void ApplicationHost::SetupMainWindow() {
     // Loaded fires after the element is added to the visual tree and XamlRoot
     // has been assigned, which is required for MenuFlyout anchoring.
     auto weak = weak_from_this();
-    m_mainWindowLoadedToken = root.Loaded([weak, root](auto&, auto&) {
-        if (auto self = weak.lock()) {
-            if (self->m_mainWindowLoadedToken.value != 0) {
-                root.Loaded(self->m_mainWindowLoadedToken);
-                self->m_mainWindowLoadedToken = {};
+    m_mainWindowLoadedToken = root.Loaded([weak, root](auto&, auto&) noexcept {
+        try {
+            if (auto self = weak.lock()) {
+                if (self->m_mainWindowLoadedToken.value != 0) {
+                    root.Loaded(self->m_mainWindowLoadedToken);
+                    self->m_mainWindowLoadedToken = {};
+                }
+                self->OnMainWindowLoaded(root);
             }
-            self->OnMainWindowLoaded(root);
+        } catch (...) {
+            if (auto self = weak.lock()) self->FailStartup(L"main-window-loaded-callback");
         }
     });
 
+    StartMainWindowLoadedWatchdog();
     m_mainWindow.Activate();
     DebugTrace(L"[App] MainWindow.Activate() called");
 }
 
-void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) {
+void ApplicationHost::StartMainWindowLoadedWatchdog() {
+    if (!m_dispatcherQueue || m_hwnd || m_exiting.load()) return;
+
+    auto timer = m_dispatcherQueue.CreateTimer();
+    timer.Interval(c_mainWindowLoadedTimeout);
+    timer.IsRepeating(false);
+    auto weak = weak_from_this();
+    timer.Tick([weak](auto const&, auto const&) noexcept {
+        try {
+            if (auto self = weak.lock(); self && !self->m_exiting.load() && !self->m_hwnd) {
+                self->FailStartup(L"main-window-loaded-timeout");
+            }
+        } catch (...) {
+            if (auto self = weak.lock()) self->FailStartup(L"main-window-loaded-watchdog");
+        }
+    });
+    m_mainWindowLoadedWatchdog = timer;
+    timer.Start();
+}
+
+void ApplicationHost::StopMainWindowLoadedWatchdog() noexcept {
+    auto timer = std::exchange(m_mainWindowLoadedWatchdog, nullptr);
+    if (!timer) return;
+    try {
+        timer.Stop();
+    } catch (...) {
+    }
+}
+
+void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept try {
     if (m_hwnd) {
         DebugTrace(L"[App] Grid.Loaded fired again, ignoring (already initialized)");
         return;
     }
+    StopMainWindowLoadedWatchdog();
     DebugTrace(L"[App] Grid.Loaded - beginning initialization");
 
     m_hwnd = util::GetWindowHandle(m_mainWindow);
     if (!m_hwnd) {
         DebugTrace(L"[App] ERROR: GetWindowHandle returned null!");
+        FailStartup(L"main-window-hwnd-null");
         return;
     }
     DebugTrace(L"[App] MainWindow HWND = 0x{0:X}", reinterpret_cast<uintptr_t>(m_hwnd));
@@ -410,7 +493,12 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) {
     root.Opacity(1);
     DebugTrace(L"[App] MainWindow hidden anchor configured");
 
-    SetWindowSubclass(m_hwnd, SubclassProc, 1, reinterpret_cast<DWORD_PTR>(this));
+    if (!SetWindowSubclass(m_hwnd, SubclassProc, 1, reinterpret_cast<DWORD_PTR>(this))) {
+        DebugTrace(L"[App] ERROR: SetWindowSubclass failed: {0}", GetLastError());
+        FailStartup(L"main-window-subclass");
+        return;
+    }
+    m_windowSubclassInstalled = true;
     DebugTrace(L"[App] Window subclass installed");
 
     m_settings = std::make_shared<::Settings>();
@@ -430,16 +518,10 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) {
     Gdiplus::GdiplusStartupInput gdiplusStartupInput;
     if (Gdiplus::GdiplusStartup(&m_gdiplusToken, &gdiplusStartupInput, nullptr) != Gdiplus::Ok) {
         DebugTrace(L"[App] ERROR: GdiplusStartup failed");
-        ExitApplication();
+        FailStartup(L"gdiplus-startup");
         return;
     }
     DebugTrace(L"[App] GDI+ initialized");
-    auto gdiplusGuard = wil::scope_exit([this]() {
-        if (m_gdiplusToken) {
-            Gdiplus::GdiplusShutdown(m_gdiplusToken);
-            m_gdiplusToken = 0;
-        }
-    });
 
     InitializeDeviceManager();
     InitializeTray();
@@ -471,15 +553,28 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) {
         auto locked = m_settings->LockSharedData();
         m_deviceManager->SetIncomingConnectionsEnabled(locked->AllowIncomingConnections);
     }
-    RefreshTrayVisualState(false, L"initialize-tray");
-
-    gdiplusGuard.release();
+    ScheduleDeviceVisualRefresh(false);
 
     s_wmTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
-    m_trayController->UpdateTooltipFromConnections();
     CheckForUpdatesOnStartupAsync();
     util::crash::CheckAndPromptCrashReports();
     DebugTrace(L"[App] Initialization complete");
+} catch (winrt::hresult_error const& ex) {
+    util::DebugTraceException(L"[App] Initialization after MainWindow.Loaded failed", ex);
+    FailStartup(L"main-window-loaded-hresult");
+} catch (std::exception const& ex) {
+    util::DebugTraceException(L"[App] Initialization after MainWindow.Loaded failed", ex);
+    FailStartup(L"main-window-loaded-standard");
+} catch (...) {
+    util::DebugTraceUnknownException(L"[App] Initialization after MainWindow.Loaded failed");
+    FailStartup(L"main-window-loaded-unknown");
+}
+
+void ApplicationHost::FailStartup(std::wstring_view stage) noexcept {
+    DebugTrace(L"[App] Startup aborted at stage={0}", stage);
+    auto const settingsWindowClosed = PerformTeardown(/*saveSettings=*/false);
+    auto const mainWindowClosed = CloseMainWindow(L"startup-failure");
+    if (!settingsWindowClosed || !mainWindowClosed) TerminateAfterWindowCloseFailure(L"startup-window-close-failure");
 }
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -496,13 +591,8 @@ void ApplicationHost::InitializeTray() {
     if (m_settingsController) {
         m_settingsController->SetPresentationChangedCallback([weak]() {
             auto self = weak.lock();
-            if (!self || self->m_exiting.load() || !self->m_dispatcherQueue) return;
-            (void)self->m_dispatcherQueue.TryEnqueue([weak]() {
-                if (auto self = weak.lock(); self && !self->m_exiting.load() && self->m_trayController) {
-                    self->m_trayController->UpdateTooltipFromConnections();
-                    self->m_trayController->RefreshDevicePickerState(false);
-                }
-            });
+            if (!self || self->m_exiting.load()) return;
+            self->ScheduleDeviceVisualRefresh(false);
         });
     }
     m_trayController->SetCallbacks(
@@ -547,12 +637,12 @@ void ApplicationHost::InitializeNotifications() {
     });
     m_notificationService->SetReconnectCallback([weak](winrt::hstring deviceId) {
         if (auto self = weak.lock()) {
-            self->RunOnUIThread([weak, deviceId = std::move(deviceId)]() mutable {
+            static_cast<void>(self->RunOnUIThread([weak, deviceId = std::move(deviceId)]() mutable {
                 if (auto self = weak.lock()) {
                     if (self->m_exiting.load() || !self->m_deviceManager) return;
                     self->m_deviceManager->ReconnectDetached(deviceId);
                 }
-            });
+            }));
         }
     });
     const auto notificationsAvailable = m_notificationService->Initialize(
@@ -632,7 +722,7 @@ void ApplicationHost::InitializeAdaptiveResources() noexcept {
 
 void ApplicationHost::HandleResourcePressureSnapshot(ResourcePressureSnapshot snapshot) {
     auto weak = weak_from_this();
-    RunOnUIThread([weak, snapshot = std::move(snapshot)]() mutable {
+    static_cast<void>(RunOnUIThread([weak, snapshot = std::move(snapshot)]() mutable {
         auto self = weak.lock();
         if (!self || self->m_exiting.load() || snapshot.Sequence <= self->m_lastResourcePressureSequence) return;
 
@@ -640,7 +730,7 @@ void ApplicationHost::HandleResourcePressureSnapshot(ResourcePressureSnapshot sn
         self->m_resourcePressureValues = snapshot.Values;
         self->m_lastResourcePressureObservedAt = snapshot.ObservedAt;
         self->EvaluateAdaptiveResources(false, L"resource-pressure-change");
-    });
+    }));
 }
 
 void ApplicationHost::EvaluateAdaptiveResources(bool userInteraction, std::wstring_view reason) noexcept {
@@ -830,7 +920,7 @@ void ApplicationHost::ToggleLastConnectedDeviceFromTray() {
         DebugTrace(L"[App] Tray double-click: connecting {0}", *targetId);
         m_deviceManager->ConnectDetached(id);
     }
-    RefreshTrayVisualState(false, L"tray-double-click-finished");
+    ScheduleDeviceVisualRefresh(false);
 }
 
 void ApplicationHost::TryAutoReconnect() {
@@ -849,32 +939,30 @@ void ApplicationHost::TryAutoReconnect() {
     }
 }
 
-void ApplicationHost::SaveLastConnectedDevices(bool saveImmediately) {
-    try {
-        if (!m_settings || !m_deviceManager) return;
-
-        auto connected = m_deviceManager->GetConnectedDevices();
-        {
-            auto locked = m_settings->LockExclusiveData();
-            locked->LastConnectedIds.clear();
-            for (const auto& c : connected) {
-                if (!c.Id.empty()) {
-                    locked->LastConnectedIds.push_back(c.Id);
-                }
+bool ApplicationHost::FlushSettingsNow(unsigned int maximumAttempts) noexcept {
+    if (!m_settings) return true;
+    auto const saveToken = m_settingsSaveCoordinator.BeginExternalSave();
+    maximumAttempts = std::max(maximumAttempts, 1U);
+    for (unsigned int attempt = 1; attempt <= maximumAttempts; ++attempt) {
+        try {
+            if (m_settings->Save(GetModuleHandleW(nullptr))) {
+                auto const clean = !m_settings->HasUnsavedChanges();
+                static_cast<void>(m_settingsSaveCoordinator.CompleteExternalSave(saveToken, clean));
+                if (clean) return true;
             }
+        } catch (winrt::hresult_error const& ex) {
+            util::DebugTraceException(L"[App] Synchronous settings flush ERROR", ex);
+        } catch (std::exception const& ex) {
+            util::DebugTraceException(L"[App] Synchronous settings flush ERROR", ex);
+        } catch (...) {
+            util::DebugTraceUnknownException(L"[App] Synchronous settings flush ERROR");
         }
-        if (saveImmediately) {
-            m_settings->Save(GetModuleHandleW(nullptr));
-        } else {
-            ScheduleDeferredSettingsSave();
+        DebugTrace(L"[App] Synchronous settings flush attempt {0}/{1} failed", attempt, maximumAttempts);
+        if (attempt < maximumAttempts) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50U << (attempt - 1U)));
         }
-    } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[App] SaveLastConnectedDevices ERROR", ex);
-    } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[App] SaveLastConnectedDevices ERROR", ex);
-    } catch (...) {
-        util::DebugTraceUnknownException(L"[App] SaveLastConnectedDevices ERROR");
     }
+    return false;
 }
 
 void ApplicationHost::HandlePowerSuspend() {
@@ -882,7 +970,7 @@ void ApplicationHost::HandlePowerSuspend() {
     m_powerTransitionCoordinator.HandleSuspend(
         [weak]() {
             if (auto self = weak.lock()) {
-                self->SaveLastConnectedDevices(/*saveImmediately=*/true);
+                static_cast<void>(self->FlushSettingsNow());
             }
         },
         m_deviceManager);
@@ -890,15 +978,41 @@ void ApplicationHost::HandlePowerSuspend() {
 
 void ApplicationHost::HandlePowerResume() {
     auto weak = weak_from_this();
-    m_powerTransitionCoordinator.HandleResume(m_deviceManager, [weak]() {
-        if (auto self = weak.lock()) {
-            self->RunOnUIThread([weak]() {
-                if (auto self = weak.lock()) {
-                    self->TryAutoReconnect();
+    m_powerTransitionCoordinator.HandleResume(
+        m_deviceManager,
+        [weak](std::vector<std::wstring> deviceIds,
+               std::uint64_t generation,
+               PowerTransitionCoordinator::ResumeReconnectCompleted completed) {
+            auto completionUsed = std::make_shared<std::atomic_bool>(false);
+            auto finish = [completed = std::move(completed),
+                           completionUsed](std::vector<std::wstring> attemptedIds) mutable noexcept {
+                if (!completionUsed->exchange(true) && completed) completed(std::move(attemptedIds));
+            };
+
+            auto self = weak.lock();
+            if (!self) {
+                finish({});
+                return;
+            }
+            auto accepted = self->RunOnUIThread([weak, generation, deviceIds = std::move(deviceIds), finish]() mutable {
+                std::vector<std::wstring> attemptedIds;
+                auto completionGuard = wil::scope_exit([&]() noexcept { finish(std::move(attemptedIds)); });
+                auto self = weak.lock();
+                if (!self || !self->m_deviceManager ||
+                    !self->m_powerTransitionCoordinator.IsResumeReconnectGenerationCurrent(generation)) {
+                    return;
+                }
+                for (auto const& deviceId : deviceIds) {
+                    if (deviceId.empty() || self->m_deviceManager->IsDeviceConnected(winrt::hstring(deviceId)) ||
+                        self->m_deviceManager->IsDeviceBusy(winrt::hstring(deviceId))) {
+                        continue;
+                    }
+                    self->m_deviceManager->ConnectDetached(winrt::hstring(deviceId));
+                    attemptedIds.push_back(deviceId);
                 }
             });
-        }
-    });
+            if (!accepted) finish({});
+        });
 }
 
 winrt::fire_and_forget ApplicationHost::CheckForUpdatesOnStartupAsync() {
@@ -919,20 +1033,105 @@ winrt::fire_and_forget ApplicationHost::CheckForUpdatesOnStartupAsync() {
     }
 }
 
-void ApplicationHost::RunOnUIThread(std::function<void()> work) {
-    if (m_exiting.load()) return;
-    if (!m_dispatcherQueue) return;
-    if (m_dispatcherQueue.HasThreadAccess()) {
-        if (m_exiting.load()) return;
-        work();
-    } else {
-        auto weak = weak_from_this();
-        (void)m_dispatcherQueue.TryEnqueue(winrt::Microsoft::UI::Dispatching::DispatcherQueuePriority::Normal,
-                                           [weak, work = std::move(work)]() {
-                                               auto self = weak.lock();
-                                               if (!self || self->m_exiting.load()) return;
-                                               work();
-                                           });
+bool ApplicationHost::RunOnUIThread(std::function<void()> work) noexcept {
+    if (m_exiting.load() || !work) return false;
+
+    bool hasThreadAccess = false;
+    try {
+        hasThreadAccess = m_dispatcherQueue && m_dispatcherQueue.HasThreadAccess();
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(L"[App] Failed to query DispatcherQueue thread access", ex);
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[App] Failed to query DispatcherQueue thread access", ex);
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[App] Failed to query DispatcherQueue thread access");
+    }
+
+    if (hasThreadAccess) {
+        if (m_exiting.load()) return false;
+        try {
+            work();
+            return true;
+        } catch (winrt::hresult_error const& ex) {
+            util::DebugTraceException(L"[App] Inline UI work failed", ex);
+        } catch (std::exception const& ex) {
+            util::DebugTraceException(L"[App] Inline UI work failed", ex);
+        } catch (...) {
+            util::DebugTraceUnknownException(L"[App] Inline UI work failed");
+        }
+        return false;
+    }
+
+    try {
+        if (m_dispatcherQueue) {
+            auto weak = weak_from_this();
+            auto dispatcherWork = work;
+            if (m_dispatcherQueue.TryEnqueue(winrt::Microsoft::UI::Dispatching::DispatcherQueuePriority::Normal,
+                                             [weak, work = std::move(dispatcherWork)]() mutable noexcept {
+                                                 try {
+                                                     if (auto self = weak.lock(); self && !self->m_exiting.load()) {
+                                                         work();
+                                                     }
+                                                 } catch (winrt::hresult_error const& ex) {
+                                                     util::DebugTraceException(L"[App] UI-dispatched work failed", ex);
+                                                 } catch (std::exception const& ex) {
+                                                     util::DebugTraceException(L"[App] UI-dispatched work failed", ex);
+                                                 } catch (...) {
+                                                     util::DebugTraceUnknownException(
+                                                         L"[App] UI-dispatched work failed");
+                                                 }
+                                             })) {
+                return true;
+            }
+        }
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(L"[App] Dispatcher queue rejected UI work", ex);
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[App] Dispatcher queue rejected UI work", ex);
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[App] Dispatcher queue rejected UI work");
+    }
+
+    return QueueUiFallbackWork(std::move(work));
+}
+
+bool ApplicationHost::QueueUiFallbackWork(std::function<void()> work) noexcept {
+    if (m_exiting.load() || !work) return false;
+
+    try {
+        std::scoped_lock lock(m_uiFallbackWorkMutex);
+        if (m_exiting.load()) return false;
+        m_uiFallbackWork.push_back(std::move(work));
+        if (m_uiFallbackMessagePending) return true;
+        if (m_hwnd && IsWindow(m_hwnd) && PostMessageW(m_hwnd, c_messageDrainUiFallbackWork, 0, 0)) {
+            m_uiFallbackMessagePending = true;
+            return true;
+        }
+        m_uiFallbackWork.clear();
+    } catch (...) {
+    }
+    DebugTrace(L"[App] ERROR: both DispatcherQueue and Win32 fallback rejected UI work");
+    return false;
+}
+
+void ApplicationHost::DrainUiFallbackWork() noexcept {
+    std::deque<std::function<void()>> workItems;
+    {
+        std::scoped_lock lock(m_uiFallbackWorkMutex);
+        workItems.swap(m_uiFallbackWork);
+        m_uiFallbackMessagePending = false;
+    }
+
+    for (auto& work : workItems) {
+        try {
+            if (!m_exiting.load() && work) work();
+        } catch (winrt::hresult_error const& ex) {
+            util::DebugTraceException(L"[App] Win32-fallback UI work failed", ex);
+        } catch (std::exception const& ex) {
+            util::DebugTraceException(L"[App] Win32-fallback UI work failed", ex);
+        } catch (...) {
+            util::DebugTraceUnknownException(L"[App] Win32-fallback UI work failed");
+        }
     }
 }
 
@@ -990,7 +1189,7 @@ ApplicationHost::RunControlUiAction(std::function<bool()> work, std::stop_token 
     }
 }
 
-void ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstring_view reason) {
+bool ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstring_view reason) {
     if (m_exiting.load() || !m_trayController || !m_deviceManager) {
         DebugTrace(L"[App] RefreshTrayVisualState skipped reason={0} exiting={1} hasTrayController={2} "
                    L"hasDeviceManager={3}",
@@ -998,42 +1197,58 @@ void ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstri
                    m_exiting.load(),
                    m_trayController != nullptr,
                    m_deviceManager != nullptr);
-        return;
+        return true;
     }
     if (!m_hwnd || !IsWindow(m_hwnd)) {
         DebugTrace(L"[App] RefreshTrayVisualState skipped reason={0} invalidHwnd hwnd=0x{1:X}",
                    reason,
                    reinterpret_cast<uintptr_t>(m_hwnd));
-        return;
+        return true;
     }
 
-    const bool hasBusyOperations = m_deviceManager->HasBusyOperations();
-    const bool hasConnections = m_deviceManager->HasConnections();
+    auto const presentation = m_deviceManager->GetTrayPresentationSnapshot();
+    const bool hasBusyOperations = presentation.HasBusyOperations;
+    const bool hasConnections = !presentation.ConnectedDevices.empty();
     const auto now = std::chrono::steady_clock::now();
     if (forceErrorWhenIdle) {
         m_trayErrorUntil = now + std::chrono::milliseconds(c_transientTrayErrorMs);
     }
     if (hasConnections) {
         m_trayErrorUntil = {};
+        m_transientTrayErrorTooltip.clear();
     }
     const bool showTransientError = !hasConnections && !hasBusyOperations && now < m_trayErrorUntil;
 
     TrayIconState desiredState = TrayIconState::Idle;
+    bool timersReady = true;
     if (hasConnections) {
         desiredState = TrayIconState::Connected;
         KillTimer(m_hwnd, c_timerAnimation);
+        m_connectingAnimationTimerActive = false;
         KillTimer(m_hwnd, c_timerTransientTrayError);
     } else if (hasBusyOperations) {
         desiredState = TrayIconState::Connecting;
-        SetTimer(m_hwnd, c_timerAnimation, 75, nullptr);
+        if (!m_connectingAnimationTimerActive) {
+            if (SetTimer(m_hwnd, c_timerAnimation, 75, nullptr)) {
+                m_connectingAnimationTimerActive = true;
+            } else {
+                timersReady = false;
+                DebugTrace(L"[App] Connecting animation timer unavailable: {0}", GetLastError());
+            }
+        }
     } else if (showTransientError) {
         desiredState = TrayIconState::Error;
         KillTimer(m_hwnd, c_timerAnimation);
+        m_connectingAnimationTimerActive = false;
         const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(m_trayErrorUntil - now);
         const auto delay = static_cast<UINT>(std::clamp<std::int64_t>(remaining.count(), 1, UINT_MAX));
-        SetTimer(m_hwnd, c_timerTransientTrayError, delay, nullptr);
+        if (!SetTimer(m_hwnd, c_timerTransientTrayError, delay, nullptr)) {
+            timersReady = false;
+            DebugTrace(L"[App] Transient tray error timer unavailable: {0}", GetLastError());
+        }
     } else {
         KillTimer(m_hwnd, c_timerAnimation);
+        m_connectingAnimationTimerActive = false;
         KillTimer(m_hwnd, c_timerTransientTrayError);
         m_trayErrorUntil = {};
     }
@@ -1048,10 +1263,119 @@ void ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstri
                TrayIconStateToString(desiredState));
     m_trayController->SetState(desiredState);
 
-    if (!forceErrorWhenIdle) {
-        m_trayController->UpdateTooltipFromConnections();
+    if (showTransientError && !m_transientTrayErrorTooltip.empty()) {
+        m_trayController->UpdateTooltip(m_transientTrayErrorTooltip);
+    } else {
+        m_trayController->UpdateTooltipFromConnections(presentation.ConnectedDevices);
     }
-    m_trayController->RefreshDevicePickerState(!showTransientError);
+    auto const pickerUpdated = m_trayController->RefreshDevicePickerState();
+    auto const shellUpdated = m_trayController->ApplyPendingTrayUpdates();
+    if (!shellUpdated && m_connectingAnimationTimerActive) {
+        KillTimer(m_hwnd, c_timerAnimation);
+        m_connectingAnimationTimerActive = false;
+    }
+    return pickerUpdated && shellUpdated && timersReady;
+}
+
+void ApplicationHost::ScheduleDeviceVisualRefresh(bool forceErrorWhenIdle, bool inventoryChanged, bool refreshTray) {
+    auto flags = (refreshTray || forceErrorWhenIdle ? c_visualRefreshRequested : 0U) |
+                 (forceErrorWhenIdle ? c_visualRefreshForceError : 0U) |
+                 (inventoryChanged ? c_visualRefreshInventoryChanged : 0U);
+    if (flags == 0) return;
+    if (m_deviceVisualRefreshCoalescer.Request(flags)) {
+        QueueDeviceVisualRefreshDrain();
+    }
+}
+
+void ApplicationHost::QueueDeviceVisualRefreshDrain() noexcept {
+    constexpr unsigned int c_maxImmediateScheduleAttempts = 3;
+    for (unsigned int attempt = 0; attempt < c_maxImmediateScheduleAttempts; ++attempt) {
+        if (m_exiting.load()) {
+            m_deviceVisualRefreshCoalescer.Cancel();
+            return;
+        }
+
+        if (m_dispatcherQueue) {
+            try {
+                auto weak = weak_from_this();
+                if (m_dispatcherQueue.TryEnqueue([weak]() {
+                        if (auto self = weak.lock()) self->DrainDeviceVisualRefresh();
+                    })) {
+                    return;
+                }
+                DebugTrace(L"[App] Dispatcher rejected coalesced device visual refresh");
+            } catch (winrt::hresult_error const& ex) {
+                util::DebugTraceException(L"[App] Failed to enqueue coalesced device visual refresh", ex);
+            } catch (std::exception const& ex) {
+                util::DebugTraceException(L"[App] Failed to enqueue coalesced device visual refresh", ex);
+            } catch (...) {
+                util::DebugTraceUnknownException(L"[App] Failed to enqueue coalesced device visual refresh");
+            }
+        }
+
+        if (m_hwnd && IsWindow(m_hwnd)) {
+            if (PostMessageW(m_hwnd, c_messageDrainDeviceVisualRefresh, 0, 0)) return;
+            if (SetTimer(m_hwnd, c_timerDeviceVisualRefreshRetry, 50, nullptr)) return;
+        }
+
+        if (ScheduleNativeDeviceVisualRefreshRetry(std::chrono::milliseconds(100))) return;
+
+        if (!m_deviceVisualRefreshCoalescer.ScheduleFailed()) return;
+    }
+
+    DebugTrace(L"[App] ERROR: no UI scheduling path accepted the device visual refresh");
+    m_deviceVisualRefreshCoalescer.AbandonSchedule();
+}
+
+void ApplicationHost::DrainDeviceVisualRefresh() noexcept {
+    auto flags = m_deviceVisualRefreshCoalescer.BeginDrain();
+    bool succeeded = false;
+    try {
+        if (!m_exiting.load()) {
+            succeeded = true;
+            if ((flags & c_visualRefreshInventoryChanged) != 0 && m_trayController) {
+                succeeded = m_trayController->InvalidateDevicePickerInventory();
+            }
+            if (succeeded && (flags & c_visualRefreshRequested) != 0) {
+                succeeded =
+                    RefreshTrayVisualState((flags & c_visualRefreshForceError) != 0, L"coalesced-device-events");
+            }
+        }
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(L"[App] Coalesced device visual refresh failed", ex);
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[App] Coalesced device visual refresh failed", ex);
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[App] Coalesced device visual refresh failed");
+    }
+
+    if (m_exiting.load()) {
+        m_deviceVisualRefreshCoalescer.Cancel();
+        return;
+    }
+
+    if (!succeeded) {
+        static_cast<void>(m_deviceVisualRefreshCoalescer.Request(flags & ~c_visualRefreshForceError));
+    }
+
+    if (!m_deviceVisualRefreshCoalescer.CompleteDrain()) {
+        if (succeeded) m_deviceVisualRefreshConsecutiveFailures = 0;
+        return;
+    }
+
+    if (succeeded) {
+        m_deviceVisualRefreshConsecutiveFailures = 0;
+        QueueDeviceVisualRefreshDrain();
+        return;
+    }
+
+    m_deviceVisualRefreshConsecutiveFailures = std::min(m_deviceVisualRefreshConsecutiveFailures + 1U, 6U);
+    auto const delay = std::min<UINT>(100U << (m_deviceVisualRefreshConsecutiveFailures - 1U), 5000U);
+    if (m_hwnd && IsWindow(m_hwnd) && SetTimer(m_hwnd, c_timerDeviceVisualRefreshRetry, delay, nullptr)) {
+        DebugTrace(L"[App] Device visual refresh retry scheduled in {0} ms", delay);
+    } else {
+        QueueDeviceVisualRefreshDrain();
+    }
 }
 
 void ApplicationHost::SetupDeviceEvents() {
@@ -1078,21 +1402,28 @@ void ApplicationHost::SetupDeviceEvents() {
         if (!self) return;
         if (self->m_exiting.load() || !self->m_trayController || !self->m_deviceManager) return;
         if (!self->m_hwnd || !IsWindow(self->m_hwnd)) return;
-        self->RefreshTrayVisualState(statusKind == DeviceStatusKind::Error, L"device-status-event");
+        self->ScheduleDeviceVisualRefresh(statusKind == DeviceStatusKind::Error);
     };
     callbacks.DeviceActivityChanged = [weak]() {
         auto self = weak.lock();
         if (!self || self->m_exiting.load() || !self->m_trayController || !self->m_deviceManager) return;
         if (!self->m_hwnd || !IsWindow(self->m_hwnd)) return;
-        self->RefreshTrayVisualState(false, L"device-activity-event");
+        self->ScheduleDeviceVisualRefresh(false);
+    };
+    callbacks.DeviceInventoryChanged = [weak]() {
+        auto self = weak.lock();
+        if (!self || self->m_exiting.load() || !self->m_trayController || !self->m_deviceManager) return;
+        if (!self->m_hwnd || !IsWindow(self->m_hwnd)) return;
+        self->ScheduleDeviceVisualRefresh(false, true, false);
     };
 
     m_deviceEventRouter.Attach(
         m_deviceManager,
         [weak](std::function<void()> work) {
             if (auto self = weak.lock()) {
-                self->RunOnUIThread(std::move(work));
+                return self->RunOnUIThread(std::move(work));
             }
+            return false;
         },
         std::move(callbacks));
 }
@@ -1107,21 +1438,31 @@ bool ApplicationHost::ShowSettingsWindow() {
     auto weak = weak_from_this();
     return m_settingsWindowPresenter.Show(m_settingsController, m_trayController, m_updateCoordinator, [weak]() {
         auto self = weak.lock();
-        if (!self || !self->m_settings) return;
-        self->m_settings->Save(GetModuleHandleW(nullptr));
+        if (self) static_cast<void>(self->FlushSettingsNow());
     });
 }
 
-void ApplicationHost::ExitApplication() {
+void ApplicationHost::ExitApplication() noexcept {
     DebugTrace(L"[App] ExitApplication() started");
-    PerformTeardown(/*saveLastConnected=*/true);
-
-    m_settingsWindowPresenter.Close();
-
-    if (m_mainWindow) {
-        m_mainWindow.Close();
-    }
+    auto const settingsWindowClosed = PerformTeardown(/*saveSettings=*/true);
+    auto const mainWindowClosed = CloseMainWindow(L"application-exit");
+    if (!settingsWindowClosed || !mainWindowClosed) TerminateAfterWindowCloseFailure(L"exit-window-close-failure");
     DebugTrace(L"[App] ExitApplication() complete");
+}
+
+bool ApplicationHost::CloseMainWindow(std::wstring_view reason) noexcept {
+    if (!m_mainWindow) return true;
+    try {
+        m_mainWindow.Close();
+        return true;
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(std::wstring(L"[App] Failed to close MainWindow: ") + std::wstring(reason), ex);
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(std::wstring(L"[App] Failed to close MainWindow: ") + std::wstring(reason), ex);
+    } catch (...) {
+        util::DebugTraceUnknownException(std::wstring(L"[App] Failed to close MainWindow: ") + std::wstring(reason));
+    }
+    return false;
 }
 
 apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Request const& request,
@@ -1791,70 +2132,56 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
 void ApplicationHost::ScheduleDeferredSettingsSave() {
     if (m_exiting.load() || !m_settings) return;
 
-    bool expected = false;
-    if (!m_settingsSavePending.compare_exchange_strong(expected, true)) return;
+    auto request = m_settingsSaveCoordinator.MarkDirty();
+    if (!request.WorkerToStart) return;
 
-    auto weak = weak_from_this();
-    auto module = GetModuleHandleW(nullptr);
-    [](std::weak_ptr<ApplicationHost> weak, HINSTANCE module) -> winrt::fire_and_forget {
-        auto pendingGuard = wil::scope_exit([weak]() noexcept {
-            if (auto self = weak.lock()) self->m_settingsSavePending = false;
-        });
-        try {
-            co_await winrt::resume_after(std::chrono::milliseconds(300));
-            auto self = weak.lock();
-            if (!self) co_return;
-            if (self->m_exiting.load() || !self->m_settings) co_return;
-            self->m_settings->Save(module);
-        } catch (winrt::hresult_error const& ex) {
-            util::DebugTraceException(L"[App] Deferred settings save ERROR", ex);
-        } catch (std::exception const& ex) {
-            util::DebugTraceException(L"[App] Deferred settings save ERROR", ex);
-        } catch (...) {
-            util::DebugTraceUnknownException(L"[App] Deferred settings save ERROR");
-        }
-    }(std::move(weak), module);
+    if (!ScheduleDeferredSettingsSaveTimer(*request.WorkerToStart, std::chrono::milliseconds(300), true)) {
+        DebugTrace(L"[App] Deferred settings timer unavailable; saving synchronously");
+        RunDeferredSettingsSaveAttempt(*request.WorkerToStart);
+    }
 }
 
 void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
-    if (m_exiting.load() || !m_settings || !m_deviceManager || !m_trayController) return;
+    if (m_exiting.load() || !m_deviceManager) return;
     DebugTrace(L"[App] OnDeviceConnected: {0}", std::wstring(id));
 
     if (!m_deviceManager->IsDeviceConnected(id)) {
         return;
     }
+    m_powerTransitionCoordinator.NotifyDeviceConnected(std::wstring_view(id));
+    if (!m_settings || !m_trayController) return;
 
     winrt::hstring rawDeviceName = id;
     if (auto displayName = m_deviceManager->GetConnectionDisplayName(id)) {
         rawDeviceName = winrt::hstring(*displayName);
     }
 
+    auto const idString = std::wstring(id);
+    auto const deviceName = std::wstring(rawDeviceName);
     bool addedNew = false;
-    bool updatedLastConnected = false;
+    bool settingsChanged = false;
     try {
         auto locked = m_settings->LockExclusiveData();
         bool alreadyKnown = std::ranges::any_of(locked->Devices, [&](const auto& d) { return d.Id == id; });
         if (!alreadyKnown) {
             DeviceSettings newDevice;
-            newDevice.Id = std::wstring(id);
-            newDevice.Name = std::wstring(rawDeviceName);
+            newDevice.Id = idString;
+            newDevice.Name = deviceName;
             newDevice.ConnectOnStartup = locked->GlobalConnectOnStartup;
             newDevice.ReconnectOnConnectionLoss = locked->GlobalReconnectOnConnectionLoss;
             locked->Devices.push_back(std::move(newDevice));
             addedNew = true;
+            settingsChanged = true;
         } else {
             auto existingDevice = std::ranges::find_if(locked->Devices, [&](const auto& d) { return d.Id == id; });
-            if (existingDevice != locked->Devices.end() && existingDevice->Name != rawDeviceName) {
-                existingDevice->Name = std::wstring(rawDeviceName);
+            if (existingDevice != locked->Devices.end() && existingDevice->Name != deviceName) {
+                existingDevice->Name = deviceName;
+                settingsChanged = true;
             }
         }
 
-        auto existing = std::ranges::find(locked->LastConnectedIds, std::wstring(id));
-        if (existing != locked->LastConnectedIds.end()) {
-            locked->LastConnectedIds.erase(existing);
-        }
-        locked->LastConnectedIds.insert(locked->LastConnectedIds.begin(), std::wstring(id));
-        updatedLastConnected = true;
+        settingsChanged =
+            AutoReconnectPlanner::PromoteMostRecentlyConnected(locked->LastConnectedIds, idString) || settingsChanged;
     } catch (winrt::hresult_error const& ex) {
         util::DebugTraceException(L"[App] OnDeviceConnected settings update ERROR", ex);
         return;
@@ -1866,7 +2193,7 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
         return;
     }
 
-    if (addedNew || updatedLastConnected) {
+    if (settingsChanged) {
         ScheduleDeferredSettingsSave();
         if (addedNew) {
             DebugTrace(L"[App] New device added to settings: {0}", std::wstring(rawDeviceName));
@@ -1901,7 +2228,7 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
         }
     }
 
-    RefreshTrayVisualState(false, L"device-connected");
+    ScheduleDeviceVisualRefresh(false);
 }
 
 void ApplicationHost::OnDeviceDisconnected(winrt::hstring const& id) {
@@ -1919,17 +2246,14 @@ void ApplicationHost::OnDeviceDisconnected(winrt::hstring const& id) {
         }
     }
 
-    RefreshTrayVisualState(false, L"device-disconnected");
+    ScheduleDeviceVisualRefresh(false);
 }
 
 void ApplicationHost::OnConnectionError(winrt::hstring const& id, winrt::hstring msg) {
     if (m_exiting.load()) return;
     DebugTrace(L"[App] OnConnectionError: {0} - {1}", std::wstring(id), std::wstring(msg));
-    if (m_trayController) {
-        std::wstring tip = std::wstring(_("AppName")) + L"\n" + std::wstring(msg);
-        m_trayController->UpdateTooltip(tip);
-    }
-    RefreshTrayVisualState(true, L"connection-error");
+    m_transientTrayErrorTooltip = std::wstring(_("AppName")) + L"\n" + std::wstring(msg);
+    ScheduleDeviceVisualRefresh(true);
 }
 
 void ApplicationHost::OnAutoReconnectTriggered(winrt::hstring const& id) {
@@ -1979,6 +2303,16 @@ LRESULT CALLBACK ApplicationHost::SubclassProc(
         return 0;
     }
 
+    if (msg == c_messageDrainUiFallbackWork) {
+        host->DrainUiFallbackWork();
+        return 0;
+    }
+
+    if (msg == c_messageDrainDeviceVisualRefresh) {
+        host->DrainDeviceVisualRefresh();
+        return 0;
+    }
+
     if (msg == WM_SETTINGCHANGE) {
         ThemeHelper::OnSettingChange(hwnd, lParam);
         return 0;
@@ -1994,13 +2328,17 @@ LRESULT CALLBACK ApplicationHost::SubclassProc(
     }
 
     if (msg == WM_TIMER && wParam == c_timerAnimation && host->m_trayController) {
-        host->m_trayController->AdvanceConnectingFrame();
+        if (!host->m_trayController->AdvanceConnectingFrame()) {
+            KillTimer(hwnd, c_timerAnimation);
+            host->m_connectingAnimationTimerActive = false;
+            host->ScheduleDeviceVisualRefresh(false);
+        }
         return 0;
     }
 
     if (msg == WM_TIMER && wParam == c_timerTransientTrayError) {
         KillTimer(hwnd, c_timerTransientTrayError);
-        host->RefreshTrayVisualState(false, L"transient-tray-error-expired");
+        host->ScheduleDeviceVisualRefresh(false);
         return 0;
     }
 
@@ -2011,10 +2349,28 @@ LRESULT CALLBACK ApplicationHost::SubclassProc(
         return 0;
     }
 
+    if (msg == WM_TIMER && wParam == c_timerDeviceVisualRefreshRetry) {
+        KillTimer(hwnd, c_timerDeviceVisualRefreshRetry);
+        host->DrainDeviceVisualRefresh();
+        return 0;
+    }
+
+    if (msg == WM_TIMER && wParam == c_timerDeferredSettingsSaveRetry) {
+        KillTimer(hwnd, c_timerDeferredSettingsSaveRetry);
+        std::optional<DeferredSaveCoordinator::WorkerToken> worker;
+        {
+            std::scoped_lock lock(host->m_settingsSaveTimerMutex);
+            worker = host->m_settingsSaveWorker;
+        }
+        if (worker) host->RunDeferredSettingsSaveAttempt(*worker);
+        return 0;
+    }
+
     if (s_wmTaskbarCreated && msg == s_wmTaskbarCreated) {
         if (host->m_trayController) {
             host->m_trayController->Reregister();
             host->m_trayController->OnThemeChanged();
+            host->ScheduleDeviceVisualRefresh(false);
         }
         return 0;
     }

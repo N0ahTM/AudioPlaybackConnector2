@@ -39,7 +39,7 @@ DeviceDiscoveryService::~DeviceDiscoveryService() {
 /*------------------------------------------------------------------------------------------------------------*/
 
 void DeviceDiscoveryService::Start() {
-    std::lock_guard lifecycleLock(m_watcherLifecycleMutex);
+    std::unique_lock lifecycleLock(m_watcherLifecycleMutex);
     if (m_watcher) return;
 
     std::uint64_t watcherGeneration = 0;
@@ -56,6 +56,51 @@ void DeviceDiscoveryService::Start() {
     winrt::event_token addedToken{};
     winrt::event_token removedToken{};
     winrt::event_token enumerationCompletedToken{};
+    auto cleanupWatcher = [&]() noexcept {
+        if (!watcher) return;
+        try {
+            watcher.Stop();
+        } catch (...) {
+            util::DebugTraceUnknownException(L"[DeviceDiscoveryService] failed to stop rejected watcher");
+        }
+        try {
+            if (addedToken.value != 0) watcher.Added(addedToken);
+            if (removedToken.value != 0) watcher.Removed(removedToken);
+            if (enumerationCompletedToken.value != 0) watcher.EnumerationCompleted(enumerationCompletedToken);
+        } catch (...) {
+            util::DebugTraceUnknownException(L"[DeviceDiscoveryService] failed to revoke rejected watcher tokens");
+        }
+    };
+    std::uint64_t rejectedGeneration = 0;
+    auto rejectWatcherGeneration = [&]() noexcept {
+        try {
+            if (m_watcher == watcher) {
+                m_watcher = nullptr;
+                m_watcherAddedToken = {};
+                m_watcherRemovedToken = {};
+                m_watcherEnumerationCompletedToken = {};
+            }
+            auto guard = m_lock.lock_exclusive();
+            if (m_watcherGeneration != watcherGeneration) return;
+            m_watcherStopping = true;
+            const bool inventoryChanged = !m_deviceCache.empty() || m_enumerationComplete;
+            m_enumerationComplete = false;
+            m_deviceCache.clear();
+            if (inventoryChanged) ++m_inventoryGeneration;
+            rejectedGeneration = ++m_watcherGeneration;
+        } catch (...) {
+            util::DebugTraceUnknownException(L"[DeviceDiscoveryService] failed to reject watcher generation");
+        }
+    };
+    auto finishWatcherRejection = [&]() noexcept {
+        if (rejectedGeneration == 0) return;
+        try {
+            auto guard = m_lock.lock_exclusive();
+            if (m_watcherGeneration == rejectedGeneration) m_watcherStopping = false;
+        } catch (...) {
+            util::DebugTraceUnknownException(L"[DeviceDiscoveryService] failed to finish watcher rejection");
+        }
+    };
     try {
         auto weak = weak_from_this();
         auto selector = winrt::Windows::Media::Audio::AudioPlaybackConnection::GetDeviceSelector();
@@ -81,37 +126,27 @@ void DeviceDiscoveryService::Start() {
         m_watcherRemovedToken = removedToken;
         m_watcherEnumerationCompletedToken = enumerationCompletedToken;
         DebugTrace(L"[DeviceDiscoveryService] DeviceWatcher started");
-        InventoryChanged();
     } catch (winrt::hresult_error const& ex) {
-        if (watcher) {
-            try {
-                if (addedToken.value != 0) watcher.Added(addedToken);
-                if (removedToken.value != 0) watcher.Removed(removedToken);
-                if (enumerationCompletedToken.value != 0) watcher.EnumerationCompleted(enumerationCompletedToken);
-            } catch (...) {
-            }
-        }
+        rejectWatcherGeneration();
+        cleanupWatcher();
+        finishWatcherRejection();
         util::DebugTraceException(L"[DeviceDiscoveryService] Start ERROR: failed to create or start watcher", ex);
     } catch (std::exception const& ex) {
-        if (watcher) {
-            try {
-                if (addedToken.value != 0) watcher.Added(addedToken);
-                if (removedToken.value != 0) watcher.Removed(removedToken);
-                if (enumerationCompletedToken.value != 0) watcher.EnumerationCompleted(enumerationCompletedToken);
-            } catch (...) {
-            }
-        }
+        rejectWatcherGeneration();
+        cleanupWatcher();
+        finishWatcherRejection();
         util::DebugTraceException(L"[DeviceDiscoveryService] Start ERROR: failed to create or start watcher", ex);
     } catch (...) {
-        if (watcher) {
-            try {
-                if (addedToken.value != 0) watcher.Added(addedToken);
-                if (removedToken.value != 0) watcher.Removed(removedToken);
-                if (enumerationCompletedToken.value != 0) watcher.EnumerationCompleted(enumerationCompletedToken);
-            } catch (...) {
-            }
-        }
+        rejectWatcherGeneration();
+        cleanupWatcher();
+        finishWatcherRejection();
         util::DebugTraceUnknownException(L"[DeviceDiscoveryService] Start ERROR: failed to create or start watcher");
+    }
+    lifecycleLock.unlock();
+    try {
+        InventoryChanged();
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[DeviceDiscoveryService] inventory reset notification failed");
     }
 }
 

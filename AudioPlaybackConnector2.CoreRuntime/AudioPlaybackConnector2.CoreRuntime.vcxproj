@@ -113,6 +113,7 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\CommandLineControlServer.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\SettingsController.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\StartupTaskController.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\StartupTaskCoordinator.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\ToastContentBuilder.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\ToastXmlSanitizer.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\UpdateCoordinator.hpp" />
@@ -150,6 +151,7 @@
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\CommandLineControlServer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\SettingsController.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\StartupTaskController.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\StartupTaskCoordinator.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\ToastContentBuilder.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\UpdateCoordinator.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\AutomaticUpdateWindow.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>

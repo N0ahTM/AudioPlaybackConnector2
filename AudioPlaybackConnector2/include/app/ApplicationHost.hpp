@@ -8,6 +8,7 @@
 #include <app/ResourcePressureMonitor.hpp>
 #include <app/SettingsWindowPresenter.hpp>
 #include <app/SingleInstanceGuard.hpp>
+#include <app/StartupTaskCoordinator.hpp>
 #include <app/UiRefreshCoalescer.hpp>
 
 #include <services/CommandLineControlServer.hpp>
@@ -134,6 +135,7 @@ private:
     std::shared_ptr<::Settings> m_settings;
     std::shared_ptr<::DeviceManager> m_deviceManager;
     std::shared_ptr<ISettingsController> m_settingsController;
+    std::shared_ptr<StartupTaskCoordinator> m_startupTaskCoordinator;
     winrt::Microsoft::UI::Dispatching::DispatcherQueue m_dispatcherQueue{nullptr};
     winrt::Microsoft::UI::Dispatching::DispatcherQueueTimer m_mainWindowLoadedWatchdog{nullptr};
 

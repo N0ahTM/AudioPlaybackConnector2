@@ -1,6 +1,7 @@
 #pragma once
 
 #include <SettingsWindow.g.h>
+#include <app/StartupTaskCoordinator.hpp>
 #include <services/SettingsController.hpp>
 #include <services/UpdateService.hpp>
 #include <ui/SettingsViewModel.hpp>
@@ -47,6 +48,7 @@ struct SettingsWindow : SettingsWindowT<SettingsWindow> {
     void LanguageComboBox_SelectionChanged(winrt::Windows::Foundation::IInspectable const& sender,
                                            winrt::Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const& e);
     void SetSettingsController(std::shared_ptr<ISettingsController> controller);
+    void SetStartupTaskCoordinator(std::shared_ptr<StartupTaskCoordinator> coordinator);
     void SetInitialSettingsSnapshot(SettingsData snapshot);
     void SetUpdateCoordinator(std::shared_ptr<UpdateCoordinator> coordinator);
     void SetDefaultPlacement(util::SettingsWindowPlacement placement);
@@ -89,20 +91,21 @@ private:
     [[nodiscard]] std::wstring BuildReportBugUri() const;
     void SetUpdateCheckBusy(bool busy);
     void SetStartupTaskBusy(bool busy);
+    void ApplyStartupTaskSnapshot(StartupTaskSnapshot const& snapshot) noexcept;
     void ShowUpdateCheckResult(UpdateCheckResult const& result);
     void StartWithWindowsToggle_Toggled(winrt::Windows::Foundation::IInspectable const& sender,
                                         winrt::Microsoft::UI::Xaml::RoutedEventArgs const& e);
-    winrt::fire_and_forget SyncStartupTaskStateAsync();
-    winrt::fire_and_forget ApplyStartWithWindowsAsync(bool on);
     winrt::fire_and_forget RunManualUpdateCheckAsync();
     winrt::fire_and_forget ClearAliasSavedAfterDelayAsync(uint64_t requestId);
     util::SettingsWindowPlacement m_defaultPlacement = util::CalculateSettingsWindowPlacement();
     util::SettingsWindowPlacement m_targetPlacement = util::CalculateSettingsWindowPlacement();
     winrt::Microsoft::UI::Dispatching::DispatcherQueueTimer m_placementSaveTimer{nullptr};
     std::atomic_uint64_t m_aliasSavedRequestId = 0;
-    std::atomic_uint64_t m_startupRequestId = 0;
     std::atomic_uint64_t m_updateCheckRequestId = 0;
+    std::uint64_t m_lastStartupTaskPublication = 0;
     std::shared_ptr<ISettingsController> m_settingsController;
+    std::shared_ptr<StartupTaskCoordinator> m_startupTaskCoordinator;
+    StartupTaskCoordinator::HandlerToken m_startupTaskHandlerToken = 0;
     std::shared_ptr<UpdateCoordinator> m_updateCoordinator;
     std::wstring m_aliasSavedDeviceId;
     std::wstring m_renderedAliasSavedDeviceId;

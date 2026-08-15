@@ -345,6 +345,9 @@ bool ApplicationHost::PerformTeardown(bool saveSettings) noexcept {
     if (m_updateCoordinator) {
         m_updateCoordinator->Shutdown();
     }
+    if (m_startupTaskCoordinator) {
+        m_startupTaskCoordinator->Shutdown();
+    }
     m_commandLineControlServer.Stop();
     TeardownDeviceEvents();
     if (m_hwnd) {
@@ -379,6 +382,7 @@ bool ApplicationHost::PerformTeardown(bool saveSettings) noexcept {
     }
     m_notificationService.reset();
     m_updateCoordinator.reset();
+    m_startupTaskCoordinator.reset();
     m_trayController.reset();
     if (m_gdiplusToken) {
         Gdiplus::GdiplusShutdown(m_gdiplusToken);
@@ -671,6 +675,10 @@ void ApplicationHost::InitializeDeviceManager() {
     auto weak = weak_from_this();
     m_settingsController = std::make_shared<SettingsController>(m_settings, m_deviceManager, [weak]() {
         if (auto self = weak.lock(); self && !self->m_exiting.load()) self->m_settingsSaver.RequestSave();
+    });
+    auto weakSettingsController = std::weak_ptr<ISettingsController>(m_settingsController);
+    m_startupTaskCoordinator = std::make_shared<StartupTaskCoordinator>([weakSettingsController](bool enabled) {
+        if (auto controller = weakSettingsController.lock()) controller->SetStartWithWindows(enabled);
     });
     m_deviceManager->SetReconnectOnConnectionLossPredicate([weak](auto id) {
         auto self = weak.lock();
@@ -1442,10 +1450,11 @@ bool ApplicationHost::ShowSettingsWindow() {
     if (m_exiting.load()) return false;
     DebugTrace(L"[App] ShowSettingsWindow()");
     auto weak = weak_from_this();
-    return m_settingsWindowPresenter.Show(m_settingsController, m_trayController, m_updateCoordinator, [weak]() {
-        auto self = weak.lock();
-        if (self) static_cast<void>(self->m_settingsSaver.FlushNow());
-    });
+    return m_settingsWindowPresenter.Show(
+        m_settingsController, m_startupTaskCoordinator, m_trayController, m_updateCoordinator, [weak]() {
+            auto self = weak.lock();
+            if (self) static_cast<void>(self->m_settingsSaver.FlushNow());
+        });
 }
 
 void ApplicationHost::ExitApplication() noexcept {

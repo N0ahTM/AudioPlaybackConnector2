@@ -4,6 +4,7 @@
 #include <memory>
 
 class ISettingsController;
+class StartupTaskCoordinator;
 class TrayController;
 class UpdateCoordinator;
 
@@ -21,6 +22,7 @@ public:
     ~SettingsWindowPresenter();
 
     [[nodiscard]] bool Show(std::shared_ptr<ISettingsController> settingsController,
+                            std::shared_ptr<StartupTaskCoordinator> startupTaskCoordinator,
                             std::shared_ptr<TrayController> trayController,
                             std::shared_ptr<UpdateCoordinator> updateCoordinator,
                             std::function<void()> saveSettings);

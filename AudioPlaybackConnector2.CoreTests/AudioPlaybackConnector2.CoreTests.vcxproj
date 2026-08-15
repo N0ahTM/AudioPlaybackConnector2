@@ -102,6 +102,7 @@
     <ClCompile Include="src\RuntimeApartmentTests.cpp" />
     <ClCompile Include="src\SettingsLimitsTests.cpp" />
     <ClCompile Include="src\SingleInstanceGuardTests.cpp" />
+    <ClCompile Include="src\StartupTaskCoordinatorTests.cpp" />
     <ClCompile Include="src\TrayTooltipBuilderTests.cpp" />
     <ClCompile Include="src\UpdateCoordinatorTests.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveResourcePolicy.cpp" />
@@ -112,6 +113,9 @@
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\ResourcePressureMonitor.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\ResourcePressureState.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\SingleInstanceGuard.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\StartupTaskCoordinator.cpp">
+      <AdditionalIncludeDirectories>..\AudioPlaybackConnector2.CoreRuntime\include;..\AudioPlaybackConnector2\res;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceOperationCoordinator.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\UpdateCoordinator.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\AutomaticUpdateWindow.cpp" />
@@ -143,6 +147,7 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResourcePressureMonitor.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResourcePressureState.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\SingleInstanceGuard.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\StartupTaskCoordinator.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\UiRefreshCoalescer.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\UpdateCoordinator.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\AutomaticUpdateWindow.hpp" />

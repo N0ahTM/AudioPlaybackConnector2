@@ -85,8 +85,8 @@ void TestLastIntentWinsAcrossSeveralReplacements() {
     LatestStartupTaskRequestState state;
     auto first = state.RequestDesired(true);
     auto second = state.RequestDesired(false);
-    auto third = state.RequestRefresh();
-    auto latest = state.RequestDesired(true);
+    auto third = state.RequestDesired(true);
+    auto latest = state.RequestDesired(false);
 
     Check(first.Revision < second.Revision && second.Revision < third.Revision && third.Revision < latest.Revision,
           "distinct intents must receive strictly increasing revisions");
@@ -97,8 +97,8 @@ void TestLastIntentWinsAcrossSeveralReplacements() {
           "only the final intent must be scheduled after several replacements");
     Check(superseded.OperationToStart &&
               superseded.OperationToStart->Kind == LatestStartupTaskRequestState::RequestKind::Desired &&
-              superseded.OperationToStart->Desired,
-          "the final desired intent must replace an intermediate refresh");
+              !superseded.OperationToStart->Desired,
+          "the final desired intent must replace every intermediate desired value");
 }
 
 void TestRefreshCoalescesOnlyWhileUnsettled() {
@@ -117,6 +117,36 @@ void TestRefreshCoalescesOnlyWhileUnsettled() {
     Check(later.Accepted && !later.Coalesced && later.Revision > first.Revision,
           "a refresh requested after publication must create a new revision");
     Check(later.OperationToStart.has_value(), "a later refresh must start a new operation while idle");
+}
+
+void TestRefreshDoesNotSupersedeUnsettledDesiredIntent() {
+    LatestStartupTaskRequestState state;
+    auto desired = state.RequestDesired(true);
+    auto refresh = state.RequestRefresh();
+
+    Check(refresh.Accepted && refresh.Coalesced, "refresh must join rather than supersede an unsettled desired intent");
+    Check(refresh.Revision == desired.Revision, "refresh joining a desired intent must retain the desired revision");
+    Check(!refresh.OperationToStart, "refresh must not start work beside an unsettled desired operation");
+    Check(state.InFlight() == desired.OperationToStart,
+          "refresh must leave the desired operation as the sole in-flight owner");
+    Check(state.Complete(*desired.OperationToStart).Disposition ==
+              LatestStartupTaskRequestState::CompletionDisposition::Publish,
+          "the desired operation must remain publishable after a refresh request");
+}
+
+void TestUnsatisfiedDesiredIntentCanBeRetried() {
+    LatestStartupTaskRequestState state;
+    auto first = state.RequestDesired(true);
+    auto failedCompletion = state.Complete(*first.OperationToStart, false);
+
+    Check(failedCompletion.Disposition == LatestStartupTaskRequestState::CompletionDisposition::Publish,
+          "an unsatisfied latest operation must still allow its authoritative result to publish");
+    auto retry = state.RequestDesired(true);
+    Check(retry.Accepted && !retry.Coalesced,
+          "an unsatisfied desired intent must allow the same desired value to be retried");
+    Check(retry.Revision == first.Revision + 1, "retrying an unsatisfied desired intent must advance the revision");
+    Check(retry.OperationToStart && retry.OperationToStart->Desired,
+          "retrying an unsatisfied desired intent must start the requested operation again");
 }
 
 void TestStaleAndDuplicateCompletionsAreIgnored() {
@@ -248,6 +278,8 @@ int RunLatestStartupTaskRequestStateTests() {
     TestDifferentDesiredRequestSupersedesInFlightWork();
     TestLastIntentWinsAcrossSeveralReplacements();
     TestRefreshCoalescesOnlyWhileUnsettled();
+    TestRefreshDoesNotSupersedeUnsettledDesiredIntent();
+    TestUnsatisfiedDesiredIntentCanBeRetried();
     TestStaleAndDuplicateCompletionsAreIgnored();
     TestStopSuppressesPublicationAndFutureRequests();
     TestConcurrentRequestsStartAtMostOneOperation();

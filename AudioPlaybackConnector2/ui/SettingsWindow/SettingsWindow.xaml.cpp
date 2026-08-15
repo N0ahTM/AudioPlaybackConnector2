@@ -7,7 +7,6 @@
 #include <core/Settings.hpp>
 #include <core/SettingsLimits.hpp>
 #include <core/StringResources.hpp>
-#include <services/StartupTaskController.hpp>
 #include <services/UpdateCoordinator.hpp>
 #include <services/UpdateService.hpp>
 #include <ui/ButtonHelpers.hpp>
@@ -157,6 +156,9 @@ SettingsWindow::SettingsWindow() {
 }
 
 SettingsWindow::~SettingsWindow() {
+    if (m_startupTaskCoordinator && m_startupTaskHandlerToken != 0) {
+        m_startupTaskCoordinator->Unsubscribe(std::exchange(m_startupTaskHandlerToken, 0));
+    }
     StopPlacementSaveTimer();
     if (m_actualThemeChangedToken.value != 0) {
         try {
@@ -478,7 +480,7 @@ bool SettingsWindow::StoreCurrentPlacement() {
 void SettingsWindow::StartWithWindowsToggle_Toggled(IInspectable const& sender, RoutedEventArgs const&) {
     if (m_suppressStartupToggle) return;
     auto toggle = sender.as<ToggleSwitch>();
-    ApplyStartWithWindowsAsync(toggle.IsOn());
+    if (m_startupTaskCoordinator) m_startupTaskCoordinator->RequestDesired(toggle.IsOn());
 }
 
 void SettingsWindow::CheckForUpdatesButton_Click(IInspectable const&, RoutedEventArgs const&) {
@@ -775,7 +777,27 @@ void SettingsWindow::InitializeSettingsContent() {
     ShowNotificationsToggle().OnContent(box_value(L""));
     SystemBackdropEffectsToggle().OffContent(box_value(L""));
     SystemBackdropEffectsToggle().OnContent(box_value(L""));
-    SyncStartupTaskStateAsync();
+    if (m_startupTaskCoordinator) {
+        auto weakWindow = get_weak();
+        auto dispatcher = DispatcherQueue();
+        m_startupTaskHandlerToken =
+            m_startupTaskCoordinator->Subscribe([weakWindow, dispatcher](StartupTaskSnapshot const& snapshot) noexcept {
+                try {
+                    auto apply = [weakWindow, snapshot]() noexcept {
+                        if (auto self = weakWindow.get()) self->ApplyStartupTaskSnapshot(snapshot);
+                    };
+                    if (dispatcher.HasThreadAccess()) {
+                        apply();
+                    } else {
+                        static_cast<void>(dispatcher.TryEnqueue(std::move(apply)));
+                    }
+                } catch (...) {
+                }
+            });
+        m_startupTaskCoordinator->Refresh();
+    } else {
+        StartWithWindowsToggle().IsEnabled(false);
+    }
 
     StartWithWindowsToggle().Toggled([weak](auto const& sender, auto const& args) {
         if (auto self = weak.get()) {
@@ -1085,100 +1107,18 @@ void SettingsWindow::ShowUpdateCheckResult(UpdateCheckResult const& result) {
 /*//////// Startup Integration ///////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-winrt::fire_and_forget SettingsWindow::SyncStartupTaskStateAsync() {
-    auto weak = get_weak();
-    auto settingsController = m_settingsController;
-    winrt::apartment_context ui;
-    auto requestId = m_startupRequestId.load();
-    SetStartupTaskBusy(true);
+void SettingsWindow::ApplyStartupTaskSnapshot(StartupTaskSnapshot const& snapshot) noexcept try {
+    if (snapshot.Publication < m_lastStartupTaskPublication) return;
+    m_lastStartupTaskPublication = snapshot.Publication;
+    SetStartupTaskBusy(snapshot.Busy);
+    if (!snapshot.Known) return;
 
-    try {
-        bool enabled = co_await StartupTaskController::IsEnabledAsync();
-
-        co_await ui;
-        auto self = weak.get();
-        if (!self || requestId != self->m_startupRequestId.load()) co_return;
-        self->SetStartupTaskBusy(false);
-
-        self->m_suppressStartupToggle = true;
-        self->StartWithWindowsToggle().IsOn(enabled);
-        self->m_suppressStartupToggle = false;
-        if (settingsController) settingsController->SetStartWithWindows(enabled);
-        co_return;
-    } catch (winrt::hresult_error const& ex) {
-        DebugTrace(L"[SettingsWindow] SyncStartupTaskStateAsync failed: 0x{0:08X} {1}",
-                   static_cast<uint32_t>(ex.code()),
-                   ex.message());
-    } catch (std::exception const& ex) {
-        DebugTrace(L"[SettingsWindow] SyncStartupTaskStateAsync failed: {0}", util::Utf8ToUtf16(ex.what()));
-    } catch (...) {
-        DebugTrace(L"[SettingsWindow] SyncStartupTaskStateAsync failed: unknown exception");
-    }
-
-    try {
-        co_await ui;
-        auto self = weak.get();
-        if (self && requestId == self->m_startupRequestId.load()) {
-            self->SetStartupTaskBusy(false);
-        }
-    } catch (...) {
-    }
-}
-
-winrt::fire_and_forget SettingsWindow::ApplyStartWithWindowsAsync(bool on) {
-    auto weak = get_weak();
-    auto settingsController = m_settingsController;
-    winrt::apartment_context ui;
-    auto requestId = ++m_startupRequestId;
-    bool revertToggle = false;
-    SetStartupTaskBusy(true);
-    if (settingsController) settingsController->SetStartWithWindows(on);
-
-    try {
-        bool success = co_await StartupTaskController::SetEnabledAsync(on);
-
-        co_await ui;
-        auto self = weak.get();
-        if (self && requestId != self->m_startupRequestId.load()) co_return;
-
-        if (!success) {
-            if (settingsController) settingsController->SetStartWithWindows(!on);
-            if (!self) co_return;
-            self->SetStartupTaskBusy(false);
-            self->m_suppressStartupToggle = true;
-            self->StartWithWindowsToggle().IsOn(!on);
-            self->m_suppressStartupToggle = false;
-            co_return;
-        }
-
-        if (self) self->SetStartupTaskBusy(false);
-    } catch (winrt::hresult_error const& ex) {
-        DebugTrace(L"[SettingsWindow] ApplyStartWithWindowsAsync failed: 0x{0:08X} {1}",
-                   static_cast<uint32_t>(ex.code()),
-                   ex.message());
-        revertToggle = true;
-    } catch (std::exception const& ex) {
-        DebugTrace(L"[SettingsWindow] ApplyStartWithWindowsAsync failed: {0}", util::Utf8ToUtf16(ex.what()));
-        revertToggle = true;
-    } catch (...) {
-        DebugTrace(L"[SettingsWindow] ApplyStartWithWindowsAsync failed: unknown exception");
-        revertToggle = true;
-    }
-
-    if (revertToggle) {
-        try {
-            co_await ui;
-            auto self = weak.get();
-            if (self && requestId != self->m_startupRequestId.load()) co_return;
-            if (settingsController) settingsController->SetStartWithWindows(!on);
-            if (!self) co_return;
-            self->SetStartupTaskBusy(false);
-            self->m_suppressStartupToggle = true;
-            self->StartWithWindowsToggle().IsOn(!on);
-            self->m_suppressStartupToggle = false;
-        } catch (...) {
-        }
-    }
+    m_suppressStartupToggle = true;
+    auto restoreSuppression = wil::scope_exit([this]() noexcept { m_suppressStartupToggle = false; });
+    StartWithWindowsToggle().IsOn(snapshot.Enabled);
+} catch (...) {
+    m_suppressStartupToggle = false;
+    util::DebugTraceUnknownException(L"[SettingsWindow] startup task snapshot ignored exception");
 }
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -1576,6 +1516,10 @@ void SettingsWindow::RebuildDeviceList(bool force) {
 
 void SettingsWindow::SetSettingsController(std::shared_ptr<ISettingsController> controller) {
     m_settingsController = std::move(controller);
+}
+
+void SettingsWindow::SetStartupTaskCoordinator(std::shared_ptr<StartupTaskCoordinator> coordinator) {
+    m_startupTaskCoordinator = std::move(coordinator);
 }
 
 void SettingsWindow::SetInitialSettingsSnapshot(SettingsData snapshot) {

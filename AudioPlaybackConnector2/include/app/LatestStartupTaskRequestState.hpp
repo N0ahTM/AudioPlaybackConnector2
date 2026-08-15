@@ -46,6 +46,9 @@ public:
         std::scoped_lock lock(m_mutex);
         if (m_stopped) return {m_revision, false, false, std::nullopt};
 
+        if (!m_latestSettled && m_latestRequest && m_latestRequest->Kind == RequestKind::Desired) {
+            return {m_latestRequest->Revision, true, true, std::nullopt};
+        }
         if (!m_latestSettled && m_latestRequest && m_latestRequest->Kind == RequestKind::Refresh) {
             return {m_latestRequest->Revision, true, true, std::nullopt};
         }
@@ -53,13 +56,14 @@ public:
         return RecordRequestLocked(RequestKind::Refresh, false);
     }
 
-    [[nodiscard]] CompletionResult Complete(OperationToken operation) noexcept {
+    [[nodiscard]] CompletionResult Complete(OperationToken operation, bool retainForCoalescing = true) noexcept {
         std::scoped_lock lock(m_mutex);
         if (m_stopped || !m_inFlight || *m_inFlight != operation) return {};
 
         m_inFlight.reset();
         if (m_latestRequest && m_latestRequest->Revision == operation.Revision) {
-            m_latestSettled = true;
+            m_latestSettled = retainForCoalescing;
+            if (!retainForCoalescing) m_latestRequest.reset();
             return {CompletionDisposition::Publish, std::nullopt};
         }
 

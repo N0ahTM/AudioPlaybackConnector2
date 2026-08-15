@@ -28,7 +28,7 @@ void DeferredSettingsSaver::Initialize(std::shared_ptr<Settings> settings, HWND 
 }
 
 void DeferredSettingsSaver::RequestSave() noexcept {
-    if (m_stopping.load() || !m_settings) return;
+    if (m_stopping.load() || m_cancelled.load() || !m_settings) return;
 
     auto request = m_coordinator.MarkDirty();
     if (!request.WorkerToStart) return;
@@ -68,6 +68,7 @@ bool DeferredSettingsSaver::FlushNow(unsigned int maximumAttempts) noexcept {
 }
 
 void DeferredSettingsSaver::Cancel() noexcept {
+    m_cancelled.store(true);
     m_coordinator.Cancel();
     if (m_hwnd) KillTimer(m_hwnd, c_windowTimerId);
 
@@ -77,7 +78,9 @@ void DeferredSettingsSaver::Cancel() noexcept {
         m_worker.reset();
         m_consecutiveFailures = 0;
         timer = std::move(m_timer);
+        if (timer) SetThreadpoolTimer(timer.get(), nullptr, 0, 0);
     }
+    if (timer) WaitForThreadpoolTimerCallbacks(timer.get(), TRUE);
     timer.reset();
 }
 
@@ -98,7 +101,7 @@ bool DeferredSettingsSaver::ScheduleTimer(DeferredSaveCoordinator::WorkerToken w
                                           std::chrono::milliseconds delay,
                                           bool resetFailures) noexcept {
     std::scoped_lock lock(m_timerMutex);
-    if (m_stopping.load()) return false;
+    if (m_stopping.load() || m_cancelled.load()) return false;
 
     if (!m_timer) {
         m_timer.reset(CreateThreadpoolTimer(TimerCallback, this, nullptr));
@@ -122,7 +125,7 @@ bool DeferredSettingsSaver::ScheduleTimer(DeferredSaveCoordinator::WorkerToken w
 }
 
 void DeferredSettingsSaver::RunAttempt(DeferredSaveCoordinator::WorkerToken worker) noexcept {
-    if (m_stopping.load()) return;
+    if (m_stopping.load() || m_cancelled.load()) return;
 
     auto attempt = m_coordinator.BeginAttempt(worker);
     if (!attempt) return;
@@ -149,6 +152,7 @@ void DeferredSettingsSaver::RunAttempt(DeferredSaveCoordinator::WorkerToken work
         case DeferredSaveCoordinator::Completion::ContinueAfterDebounce:
             if (!ScheduleTimer(worker, std::chrono::milliseconds(300), true)) {
                 static_cast<void>(m_coordinator.AbandonWorker(worker));
+                if (m_cancelled.load() || m_stopping.load()) return;
                 DebugTrace(L"[App] Deferred settings follow-up could not be scheduled; flushing synchronously");
                 static_cast<void>(FlushNow(3));
             }
@@ -175,6 +179,7 @@ void DeferredSettingsSaver::RunAttempt(DeferredSaveCoordinator::WorkerToken work
                 DebugTrace(L"[App] Deferred settings save failed; retrying in {0} ms", delay.count());
             } else {
                 static_cast<void>(m_coordinator.AbandonWorker(worker));
+                if (m_cancelled.load() || m_stopping.load()) return;
                 DebugTrace(L"[App] Deferred settings retry could not be scheduled; flushing synchronously");
                 static_cast<void>(FlushNow(3));
             }
@@ -185,7 +190,7 @@ void DeferredSettingsSaver::RunAttempt(DeferredSaveCoordinator::WorkerToken work
 
 void CALLBACK DeferredSettingsSaver::TimerCallback(PTP_CALLBACK_INSTANCE, void* context, PTP_TIMER) noexcept {
     auto self = static_cast<DeferredSettingsSaver*>(context);
-    if (!self || self->m_stopping.load()) return;
+    if (!self || self->m_stopping.load() || self->m_cancelled.load()) return;
 
     std::optional<DeferredSaveCoordinator::WorkerToken> worker;
     {

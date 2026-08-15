@@ -29,7 +29,9 @@ void ApplicationHost::CancelNativeDeviceVisualRefreshRetry() noexcept {
     {
         std::scoped_lock lock(m_deviceVisualRefreshRetryTimerMutex);
         timer = std::move(m_deviceVisualRefreshRetryTimer);
+        if (timer) SetThreadpoolTimer(timer.get(), nullptr, 0, 0);
     }
+    if (timer) WaitForThreadpoolTimerCallbacks(timer.get(), TRUE);
     timer.reset();
 }
 

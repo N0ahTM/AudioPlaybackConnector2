@@ -26,13 +26,16 @@ PowerTransitionCoordinator::~PowerTransitionCoordinator() {
 /*------------------------------------------------------------------------------------------------------------*/
 
 void PowerTransitionCoordinator::Cancel() noexcept {
-    CancelResumeReconnectTimer();
     auto state = m_resumeState;
-    if (!state) return;
-    std::scoped_lock lock(state->Mutex);
-    state->Cancelled = true;
-    state->Attempts.Clear();
-    ++state->Generation;
+    if (state) {
+        std::scoped_lock lock(state->Mutex);
+        state->Cancelled = true;
+        state->Attempts.Clear();
+        state->Reconnect = nullptr;
+        state->DeliveryInFlight = false;
+        ++state->Generation;
+    }
+    CancelResumeReconnectTimer();
 }
 
 void PowerTransitionCoordinator::HandleSuspend(std::function<void()> flushSettings,
@@ -42,6 +45,13 @@ void PowerTransitionCoordinator::HandleSuspend(std::function<void()> flushSettin
         m_powerSuspended = true;
         DebugTrace(L"[PowerTransitionCoordinator] Power suspend detected");
 
+        if (auto state = m_resumeState) {
+            std::scoped_lock lock(state->Mutex);
+            state->Cancelled = true;
+            state->Reconnect = nullptr;
+            state->DeliveryInFlight = false;
+            ++state->Generation;
+        }
         CancelResumeReconnectTimer();
 
         std::vector<std::wstring> activeDeviceIds;
@@ -113,7 +123,7 @@ void PowerTransitionCoordinator::HandleResume(std::shared_ptr<DeviceManager> dev
         try {
             m_resumeReconnectTimer = winrt::Windows::System::Threading::ThreadPoolTimer::CreatePeriodicTimer(
                 [state, generation](auto const& timer) noexcept {
-                    if (!DeliverResumeReconnect(state, generation)) return;
+                    if (DeliverResumeReconnect(state, generation) != DeliveryResult::Stop) return;
                     try {
                         timer.Cancel();
                     } catch (...) {
@@ -135,17 +145,7 @@ void PowerTransitionCoordinator::HandleResume(std::shared_ptr<DeviceManager> dev
                         std::chrono::duration_cast<std::chrono::milliseconds>(c_resumeReconnectDelay).count()),
                     0);
             } else {
-                DebugTrace(L"[PowerTransitionCoordinator] Native resume timer unavailable; using fallback worker");
-                m_resumeReconnectFallbackThread = std::jthread([this, state, generation](std::stop_token stopToken) {
-                    while (!stopToken.stop_requested()) {
-                        {
-                            std::unique_lock lock(m_resumeReconnectFallbackMutex);
-                            static_cast<void>(m_resumeReconnectFallbackWake.wait_for(
-                                lock, stopToken, c_resumeReconnectDelay, []() noexcept { return false; }));
-                        }
-                        if (stopToken.stop_requested() || DeliverResumeReconnect(state, generation)) return;
-                    }
-                });
+                DebugTrace(L"[PowerTransitionCoordinator] Resume reconnect timer unavailable");
             }
         }
     } catch (...) {
@@ -179,11 +179,6 @@ bool PowerTransitionCoordinator::IsResumeReconnectGenerationCurrent(std::uint64_
 /*------------------------------------------------------------------------------------------------------------*/
 
 void PowerTransitionCoordinator::CancelResumeReconnectTimer() noexcept {
-    if (m_resumeReconnectFallbackThread.joinable()) {
-        m_resumeReconnectFallbackThread.request_stop();
-        m_resumeReconnectFallbackWake.notify_all();
-        m_resumeReconnectFallbackThread.join();
-    }
     auto timer = std::exchange(m_resumeReconnectTimer, nullptr);
     if (timer) {
         try {
@@ -191,28 +186,37 @@ void PowerTransitionCoordinator::CancelResumeReconnectTimer() noexcept {
         } catch (...) {
         }
     }
-    m_nativeResumeReconnectTimer.reset();
+    auto nativeTimer = std::move(m_nativeResumeReconnectTimer);
+    if (nativeTimer) {
+        SetThreadpoolTimer(nativeTimer.get(), nullptr, 0, 0);
+        WaitForThreadpoolTimerCallbacks(nativeTimer.get(), TRUE);
+    }
+    nativeTimer.reset();
 }
 
-bool PowerTransitionCoordinator::DeliverResumeReconnect(std::shared_ptr<ResumeState> const& state,
-                                                        std::uint64_t generation) noexcept {
-    if (!state) return true;
+PowerTransitionCoordinator::DeliveryResult
+PowerTransitionCoordinator::DeliverResumeReconnect(std::shared_ptr<ResumeState> const& state,
+                                                   std::uint64_t generation,
+                                                   PTP_CALLBACK_INSTANCE callbackInstance) noexcept {
+    if (!state) return DeliveryResult::Stop;
 
     std::vector<std::wstring> deviceIds;
     ResumeReconnectCallback reconnect;
     {
         std::scoped_lock lock(state->Mutex);
-        if (state->Cancelled || state->Generation != generation || state->Attempts.Empty()) return true;
-        if (state->DeliveryInFlight) return false;
+        if (state->Cancelled || state->Generation != generation || state->Attempts.Empty()) {
+            return DeliveryResult::Stop;
+        }
+        if (state->DeliveryInFlight) return DeliveryResult::Continue;
 
         auto selection = state->Attempts.SelectEligible(c_maxResumeReconnectAttempts);
         for (auto const& id : selection.Exhausted) {
             DebugTrace(L"[PowerTransitionCoordinator] Resume reconnect retry limit reached for {0}", id);
         }
-        if (selection.Eligible.empty()) return true;
+        if (selection.Eligible.empty()) return DeliveryResult::Stop;
 
         reconnect = state->Reconnect;
-        if (!reconnect) return false;
+        if (!reconnect) return DeliveryResult::Continue;
         deviceIds = std::move(selection.Eligible);
         state->DeliveryInFlight = true;
     }
@@ -223,16 +227,17 @@ bool PowerTransitionCoordinator::DeliverResumeReconnect(std::shared_ptr<ResumeSt
         state->Attempts.RecordAttempts(attemptedIds);
         state->DeliveryInFlight = false;
     };
+    if (callbackInstance) DisassociateCurrentThreadFromCallback(callbackInstance);
     try {
         reconnect(std::move(deviceIds), generation, completed);
     } catch (...) {
         completed({});
         DebugTrace(L"[PowerTransitionCoordinator] Delayed resume reconnect callback failed");
     }
-    return false;
+    return callbackInstance ? DeliveryResult::CallbackDisassociated : DeliveryResult::Continue;
 }
 
-void CALLBACK PowerTransitionCoordinator::NativeResumeReconnectTimerCallback(PTP_CALLBACK_INSTANCE,
+void CALLBACK PowerTransitionCoordinator::NativeResumeReconnectTimerCallback(PTP_CALLBACK_INSTANCE callbackInstance,
                                                                              void* context,
                                                                              PTP_TIMER timer) noexcept {
     auto self = static_cast<PowerTransitionCoordinator*>(context);
@@ -243,5 +248,6 @@ void CALLBACK PowerTransitionCoordinator::NativeResumeReconnectTimerCallback(PTP
         std::scoped_lock lock(state->Mutex);
         generation = state->Generation;
     }
-    if (DeliverResumeReconnect(state, generation)) SetThreadpoolTimer(timer, nullptr, 0, 0);
+    auto const result = DeliverResumeReconnect(state, generation, callbackInstance);
+    if (result == DeliveryResult::Stop) SetThreadpoolTimer(timer, nullptr, 0, 0);
 }

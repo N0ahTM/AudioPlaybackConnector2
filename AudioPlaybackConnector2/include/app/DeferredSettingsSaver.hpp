@@ -36,6 +36,7 @@ private:
     static constexpr UINT_PTR c_windowTimerId = 0x41504336;
 
     std::atomic<bool> const& m_stopping;
+    std::atomic<bool> m_cancelled = false;
     std::shared_ptr<Settings> m_settings;
     HWND m_hwnd = nullptr;
     DeferredSaveCoordinator m_coordinator;

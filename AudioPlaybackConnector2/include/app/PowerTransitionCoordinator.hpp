@@ -4,14 +4,12 @@
 
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <vector>
 
 class DeviceManager;
@@ -46,14 +44,17 @@ public:
 
 private:
     struct ResumeState;
+    enum class DeliveryResult { Continue, Stop, CallbackDisassociated };
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Helpers ///////////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
     void CancelResumeReconnectTimer() noexcept;
-    [[nodiscard]] static bool DeliverResumeReconnect(std::shared_ptr<ResumeState> const& state,
-                                                     std::uint64_t generation) noexcept;
+    [[nodiscard]] static DeliveryResult
+    DeliverResumeReconnect(std::shared_ptr<ResumeState> const& state,
+                           std::uint64_t generation,
+                           PTP_CALLBACK_INSTANCE callbackInstance = nullptr) noexcept;
     static void CALLBACK NativeResumeReconnectTimerCallback(PTP_CALLBACK_INSTANCE,
                                                             void* context,
                                                             PTP_TIMER timer) noexcept;
@@ -77,7 +78,4 @@ private:
     std::chrono::steady_clock::time_point m_lastResumeHandledAt{};
     winrt::Windows::System::Threading::ThreadPoolTimer m_resumeReconnectTimer{nullptr};
     wil::unique_threadpool_timer m_nativeResumeReconnectTimer;
-    std::jthread m_resumeReconnectFallbackThread;
-    std::mutex m_resumeReconnectFallbackMutex;
-    std::condition_variable_any m_resumeReconnectFallbackWake;
 };

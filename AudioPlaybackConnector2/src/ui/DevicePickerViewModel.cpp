@@ -37,14 +37,21 @@ bool DevicePickerViewModel::SynchronizeInventoryFromManager(TimePoint refreshedA
     auto manager = m_manager.lock();
     if (!manager) return false;
 
-    auto inventory = manager->GetDevicePickerInventorySnapshot();
-    if (!m_sourceInventoryGeneration || *m_sourceInventoryGeneration != inventory.Generation ||
-        !m_cache.HasInventory()) {
+    if (m_sourceInventoryGeneration && m_cache.HasInventory()) {
+        auto inventory = manager->GetDevicePickerInventorySnapshotIfChanged(*m_sourceInventoryGeneration);
+        if (!inventory) return m_sourceEnumerationComplete;
+
+        m_cache.ReplaceInventory(std::move(inventory->Devices), refreshedAt);
+        m_sourceInventoryGeneration = inventory->Generation;
+        m_sourceEnumerationComplete = inventory->EnumerationComplete;
+    } else {
+        auto inventory = manager->GetDevicePickerInventorySnapshot();
         m_cache.ReplaceInventory(std::move(inventory.Devices), refreshedAt);
         m_sourceInventoryGeneration = inventory.Generation;
+        m_sourceEnumerationComplete = inventory.EnumerationComplete;
     }
-    if (!inventory.EnumerationComplete) m_cache.InvalidateInventory();
-    return inventory.EnumerationComplete;
+    if (!m_sourceEnumerationComplete) m_cache.InvalidateInventory();
+    return m_sourceEnumerationComplete;
 }
 
 void DevicePickerViewModel::InvalidateInventory() noexcept {
@@ -54,6 +61,7 @@ void DevicePickerViewModel::InvalidateInventory() noexcept {
 void DevicePickerViewModel::Clear() noexcept {
     m_cache.Clear();
     m_sourceInventoryGeneration.reset();
+    m_sourceEnumerationComplete = false;
 }
 
 bool DevicePickerViewModel::HasInventory() const noexcept {

@@ -76,6 +76,8 @@ public:
     bool IsDeviceBusy(winrt::hstring const& deviceId) const;
     [[nodiscard]] apc::device_picker::DeviceActivitySnapshot GetDevicePickerActivitySnapshot() const;
     [[nodiscard]] apc::device_picker::DeviceInventorySnapshot GetDevicePickerInventorySnapshot() const;
+    [[nodiscard]] std::optional<apc::device_picker::DeviceInventorySnapshot>
+    GetDevicePickerInventorySnapshotIfChanged(std::uint64_t knownGeneration) const;
     [[nodiscard]] DeviceTrayPresentationSnapshot GetTrayPresentationSnapshot() const;
 
     /*------------------------------------------------------------------------------------------------------------*/

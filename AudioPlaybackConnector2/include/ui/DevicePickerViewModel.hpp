@@ -44,4 +44,5 @@ private:
     std::weak_ptr<Settings> m_settings;
     apc::device_picker::DevicePickerSnapshotCache m_cache;
     std::optional<std::uint64_t> m_sourceInventoryGeneration;
+    bool m_sourceEnumerationComplete = false;
 };

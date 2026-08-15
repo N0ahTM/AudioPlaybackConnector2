@@ -2,6 +2,30 @@
 
 #include <core/DeviceDiscoveryService.hpp>
 
+namespace {
+
+apc::device_picker::DeviceInventorySnapshot
+BuildInventorySnapshot(std::uint64_t generation,
+                       bool enumerationComplete,
+                       std::unordered_map<std::wstring, std::wstring> const& deviceCache) {
+    apc::device_picker::DeviceInventorySnapshot result;
+    result.Generation = generation;
+    result.EnumerationComplete = enumerationComplete;
+    result.Devices.reserve(deviceCache.size());
+    for (auto const& [id, name] : deviceCache) {
+        result.Devices.push_back({id, name});
+    }
+    std::ranges::sort(result.Devices, [](auto const& left, auto const& right) {
+        auto const leftName = left.Name.empty() ? std::wstring_view(left.Id) : std::wstring_view(left.Name);
+        auto const rightName = right.Name.empty() ? std::wstring_view(right.Id) : std::wstring_view(right.Name);
+        if (leftName != rightName) return leftName < rightName;
+        return left.Id < right.Id;
+    });
+    return result;
+}
+
+} // namespace
+
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Constructors / Destructor /////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
@@ -155,20 +179,14 @@ bool DeviceDiscoveryService::ContainsDeviceId(std::wstring const& deviceId) cons
 
 apc::device_picker::DeviceInventorySnapshot DeviceDiscoveryService::GetInventorySnapshot() const {
     auto guard = m_lock.lock_shared();
-    apc::device_picker::DeviceInventorySnapshot result;
-    result.Generation = m_inventoryGeneration;
-    result.EnumerationComplete = m_enumerationComplete;
-    result.Devices.reserve(m_deviceCache.size());
-    for (auto const& [id, name] : m_deviceCache) {
-        result.Devices.push_back({id, name});
-    }
-    std::ranges::sort(result.Devices, [](auto const& left, auto const& right) {
-        auto const leftName = left.Name.empty() ? std::wstring_view(left.Id) : std::wstring_view(left.Name);
-        auto const rightName = right.Name.empty() ? std::wstring_view(right.Id) : std::wstring_view(right.Name);
-        if (leftName != rightName) return leftName < rightName;
-        return left.Id < right.Id;
-    });
-    return result;
+    return BuildInventorySnapshot(m_inventoryGeneration, m_enumerationComplete, m_deviceCache);
+}
+
+std::optional<apc::device_picker::DeviceInventorySnapshot>
+DeviceDiscoveryService::GetInventorySnapshotIfChanged(std::uint64_t knownGeneration) const {
+    auto guard = m_lock.lock_shared();
+    if (m_inventoryGeneration == knownGeneration) return std::nullopt;
+    return BuildInventorySnapshot(m_inventoryGeneration, m_enumerationComplete, m_deviceCache);
 }
 
 std::size_t DeviceDiscoveryService::CacheSize() const {

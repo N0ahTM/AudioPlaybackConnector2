@@ -892,6 +892,13 @@ apc::device_picker::DeviceInventorySnapshot DeviceManager::GetDevicePickerInvent
     return discoveryService ? discoveryService->GetInventorySnapshot() : apc::device_picker::DeviceInventorySnapshot{};
 }
 
+std::optional<apc::device_picker::DeviceInventorySnapshot>
+DeviceManager::GetDevicePickerInventorySnapshotIfChanged(std::uint64_t knownGeneration) const {
+    auto discoveryService = m_discoveryService;
+    if (!discoveryService) return std::nullopt;
+    return discoveryService->GetInventorySnapshotIfChanged(knownGeneration);
+}
+
 DeviceTrayPresentationSnapshot DeviceManager::GetTrayPresentationSnapshot() const {
     auto guard = m_lock.lock_shared();
     DeviceTrayPresentationSnapshot snapshot;

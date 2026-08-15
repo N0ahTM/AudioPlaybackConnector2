@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <unordered_map>
 #include <util/Event.hpp>
 
@@ -37,6 +38,8 @@ public:
     [[nodiscard]] bool ContainsDeviceId(std::wstring const& deviceId) const;
     [[nodiscard]] std::size_t CacheSize() const;
     [[nodiscard]] apc::device_picker::DeviceInventorySnapshot GetInventorySnapshot() const;
+    [[nodiscard]] std::optional<apc::device_picker::DeviceInventorySnapshot>
+    GetInventorySnapshotIfChanged(std::uint64_t knownGeneration) const;
     winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
     RefreshAsync();
 

@@ -116,7 +116,6 @@ private:
         winrt::event_token StateChangedToken{};
         std::shared_ptr<CloseBarrier> Barrier;
         bool RestoreIncoming = false;
-        bool StopHeartbeat = false;
     };
 
     winrt::Windows::Foundation::IAsyncOperation<bool> ConnectWithIntentAsync(winrt::hstring deviceId,
@@ -163,8 +162,6 @@ private:
                                   winrt::Windows::Media::Audio::AudioPlaybackConnection sender,
                                   winrt::Windows::Foundation::IInspectable);
     void ScheduleReconnect(winrt::hstring deviceId);
-    void StartConnectionHeartbeat();
-    void StopConnectionHeartbeat();
     void LogConnectionSnapshot(winrt::hstring const& reason) const;
     void EnsureDiscoveryEventHandlers();
     void OnDeviceAdded(winrt::Windows::Devices::Enumeration::DeviceInformation args);
@@ -190,6 +187,4 @@ private:
     std::size_t m_discoveryDeviceAddedToken = 0;
     std::size_t m_discoveryDeviceRemovedToken = 0;
     std::size_t m_discoveryInventoryChangedToken = 0;
-    mutable std::mutex m_heartbeatTimerMutex;
-    winrt::Windows::System::Threading::ThreadPoolTimer m_heartbeatTimer{nullptr};
 };

@@ -7,7 +7,6 @@
 #include <utility>
 
 namespace {
-constexpr int c_heartbeatIntervalMinutes = 5;
 constexpr std::chrono::seconds c_userActionCascadeWindow{5};
 constexpr std::size_t c_openTransientFailureMaxAttempts = 10;
 
@@ -145,7 +144,6 @@ void DeviceManager::StartDeviceWatcher() {
 }
 
 void DeviceManager::StopDeviceWatcher() {
-    StopConnectionHeartbeat();
     if (m_discoveryService) m_discoveryService->Stop();
 }
 
@@ -903,49 +901,6 @@ DeviceTrayPresentationSnapshot DeviceManager::GetTrayPresentationSnapshot() cons
     return snapshot;
 }
 
-void DeviceManager::StartConnectionHeartbeat() {
-    bool started = false;
-    try {
-        std::lock_guard lock(m_heartbeatTimerMutex);
-        if (m_heartbeatTimer) return;
-
-        auto weak = weak_from_this();
-        m_heartbeatTimer = winrt::Windows::System::Threading::ThreadPoolTimer::CreatePeriodicTimer(
-            [weak](auto) {
-                if (auto self = weak.lock()) {
-                    self->LogConnectionSnapshot(L"heartbeat");
-                }
-            },
-            std::chrono::minutes(c_heartbeatIntervalMinutes));
-        started = true;
-    } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[DeviceManager] Heartbeat timer creation failed", ex);
-    } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[DeviceManager] Heartbeat timer creation failed", ex);
-    } catch (...) {
-        util::DebugTraceUnknownException(L"[DeviceManager] Heartbeat timer creation failed");
-    }
-
-    if (started) {
-        LogConnectionSnapshot(L"heartbeat-started");
-    }
-}
-
-void DeviceManager::StopConnectionHeartbeat() {
-    winrt::Windows::System::Threading::ThreadPoolTimer timer{nullptr};
-    {
-        std::lock_guard lock(m_heartbeatTimerMutex);
-        timer = std::exchange(m_heartbeatTimer, nullptr);
-    }
-    if (timer) {
-        try {
-            timer.Cancel();
-        } catch (...) {
-        }
-        LogConnectionSnapshot(L"heartbeat-stopped");
-    }
-}
-
 void DeviceManager::LogConnectionSnapshot(winrt::hstring const& reason) const {
     std::vector<DeviceManagerDiagnosticSnapshot> snapshots;
     bool allReconnectsCancelled = false;
@@ -1003,7 +958,6 @@ void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason,
 
     bool reconnectOnConnectionLoss = false;
     bool acceptIncomingConnections = false;
-    bool noActiveConnections = false;
     bool stateChanged = false;
     winrt::Windows::Media::Audio::AudioPlaybackConnection connection{nullptr};
     winrt::event_token stateChangedToken{};
@@ -1030,7 +984,6 @@ void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason,
                 reconnectOnConnectionLoss = false;
                 acceptIncomingConnections = false;
             }
-            noActiveConnections = !m_sessions.HasConnections();
             closeBarrier = InstallCloseBarrierLocked(deviceId);
             stateChanged = true;
             if (reason == DisconnectReason::UserInitiated && !suppressCascade) {
@@ -1042,10 +995,6 @@ void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason,
     if (!closeBarrier) {
         if (stateChanged) DeviceActivityChanged(deviceId);
         return;
-    }
-
-    if (noActiveConnections) {
-        StopConnectionHeartbeat();
     }
 
     // Revoke the StateChanged token so the zombie cannot fire events at us.
@@ -1358,7 +1307,6 @@ DeviceManager::ConnectInternalAsync(winrt::Windows::Devices::Enumeration::Device
                                             DeviceStatusKind::Connected);
                     }
                     LogConnectionSnapshot(L"open-success");
-                    StartConnectionHeartbeat();
                     co_return true;
                 }
                 case winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResultStatus::RequestTimedOut:
@@ -1468,13 +1416,11 @@ DeviceManager::PrepareReconnectPolicyCleanupLocked(winrt::hstring const& deviceI
     cleanup.StateChangedToken = extracted->StateChangedToken;
     cleanup.Barrier = std::move(barrier);
     cleanup.RestoreIncoming = extracted->AcceptIncomingConnections && m_incomingConnectionsEnabled;
-    cleanup.StopHeartbeat = !m_sessions.HasConnections();
     return cleanup;
 }
 
 void DeviceManager::StartReconnectPolicyCleanup(ReconnectPolicyCleanup cleanup) noexcept {
     try {
-        if (cleanup.StopHeartbeat) StopConnectionHeartbeat();
         if (cleanup.Connection && cleanup.StateChangedToken.value != 0) {
             AudioConnectionService::RevokeStateChanged(cleanup.Connection, cleanup.StateChangedToken);
         }
@@ -1735,7 +1681,6 @@ void DeviceManager::OnConnectionStateChanged(winrt::hstring deviceId,
                 DeviceStatusKind::Connected);
             DeviceActivityChanged(deviceId);
             LogConnectionSnapshot(L"incoming-opened");
-            StartConnectionHeartbeat();
         }
         return;
     }
@@ -1790,9 +1735,6 @@ void DeviceManager::OnConnectionStateChanged(winrt::hstring deviceId,
                             winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::None,
                             DeviceStatusKind::Ready);
         DeviceActivityChanged(deviceId);
-        if (!HasConnections()) {
-            StopConnectionHeartbeat();
-        }
         if (wasOpen && reconnectOnConnectionLoss) {
             ScheduleReconnect(deviceId);
         }

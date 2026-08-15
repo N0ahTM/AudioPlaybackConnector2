@@ -47,7 +47,7 @@ public:
     void BeginManualOperation(std::wstring_view deviceId);
     void CancelDevice(std::wstring_view deviceId);
     void SetPolicyEnabled(std::wstring_view deviceId, bool enabled);
-    void CompleteConnectionSucceeded(std::wstring_view deviceId);
+    void CompleteConnectionSucceeded(std::wstring_view deviceId) noexcept;
     [[nodiscard]] bool IsCancelled(std::wstring_view deviceId) const;
     [[nodiscard]] bool AllReconnectsCancelled() const;
     [[nodiscard]] std::size_t Attempts(std::wstring_view deviceId) const;

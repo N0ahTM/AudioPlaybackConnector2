@@ -93,8 +93,12 @@ void ReconnectController::SetPolicyEnabled(std::wstring_view deviceId, bool enab
     state.FailureNotified = false;
 }
 
-void ReconnectController::CompleteConnectionSucceeded(std::wstring_view deviceId) {
-    auto& state = m_states[DeviceKey(deviceId)];
+void ReconnectController::CompleteConnectionSucceeded(std::wstring_view deviceId) noexcept {
+    auto iter = std::ranges::find_if(
+        m_states, [deviceId](auto const& entry) { return std::wstring_view(entry.first) == deviceId; });
+    if (iter == m_states.end()) return;
+
+    auto& state = iter->second;
     ++state.Generation;
     state.CompletedAttempts = 0;
     state.TimerPending = false;

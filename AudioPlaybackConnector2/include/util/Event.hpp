@@ -26,22 +26,25 @@ public:
         std::erase_if(m_handlers, [id](const auto& pair) { return pair.first == id; });
     }
 
-    template <typename... CallArgs> void operator()(CallArgs&&... args) const {
+    template <typename... CallArgs> void operator()(CallArgs&&... args) const noexcept {
         static_assert(sizeof...(CallArgs) == sizeof...(Args), "Event argument count mismatch");
-        auto snapshot = std::tuple<std::decay_t<Args>...>(std::forward<CallArgs>(args)...);
-        std::vector<std::shared_ptr<Handler>> copy;
-        {
-            auto guard = m_lock.lock_shared();
-            copy.reserve(m_handlers.size());
-            for (auto& handler : m_handlers) {
-                copy.push_back(handler.second);
+        try {
+            auto snapshot = std::tuple<std::decay_t<Args>...>(std::forward<CallArgs>(args)...);
+            std::vector<std::shared_ptr<Handler>> copy;
+            {
+                auto guard = m_lock.lock_shared();
+                copy.reserve(m_handlers.size());
+                for (auto& handler : m_handlers) {
+                    copy.push_back(handler.second);
+                }
             }
-        }
-        for (auto& handler : copy) {
-            try {
-                std::apply([&](auto const&... values) { (*handler)(values...); }, snapshot);
-            } catch (...) {
+            for (auto& handler : copy) {
+                try {
+                    std::apply([&](auto const&... values) { (*handler)(values...); }, snapshot);
+                } catch (...) {
+                }
             }
+        } catch (...) {
         }
     }
 

@@ -96,6 +96,7 @@
     <ClCompile Include="src\ControlTargetMatcherTests.cpp" />
     <ClCompile Include="src\DeviceOperationCoordinatorTests.cpp" />
     <ClCompile Include="src\DiagnosticsLogCollectorTests.cpp" />
+    <ClCompile Include="src\EventTests.cpp" />
     <ClCompile Include="src\SettingsDiagnosticsReportBuilderTests.cpp" />
     <ClCompile Include="src\DevicePickerSnapshotTests.cpp" />
     <ClCompile Include="src\LatestStartupTaskRequestStateTests.cpp" />
@@ -158,6 +159,7 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\AutomaticUpdateWindow.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DevicePickerSnapshot.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\ReconnectController.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\util\Event.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\util\RuntimeApartment.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\ToastXmlSanitizer.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\CommandLineControlServer.hpp" />

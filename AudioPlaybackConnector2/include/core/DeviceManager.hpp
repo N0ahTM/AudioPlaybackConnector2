@@ -195,7 +195,7 @@ private:
                                   winrt::Windows::Media::Audio::AudioPlaybackConnection sender,
                                   winrt::Windows::Foundation::IInspectable);
     [[nodiscard]] bool ScheduleReconnect(winrt::hstring deviceId);
-    void LogConnectionSnapshot(winrt::hstring const& reason) const;
+    void LogConnectionSnapshot(winrt::hstring const& reason) const noexcept;
     void EnsureDiscoveryEventHandlers();
     void OnDeviceAdded(winrt::Windows::Devices::Enumeration::DeviceInformation args);
     void OnDeviceRemoved(winrt::Windows::Devices::Enumeration::DeviceInformationUpdate args);

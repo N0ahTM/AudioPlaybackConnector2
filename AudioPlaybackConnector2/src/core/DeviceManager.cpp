@@ -934,36 +934,44 @@ DeviceTrayPresentationSnapshot DeviceManager::GetTrayPresentationSnapshot() cons
     return snapshot;
 }
 
-void DeviceManager::LogConnectionSnapshot(winrt::hstring const& reason) const {
-    std::vector<DeviceManagerDiagnosticSnapshot> snapshots;
-    bool allReconnectsCancelled = false;
-    std::size_t deviceCacheSize = m_discoveryService ? m_discoveryService->CacheSize() : 0;
-    std::vector<std::pair<std::wstring, DeviceConnectionInfo>> allConnections;
-    {
-        auto guard = m_lock.lock_shared();
-        allConnections = m_sessions.GetConnectionsSnapshot();
-        snapshots.reserve(allConnections.size());
-        allReconnectsCancelled = m_reconnectController.AllReconnectsCancelled();
-        for (auto const& [id, info] : allConnections) {
-            DeviceManagerDiagnosticSnapshot snapshot;
-            snapshot.Id = winrt::hstring(id);
-            snapshot.Name = !info.Name.empty() ? info.Name : id;
-            snapshot.HasConnection = static_cast<bool>(info.Connection);
-            snapshot.IsOpen = info.IsOpen;
-            snapshot.ReconnectOnConnectionLoss = info.ReconnectOnConnectionLoss;
-            snapshot.AcceptIncomingConnections = info.AcceptIncomingConnections;
-            snapshot.Disconnecting = m_sessions.IsDisconnecting(snapshot.Id);
-            snapshot.Reconnecting = m_deviceOperations.IsInPhase(id, OperationPhase::Reconnecting);
-            snapshot.CancelledReconnect = m_reconnectController.IsCancelled(snapshot.Id);
-            snapshot.ReconnectAttempts = m_reconnectController.Attempts(snapshot.Id);
-            if (auto iter = m_connectAttemptIds.find(id); iter != m_connectAttemptIds.end()) {
-                snapshot.ConnectAttemptId = iter->second;
+void DeviceManager::LogConnectionSnapshot(winrt::hstring const& reason) const noexcept {
+    try {
+        std::vector<DeviceManagerDiagnosticSnapshot> snapshots;
+        bool allReconnectsCancelled = false;
+        std::size_t deviceCacheSize = m_discoveryService ? m_discoveryService->CacheSize() : 0;
+        std::vector<std::pair<std::wstring, DeviceConnectionInfo>> allConnections;
+        {
+            auto guard = m_lock.lock_shared();
+            allConnections = m_sessions.GetConnectionsSnapshot();
+            snapshots.reserve(allConnections.size());
+            allReconnectsCancelled = m_reconnectController.AllReconnectsCancelled();
+            for (auto const& [id, info] : allConnections) {
+                DeviceManagerDiagnosticSnapshot snapshot;
+                snapshot.Id = winrt::hstring(id);
+                snapshot.Name = !info.Name.empty() ? info.Name : id;
+                snapshot.HasConnection = static_cast<bool>(info.Connection);
+                snapshot.IsOpen = info.IsOpen;
+                snapshot.ReconnectOnConnectionLoss = info.ReconnectOnConnectionLoss;
+                snapshot.AcceptIncomingConnections = info.AcceptIncomingConnections;
+                snapshot.Disconnecting = m_sessions.IsDisconnecting(snapshot.Id);
+                snapshot.Reconnecting = m_deviceOperations.IsInPhase(id, OperationPhase::Reconnecting);
+                snapshot.CancelledReconnect = m_reconnectController.IsCancelled(snapshot.Id);
+                snapshot.ReconnectAttempts = m_reconnectController.Attempts(snapshot.Id);
+                if (auto iter = m_connectAttemptIds.find(id); iter != m_connectAttemptIds.end()) {
+                    snapshot.ConnectAttemptId = iter->second;
+                }
+                snapshots.push_back(std::move(snapshot));
             }
-            snapshots.push_back(std::move(snapshot));
         }
-    }
 
-    LogDeviceManagerDiagnosticSnapshot(reason, deviceCacheSize, allReconnectsCancelled, snapshots);
+        LogDeviceManagerDiagnosticSnapshot(reason, deviceCacheSize, allReconnectsCancelled, snapshots);
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(L"[DeviceManager] connection snapshot logging failed", ex);
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[DeviceManager] connection snapshot logging failed", ex);
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[DeviceManager] connection snapshot logging failed");
+    }
 }
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -1391,12 +1399,20 @@ DeviceManager::ConnectInternalAsync(winrt::Windows::Devices::Enumeration::Device
                         m_userActionCascadeIds.erase(deviceIdKey);
                     }
                     if (becameOpen) {
-                        DeviceConnected(deviceId);
-                        DeviceStatusChanged(deviceId,
-                                            winrt::hstring(_("Connected")),
-                                            winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::
-                                                ShowDisconnectButton,
-                                            DeviceStatusKind::Connected);
+                        try {
+                            DeviceConnected(deviceId);
+                            DeviceStatusChanged(deviceId,
+                                                winrt::hstring(_("Connected")),
+                                                winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::
+                                                    ShowDisconnectButton,
+                                                DeviceStatusKind::Connected);
+                        } catch (winrt::hresult_error const& ex) {
+                            util::DebugTraceException(L"[DeviceManager] post-connect notification failed", ex);
+                        } catch (std::exception const& ex) {
+                            util::DebugTraceException(L"[DeviceManager] post-connect notification failed", ex);
+                        } catch (...) {
+                            util::DebugTraceUnknownException(L"[DeviceManager] post-connect notification failed");
+                        }
                     }
                     LogConnectionSnapshot(L"open-success");
                     co_return true;
@@ -1815,11 +1831,11 @@ void DeviceManager::OnConnectionStateChanged(winrt::hstring deviceId,
     }
 
     winrt::Windows::Media::Audio::AudioPlaybackConnectionState state;
+    std::wstring deviceIdKey;
     try {
+        deviceIdKey = std::wstring(deviceId);
         state = sender.State();
-        DebugTrace(L"[DeviceManager] StateChanged: id={0} state={1}",
-                   std::wstring(deviceId),
-                   DeviceConnectionStateName(state));
+        DebugTrace(L"[DeviceManager] StateChanged: id={0} state={1}", deviceIdKey, DeviceConnectionStateName(state));
     } catch (winrt::hresult_error const& ex) {
         DebugTrace(L"[DeviceManager] StateChanged callback failed: 0x{0:X} {1}",
                    static_cast<uint32_t>(ex.code()),
@@ -1838,7 +1854,7 @@ void DeviceManager::OnConnectionStateChanged(winrt::hstring deviceId,
         {
             auto guard = m_lock.lock_exclusive();
             if (m_sessions.IsDisconnecting(deviceId) ||
-                m_deviceOperations.IsInPhase(std::wstring_view(deviceId), OperationPhase::Reconnecting)) {
+                m_deviceOperations.IsInPhase(deviceIdKey, OperationPhase::Reconnecting)) {
                 return;
             }
 
@@ -1848,18 +1864,30 @@ void DeviceManager::OnConnectionStateChanged(winrt::hstring deviceId,
             if (becameOpen) {
                 m_sessions.UpdateConnectionIsOpen(deviceId, true);
                 m_reconnectController.CompleteConnectionSucceeded(deviceId);
-                m_userActionCascadeIds.erase(std::wstring(deviceId));
+                m_userActionCascadeIds.erase(deviceIdKey);
             }
         }
 
         if (becameOpen) {
-            DebugTrace(L"[DeviceManager] Incoming connection opened: {0}", std::wstring(deviceId));
+            try {
+                DebugTrace(L"[DeviceManager] Incoming connection opened: {0}", deviceIdKey);
+            } catch (...) {
+                util::DebugTraceUnknownException(L"[DeviceManager] incoming connection logging failed");
+            }
             DeviceConnected(deviceId);
-            DeviceStatusChanged(
-                deviceId,
-                winrt::hstring(_("Connected")),
-                winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::ShowDisconnectButton,
-                DeviceStatusKind::Connected);
+            try {
+                DeviceStatusChanged(
+                    deviceId,
+                    winrt::hstring(_("Connected")),
+                    winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::ShowDisconnectButton,
+                    DeviceStatusKind::Connected);
+            } catch (winrt::hresult_error const& ex) {
+                util::DebugTraceException(L"[DeviceManager] incoming connection status notification failed", ex);
+            } catch (std::exception const& ex) {
+                util::DebugTraceException(L"[DeviceManager] incoming connection status notification failed", ex);
+            } catch (...) {
+                util::DebugTraceUnknownException(L"[DeviceManager] incoming connection status notification failed");
+            }
             DeviceActivityChanged(deviceId);
             LogConnectionSnapshot(L"incoming-opened");
         }
@@ -1877,7 +1905,7 @@ void DeviceManager::OnConnectionStateChanged(winrt::hstring deviceId,
         if (m_sessions.IsDisconnecting(deviceId)) {
             return;
         }
-        if (m_deviceOperations.IsInPhase(std::wstring_view(deviceId), OperationPhase::Reconnecting)) {
+        if (m_deviceOperations.IsInPhase(deviceIdKey, OperationPhase::Reconnecting)) {
             return; // reconnect in progress – ignore stale Closed events
         }
 
@@ -1900,15 +1928,14 @@ void DeviceManager::OnConnectionStateChanged(winrt::hstring deviceId,
     }
 
     if (isUserActionCascade) {
-        DebugTrace(L"[DeviceManager] StateChanged Closed treated as user-action cascade: {0}", std::wstring(deviceId));
+        DebugTrace(L"[DeviceManager] StateChanged Closed treated as user-action cascade: {0}", deviceIdKey);
         Disconnect(deviceId, DisconnectReason::UserInitiatedCascade);
         return;
     }
 
     if (retainIncomingConnection) {
         if (wasOpen) {
-            DebugTrace(L"[DeviceManager] Incoming connection closed; sink remains enabled: {0}",
-                       std::wstring(deviceId));
+            DebugTrace(L"[DeviceManager] Incoming connection closed; sink remains enabled: {0}", deviceIdKey);
             DeviceDisconnected(deviceId);
         }
         DeviceStatusChanged(deviceId,

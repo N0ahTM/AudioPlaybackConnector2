@@ -106,6 +106,15 @@ void TestObservedConnectionInvalidatesAttempt() {
     Check(controller.Attempts(id) == 0, "an observed connection must reset attempts");
 }
 
+void TestUnknownConnectionSuccessDoesNotCreateState() {
+    constexpr std::wstring_view id = L"device-unknown-success";
+    ReconnectController controller;
+
+    controller.CompleteConnectionSucceeded(id);
+    controller.CancelPendingReconnects();
+    Check(!controller.IsCancelled(id), "observing an untracked success must not allocate persistent reconnect state");
+}
+
 void TestBlockedTimerDoesNotRemainPending() {
     constexpr std::wstring_view id = L"device-blocked";
     ReconnectController controller;
@@ -443,6 +452,7 @@ int RunControlUiActionGateTests();
 int RunControlTargetMatcherTests();
 int RunDeviceOperationCoordinatorTests();
 int RunDiagnosticsLogCollectorTests();
+int RunEventTests();
 int RunSettingsDiagnosticsReportBuilderTests();
 int RunDevicePickerSnapshotTests();
 int RunLatestStartupTaskRequestStateTests();
@@ -459,6 +469,7 @@ int main() {
     TestSuccessAndStaleTokens();
     TestCancellationAndTimerCreationFailure();
     TestObservedConnectionInvalidatesAttempt();
+    TestUnknownConnectionSuccessDoesNotCreateState();
     TestBlockedTimerDoesNotRemainPending();
     TestBusyTimerDeferralPreservesReconnect();
     TestAbortReleasesClaimedAttempt();
@@ -480,6 +491,7 @@ int main() {
     g_failures += RunControlTargetMatcherTests();
     g_failures += RunDeviceOperationCoordinatorTests();
     g_failures += RunDiagnosticsLogCollectorTests();
+    g_failures += RunEventTests();
     g_failures += RunSettingsDiagnosticsReportBuilderTests();
     g_failures += RunDevicePickerSnapshotTests();
     g_failures += RunLatestStartupTaskRequestStateTests();

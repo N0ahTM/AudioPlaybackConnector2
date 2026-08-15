@@ -989,13 +989,22 @@ bool DeviceManager::DisconnectIfCurrent(winrt::hstring deviceId,
         std::move(deviceId), reason, suppressCascade, &expectedOperation, expectedAttemptId, nullptr, false);
 }
 
+bool DeviceManager::DisconnectIfCurrentConnection(
+    winrt::hstring deviceId,
+    DisconnectReason reason,
+    winrt::Windows::Media::Audio::AudioPlaybackConnection const& expectedConnection) {
+    return DisconnectInternal(std::move(deviceId), reason, false, nullptr, 0, nullptr, false, expectedConnection, true);
+}
+
 bool DeviceManager::DisconnectInternal(winrt::hstring deviceId,
                                        DisconnectReason reason,
                                        bool suppressCascade,
                                        OperationToken const* expectedOperation,
                                        std::size_t expectedAttemptId,
                                        winrt::hstring const* failureMessage,
-                                       bool restoreIncomingIfNoConnection) {
+                                       bool restoreIncomingIfNoConnection,
+                                       winrt::Windows::Media::Audio::AudioPlaybackConnection const& expectedConnection,
+                                       bool deriveDeviceRemovalReason) {
     auto reasonName = [](DisconnectReason value) -> std::wstring_view {
         switch (value) {
             case DisconnectReason::UserInitiated: return L"UserInitiated";
@@ -1005,10 +1014,6 @@ bool DeviceManager::DisconnectInternal(winrt::hstring deviceId,
             default: return L"UnknownReason";
         }
     };
-    DebugTrace(L"[DeviceManager] Disconnect requested: id={0} reason={1} suppressCascade={2}",
-               std::wstring(deviceId),
-               reasonName(reason),
-               suppressCascade);
     const std::wstring deviceIdKey(deviceId);
 
     bool reconnectOnConnectionLoss = false;
@@ -1028,6 +1033,17 @@ bool DeviceManager::DisconnectInternal(winrt::hstring deviceId,
             if (!IsOperationCurrentLocked(*expectedOperation) || attempt == m_connectAttemptIds.end() ||
                 attempt->second != expectedAttemptId) {
                 return false;
+            }
+        }
+        if (expectedConnection) {
+            auto const current = m_sessions.FindConnection(deviceId);
+            if (!current || current->Connection != expectedConnection) return false;
+            if (deriveDeviceRemovalReason) {
+                if (m_sessions.IsDisconnecting(deviceId) ||
+                    m_deviceOperations.IsInPhase(deviceIdKey, OperationPhase::Reconnecting)) {
+                    return false;
+                }
+                reason = current->IsOpen ? DisconnectReason::Unexpected : DisconnectReason::Cleanup;
             }
         }
 
@@ -1071,6 +1087,11 @@ bool DeviceManager::DisconnectInternal(winrt::hstring deviceId,
         }
         throw;
     }
+
+    DebugTrace(L"[DeviceManager] Disconnect claimed: id={0} reason={1} suppressCascade={2}",
+               deviceIdKey,
+               reasonName(reason),
+               suppressCascade);
 
     if (!closeBarrier) {
         if (stateChanged) DeviceActivityChanged(deviceId);
@@ -2140,18 +2161,15 @@ void DeviceManager::OnDeviceAdded(winrt::Windows::Devices::Enumeration::DeviceIn
 }
 
 void DeviceManager::OnDeviceRemoved(winrt::Windows::Devices::Enumeration::DeviceInformationUpdate args) {
-    std::optional<bool> removedSessionWasOpen;
+    winrt::Windows::Media::Audio::AudioPlaybackConnection removedConnection{nullptr};
     {
         auto guard = m_lock.lock_exclusive();
         if (m_shutdownForProcessExit) return;
 
         auto info = m_sessions.FindConnection(args.Id());
-        if (info && !m_sessions.IsDisconnecting(args.Id()) &&
-            !m_deviceOperations.IsInPhase(std::wstring_view(args.Id()), OperationPhase::Reconnecting)) {
-            removedSessionWasOpen = info->IsOpen;
-        }
+        if (info && info->Connection) removedConnection = info->Connection;
     }
-    if (removedSessionWasOpen) {
-        Disconnect(args.Id(), *removedSessionWasOpen ? DisconnectReason::Unexpected : DisconnectReason::Cleanup);
+    if (removedConnection) {
+        static_cast<void>(DisconnectIfCurrentConnection(args.Id(), DisconnectReason::Cleanup, removedConnection));
     }
 }

@@ -144,13 +144,20 @@ private:
                                            bool suppressCascade,
                                            OperationToken const& expectedOperation,
                                            std::size_t expectedAttemptId);
-    [[nodiscard]] bool DisconnectInternal(winrt::hstring deviceId,
-                                          DisconnectReason reason,
-                                          bool suppressCascade,
-                                          OperationToken const* expectedOperation,
-                                          std::size_t expectedAttemptId,
-                                          winrt::hstring const* failureMessage,
-                                          bool restoreIncomingIfNoConnection);
+    [[nodiscard]] bool
+    DisconnectIfCurrentConnection(winrt::hstring deviceId,
+                                  DisconnectReason reason,
+                                  winrt::Windows::Media::Audio::AudioPlaybackConnection const& expectedConnection);
+    [[nodiscard]] bool
+    DisconnectInternal(winrt::hstring deviceId,
+                       DisconnectReason reason,
+                       bool suppressCascade,
+                       OperationToken const* expectedOperation,
+                       std::size_t expectedAttemptId,
+                       winrt::hstring const* failureMessage,
+                       bool restoreIncomingIfNoConnection,
+                       winrt::Windows::Media::Audio::AudioPlaybackConnection const& expectedConnection = nullptr,
+                       bool deriveDeviceRemovalReason = false);
     [[nodiscard]] std::optional<OperationToken>
     TryBeginOperationLocked(winrt::hstring const& deviceId, ConnectionIntent intent, OperationPhase phase);
     void InvalidateDeviceOperationLocked(winrt::hstring const& deviceId);

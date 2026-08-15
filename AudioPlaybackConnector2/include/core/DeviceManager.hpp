@@ -148,8 +148,18 @@ private:
     winrt::Windows::Foundation::IAsyncOperation<bool> WaitForCloseBarrierAsync(OperationToken operation,
                                                                                bool waitIndefinitely);
     [[nodiscard]] std::shared_ptr<CloseBarrier> InstallCloseBarrierLocked(winrt::hstring const& deviceId);
-    void
-    CompleteCloseBarrierDetached(winrt::hstring deviceId, std::shared_ptr<CloseBarrier> barrier, bool restoreIncoming);
+    [[nodiscard]] bool RemoveCloseBarrierLocked(std::shared_ptr<CloseBarrier> const& barrier) noexcept;
+    void StartCloseBarrierCleanup(winrt::Windows::Media::Audio::AudioPlaybackConnection connection,
+                                  winrt::hstring deviceId,
+                                  std::shared_ptr<CloseBarrier> barrier,
+                                  bool restoreIncoming,
+                                  std::wstring_view context) noexcept;
+    void FinalizeCloseBarrierNowNoThrow(winrt::hstring const& deviceId,
+                                        std::shared_ptr<CloseBarrier> const& barrier,
+                                        bool restoreIncoming) noexcept;
+    void CompleteCloseBarrierDetached(winrt::hstring deviceId,
+                                      std::shared_ptr<CloseBarrier> barrier,
+                                      bool restoreIncoming) noexcept;
     void AutoReconnectAttemptDetached(ReconnectController::TimerToken token);
     void StartReconnectTimer(ReconnectController::ScheduleDecision const& decision, bool notifyTriggered);
     void NotifyAutoReconnectFailed(winrt::hstring const& deviceId, std::size_t maxAttempts);

@@ -41,6 +41,7 @@ public:
     void InsertOrUpdateConnection(winrt::hstring const& deviceId, DeviceConnectionInfo info);
     void MarkDisconnecting(winrt::hstring const& deviceId);
     void UnmarkDisconnecting(winrt::hstring const& deviceId);
+    void UnmarkDisconnecting(std::wstring_view deviceId) noexcept;
 
 private:
     /*------------------------------------------------------------------------------------------------------------*/

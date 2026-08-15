@@ -67,10 +67,15 @@ std::optional<DeviceConnectionInfo> DeviceSessionStore::ExtractConnection(winrt:
 
 std::vector<std::pair<std::wstring, DeviceConnectionInfo>> DeviceSessionStore::ExtractAllConnections() {
     auto guard = m_lock.lock_exclusive();
+    static_assert(std::is_nothrow_move_assignable_v<DeviceConnectionInfo>);
     std::vector<std::pair<std::wstring, DeviceConnectionInfo>> result;
     result.reserve(m_connections.size());
-    for (auto& entry : m_connections) {
-        result.emplace_back(entry.first, std::move(entry.second));
+    for (auto const& entry : m_connections) {
+        result.emplace_back(entry.first, DeviceConnectionInfo{});
+    }
+    for (auto& entry : result) {
+        auto const source = m_connections.find(entry.first);
+        entry.second = std::move(source->second);
     }
     m_connections.clear();
     return result;
@@ -121,6 +126,12 @@ void DeviceSessionStore::MarkDisconnecting(winrt::hstring const& deviceId) {
 void DeviceSessionStore::UnmarkDisconnecting(winrt::hstring const& deviceId) {
     auto guard = m_lock.lock_exclusive();
     m_disconnectingIds.erase(DeviceKey(deviceId));
+}
+
+void DeviceSessionStore::UnmarkDisconnecting(std::wstring_view deviceId) noexcept {
+    auto guard = m_lock.lock_exclusive();
+    auto const iter = std::ranges::find(m_disconnectingIds, deviceId);
+    if (iter != m_disconnectingIds.end()) m_disconnectingIds.erase(iter);
 }
 
 void DeviceSessionStore::SetReconnectOnConnectionLoss(winrt::hstring const& deviceId, bool enabled) {

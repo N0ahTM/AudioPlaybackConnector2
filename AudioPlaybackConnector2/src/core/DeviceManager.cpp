@@ -208,18 +208,20 @@ void DeviceManager::ShutdownForProcessExit() noexcept {
 }
 
 void DeviceManager::SuspendForPowerTransition() noexcept {
+    struct ConnectionForSuspend {
+        winrt::hstring DeviceId;
+        winrt::Windows::Media::Audio::AudioPlaybackConnection Connection{nullptr};
+        winrt::event_token StateChangedToken{};
+        std::shared_ptr<CloseBarrier> Barrier;
+    };
+    static_assert(std::is_nothrow_move_constructible_v<ConnectionForSuspend>);
+    std::vector<ConnectionForSuspend> connections;
+    decltype(m_sessions.ExtractAllConnections()) extractedConnections;
     try {
         DebugTrace(L"[DeviceManager] Power transition suspend started");
         StopDeviceWatcher();
         CancelPendingReconnects();
 
-        struct ConnectionForSuspend {
-            winrt::hstring DeviceId;
-            winrt::Windows::Media::Audio::AudioPlaybackConnection Connection{nullptr};
-            winrt::event_token StateChangedToken{};
-            std::shared_ptr<CloseBarrier> Barrier;
-        };
-        std::vector<ConnectionForSuspend> connections;
         {
             auto guard = m_lock.lock_exclusive();
             if (m_shutdownForProcessExit) return;
@@ -228,49 +230,59 @@ void DeviceManager::SuspendForPowerTransition() noexcept {
                 ++entry.second;
             }
             m_deviceOperations.CancelAll();
-            auto allConnections = m_sessions.ExtractAllConnections();
-            connections.reserve(allConnections.size());
+            extractedConnections = m_sessions.ExtractAllConnections();
+            connections.reserve(extractedConnections.size());
 
-            for (auto& [id, info] : allConnections) {
+            for (auto& [id, info] : extractedConnections) {
                 if (info.Connection) {
                     auto deviceId = winrt::hstring(id);
-                    connections.push_back({deviceId,
-                                           std::move(info.Connection),
-                                           info.StateChangedToken,
-                                           InstallCloseBarrierLocked(deviceId)});
+                    connections.push_back({deviceId, std::move(info.Connection), info.StateChangedToken, nullptr});
+                    auto& item = connections.back();
+                    item.Barrier = InstallCloseBarrierLocked(deviceId);
                 }
             }
 
-            m_sessions.Clear();
-            for (auto const& [id, barrier] : m_closeBarriers) {
-                (void)barrier;
-                m_sessions.MarkDisconnecting(winrt::hstring(id));
-            }
             m_reconnectController.ClearTracking();
             m_userActionCascadeIds.clear();
         }
 
         for (auto& item : connections) {
+            bool cleanupHandedOff = false;
+            auto cleanupFallback = wil::scope_exit([&]() noexcept {
+                if (!cleanupHandedOff) {
+                    StartCloseBarrierCleanup(std::move(item.Connection),
+                                             std::move(item.DeviceId),
+                                             std::move(item.Barrier),
+                                             false,
+                                             L"Power transition cleanup fallback");
+                }
+            });
             if (item.StateChangedToken.value != 0) {
                 AudioConnectionService::RevokeStateChanged(item.Connection, item.StateChangedToken);
             }
-            auto weak = weak_from_this();
-            std::vector<winrt::Windows::Media::Audio::AudioPlaybackConnection> closeConnections;
-            closeConnections.push_back(std::move(item.Connection));
-            CloseConnectionsOnBackgroundThread(
-                std::move(closeConnections),
-                L"Power transition cleanup",
-                [weak, id = std::move(item.DeviceId), barrier = std::move(item.Barrier)]() mutable {
-                    if (auto self = weak.lock()) {
-                        self->CompleteCloseBarrierDetached(std::move(id), std::move(barrier), false);
-                    } else if (barrier) {
-                        barrier->Completed.SetEvent();
-                    }
-                });
+            StartCloseBarrierCleanup(std::move(item.Connection),
+                                     std::move(item.DeviceId),
+                                     std::move(item.Barrier),
+                                     false,
+                                     L"Power transition cleanup");
+            cleanupHandedOff = true;
         }
 
         LogConnectionSnapshot(L"power-suspend");
     } catch (...) {
+        for (auto& item : connections) {
+            AudioConnectionService::RevokeStateChanged(item.Connection, item.StateChangedToken);
+            StartCloseBarrierCleanup(std::move(item.Connection),
+                                     std::move(item.DeviceId),
+                                     std::move(item.Barrier),
+                                     false,
+                                     L"Power transition outer fallback");
+        }
+        for (auto& [id, info] : extractedConnections) {
+            (void)id;
+            AudioConnectionService::RevokeStateChanged(info.Connection, info.StateChangedToken);
+            AudioConnectionService::Close(info.Connection);
+        }
         DebugTrace(L"[DeviceManager] SuspendForPowerTransition ERROR: ignored exception during suspend");
     }
 }
@@ -642,7 +654,7 @@ DeviceManager::ReconnectWithIntentAsync(winrt::hstring deviceId,
         winrt::Windows::Media::Audio::AudioPlaybackConnection oldConn{nullptr};
         winrt::event_token oldToken{};
         std::shared_ptr<CloseBarrier> closeBarrier;
-        {
+        try {
             auto guard = m_lock.lock_exclusive();
             if (!IsOperationCurrentLocked(operation)) co_return false;
             auto extracted = m_sessions.ExtractConnection(deviceId);
@@ -653,25 +665,31 @@ DeviceManager::ReconnectWithIntentAsync(winrt::hstring deviceId,
                 closeBarrier = InstallCloseBarrierLocked(deviceId);
                 TrackUserActionCascadeLocked(deviceId);
             }
+        } catch (...) {
+            AudioConnectionService::RevokeStateChanged(oldConn, oldToken);
+            AudioConnectionService::Close(oldConn);
+            if (closeBarrier) {
+                CompleteCloseBarrierDetached(deviceId, std::move(closeBarrier), false);
+            }
+            throw;
         }
 
-        if (oldConn) {
+        if (closeBarrier) {
+            bool cleanupHandedOff = false;
+            auto cleanupFallback = wil::scope_exit([&]() noexcept {
+                if (!cleanupHandedOff) {
+                    StartCloseBarrierCleanup(
+                        std::move(oldConn), deviceId, std::move(closeBarrier), false, L"Reconnect cleanup fallback");
+                }
+            });
             // Revoke the event token first so no stale Closed callbacks fire.
             if (oldToken.value != 0) {
                 AudioConnectionService::RevokeStateChanged(oldConn, oldToken);
             }
             DebugTrace(L"[DeviceManager] ReconnectAsync closing old connection: {0}", std::wstring(deviceId));
-            auto weak = weak_from_this();
-            std::vector<winrt::Windows::Media::Audio::AudioPlaybackConnection> connections;
-            connections.push_back(std::move(oldConn));
-            CloseConnectionsOnBackgroundThread(
-                std::move(connections), L"Reconnect cleanup", [weak, id = deviceId, barrier = closeBarrier]() mutable {
-                    if (auto self = weak.lock()) {
-                        self->CompleteCloseBarrierDetached(std::move(id), std::move(barrier), false);
-                    } else if (barrier) {
-                        barrier->Completed.SetEvent();
-                    }
-                });
+            StartCloseBarrierCleanup(
+                std::move(oldConn), deviceId, std::move(closeBarrier), false, L"Reconnect cleanup");
+            cleanupHandedOff = true;
         }
 
         if (!(co_await WaitForCloseBarrierAsync(operation,
@@ -765,8 +783,8 @@ void DeviceManager::SetReconnectOnConnectionLoss(winrt::hstring deviceId, bool e
         m_reconnectController.SetPolicyEnabled(deviceId, enabled);
         if (cancelActiveAttempt) cleanup = PrepareReconnectPolicyCleanupLocked(deviceId);
     }
-    if (activityChanged) DeviceActivityChanged(deviceId);
     if (cleanup) StartReconnectPolicyCleanup(std::move(*cleanup));
+    if (activityChanged) DeviceActivityChanged(deviceId);
 }
 
 void DeviceManager::ApplyReconnectOnConnectionLossPolicy(bool globallyEnabled,
@@ -775,7 +793,8 @@ void DeviceManager::ApplyReconnectOnConnectionLossPolicy(bool globallyEnabled,
                                                          individuallyEnabledDeviceIds.end());
     std::vector<ReconnectPolicyCleanup> cleanups;
     std::vector<std::wstring> activityChanges;
-    {
+    static_assert(std::is_nothrow_move_constructible_v<ReconnectPolicyCleanup>);
+    try {
         auto guard = m_lock.lock_exclusive();
         std::unordered_set<std::wstring> trackedIds;
         for (auto const& [id, info] : m_sessions.GetConnectionsSnapshot()) {
@@ -799,6 +818,11 @@ void DeviceManager::ApplyReconnectOnConnectionLossPolicy(bool globallyEnabled,
                 if (cleanup) cleanups.push_back(std::move(*cleanup));
             }
         }
+    } catch (...) {
+        for (auto& cleanup : cleanups) {
+            StartReconnectPolicyCleanup(std::move(cleanup));
+        }
+        throw;
     }
 
     for (auto& cleanup : cleanups) {
@@ -965,11 +989,13 @@ void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason,
 
     bool reconnectOnConnectionLoss = false;
     bool acceptIncomingConnections = false;
+    bool powerTransitionSuspended = false;
+    bool restoreIncoming = false;
     bool stateChanged = false;
     winrt::Windows::Media::Audio::AudioPlaybackConnection connection{nullptr};
     winrt::event_token stateChangedToken{};
     std::shared_ptr<CloseBarrier> closeBarrier;
-    {
+    try {
         auto guard = m_lock.lock_exclusive();
         if (m_shutdownForProcessExit) return;
 
@@ -991,12 +1017,22 @@ void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason,
                 reconnectOnConnectionLoss = false;
                 acceptIncomingConnections = false;
             }
+            powerTransitionSuspended = m_powerTransitionSuspended;
+            restoreIncoming = acceptIncomingConnections && m_incomingConnectionsEnabled &&
+                              (reason == DisconnectReason::UserInitiated || reason == DisconnectReason::Cleanup);
             closeBarrier = InstallCloseBarrierLocked(deviceId);
             stateChanged = true;
             if (reason == DisconnectReason::UserInitiated && !suppressCascade) {
                 TrackUserActionCascadeLocked(deviceId);
             }
         }
+    } catch (...) {
+        AudioConnectionService::RevokeStateChanged(connection, stateChangedToken);
+        AudioConnectionService::Close(connection);
+        if (closeBarrier) {
+            CompleteCloseBarrierDetached(deviceId, std::move(closeBarrier), restoreIncoming);
+        }
+        throw;
     }
 
     if (!closeBarrier) {
@@ -1004,15 +1040,20 @@ void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason,
         return;
     }
 
+    bool cleanupHandedOff = false;
+    auto cleanupFallback = wil::scope_exit([&]() noexcept {
+        if (!cleanupHandedOff) {
+            StartCloseBarrierCleanup(std::move(connection),
+                                     deviceId,
+                                     std::move(closeBarrier),
+                                     restoreIncoming,
+                                     L"Disconnect cleanup fallback");
+        }
+    });
+
     // Revoke the StateChanged token so the zombie cannot fire events at us.
     if (connection && stateChangedToken.value != 0) {
         AudioConnectionService::RevokeStateChanged(connection, stateChangedToken);
-    }
-
-    bool powerTransitionSuspended = false;
-    {
-        auto guard = m_lock.lock_shared();
-        powerTransitionSuspended = m_powerTransitionSuspended;
     }
 
     if (reason != DisconnectReason::Cleanup && !powerTransitionSuspended) {
@@ -1039,30 +1080,9 @@ void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason,
 
     DeviceActivityChanged(deviceId);
 
-    bool restoreIncoming = false;
-    {
-        auto guard = m_lock.lock_shared();
-        restoreIncoming = acceptIncomingConnections && m_incomingConnectionsEnabled &&
-                          (reason == DisconnectReason::UserInitiated || reason == DisconnectReason::Cleanup);
-    }
-
-    auto weak = weak_from_this();
-    if (connection) {
-        std::vector<winrt::Windows::Media::Audio::AudioPlaybackConnection> connections;
-        connections.push_back(std::move(connection));
-        CloseConnectionsOnBackgroundThread(std::move(connections),
-                                           L"Disconnect cleanup",
-                                           [weak, id = deviceId, barrier = closeBarrier, restoreIncoming]() mutable {
-                                               if (auto self = weak.lock()) {
-                                                   self->CompleteCloseBarrierDetached(
-                                                       std::move(id), std::move(barrier), restoreIncoming);
-                                               } else if (barrier) {
-                                                   barrier->Completed.SetEvent();
-                                               }
-                                           });
-    } else {
-        CompleteCloseBarrierDetached(deviceId, std::move(closeBarrier), restoreIncoming);
-    }
+    StartCloseBarrierCleanup(
+        std::move(connection), deviceId, std::move(closeBarrier), restoreIncoming, L"Disconnect cleanup");
+    cleanupHandedOff = true;
 
     LogConnectionSnapshot(winrt::hstring(L"disconnect:") + winrt::hstring(reasonName(reason)));
 }
@@ -1416,8 +1436,17 @@ DeviceManager::PrepareReconnectPolicyCleanupLocked(winrt::hstring const& deviceI
     ReconnectPolicyCleanup cleanup;
     cleanup.DeviceId = deviceId;
     auto barrier = InstallCloseBarrierLocked(deviceId);
-    auto extracted = m_sessions.ExtractConnection(deviceId);
-    if (!extracted) return std::nullopt;
+    std::optional<DeviceConnectionInfo> extracted;
+    try {
+        extracted = m_sessions.ExtractConnection(deviceId);
+    } catch (...) {
+        static_cast<void>(RemoveCloseBarrierLocked(barrier));
+        throw;
+    }
+    if (!extracted) {
+        static_cast<void>(RemoveCloseBarrierLocked(barrier));
+        return std::nullopt;
+    }
 
     cleanup.Connection = std::move(extracted->Connection);
     cleanup.StateChangedToken = extracted->StateChangedToken;
@@ -1427,34 +1456,27 @@ DeviceManager::PrepareReconnectPolicyCleanupLocked(winrt::hstring const& deviceI
 }
 
 void DeviceManager::StartReconnectPolicyCleanup(ReconnectPolicyCleanup cleanup) noexcept {
+    bool cleanupHandedOff = false;
+    auto cleanupFallback = wil::scope_exit([&]() noexcept {
+        if (!cleanupHandedOff) {
+            StartCloseBarrierCleanup(std::move(cleanup.Connection),
+                                     std::move(cleanup.DeviceId),
+                                     std::move(cleanup.Barrier),
+                                     cleanup.RestoreIncoming,
+                                     L"Reconnect policy cleanup fallback");
+        }
+    });
     try {
         if (cleanup.Connection && cleanup.StateChangedToken.value != 0) {
             AudioConnectionService::RevokeStateChanged(cleanup.Connection, cleanup.StateChangedToken);
         }
-
-        auto weak = weak_from_this();
-        std::vector<winrt::Windows::Media::Audio::AudioPlaybackConnection> connections;
-        connections.push_back(std::move(cleanup.Connection));
-        CloseConnectionsOnBackgroundThread(std::move(connections),
-                                           L"Reconnect policy cleanup",
-                                           [weak,
-                                            id = std::move(cleanup.DeviceId),
-                                            barrier = std::move(cleanup.Barrier),
-                                            restoreIncoming = cleanup.RestoreIncoming]() mutable {
-                                               if (auto self = weak.lock()) {
-                                                   self->CompleteCloseBarrierDetached(
-                                                       std::move(id), std::move(barrier), restoreIncoming);
-                                               } else if (barrier) {
-                                                   barrier->Completed.SetEvent();
-                                               }
-                                           });
+        StartCloseBarrierCleanup(std::move(cleanup.Connection),
+                                 std::move(cleanup.DeviceId),
+                                 std::move(cleanup.Barrier),
+                                 cleanup.RestoreIncoming,
+                                 L"Reconnect policy cleanup");
+        cleanupHandedOff = true;
     } catch (...) {
-        if (cleanup.Connection) AudioConnectionService::Close(cleanup.Connection);
-        if (cleanup.Barrier) {
-            cleanup.Barrier->Completed.SetEvent();
-            CompleteCloseBarrierDetached(
-                std::move(cleanup.DeviceId), std::move(cleanup.Barrier), cleanup.RestoreIncoming);
-        }
         util::DebugTraceUnknownException(L"[DeviceManager] reconnect policy cleanup fallback used");
     }
 }
@@ -1517,48 +1539,132 @@ std::shared_ptr<DeviceManager::CloseBarrier> DeviceManager::InstallCloseBarrierL
     if (existing != m_closeBarriers.end()) return existing->second;
 
     auto barrier = std::make_shared<CloseBarrier>();
-    m_closeBarriers.emplace(key, barrier);
+    auto const [inserted, wasInserted] = m_closeBarriers.emplace(key, barrier);
+    if (!wasInserted) return inserted->second;
+    auto rollback = wil::scope_exit([&]() noexcept { m_closeBarriers.erase(inserted); });
     m_sessions.MarkDisconnecting(deviceId);
+    rollback.release();
     return barrier;
+}
+
+bool DeviceManager::RemoveCloseBarrierLocked(std::shared_ptr<CloseBarrier> const& barrier) noexcept {
+    auto const iter =
+        std::ranges::find_if(m_closeBarriers, [&](auto const& entry) noexcept { return entry.second == barrier; });
+    if (iter == m_closeBarriers.end()) return false;
+    m_sessions.UnmarkDisconnecting(std::wstring_view(iter->first));
+    m_closeBarriers.erase(iter);
+    return true;
+}
+
+void DeviceManager::StartCloseBarrierCleanup(winrt::Windows::Media::Audio::AudioPlaybackConnection connection,
+                                             winrt::hstring deviceId,
+                                             std::shared_ptr<CloseBarrier> barrier,
+                                             bool restoreIncoming,
+                                             std::wstring_view context) noexcept {
+    if (!barrier) {
+        AudioConnectionService::Close(connection);
+        return;
+    }
+
+    auto fallback = wil::scope_exit([&]() noexcept {
+        AudioConnectionService::Close(connection);
+        CompleteCloseBarrierDetached(std::move(deviceId), std::move(barrier), restoreIncoming);
+    });
+    try {
+        if (!connection) {
+            CompleteCloseBarrierDetached(std::move(deviceId), std::move(barrier), restoreIncoming);
+            fallback.release();
+            return;
+        }
+
+        auto weak = weak_from_this();
+        std::function<void()> completed =
+            [weak, id = deviceId, closeBarrier = barrier, restoreIncoming]() mutable noexcept {
+                if (auto self = weak.lock()) {
+                    self->CompleteCloseBarrierDetached(std::move(id), std::move(closeBarrier), restoreIncoming);
+                } else if (closeBarrier) {
+                    closeBarrier->Completed.SetEvent();
+                }
+            };
+        std::vector<winrt::Windows::Media::Audio::AudioPlaybackConnection> connections;
+        connections.push_back(std::move(connection));
+        CloseConnectionsOnBackgroundThread(std::move(connections), context, std::move(completed));
+        fallback.release();
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[DeviceManager] close-barrier cleanup handoff failed");
+    }
+}
+
+void DeviceManager::FinalizeCloseBarrierNowNoThrow(winrt::hstring const& deviceId,
+                                                   std::shared_ptr<CloseBarrier> const& barrier,
+                                                   bool restoreIncoming) noexcept {
+    bool completedCurrentBarrier = false;
+    bool reenable = false;
+    {
+        auto guard = m_lock.lock_exclusive();
+        completedCurrentBarrier = RemoveCloseBarrierLocked(barrier);
+        if (completedCurrentBarrier) {
+            reenable = restoreIncoming && !m_shutdownForProcessExit && !m_powerTransitionSuspended &&
+                       m_incomingConnectionsEnabled;
+        }
+    }
+
+    if (completedCurrentBarrier) {
+        try {
+            DeviceActivityChanged(deviceId);
+        } catch (...) {
+            util::DebugTraceUnknownException(L"[DeviceManager] close-barrier activity notification failed");
+        }
+    }
+    if (barrier) barrier->Completed.SetEvent();
+    if (reenable) {
+        try {
+            ReenableIncomingConnectionDetached(deviceId);
+        } catch (...) {
+            util::DebugTraceUnknownException(L"[DeviceManager] close-barrier incoming restore failed");
+        }
+    }
 }
 
 void DeviceManager::CompleteCloseBarrierDetached(winrt::hstring deviceId,
                                                  std::shared_ptr<CloseBarrier> barrier,
-                                                 bool restoreIncoming) {
-    auto weak = weak_from_this();
-    [](std::weak_ptr<DeviceManager> weak,
-       winrt::hstring id,
-       std::shared_ptr<CloseBarrier> closeBarrier,
-       bool shouldRestoreIncoming) -> winrt::fire_and_forget {
-        try {
-            co_await winrt::resume_after(ReconnectController::ReconnectCloseCooldown());
-            auto self = weak.lock();
-            if (!self) {
-                closeBarrier->Completed.SetEvent();
+                                                 bool restoreIncoming) noexcept {
+    auto fallbackDeviceId = deviceId;
+    auto fallbackBarrier = barrier;
+    try {
+        auto weak = weak_from_this();
+        [](std::weak_ptr<DeviceManager> weak,
+           winrt::hstring id,
+           std::shared_ptr<CloseBarrier> closeBarrier,
+           bool shouldRestoreIncoming) -> winrt::fire_and_forget {
+            bool cooldownCompleted = false;
+            try {
+                co_await winrt::resume_after(ReconnectController::ReconnectCloseCooldown());
+                cooldownCompleted = true;
+                if (auto self = weak.lock()) {
+                    self->FinalizeCloseBarrierNowNoThrow(id, closeBarrier, shouldRestoreIncoming);
+                } else if (closeBarrier) {
+                    closeBarrier->Completed.SetEvent();
+                }
                 co_return;
+            } catch (...) {
+                util::DebugTraceUnknownException(L"[DeviceManager] close-barrier completion fallback used");
             }
 
-            bool completedCurrentBarrier = false;
-            bool reenable = false;
-            {
-                auto guard = self->m_lock.lock_exclusive();
-                auto iter = self->m_closeBarriers.find(std::wstring(id));
-                if (iter != self->m_closeBarriers.end() && iter->second == closeBarrier) {
-                    self->m_closeBarriers.erase(iter);
-                    self->m_sessions.UnmarkDisconnecting(id);
-                    completedCurrentBarrier = true;
-                    reenable = shouldRestoreIncoming && !self->m_shutdownForProcessExit &&
-                               !self->m_powerTransitionSuspended && self->m_incomingConnectionsEnabled;
-                }
+            if (!cooldownCompleted) {
+                std::this_thread::sleep_for(ReconnectController::ReconnectCloseCooldown());
             }
-            if (completedCurrentBarrier) self->DeviceActivityChanged(id);
-            closeBarrier->Completed.SetEvent();
-            if (reenable) self->ReenableIncomingConnectionDetached(std::move(id));
-        } catch (...) {
-            closeBarrier->Completed.SetEvent();
-            util::DebugTraceUnknownException(L"[DeviceManager] Close barrier completion ignored exception");
-        }
-    }(std::move(weak), std::move(deviceId), std::move(barrier), restoreIncoming);
+            if (auto self = weak.lock()) {
+                self->FinalizeCloseBarrierNowNoThrow(id, closeBarrier, shouldRestoreIncoming);
+            } else if (closeBarrier) {
+                closeBarrier->Completed.SetEvent();
+            }
+        }(std::move(weak), std::move(deviceId), std::move(barrier), restoreIncoming);
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[DeviceManager] close-barrier coroutine launch failed");
+        std::this_thread::sleep_for(ReconnectController::ReconnectCloseCooldown());
+        FinalizeCloseBarrierNowNoThrow(fallbackDeviceId, fallbackBarrier, restoreIncoming);
+    }
 }
 
 void DeviceManager::TrackUserActionCascadeLocked(winrt::hstring const& deviceId) {

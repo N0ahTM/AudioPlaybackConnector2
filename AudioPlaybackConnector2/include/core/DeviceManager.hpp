@@ -137,6 +137,10 @@ private:
                                  OperationToken const& operation,
                                  std::size_t attemptId,
                                  bool restoreIncomingIfNoConnection = false);
+    void ReportOperationFailure(winrt::hstring const& deviceId,
+                                winrt::hstring const& message,
+                                OperationToken const& operation,
+                                std::wstring_view context) noexcept;
     void Disconnect(winrt::hstring deviceId, DisconnectReason reason);
     void Disconnect(winrt::hstring deviceId, DisconnectReason reason, bool suppressCascade);
     [[nodiscard]] bool DisconnectIfCurrent(winrt::hstring deviceId,

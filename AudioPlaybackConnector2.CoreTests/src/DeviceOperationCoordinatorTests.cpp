@@ -67,6 +67,31 @@ void TestIndependentDevicesAndCancelAll() {
           "a device restarted after cancel-all must receive a new token identity");
 }
 
+void TestFailureReportCanBeClaimedExactlyOnce() {
+    using namespace apc::device_operation;
+    DeviceOperationCoordinator coordinator;
+
+    auto operation = coordinator.TryBegin(L"device-f", Intent::ManualConnect, Phase::Connecting);
+    Check(operation && coordinator.TryClaimFailureReport(*operation),
+          "the current operation must claim failure publication");
+    Check(operation && !coordinator.TryClaimFailureReport(*operation),
+          "the same operation must not claim failure publication twice");
+    Check(operation && coordinator.IsCurrent(*operation),
+          "failure publication must keep the operation active as an ordering fence");
+    Check(operation && !coordinator.Transition(*operation, Phase::Connecting, Phase::Reconnecting),
+          "a claimed failure report must prevent further operation transitions");
+    Check(operation && coordinator.Complete(*operation), "the failure reporter must complete its operation");
+    Check(operation && !coordinator.TryClaimFailureReport(*operation),
+          "a completed operation must not claim another failure publication");
+
+    auto replacement = coordinator.TryBegin(L"device-f", Intent::ManualConnect, Phase::Connecting);
+    Check(operation && replacement && *operation != *replacement, "a replacement must have a distinct token identity");
+    Check(operation && !coordinator.TryClaimFailureReport(*operation),
+          "a stale token must not claim failure publication from its replacement");
+    Check(replacement && coordinator.TryClaimFailureReport(*replacement),
+          "the replacement must own its independent failure publication");
+}
+
 void TestInvalidInputsAreNoOps() {
     using namespace apc::device_operation;
     DeviceOperationCoordinator coordinator;
@@ -90,6 +115,7 @@ int RunDeviceOperationCoordinatorTests() {
     TestDuplicateBeginDoesNotInvalidateOwner();
     TestTransitionAndStaleCompletion();
     TestIndependentDevicesAndCancelAll();
+    TestFailureReportCanBeClaimedExactlyOnce();
     TestInvalidInputsAreNoOps();
     TestTokenExhaustionFailsClosed();
     return g_failures;

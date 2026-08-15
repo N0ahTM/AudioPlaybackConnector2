@@ -30,6 +30,7 @@ class DeviceOperationCoordinator {
 public:
     [[nodiscard]] std::optional<Token> TryBegin(std::wstring_view deviceId, Intent intent, Phase phase);
     [[nodiscard]] bool Transition(Token const& token, Phase expected, Phase next);
+    [[nodiscard]] bool TryClaimFailureReport(Token const& token) noexcept;
     [[nodiscard]] bool Complete(Token const& token);
     [[nodiscard]] bool Invalidate(std::wstring_view deviceId);
     void CancelAll() noexcept;
@@ -61,6 +62,7 @@ private:
         std::uint64_t TokenId = 0;
         Intent OperationIntent = Intent::ManualConnect;
         Phase OperationPhase = Phase::Connecting;
+        bool FailureReportClaimed = false;
     };
 
     std::unordered_map<std::wstring, State, TransparentStringHash, std::equal_to<>> m_active;

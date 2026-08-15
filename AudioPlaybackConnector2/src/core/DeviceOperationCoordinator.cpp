@@ -28,11 +28,23 @@ std::optional<Token> DeviceOperationCoordinator::TryBegin(std::wstring_view devi
 bool DeviceOperationCoordinator::Transition(Token const& token, Phase expected, Phase next) {
     auto state = m_active.find(token.DeviceId);
     if (state == m_active.end() || state->second.TokenId != token.Id ||
-        state->second.OperationIntent != token.OperationIntent || state->second.OperationPhase != expected) {
+        state->second.OperationIntent != token.OperationIntent || state->second.OperationPhase != expected ||
+        state->second.FailureReportClaimed) {
         return false;
     }
 
     state->second.OperationPhase = next;
+    return true;
+}
+
+bool DeviceOperationCoordinator::TryClaimFailureReport(Token const& token) noexcept {
+    auto state = m_active.find(token.DeviceId);
+    if (state == m_active.end() || state->second.TokenId != token.Id ||
+        state->second.OperationIntent != token.OperationIntent || state->second.FailureReportClaimed) {
+        return false;
+    }
+
+    state->second.FailureReportClaimed = true;
     return true;
 }
 

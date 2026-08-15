@@ -26,19 +26,6 @@ bool IsRetryableOpenFailure(winrt::Windows::Media::Audio::AudioPlaybackConnectio
     return static_cast<HRESULT>(extendedError) == HRESULT_FROM_WIN32(ERROR_GEN_FAILURE);
 }
 
-inline void ReportAsyncConnectionError(DeviceManager& dm,
-                                       winrt::hstring const& deviceId,
-                                       winrt::hstring const& message,
-                                       std::wstring_view context) {
-    DebugTrace(L"[DeviceManager] {0} ERROR: {1}", std::wstring(context), std::wstring(message));
-    dm.ConnectionError(deviceId, message);
-    dm.DeviceStatusChanged(deviceId,
-                           message,
-                           winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::ShowRetryButton,
-                           DeviceStatusKind::Error);
-    dm.DeviceActivityChanged(deviceId);
-}
-
 void PopulateConnectionMetadata(DeviceConnectionInfo& info,
                                 winrt::Windows::Devices::Enumeration::DeviceInformation const& device) {
     try {
@@ -426,8 +413,8 @@ DeviceManager::ConnectWithIntentAsync(winrt::hstring deviceId,
 
         if (!(co_await WaitForCloseBarrierAsync(operation,
                                                 operation.OperationIntent == ConnectionIntent::AutoReconnect))) {
-            if (reportFailures && IsOperationCurrent(operation)) {
-                ReportAsyncConnectionError(*this, deviceId, winrt::hstring(_("UnknownError")), L"close barrier");
+            if (reportFailures) {
+                ReportOperationFailure(deviceId, winrt::hstring(_("UnknownError")), operation, L"close barrier");
             }
             co_return false;
         }
@@ -446,41 +433,19 @@ DeviceManager::ConnectWithIntentAsync(winrt::hstring deviceId,
             DebugTrace(L"[DeviceManager] ConnectAsync known ID could not be resolved: {0}", std::wstring(deviceId));
         }
 
-        if (reportFailures && IsOperationCurrent(operation)) {
-            ConnectionError(deviceId, winrt::hstring(_("UnknownError")));
-            DeviceStatusChanged(deviceId,
-                                winrt::hstring(_("UnknownError")),
-                                winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::ShowRetryButton,
-                                DeviceStatusKind::Error);
+        if (reportFailures) {
+            ReportOperationFailure(deviceId, winrt::hstring(_("UnknownError")), operation, L"device resolution");
         }
         co_return false;
     } catch (winrt::hresult_error const& ex) {
-        if (reportFailures && IsOperationCurrent(operation)) {
-            ConnectionError(deviceId, ex.message());
-            DeviceStatusChanged(deviceId,
-                                ex.message(),
-                                winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::ShowRetryButton,
-                                DeviceStatusKind::Error);
-        }
+        if (reportFailures) ReportOperationFailure(deviceId, ex.message(), operation, L"ConnectAsync");
     } catch (std::exception const& ex) {
         auto message = winrt::hstring(util::Utf8ToUtf16(ex.what()));
-        if (reportFailures && IsOperationCurrent(operation)) {
-            ConnectionError(deviceId, message);
-            DeviceStatusChanged(deviceId,
-                                message,
-                                winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::ShowRetryButton,
-                                DeviceStatusKind::Error);
-        }
+        if (reportFailures) ReportOperationFailure(deviceId, message, operation, L"ConnectAsync");
     } catch (...) {
         util::DebugTraceUnknownException(L"[DeviceManager] ConnectAsync ERROR");
         auto message = winrt::hstring(_("UnknownError"));
-        if (reportFailures && IsOperationCurrent(operation)) {
-            ConnectionError(deviceId, message);
-            DeviceStatusChanged(deviceId,
-                                message,
-                                winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::ShowRetryButton,
-                                DeviceStatusKind::Error);
-        }
+        if (reportFailures) ReportOperationFailure(deviceId, message, operation, L"ConnectAsync");
     }
     co_return false;
 }
@@ -696,23 +661,26 @@ DeviceManager::ReconnectWithIntentAsync(winrt::hstring deviceId,
 
         if (!(co_await WaitForCloseBarrierAsync(operation,
                                                 operation.OperationIntent == ConnectionIntent::AutoReconnect))) {
+            if (operation.OperationIntent != ConnectionIntent::AutoReconnect) {
+                ReportOperationFailure(deviceId, winrt::hstring(_("UnknownError")), operation, L"close barrier");
+            }
             co_return false;
         }
         if (!IsOperationCurrent(operation)) co_return false;
         co_return co_await ConnectWithIntentAsync(deviceId, operation);
     } catch (winrt::hresult_error const& ex) {
-        if (operation.OperationIntent != ConnectionIntent::AutoReconnect && IsOperationCurrent(operation)) {
-            ReportAsyncConnectionError(*this, deviceId, ex.message(), L"ReconnectAsync");
+        if (operation.OperationIntent != ConnectionIntent::AutoReconnect) {
+            ReportOperationFailure(deviceId, ex.message(), operation, L"ReconnectAsync");
         }
     } catch (std::exception const& ex) {
-        if (operation.OperationIntent != ConnectionIntent::AutoReconnect && IsOperationCurrent(operation)) {
-            ReportAsyncConnectionError(
-                *this, deviceId, winrt::hstring(util::Utf8ToUtf16(ex.what())), L"ReconnectAsync");
+        if (operation.OperationIntent != ConnectionIntent::AutoReconnect) {
+            ReportOperationFailure(
+                deviceId, winrt::hstring(util::Utf8ToUtf16(ex.what())), operation, L"ReconnectAsync");
         }
     } catch (...) {
         util::DebugTraceUnknownException(L"[DeviceManager] ReconnectAsync ERROR");
-        if (operation.OperationIntent != ConnectionIntent::AutoReconnect && IsOperationCurrent(operation)) {
-            ReportAsyncConnectionError(*this, deviceId, winrt::hstring(_("UnknownError")), L"ReconnectAsync");
+        if (operation.OperationIntent != ConnectionIntent::AutoReconnect) {
+            ReportOperationFailure(deviceId, winrt::hstring(_("UnknownError")), operation, L"ReconnectAsync");
         }
     }
     co_return false;
@@ -1054,7 +1022,6 @@ bool DeviceManager::DisconnectInternal(winrt::hstring deviceId,
                 reason = current->IsOpen ? DisconnectReason::Unexpected : DisconnectReason::Cleanup;
             }
         }
-
         InvalidateDeviceOperationLocked(deviceId);
         ++m_connectAttemptIds[deviceIdKey];
         if (reason == DisconnectReason::UserInitiated) {
@@ -1170,6 +1137,67 @@ void DeviceManager::ReportConnectionFailure(winrt::hstring const& deviceId,
                                             bool restoreIncomingIfNoConnection) {
     static_cast<void>(DisconnectInternal(
         deviceId, DisconnectReason::Cleanup, false, &operation, attemptId, &message, restoreIncomingIfNoConnection));
+}
+
+void DeviceManager::ReportOperationFailure(winrt::hstring const& deviceId,
+                                           winrt::hstring const& message,
+                                           OperationToken const& operation,
+                                           std::wstring_view context) noexcept {
+    std::shared_ptr<CloseBarrier> barrier;
+    bool ownsBarrier = false;
+    std::size_t claimedAttemptId = 0;
+    try {
+        DebugTrace(L"[DeviceManager] {0} ERROR: {1}", std::wstring(context), std::wstring(message));
+        {
+            auto guard = m_lock.lock_exclusive();
+            if (!IsOperationCurrentLocked(operation)) return;
+
+            auto attempt = m_connectAttemptIds.try_emplace(operation.DeviceId, 0).first;
+            auto existingBarrier = m_closeBarriers.find(operation.DeviceId);
+            if (existingBarrier != m_closeBarriers.end()) {
+                barrier = existingBarrier->second;
+            } else {
+                barrier = InstallCloseBarrierLocked(deviceId);
+                ownsBarrier = true;
+            }
+
+            if (!m_deviceOperations.TryClaimFailureReport(operation)) {
+                if (ownsBarrier) static_cast<void>(RemoveCloseBarrierLocked(barrier));
+                return;
+            }
+            claimedAttemptId = ++attempt->second;
+        }
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(L"[DeviceManager] operation failure reporting failed", ex);
+        return;
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[DeviceManager] operation failure reporting failed", ex);
+        return;
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[DeviceManager] operation failure reporting failed");
+        return;
+    }
+
+    ConnectionError(deviceId, message);
+    if (!IsConnectAttemptCurrent(operation, claimedAttemptId)) {
+        if (ownsBarrier) {
+            StartCloseBarrierCleanup(nullptr, deviceId, std::move(barrier), false, L"Operation failure cleanup");
+        }
+        return;
+    }
+    DeviceStatusChanged(deviceId,
+                        message,
+                        winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::ShowRetryButton,
+                        DeviceStatusKind::Error);
+    bool operationCompleted = false;
+    {
+        auto guard = m_lock.lock_exclusive();
+        operationCompleted = m_deviceOperations.Complete(operation);
+    }
+    if (operationCompleted) DeviceActivityChanged(deviceId);
+    if (ownsBarrier) {
+        StartCloseBarrierCleanup(nullptr, deviceId, std::move(barrier), false, L"Operation failure cleanup");
+    }
 }
 
 winrt::Windows::Foundation::IAsyncOperation<bool>

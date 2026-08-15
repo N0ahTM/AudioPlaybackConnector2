@@ -216,26 +216,27 @@ LRESULT CALLBACK SettingsWindow::SettingsWindowSubclassProc(
 void SettingsWindow::RootGrid_Loaded(IInspectable const&, RoutedEventArgs const&) {
     if (std::exchange(m_loaded, true)) return;
 
-    LocalizeSettingsText();
+    try {
+        LocalizeSettingsText();
 
-    InitializeSettingsContent();
-    m_suppressNavigationSelection = true;
-    SettingsNavigation().SelectedItem(DevicesNavItem());
-    m_suppressNavigationSelection = false;
-    ShowSettingsPage(SettingsPage::Devices);
+        InitializeSettingsContent();
+        m_suppressNavigationSelection = true;
+        SettingsNavigation().SelectedItem(DevicesNavItem());
+        m_suppressNavigationSelection = false;
+        ShowSettingsPage(SettingsPage::Devices);
 
-    if (!m_hadPersistedPlacement) {
-        ApplyAdaptiveLayout();
-    } else {
-        SettingsNavigation().OpenPaneLength(CalculateNavigationPaneLength());
-    }
-    m_adaptiveLayoutReady = true;
+        if (!m_hadPersistedPlacement) {
+            ApplyAdaptiveLayout();
+        } else {
+            SettingsNavigation().OpenPaneLength(CalculateNavigationPaneLength());
+        }
+        m_adaptiveLayoutReady = true;
 
-    this->ExtendsContentIntoTitleBar(true);
-    this->SetTitleBar(TitleBarArea());
+        this->ExtendsContentIntoTitleBar(true);
+        this->SetTitleBar(TitleBarArea());
 
-    auto hwnd = util::GetWindowHandle(*this);
-    if (hwnd) {
+        auto hwnd = util::GetWindowHandle(*this);
+        if (!hwnd) winrt::throw_hresult(E_HANDLE);
         DWM_WINDOW_CORNER_PREFERENCE corner = DWMWCP_ROUND;
         DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
 
@@ -250,23 +251,43 @@ void SettingsWindow::RootGrid_Loaded(IInspectable const&, RoutedEventArgs const&
         }
 
         auto appWindow = this->AppWindow();
-        if (appWindow) {
-            appWindow.Resize({m_targetPlacement.size.cx, m_targetPlacement.size.cy});
+        if (!appWindow) winrt::throw_hresult(E_HANDLE);
+        appWindow.Resize({m_targetPlacement.size.cx, m_targetPlacement.size.cy});
 
-            auto presenter = appWindow.Presenter().as<OverlappedPresenter>();
-            if (presenter) {
-                presenter.IsResizable(true);
-                presenter.IsMinimizable(false);
-                presenter.IsMaximizable(false);
-            }
-
-            if (!m_subclassInstalled &&
-                SetWindowSubclass(hwnd, SettingsWindowSubclassProc, 1, reinterpret_cast<DWORD_PTR>(this))) {
-                m_subclassInstalled = true;
-            }
-
-            RevealAtTarget(hwnd);
+        auto presenter = appWindow.Presenter().as<OverlappedPresenter>();
+        if (presenter) {
+            presenter.IsResizable(true);
+            presenter.IsMinimizable(false);
+            presenter.IsMaximizable(false);
         }
+
+        if (!m_subclassInstalled &&
+            SetWindowSubclass(hwnd, SettingsWindowSubclassProc, 1, reinterpret_cast<DWORD_PTR>(this))) {
+            m_subclassInstalled = true;
+        }
+
+        RevealAtTarget(hwnd);
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(L"[SettingsWindow] initialization failed", ex);
+        CloseAfterInitializationFailure();
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[SettingsWindow] initialization failed", ex);
+        CloseAfterInitializationFailure();
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[SettingsWindow] initialization failed");
+        CloseAfterInitializationFailure();
+    }
+}
+
+void SettingsWindow::CloseAfterInitializationFailure() noexcept {
+    try {
+        Close();
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(L"[SettingsWindow] failed to close after initialization error", ex);
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[SettingsWindow] failed to close after initialization error", ex);
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[SettingsWindow] failed to close after initialization error");
     }
 }
 

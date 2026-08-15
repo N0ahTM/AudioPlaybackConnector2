@@ -63,6 +63,7 @@ private:
         HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) noexcept;
 
     void InitializeSettingsContent();
+    void CloseAfterInitializationFailure() noexcept;
     void LocalizeSettingsText();
     void ApplyCurrentWindowTheme(HWND hwnd) noexcept;
     void ApplySystemBackdropEffects(bool enabled) noexcept;

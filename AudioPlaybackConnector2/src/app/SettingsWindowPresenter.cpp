@@ -57,7 +57,11 @@ bool SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settings
         } else {
             try {
                 auto hwnd = util::GetWindowHandle(current->Window);
-                if (current->Activated && hwnd && IsWindow(hwnd)) {
+                auto impl = current->Window.as<winrt::AudioPlaybackConnector2::implementation::SettingsWindow>();
+                if (current->Activated &&
+                    impl->InitializationStatus() !=
+                        winrt::AudioPlaybackConnector2::implementation::SettingsWindow::InitializationState::Failed &&
+                    hwnd && IsWindow(hwnd)) {
                     ShowWindow(hwnd, IsIconic(hwnd) ? SW_RESTORE : SW_SHOW);
                     SetForegroundWindow(hwnd);
                     DebugTrace(L"[SettingsWindowPresenter] SettingsWindow brought to foreground");
@@ -84,6 +88,7 @@ bool SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settings
     try {
         candidate = std::make_shared<WindowState>();
         candidate->Window = winrt::AudioPlaybackConnector2::SettingsWindow();
+        candidate->SaveSettings = std::move(saveSettings);
         owner->Current = candidate;
 
         auto defaultPlacement =
@@ -139,12 +144,12 @@ bool SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settings
             DebugTrace(L"[SettingsWindowPresenter] SettingsWindow closed while activating");
             return false;
         }
-        if (!impl->InitializationSucceeded()) {
+        if (impl->InitializationStatus() ==
+            winrt::AudioPlaybackConnector2::implementation::SettingsWindow::InitializationState::Failed) {
             DebugTrace(L"[SettingsWindowPresenter] SettingsWindow initialization did not complete");
             static_cast<void>(CloseWindow(owner, candidate, false));
             return false;
         }
-        candidate->SaveSettings = std::move(saveSettings);
         candidate->Activated = true;
 
         DebugTrace(L"[SettingsWindowPresenter] SettingsWindow created off-screen (hidden until ready)");
@@ -231,11 +236,19 @@ void SettingsWindowPresenter::HandleWindowClosed(std::shared_ptr<PresenterState>
     state->Closed = true;
     state->Closing = false;
     RevokeWindowClosedHandler(state);
+    bool initialized = false;
+    try {
+        auto impl = closedWindow.as<winrt::AudioPlaybackConnector2::implementation::SettingsWindow>();
+        initialized = impl->InitializationStatus() ==
+                      winrt::AudioPlaybackConnector2::implementation::SettingsWindow::InitializationState::Succeeded;
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[SettingsWindowPresenter] failed to inspect closed window initialization");
+    }
     state->Window = nullptr;
     auto saveSettings = std::exchange(state->SaveSettings, nullptr);
     if (owner && owner->Current == state) owner->Current.reset();
 
-    if (!saveSettings) return;
+    if (!saveSettings || !initialized) return;
     try {
         saveSettings();
     } catch (winrt::hresult_error const& ex) {

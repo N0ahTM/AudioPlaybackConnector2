@@ -12,6 +12,8 @@ class UpdateCoordinator;
 
 namespace winrt::AudioPlaybackConnector2::implementation {
 struct SettingsWindow : SettingsWindowT<SettingsWindow> {
+    enum class InitializationState { Pending, Succeeded, Failed };
+
     SettingsWindow();
     ~SettingsWindow();
 
@@ -55,7 +57,7 @@ struct SettingsWindow : SettingsWindowT<SettingsWindow> {
     void SetDefaultPlacement(util::SettingsWindowPlacement placement);
     void SetTargetPlacement(util::SettingsWindowPlacement placement);
     void RefreshKnownDevices();
-    [[nodiscard]] bool InitializationSucceeded() const noexcept;
+    [[nodiscard]] InitializationState InitializationStatus() const noexcept;
 
 private:
     enum class SettingsPage { Devices, App, Privacy, StreamDeck, Help, About };
@@ -142,7 +144,7 @@ private:
     bool m_adaptiveLayoutReady = false;
     bool m_loaded = false;
     bool m_hadPersistedPlacement = false;
-    bool m_initializationSucceeded = false;
+    InitializationState m_initializationState = InitializationState::Pending;
 };
 } // namespace winrt::AudioPlaybackConnector2::implementation
 

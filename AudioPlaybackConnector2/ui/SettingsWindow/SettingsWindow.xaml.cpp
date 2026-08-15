@@ -267,21 +267,24 @@ void SettingsWindow::RootGrid_Loaded(IInspectable const&, RoutedEventArgs const&
         }
 
         RevealAtTarget(hwnd);
-        m_initializationSucceeded = true;
+        m_initializationState = InitializationState::Succeeded;
     } catch (winrt::hresult_error const& ex) {
+        m_initializationState = InitializationState::Failed;
         util::DebugTraceException(L"[SettingsWindow] initialization failed", ex);
         CloseAfterInitializationFailure();
     } catch (std::exception const& ex) {
+        m_initializationState = InitializationState::Failed;
         util::DebugTraceException(L"[SettingsWindow] initialization failed", ex);
         CloseAfterInitializationFailure();
     } catch (...) {
+        m_initializationState = InitializationState::Failed;
         util::DebugTraceUnknownException(L"[SettingsWindow] initialization failed");
         CloseAfterInitializationFailure();
     }
 }
 
-bool SettingsWindow::InitializationSucceeded() const noexcept {
-    return m_initializationSucceeded;
+SettingsWindow::InitializationState SettingsWindow::InitializationStatus() const noexcept {
+    return m_initializationState;
 }
 
 void SettingsWindow::CloseAfterInitializationFailure() noexcept {

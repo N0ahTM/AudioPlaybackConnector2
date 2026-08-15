@@ -436,6 +436,7 @@ winrt::fire_and_forget SettingsWindow::ClearAliasSavedAfterDelayAsync(uint64_t r
         auto self = weak.get();
         if (!self || requestId != self->m_aliasSavedRequestId.load()) co_return;
         self->m_aliasSavedDeviceId.clear();
+        self->m_renderedAliasSavedDeviceId.clear();
         if (self->m_aliasSavedIndicator) self->m_aliasSavedIndicator.Visibility(Visibility::Collapsed);
         self->m_aliasSavedIndicator = nullptr;
     } catch (winrt::hresult_error const& ex) {
@@ -496,7 +497,7 @@ void SettingsWindow::DefaultLastConnectedButton_Click(IInspectable const&, Route
     if (auto controller = m_settingsController) {
         controller->ClearDefaultDevice();
     }
-    RebuildDeviceList();
+    RequestDeviceListRebuild();
 }
 
 void SettingsWindow::RepositoryButton_Click(IInspectable const&, RoutedEventArgs const&) {
@@ -595,8 +596,8 @@ void SettingsWindow::LanguageComboBox_SelectionChanged(IInspectable const&, Sele
     }
     LocalizeSettingsText();
     ShowSettingsPage(m_currentPage);
-    RebuildDeviceList();
-    ApplyAdaptiveLayout();
+    RequestDeviceListRebuild(true);
+    if (m_currentPage != SettingsPage::Devices) ApplyAdaptiveLayout();
 }
 
 void SettingsWindow::ResetWindowPlacement() {
@@ -733,7 +734,7 @@ void SettingsWindow::InitializeSettingsContent() {
             if (auto settingsController = self->m_settingsController) {
                 settingsController->SetGlobalConnectOnStartup(s.template as<ToggleSwitch>().IsOn());
             }
-            self->RebuildDeviceList();
+            self->RequestDeviceListRebuild();
         }
     });
 
@@ -742,7 +743,7 @@ void SettingsWindow::InitializeSettingsContent() {
             if (auto settingsController = self->m_settingsController) {
                 settingsController->SetGlobalReconnectOnConnectionLoss(s.template as<ToggleSwitch>().IsOn());
             }
-            self->RebuildDeviceList();
+            self->RequestDeviceListRebuild();
         }
     });
 
@@ -759,7 +760,7 @@ void SettingsWindow::InitializeSettingsContent() {
             if (auto settingsController = self->m_settingsController) {
                 settingsController->SetPrivacyMode(s.template as<ToggleSwitch>().IsOn());
             }
-            self->RebuildDeviceList();
+            self->RequestDeviceListRebuild();
         }
     });
 
@@ -800,7 +801,7 @@ void SettingsWindow::InitializeSettingsContent() {
         }
     });
 
-    RebuildDeviceList();
+    RebuildDeviceList(true);
 }
 
 void SettingsWindow::ShowDiagnosticsInfo(InfoBarSeverity severity, std::wstring_view title, std::wstring_view message) {
@@ -895,6 +896,10 @@ void SettingsWindow::ShowSettingsPage(SettingsPage page) {
     HelpSection().Visibility(page == SettingsPage::Help ? Visibility::Visible : Visibility::Collapsed);
     InfoSection().Visibility(page == SettingsPage::About ? Visibility::Visible : Visibility::Collapsed);
 
+    if (page == SettingsPage::Devices && m_contentInitialized && m_deviceListRebuildPending) {
+        RequestDeviceListRebuild();
+    }
+
     switch (page) {
         case SettingsPage::Devices:
             TitleText().Text(winrt::hstring(_("Settings_Devices")));
@@ -960,14 +965,12 @@ void SettingsWindow::SelectLanguage(std::wstring_view language) {
     m_suppressLanguageSelection = false;
 }
 
-void SettingsWindow::CommitAlias(std::wstring const& deviceId,
-                                 TextBox const& textBox,
-                                 std::wstring const& previousAlias) {
+void SettingsWindow::CommitAlias(std::wstring const& deviceId, TextBox const& textBox) {
     auto alias = TrimWhitespace(std::wstring(textBox.Text()));
     textBox.Text(winrt::hstring(alias));
 
+    auto previousAlias = std::wstring(winrt::unbox_value_or<winrt::hstring>(textBox.Tag(), L""));
     if (alias == previousAlias) return;
-    if (m_lastCommittedAliasDeviceId == deviceId && m_lastCommittedAliasValue == alias) return;
 
     if (auto settingsController = m_settingsController) {
         if (!settingsController->SetDeviceAlias(deviceId, alias)) {
@@ -976,11 +979,10 @@ void SettingsWindow::CommitAlias(std::wstring const& deviceId,
             return;
         }
     }
-    m_lastCommittedAliasDeviceId = deviceId;
-    m_lastCommittedAliasValue = alias;
+    textBox.Tag(winrt::box_value(winrt::hstring(alias)));
     m_aliasSavedDeviceId = deviceId;
     auto requestId = ++m_aliasSavedRequestId;
-    RebuildDeviceList();
+    RequestDeviceListRebuild();
     ClearAliasSavedAfterDelayAsync(requestId);
 }
 
@@ -1183,22 +1185,89 @@ winrt::fire_and_forget SettingsWindow::ApplyStartWithWindowsAsync(bool on) {
 /*//////// Private Implementation ////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-void SettingsWindow::RebuildDeviceList() {
-    m_aliasSavedIndicator = nullptr;
-    DevicesPanel().Children().Clear();
+void SettingsWindow::RequestDeviceListRebuild(bool force) {
+    m_deviceListRebuildPending = true;
+    m_forceDeviceListRebuildPending = m_forceDeviceListRebuildPending || force;
+    if (m_currentPage != SettingsPage::Devices) return;
+    if (m_deviceListRebuildQueued) return;
 
+    m_deviceListRebuildQueued = true;
+    auto weak = get_weak();
+    try {
+        if (DispatcherQueue().TryEnqueue([weak]() noexcept {
+                if (auto self = weak.get()) self->ProcessPendingDeviceListRebuild();
+            })) {
+            return;
+        }
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(L"[SettingsWindow] Device list rebuild enqueue failed", ex);
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[SettingsWindow] Device list rebuild enqueue failed", ex);
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[SettingsWindow] Device list rebuild enqueue failed");
+    }
+
+    m_deviceListRebuildQueued = false;
+    ProcessPendingDeviceListRebuild();
+}
+
+void SettingsWindow::ProcessPendingDeviceListRebuild() noexcept {
+    m_deviceListRebuildQueued = false;
+    if (!m_deviceListRebuildPending || m_currentPage != SettingsPage::Devices) return;
+
+    auto forceRebuild = std::exchange(m_forceDeviceListRebuildPending, false);
+    m_deviceListRebuildPending = false;
+    try {
+        RebuildDeviceList(forceRebuild);
+        if (forceRebuild && m_adaptiveLayoutReady) ApplyAdaptiveLayout();
+    } catch (winrt::hresult_error const& ex) {
+        m_deviceListRebuildPending = true;
+        m_forceDeviceListRebuildPending = m_forceDeviceListRebuildPending || forceRebuild;
+        util::DebugTraceException(L"[SettingsWindow] Device list rebuild failed", ex);
+    } catch (std::exception const& ex) {
+        m_deviceListRebuildPending = true;
+        m_forceDeviceListRebuildPending = m_forceDeviceListRebuildPending || forceRebuild;
+        util::DebugTraceException(L"[SettingsWindow] Device list rebuild failed", ex);
+    } catch (...) {
+        m_deviceListRebuildPending = true;
+        m_forceDeviceListRebuildPending = m_forceDeviceListRebuildPending || forceRebuild;
+        util::DebugTraceUnknownException(L"[SettingsWindow] Device list rebuild failed");
+    }
+}
+
+void SettingsWindow::RebuildDeviceList(bool force) {
     auto controller = m_settingsController;
     if (!controller) return;
-
-    auto secondaryBrush =
-        apc::ui::ThemeBrushOrFallback(L"TextFillColorSecondaryBrush", winrt::Windows::UI::Colors::Gray());
 
     // Snapshot settings through the controller, then build UI without holding any settings lock.
     auto snapshot = controller->Snapshot();
     auto devices = SettingsViewModel::BuildDeviceItems(snapshot);
     bool globalConnectOnStartup = snapshot.GlobalConnectOnStartup;
     bool globalReconnectOnConnectionLoss = snapshot.GlobalReconnectOnConnectionLoss;
-    DefaultLastConnectedButton().IsEnabled(snapshot.DefaultDevice != DefaultDeviceMode::LastConnected);
+    bool defaultLastConnectedEnabled = snapshot.DefaultDevice != DefaultDeviceMode::LastConnected;
+    if (!force && m_hasDeviceListRenderState && devices == m_renderedDeviceItems &&
+        globalConnectOnStartup == m_renderedGlobalConnectOnStartup &&
+        globalReconnectOnConnectionLoss == m_renderedGlobalReconnectOnConnectionLoss &&
+        defaultLastConnectedEnabled == m_renderedDefaultLastConnectedEnabled &&
+        m_aliasSavedDeviceId == m_renderedAliasSavedDeviceId) {
+        return;
+    }
+
+    auto secondaryBrush =
+        apc::ui::ThemeBrushOrFallback(L"TextFillColorSecondaryBrush", winrt::Windows::UI::Colors::Gray());
+    m_hasDeviceListRenderState = false;
+    m_aliasSavedIndicator = nullptr;
+    DevicesPanel().Children().Clear();
+    DefaultLastConnectedButton().IsEnabled(defaultLastConnectedEnabled);
+
+    auto commitRenderState = [&]() {
+        m_renderedDeviceItems = std::move(devices);
+        m_renderedGlobalConnectOnStartup = globalConnectOnStartup;
+        m_renderedGlobalReconnectOnConnectionLoss = globalReconnectOnConnectionLoss;
+        m_renderedDefaultLastConnectedEnabled = defaultLastConnectedEnabled;
+        m_renderedAliasSavedDeviceId = m_aliasSavedDeviceId;
+        m_hasDeviceListRenderState = true;
+    };
 
     if (devices.empty()) {
         auto emptyPanel = StackPanel();
@@ -1271,6 +1340,7 @@ void SettingsWindow::RebuildDeviceList() {
         emptyActions.Children().Append(troubleshootingButton);
         emptyPanel.Children().Append(emptyActions);
         DevicesPanel().Children().Append(emptyPanel);
+        commitRenderState();
         return;
     }
 
@@ -1339,24 +1409,25 @@ void SettingsWindow::RebuildDeviceList() {
         aliasBox.MaxLength(static_cast<int32_t>(apc::limits::c_maxDeviceAliasCharacters));
         aliasBox.PlaceholderText(winrt::hstring(_("Settings_DeviceAliasPlaceholder")));
         aliasBox.Text(winrt::hstring(dev.Alias));
+        aliasBox.Tag(winrt::box_value(winrt::hstring(dev.Alias)));
         apc::ui::SetTooltipText(aliasBox, winrt::hstring(_("Settings_DeviceAlias")));
         auto weak = get_weak();
-        aliasBox.LostFocus([id = dev.Id, previousAlias = dev.Alias, weak](auto const& s, auto) {
+        aliasBox.LostFocus([id = dev.Id, weak](auto const& s, auto) {
             if (auto self = weak.get()) {
                 auto textBox = s.template as<TextBox>();
-                self->CommitAlias(id, textBox, previousAlias);
+                self->CommitAlias(id, textBox);
             }
         });
-        aliasBox.KeyDown([id = dev.Id, previousAlias = dev.Alias, weak](auto const& s, auto const& e) {
+        aliasBox.KeyDown([id = dev.Id, weak](auto const& s, auto const& e) {
             auto key = e.Key();
             auto textBox = s.template as<TextBox>();
             if (key == winrt::Windows::System::VirtualKey::Enter) {
                 if (auto self = weak.get()) {
-                    self->CommitAlias(id, textBox, previousAlias);
+                    self->CommitAlias(id, textBox);
                 }
                 e.Handled(true);
             } else if (key == winrt::Windows::System::VirtualKey::Escape) {
-                textBox.Text(winrt::hstring(previousAlias));
+                textBox.Text(winrt::unbox_value_or<winrt::hstring>(textBox.Tag(), L""));
                 e.Handled(true);
             }
         });
@@ -1378,7 +1449,7 @@ void SettingsWindow::RebuildDeviceList() {
                 if (auto settingsController = self->m_settingsController) {
                     settingsController->SetDefaultDeviceId(id);
                 }
-                self->RebuildDeviceList();
+                self->RequestDeviceListRebuild();
             }
         });
 
@@ -1398,7 +1469,7 @@ void SettingsWindow::RebuildDeviceList() {
                 }
                 self->m_aliasSavedDeviceId = id;
                 auto requestId = ++self->m_aliasSavedRequestId;
-                self->RebuildDeviceList();
+                self->RequestDeviceListRebuild();
                 self->ClearAliasSavedAfterDelayAsync(requestId);
             }
         });
@@ -1483,7 +1554,7 @@ void SettingsWindow::RebuildDeviceList() {
                 if (auto settingsController = self->m_settingsController) {
                     settingsController->ForgetDevice(id);
                 }
-                self->RebuildDeviceList();
+                self->RequestDeviceListRebuild();
             }
         });
 
@@ -1496,6 +1567,7 @@ void SettingsWindow::RebuildDeviceList() {
         item.Children().Append(actionPanel);
         DevicesPanel().Children().Append(item);
     }
+    commitRenderState();
 }
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -1524,7 +1596,7 @@ void SettingsWindow::SetTargetPlacement(util::SettingsWindowPlacement placement)
 }
 
 void SettingsWindow::RefreshKnownDevices() {
-    if (m_contentInitialized) RebuildDeviceList();
+    if (m_contentInitialized) RequestDeviceListRebuild();
 }
 
 } // namespace winrt::AudioPlaybackConnector2::implementation

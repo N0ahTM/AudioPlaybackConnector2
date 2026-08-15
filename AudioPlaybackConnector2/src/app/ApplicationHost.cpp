@@ -2139,6 +2139,7 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
     }
     bool addedNew = false;
     bool settingsChanged = false;
+    bool devicePresentationChanged = false;
     try {
         auto locked = m_settings->LockExclusiveData();
         auto const existingDevice = std::ranges::find(locked->Devices, idString, &DeviceSettings::Id);
@@ -2164,8 +2165,10 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
                 newDevice.ReconnectOnConnectionLoss = data.GlobalReconnectOnConnectionLoss;
                 data.Devices.push_back(std::move(newDevice));
                 addedNew = true;
+                devicePresentationChanged = true;
             } else if (updateDeviceName) {
                 data.Devices[*existingDeviceIndex].Name = deviceName;
+                devicePresentationChanged = true;
             }
             if (promoteMru) {
                 static_cast<void>(AutoReconnectPlanner::PromoteMostRecentlyConnected(data.LastConnectedIds, idString));
@@ -2184,7 +2187,7 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
 
     if (settingsChanged) {
         m_settingsSaver.RequestSave();
-        m_settingsWindowPresenter.RefreshKnownDevicesIfOpen();
+        if (devicePresentationChanged) m_settingsWindowPresenter.RefreshKnownDevicesIfOpen();
         if (addedNew) {
             DebugTrace(L"[App] New device added to settings: {0}", std::wstring(rawDeviceName));
         }

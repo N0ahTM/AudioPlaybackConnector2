@@ -17,7 +17,6 @@ std::vector<SettingsDeviceViewModel> SettingsViewModel::BuildDeviceItems(Setting
             apc::display::DeviceNameOrId(device.Id, device.Name, device.Alias, settings.PrivacyModeEnabled);
         items.push_back({
             .Id = device.Id,
-            .Name = device.Name,
             .Alias = device.Alias,
             .DisplayName = std::move(displayName),
             .ConnectOnStartup = device.ConnectOnStartup,

@@ -70,7 +70,9 @@ private:
     bool StoreCurrentPlacement();
     void ResetWindowPlacement();
     void ApplyAdaptiveLayout();
-    void RebuildDeviceList();
+    void RequestDeviceListRebuild(bool force = false);
+    void ProcessPendingDeviceListRebuild() noexcept;
+    void RebuildDeviceList(bool force = false);
     void ShowDiagnosticsInfo(winrt::Microsoft::UI::Xaml::Controls::InfoBarSeverity severity,
                              std::wstring_view title,
                              std::wstring_view message);
@@ -83,9 +85,7 @@ private:
     [[nodiscard]] util::SettingsWindowPlacement CalculateAdaptivePlacement();
     [[nodiscard]] double CalculateNavigationPaneLength();
     [[nodiscard]] double MeasureVisibleContentHeight(double contentWidth);
-    void CommitAlias(std::wstring const& deviceId,
-                     winrt::Microsoft::UI::Xaml::Controls::TextBox const& textBox,
-                     std::wstring const& previousAlias);
+    void CommitAlias(std::wstring const& deviceId, winrt::Microsoft::UI::Xaml::Controls::TextBox const& textBox);
     [[nodiscard]] std::wstring BuildReportBugUri() const;
     void SetUpdateCheckBusy(bool busy);
     void SetStartupTaskBusy(bool busy);
@@ -105,8 +105,8 @@ private:
     std::shared_ptr<ISettingsController> m_settingsController;
     std::shared_ptr<UpdateCoordinator> m_updateCoordinator;
     std::wstring m_aliasSavedDeviceId;
-    std::wstring m_lastCommittedAliasDeviceId;
-    std::wstring m_lastCommittedAliasValue;
+    std::wstring m_renderedAliasSavedDeviceId;
+    std::vector<SettingsDeviceViewModel> m_renderedDeviceItems;
     winrt::Microsoft::UI::Xaml::Controls::TextBlock m_aliasSavedIndicator{nullptr};
     std::optional<SettingsData> m_initialSettingsSnapshot;
     winrt::event_token m_actualThemeChangedToken{};
@@ -116,6 +116,13 @@ private:
     bool m_suppressNavigationSelection = false;
     bool m_subclassInstalled = false;
     bool m_contentInitialized = false;
+    bool m_deviceListRebuildQueued = false;
+    bool m_deviceListRebuildPending = false;
+    bool m_forceDeviceListRebuildPending = false;
+    bool m_hasDeviceListRenderState = false;
+    bool m_renderedGlobalConnectOnStartup = false;
+    bool m_renderedGlobalReconnectOnConnectionLoss = false;
+    bool m_renderedDefaultLastConnectedEnabled = false;
     bool m_capturePlacementChanges = false;
     bool m_adaptiveLayoutReady = false;
     bool m_loaded = false;

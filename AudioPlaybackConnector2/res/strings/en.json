@@ -156,6 +156,8 @@
   "Settings_Diagnostics_ReconnectOnConnectionLoss": "Reconnect after interruption",
   "Settings_Diagnostics_RecentErrors": "Recent relevant errors",
   "Settings_Diagnostics_NoRecentErrors": "No recent relevant errors found",
+  "Settings_Diagnostics_LogUnavailable": "The log file could not be read",
+  "Settings_Diagnostics_LogEntriesOmitted": "Some log entries were omitted because they were invalid or too large",
   "Settings_Diagnostics_PrivacyNote": "Diagnostics hide known device names, IDs, aliases, and local user paths where possible. Review logs before sharing.",
   "Settings_Diagnostics_DumpWarning": "Minidumps and crash dumps can contain sensitive data. Share them only if you trust the recipient.",
   "Command_DefaultTargetMissing": "No default or last connected device is saved.",

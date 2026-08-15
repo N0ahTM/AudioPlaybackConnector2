@@ -442,6 +442,8 @@ int RunCommandLineControlServerTests();
 int RunControlUiActionGateTests();
 int RunControlTargetMatcherTests();
 int RunDeviceOperationCoordinatorTests();
+int RunDiagnosticsLogCollectorTests();
+int RunSettingsDiagnosticsReportBuilderTests();
 int RunDevicePickerSnapshotTests();
 int RunLatestStartupTaskRequestStateTests();
 int RunResourcePressureMonitorTests();
@@ -477,6 +479,8 @@ int main() {
     g_failures += RunControlUiActionGateTests();
     g_failures += RunControlTargetMatcherTests();
     g_failures += RunDeviceOperationCoordinatorTests();
+    g_failures += RunDiagnosticsLogCollectorTests();
+    g_failures += RunSettingsDiagnosticsReportBuilderTests();
     g_failures += RunDevicePickerSnapshotTests();
     g_failures += RunLatestStartupTaskRequestStateTests();
     g_failures += RunResourcePressureMonitorTests();

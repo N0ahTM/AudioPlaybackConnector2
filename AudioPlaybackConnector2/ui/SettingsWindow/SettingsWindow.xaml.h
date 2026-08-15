@@ -4,6 +4,7 @@
 #include <app/StartupTaskCoordinator.hpp>
 #include <services/SettingsController.hpp>
 #include <services/UpdateService.hpp>
+#include <ui/SettingsDiagnosticsReport.hpp>
 #include <ui/SettingsViewModel.hpp>
 #include <ui/WindowPlacement.hpp>
 
@@ -92,6 +93,13 @@ private:
     void SetUpdateCheckBusy(bool busy);
     void SetStartupTaskBusy(bool busy);
     void ApplyStartupTaskSnapshot(StartupTaskSnapshot const& snapshot) noexcept;
+    static winrt::fire_and_forget CopyDiagnosticsAsync(winrt::weak_ref<SettingsWindow> weak,
+                                                       winrt::apartment_context uiThread,
+                                                       SettingsData settings,
+                                                       std::size_t connectedDeviceCount,
+                                                       std::filesystem::path logPath,
+                                                       apc::ui::SettingsDiagnosticsReportContext context,
+                                                       std::uint64_t requestId);
     void ShowUpdateCheckResult(UpdateCheckResult const& result);
     void StartWithWindowsToggle_Toggled(winrt::Windows::Foundation::IInspectable const& sender,
                                         winrt::Microsoft::UI::Xaml::RoutedEventArgs const& e);
@@ -103,6 +111,8 @@ private:
     std::atomic_uint64_t m_aliasSavedRequestId = 0;
     std::atomic_uint64_t m_updateCheckRequestId = 0;
     std::uint64_t m_lastStartupTaskPublication = 0;
+    std::uint64_t m_diagnosticsCopyRequestId = 0;
+    bool m_diagnosticsCopyInProgress = false;
     std::shared_ptr<ISettingsController> m_settingsController;
     std::shared_ptr<StartupTaskCoordinator> m_startupTaskCoordinator;
     StartupTaskCoordinator::HandlerToken m_startupTaskHandlerToken = 0;

@@ -134,7 +134,13 @@
     <ClCompile Include="src\ui\FlyoutPresenterStyle.cpp">
       <Filter>src\ui</Filter>
     </ClCompile>
+    <ClCompile Include="src\ui\DiagnosticsLogCollector.cpp">
+      <Filter>src\ui</Filter>
+    </ClCompile>
     <ClCompile Include="src\ui\SettingsDiagnosticsReport.cpp">
+      <Filter>src\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ui\SettingsDiagnosticsReportBuilder.cpp">
       <Filter>src\ui</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\SettingsViewModel.cpp">
@@ -314,6 +320,9 @@
       <Filter>include\ui</Filter>
     </ClInclude>
     <ClInclude Include="include\ui\FlyoutPresenterStyle.hpp">
+      <Filter>include\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="include\ui\DiagnosticsLogCollector.hpp">
       <Filter>include\ui</Filter>
     </ClInclude>
     <ClInclude Include="include\ui\SettingsDiagnosticsReport.hpp">

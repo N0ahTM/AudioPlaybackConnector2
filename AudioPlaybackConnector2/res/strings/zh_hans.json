@@ -156,6 +156,8 @@
   "Settings_Diagnostics_ReconnectOnConnectionLoss": "中断后重新连接",
   "Settings_Diagnostics_RecentErrors": "最近相关错误",
   "Settings_Diagnostics_NoRecentErrors": "未找到最近相关错误",
+  "Settings_Diagnostics_LogUnavailable": "无法读取日志文件",
+  "Settings_Diagnostics_LogEntriesOmitted": "某些无效或过大的日志条目已被省略",
   "Settings_Diagnostics_PrivacyNote": "诊断信息会尽可能隐藏已知设备名称、ID、别名和本地用户路径。共享前请检查日志。",
   "Settings_Diagnostics_DumpWarning": "小型转储和崩溃转储可能包含敏感数据。仅在信任接收方时共享。",
   "Command_DefaultTargetMissing": "没有保存默认设备或上次连接的设备。",

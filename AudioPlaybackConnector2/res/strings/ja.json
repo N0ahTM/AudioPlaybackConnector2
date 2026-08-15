@@ -156,6 +156,8 @@
   "Settings_Diagnostics_ReconnectOnConnectionLoss": "中断後に再接続",
   "Settings_Diagnostics_RecentErrors": "最近の関連エラー",
   "Settings_Diagnostics_NoRecentErrors": "最近の関連エラーは見つかりませんでした",
+  "Settings_Diagnostics_LogUnavailable": "ログ ファイルを読み取れませんでした",
+  "Settings_Diagnostics_LogEntriesOmitted": "無効または大きすぎるログ エントリは省略されました",
   "Settings_Diagnostics_PrivacyNote": "診断では、可能な限り既知のデバイス名、ID、エイリアス、ローカル ユーザー パスを隠します。共有する前にログを確認してください。",
   "Settings_Diagnostics_DumpWarning": "ミニダンプとクラッシュ ダンプには機密データが含まれることがあります。信頼できる相手にのみ共有してください。",
   "Command_DefaultTargetMissing": "既定デバイスまたは最後に接続したデバイスが保存されていません。",

@@ -156,6 +156,8 @@
   "Settings_Diagnostics_ReconnectOnConnectionLoss": "Reconectar tras interrupción",
   "Settings_Diagnostics_RecentErrors": "Errores relevantes recientes",
   "Settings_Diagnostics_NoRecentErrors": "No se encontraron errores relevantes recientes",
+  "Settings_Diagnostics_LogUnavailable": "No se pudo leer el archivo de registro",
+  "Settings_Diagnostics_LogEntriesOmitted": "Se omitieron algunas entradas del registro porque no eran válidas o eran demasiado grandes",
   "Settings_Diagnostics_PrivacyNote": "El diagnóstico oculta nombres de dispositivos conocidos, ID, alias y rutas locales de usuario cuando es posible. Revisa los logs antes de compartirlos.",
   "Settings_Diagnostics_DumpWarning": "Los minidumps y volcados de fallo pueden contener datos sensibles. Compártelos solo con personas de confianza.",
   "Command_DefaultTargetMissing": "No hay ningún dispositivo predeterminado o último dispositivo conectado guardado.",

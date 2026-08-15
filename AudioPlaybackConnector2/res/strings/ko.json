@@ -156,6 +156,8 @@
   "Settings_Diagnostics_ReconnectOnConnectionLoss": "중단 후 다시 연결",
   "Settings_Diagnostics_RecentErrors": "최근 관련 오류",
   "Settings_Diagnostics_NoRecentErrors": "최근 관련 오류를 찾을 수 없습니다",
+  "Settings_Diagnostics_LogUnavailable": "로그 파일을 읽을 수 없습니다",
+  "Settings_Diagnostics_LogEntriesOmitted": "잘못되었거나 너무 큰 일부 로그 항목이 생략되었습니다",
   "Settings_Diagnostics_PrivacyNote": "진단은 가능한 경우 알려진 디바이스 이름, ID, 별칭 및 로컬 사용자 경로를 숨깁니다. 공유하기 전에 로그를 검토하세요.",
   "Settings_Diagnostics_DumpWarning": "미니덤프와 크래시 덤프에는 민감한 데이터가 포함될 수 있습니다. 신뢰하는 대상에게만 공유하세요.",
   "Command_DefaultTargetMissing": "기본 디바이스 또는 마지막으로 연결한 디바이스가 저장되어 있지 않습니다.",

@@ -156,6 +156,8 @@
   "Settings_Diagnostics_ReconnectOnConnectionLoss": "中斷後重新連線",
   "Settings_Diagnostics_RecentErrors": "最近相關錯誤",
   "Settings_Diagnostics_NoRecentErrors": "找不到最近相關錯誤",
+  "Settings_Diagnostics_LogUnavailable": "無法讀取記錄檔",
+  "Settings_Diagnostics_LogEntriesOmitted": "部分無效或過大的記錄項目已省略",
   "Settings_Diagnostics_PrivacyNote": "診斷資訊會盡可能隱藏已知裝置名稱、ID、別名和本機使用者路徑。分享前請檢查記錄。",
   "Settings_Diagnostics_DumpWarning": "小型傾印和當機傾印可能包含敏感資料。僅在信任收件者時分享。",
   "Command_DefaultTargetMissing": "沒有儲存預設裝置或上次連線的裝置。",

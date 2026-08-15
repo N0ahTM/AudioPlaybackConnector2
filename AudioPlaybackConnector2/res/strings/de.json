@@ -156,6 +156,8 @@
   "Settings_Diagnostics_ReconnectOnConnectionLoss": "Nach Abbruch neu verbinden",
   "Settings_Diagnostics_RecentErrors": "Aktuelle relevante Fehler",
   "Settings_Diagnostics_NoRecentErrors": "Keine aktuellen relevanten Fehler gefunden",
+  "Settings_Diagnostics_LogUnavailable": "Die Protokolldatei konnte nicht gelesen werden",
+  "Settings_Diagnostics_LogEntriesOmitted": "Einige Protokolleinträge wurden ausgelassen, weil sie ungültig oder zu groß waren",
   "Settings_Diagnostics_PrivacyNote": "Diagnosen anonymisieren bekannte Gerätenamen, IDs, Aliase und lokale Benutzerpfade so weit möglich. Prüfe Logs vor dem Teilen.",
   "Settings_Diagnostics_DumpWarning": "Minidumps und Crash-Dumps können sensible Daten enthalten. Teile sie nur, wenn du dem Empfänger vertraust.",
   "Command_DefaultTargetMissing": "Es ist kein Standardgerät oder zuletzt verbundenes Gerät gespeichert.",

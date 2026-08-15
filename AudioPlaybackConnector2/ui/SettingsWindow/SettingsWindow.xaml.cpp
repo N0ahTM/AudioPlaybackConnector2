@@ -10,6 +10,7 @@
 #include <services/UpdateCoordinator.hpp>
 #include <services/UpdateService.hpp>
 #include <ui/ButtonHelpers.hpp>
+#include <ui/DiagnosticsLogCollector.hpp>
 #include <ui/SettingsDiagnosticsReport.hpp>
 #include <util/Logger.hpp>
 #include <util/Util.hpp>
@@ -523,14 +524,24 @@ void SettingsWindow::OpenLogFolderButton_Click(IInspectable const&, RoutedEventA
 }
 
 void SettingsWindow::CopyDiagnosticsButton_Click(IInspectable const&, RoutedEventArgs const&) {
-    std::wstring diagnostics;
+    if (m_diagnosticsCopyInProgress) return;
     try {
         auto controller = m_settingsController;
         auto snapshot = controller ? controller->Snapshot() : SettingsData{};
         auto connectedCount = controller ? controller->ConnectedDeviceCount() : 0;
-        auto appVersion = BuildVersionText();
-        diagnostics =
-            apc::ui::BuildSettingsDiagnosticsReport(snapshot, connectedCount, util::GetCachedLogPath(), appVersion);
+        auto context = apc::ui::CaptureSettingsDiagnosticsReportContext(BuildVersionText());
+        auto logPath = util::GetCachedLogPath();
+        auto requestId = ++m_diagnosticsCopyRequestId;
+        m_diagnosticsCopyInProgress = true;
+        CopyDiagnosticsButton().IsEnabled(false);
+        CopyDiagnosticsAsync(get_weak(),
+                             winrt::apartment_context{},
+                             std::move(snapshot),
+                             connectedCount,
+                             std::move(logPath),
+                             std::move(context),
+                             requestId);
+        return;
     } catch (winrt::hresult_error const& ex) {
         util::DebugTraceException(L"[SettingsWindow] BuildDiagnosticsText failed", ex);
     } catch (std::exception const& ex) {
@@ -539,14 +550,13 @@ void SettingsWindow::CopyDiagnosticsButton_Click(IInspectable const&, RoutedEven
         util::DebugTraceUnknownException(L"[SettingsWindow] BuildDiagnosticsText failed");
     }
 
-    if (diagnostics.empty() || !CopyTextToClipboard(diagnostics)) {
+    m_diagnosticsCopyInProgress = false;
+    try {
+        CopyDiagnosticsButton().IsEnabled(true);
         ShowDiagnosticsInfo(
             InfoBarSeverity::Error, _("Settings_ActionFailed_Title"), _("Settings_ActionFailed_Message"));
-        return;
+    } catch (...) {
     }
-
-    ShowDiagnosticsInfo(
-        InfoBarSeverity::Success, _("Settings_DiagnosticsCopied_Title"), _("Settings_DiagnosticsCopied_Message"));
 }
 
 void SettingsWindow::ReportBugButton_Click(IInspectable const&, RoutedEventArgs const&) {
@@ -1119,6 +1129,71 @@ void SettingsWindow::ApplyStartupTaskSnapshot(StartupTaskSnapshot const& snapsho
 } catch (...) {
     m_suppressStartupToggle = false;
     util::DebugTraceUnknownException(L"[SettingsWindow] startup task snapshot ignored exception");
+}
+
+winrt::fire_and_forget SettingsWindow::CopyDiagnosticsAsync(winrt::weak_ref<SettingsWindow> weak,
+                                                            winrt::apartment_context uiThread,
+                                                            SettingsData settings,
+                                                            std::size_t connectedDeviceCount,
+                                                            std::filesystem::path logPath,
+                                                            apc::ui::SettingsDiagnosticsReportContext context,
+                                                            std::uint64_t requestId) {
+    apc::ui::DiagnosticsLogResult logResult;
+    std::wstring diagnostics;
+    bool returnedToUi = false;
+    try {
+        co_await winrt::resume_background();
+        logResult =
+            apc::ui::CollectRecentDiagnosticLogLines(logPath, settings, context.RedactedDevice, context.RedactedValue);
+        diagnostics = apc::ui::BuildSettingsDiagnosticsReport(settings, connectedDeviceCount, context, logResult);
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(L"[SettingsWindow] CollectRecentDiagnosticLogLines failed", ex);
+        logResult.Status = apc::ui::DiagnosticsLogStatus::Unavailable;
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[SettingsWindow] CollectRecentDiagnosticLogLines failed", ex);
+        logResult.Status = apc::ui::DiagnosticsLogStatus::Unavailable;
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[SettingsWindow] CollectRecentDiagnosticLogLines failed");
+        logResult.Status = apc::ui::DiagnosticsLogStatus::Unavailable;
+    }
+
+    try {
+        co_await uiThread;
+        returnedToUi = true;
+        auto self = weak.get();
+        if (!self || requestId != self->m_diagnosticsCopyRequestId) co_return;
+        if (diagnostics.empty() || !self->CopyTextToClipboard(diagnostics)) {
+            self->ShowDiagnosticsInfo(
+                InfoBarSeverity::Error, _("Settings_ActionFailed_Title"), _("Settings_ActionFailed_Message"));
+            self->m_diagnosticsCopyInProgress = false;
+            self->CopyDiagnosticsButton().IsEnabled(true);
+            co_return;
+        }
+        self->ShowDiagnosticsInfo(
+            InfoBarSeverity::Success, _("Settings_DiagnosticsCopied_Title"), _("Settings_DiagnosticsCopied_Message"));
+        self->m_diagnosticsCopyInProgress = false;
+        self->CopyDiagnosticsButton().IsEnabled(true);
+        co_return;
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(L"[SettingsWindow] CopyDiagnosticsAsync failed", ex);
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[SettingsWindow] CopyDiagnosticsAsync failed", ex);
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[SettingsWindow] CopyDiagnosticsAsync failed");
+    }
+
+    if (returnedToUi) {
+        try {
+            auto self = weak.get();
+            if (self && requestId == self->m_diagnosticsCopyRequestId) {
+                self->m_diagnosticsCopyInProgress = false;
+                self->CopyDiagnosticsButton().IsEnabled(true);
+                self->ShowDiagnosticsInfo(
+                    InfoBarSeverity::Error, _("Settings_ActionFailed_Title"), _("Settings_ActionFailed_Message"));
+            }
+        } catch (...) {
+        }
+    }
 }
 
 /*------------------------------------------------------------------------------------------------------------*/

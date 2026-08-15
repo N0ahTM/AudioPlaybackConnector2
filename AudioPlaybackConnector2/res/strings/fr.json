@@ -156,6 +156,8 @@
   "Settings_Diagnostics_ReconnectOnConnectionLoss": "Reconnexion après interruption",
   "Settings_Diagnostics_RecentErrors": "Erreurs récentes pertinentes",
   "Settings_Diagnostics_NoRecentErrors": "Aucune erreur récente pertinente trouvée",
+  "Settings_Diagnostics_LogUnavailable": "Le fichier journal n’a pas pu être lu",
+  "Settings_Diagnostics_LogEntriesOmitted": "Certaines entrées du journal ont été omises car elles étaient non valides ou trop volumineuses",
   "Settings_Diagnostics_PrivacyNote": "Les diagnostics masquent les noms d'appareils connus, les ID, les alias et les chemins utilisateur locaux lorsque c'est possible. Vérifie les journaux avant de les partager.",
   "Settings_Diagnostics_DumpWarning": "Les minidumps et dumps de plantage peuvent contenir des données sensibles. Partage-les seulement avec une personne de confiance.",
   "Command_DefaultTargetMissing": "Aucun appareil par défaut ou dernier appareil connecté n'est enregistré.",

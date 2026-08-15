@@ -223,8 +223,35 @@ bool DevicePickerView::LoadDevices() {
             }
 
             if (status == winrt::Windows::Foundation::AsyncStatus::Canceled) {
-                if (auto self = weak.get()) {
-                    if (self->m_loadDevicesRequestId.load() == requestId) {
+                bool enqueued = false;
+                try {
+                    enqueued = dispatcher.TryEnqueue([weak, requestId]() noexcept {
+                        if (auto self = weak.get(); self && self->m_loadDevicesRequestId.load() == requestId &&
+                                                    self->m_activeLoadRequestId.load() == requestId) {
+                            auto completeLoad = wil::scope_exit([self, requestId]() noexcept {
+                                if (self->m_loadDevicesRequestId.load() == requestId &&
+                                    self->m_activeLoadRequestId.load() == requestId) {
+                                    self->m_isLoadingDevices.store(false);
+                                    self->m_activeLoadRequestId.store(0);
+                                }
+                            });
+                            try {
+                                self->SetRefreshIndicators(false, false);
+                            } catch (winrt::hresult_error const& ex) {
+                                util::DebugTraceException(L"[DevicePickerView] canceled refresh UI cleanup failed", ex);
+                            } catch (std::exception const& ex) {
+                                util::DebugTraceException(L"[DevicePickerView] canceled refresh UI cleanup failed", ex);
+                            } catch (...) {
+                                util::DebugTraceUnknownException(
+                                    L"[DevicePickerView] canceled refresh UI cleanup failed");
+                            }
+                        }
+                    });
+                } catch (...) {
+                    util::DebugTraceUnknownException(L"[DevicePickerView] ERROR: marshaling canceled refresh threw");
+                }
+                if (!enqueued) {
+                    if (auto self = weak.get(); self && self->m_loadDevicesRequestId.load() == requestId) {
                         self->m_isLoadingDevices.store(false);
                         self->m_activeLoadRequestId.store(0);
                     }

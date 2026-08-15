@@ -659,18 +659,20 @@ bool TrayController::EnsureDevicePickerViewCreated() noexcept {
                 if (!self || self->m_isTearingDown.load()) return;
                 DebugTrace(L"[TrayController] User reconnected device: {0}", std::wstring(id));
                 self->TryHideDevicePicker();
-                auto dispatcher = self->m_mainWindow ? self->m_mainWindow.DispatcherQueue() : nullptr;
-                if (dispatcher) {
-                    auto weakSelf = weak;
-                    bool queued = dispatcher.TryEnqueue([weakSelf, id]() {
-                        if (auto queuedSelf = weakSelf.lock();
-                            queuedSelf && !queuedSelf->m_isTearingDown.load() && queuedSelf->m_reconnectCallback) {
-                            queuedSelf->m_reconnectCallback(id);
-                        }
-                    });
-                    if (queued) {
-                        return;
+                try {
+                    auto dispatcher = self->m_mainWindow ? self->m_mainWindow.DispatcherQueue() : nullptr;
+                    if (dispatcher) {
+                        auto weakSelf = weak;
+                        bool queued = dispatcher.TryEnqueue([weakSelf, id]() {
+                            if (auto queuedSelf = weakSelf.lock();
+                                queuedSelf && !queuedSelf->m_isTearingDown.load() && queuedSelf->m_reconnectCallback) {
+                                queuedSelf->m_reconnectCallback(id);
+                            }
+                        });
+                        if (queued) return;
                     }
+                } catch (...) {
+                    util::DebugTraceUnknownException(L"[TrayController] failed to queue reconnect callback");
                 }
                 if (self->m_reconnectCallback) self->m_reconnectCallback(id);
             },

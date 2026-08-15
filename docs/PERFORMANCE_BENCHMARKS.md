@@ -11,16 +11,41 @@ running instance so startup and warm-up measurements remain comparable. Then run
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Measure-ResourceUsage.ps1 `
     -ExpectedPackageVersion 0.7.0.0 `
+    -ExpectedExecutableSha256 <64-character-installed-executable-hash> `
+    -ExpectedUserNotificationState AcceptsNotifications `
+    -RequireEnergySaverOff `
     -Scenario idle-baseline `
-    -WarmupSeconds 10 `
-    -DurationSeconds 30 `
+    -WarmupSeconds 35 `
+    -DurationSeconds 120 `
     -SampleIntervalMilliseconds 1000
 ```
 
 Results are written atomically as JSON and CSV below `artifacts/perf/`. That
-directory is ignored by Git. The JSON includes package, executable, process, OS,
-PowerShell, and Git metadata so measurements from different builds or hosts are
-not accidentally compared as equivalent.
+directory is ignored by Git. The JSON includes the installed package full name,
+publisher, architecture, executable and manifest SHA-256 hashes, process, OS,
+PowerShell, and host-state metadata. `Source.GitCommit` identifies only the
+worktree containing the benchmark harness; the installed executable hash is the
+authoritative build identity.
+
+Calculate the expected installed hash after installing each A/B variant:
+
+```powershell
+$package = Get-AppxPackage -Name N0ahTM.AudioPlaybackConnector2
+$exe = Join-Path $package.InstallLocation AudioPlaybackConnector2.exe
+(Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash
+```
+
+The harness checks the executable and package manifest again after sampling and
+rejects a run if either changed. With `-ExpectedUserNotificationState`, it also
+requires the same Windows notification state before launch, after warm-up, and
+after measurement. Accepted names are `NotPresent`, `Busy`,
+`RunningD3dFullScreen`, `PresentationMode`, `AcceptsNotifications`, `QuietTime`,
+and `App`. Use `AcceptsNotifications` for normal desktop/hot measurements and the
+matching fullscreen or presentation state for cold-policy measurements. Use
+`-RequireEnergySaverOff` whenever Energy Saver is not the scenario under test.
+Even when no notification state is requested, the observed state, active power
+scheme, and AC/DC source must remain unchanged across those three checkpoints or
+the run is rejected.
 
 Use `-AttachToExisting` only for scenarios that cannot begin with a clean process.
 An attached process is never stopped by the harness. Use `-LeaveRunning` when a
@@ -37,20 +62,36 @@ newly launched process must remain alive after a run.
 - `CpuPercentOneCore`: interval CPU time relative to one logical processor.
 - `CpuPercentMachine`: interval CPU time normalized across all logical processors.
 - `ThreadCount` and `HandleCount`: point-in-time process resource counts.
+- `ScheduleLatenessMilliseconds`: how late the sample was relative to its fixed
+  monotonic schedule. Large values invalidate high-frequency comparisons.
+- `CpuTotalDeltaMilliseconds`, `CpuAveragePercentOneCore`, and
+  `CpuAveragePercentMachine` in the JSON summary aggregate CPU over the complete
+  measured duration instead of treating correlated interval percentages as
+  independent observations.
 
 The first scheduled sample is taken immediately after warm-up and the final sample
 at the requested duration. Percentiles use linear interpolation over sorted sample
-values. Prefer private working set and private commit when judging application
+values. Private working set and private commit come directly from
+`GetProcessMemoryInfo`; the harness does not perform a per-sample CIM query that
+would distort the schedule. Prefer those private metrics when judging application
 cost; the total working set includes shareable framework and system image pages.
 
 ## Comparison protocol
 
 For an A/B comparison, keep the installed package architecture, Windows build,
-power mode, foreground state, warm-up, duration, and sample interval identical.
-Run each short scenario at least 20 times, alternate A and B runs where practical,
-and compare distributions rather than a single minimum. Useful scenarios include
-idle, first picker open, repeated picker open, settings open/close, update due/not
-due, suspend/resume, and command-line control stress.
+power mode, notification state, foreground state, warm-up, duration, and sample
+interval identical. Run each scenario at least 20 times per variant as alternating
+AB/BA pairs, and reduce every run to one summary value before comparing paired
+distributions. Samples within one run are time-correlated and are not independent
+runs. Useful scenarios include idle, first picker open, repeated picker open,
+settings open/close, update due/not due, suspend/resume, and command-line control
+stress.
+
+The adaptive picker needs about 20 seconds to reach Hot after a healthy desktop
+snapshot, so use at least 35 seconds of warm-up for
+`AcceptsNotifications`/Hot steady state. Fullscreen or presentation pressure moves
+to Cold after its grace period; use at least 15 seconds there. Do not mix those
+states into a single idle average.
 
 This harness intentionally does not create artificial memory pressure, manipulate
 the process working set, or run destructive low-memory experiments on the host.

@@ -38,6 +38,26 @@ param(
     [string]$ExpectedPackageVersion,
 
     [Parameter()]
+    [ValidatePattern('^[A-Fa-f0-9]{64}$')]
+    [string]$ExpectedExecutableSha256,
+
+    [Parameter()]
+    [ValidateSet(
+        "Any",
+        "NotPresent",
+        "Busy",
+        "RunningD3dFullScreen",
+        "PresentationMode",
+        "AcceptsNotifications",
+        "QuietTime",
+        "App"
+    )]
+    [string]$ExpectedUserNotificationState = "Any",
+
+    [Parameter()]
+    [switch]$RequireEnergySaverOff,
+
+    [Parameter()]
     [ValidateRange(1, 300)]
     [int]$ProcessStartupTimeoutSeconds = 30,
 
@@ -56,6 +76,175 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+function Initialize-NativeResourceProbe {
+    if ("ApcResourceBenchmark.NativeMethods" -as [type]) {
+        return
+    }
+
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+namespace ApcResourceBenchmark {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct SystemPowerStatus {
+        public byte ACLineStatus;
+        public byte BatteryFlag;
+        public byte BatteryLifePercent;
+        public byte SystemStatusFlag;
+        public int BatteryLifeTime;
+        public int BatteryFullLifeTime;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct ProcessMemoryCountersEx2 {
+        public uint cb;
+        public uint PageFaultCount;
+        public UIntPtr PeakWorkingSetSize;
+        public UIntPtr WorkingSetSize;
+        public UIntPtr QuotaPeakPagedPoolUsage;
+        public UIntPtr QuotaPagedPoolUsage;
+        public UIntPtr QuotaPeakNonPagedPoolUsage;
+        public UIntPtr QuotaNonPagedPoolUsage;
+        public UIntPtr PagefileUsage;
+        public UIntPtr PeakPagefileUsage;
+        public UIntPtr PrivateUsage;
+        public UIntPtr PrivateWorkingSetSize;
+        public UIntPtr SharedCommitUsage;
+    }
+
+    public static class NativeMethods {
+        [DllImport("shell32.dll")]
+        public static extern int SHQueryUserNotificationState(out int state);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool GetSystemPowerStatus(out SystemPowerStatus status);
+
+        [DllImport("psapi.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool GetProcessMemoryInfo(
+            IntPtr process,
+            out ProcessMemoryCountersEx2 counters,
+            uint size
+        );
+
+        [DllImport("powrprof.dll")]
+        private static extern uint PowerGetActiveScheme(IntPtr userRootPowerKey, out IntPtr activePolicyGuid);
+
+        [DllImport("kernel32.dll")]
+        private static extern IntPtr LocalFree(IntPtr memory);
+
+        public static Guid GetActivePowerSchemeGuid() {
+            IntPtr policyGuid;
+            uint result = PowerGetActiveScheme(IntPtr.Zero, out policyGuid);
+            if (result != 0) {
+                throw new System.ComponentModel.Win32Exception((int)result, "PowerGetActiveScheme failed.");
+            }
+
+            try {
+                return (Guid)Marshal.PtrToStructure(policyGuid, typeof(Guid));
+            }
+            finally {
+                LocalFree(policyGuid);
+            }
+        }
+    }
+}
+'@
+}
+
+function Get-UserNotificationStateName {
+    param(
+        [Parameter(Mandatory)]
+        [int]$State
+    )
+
+    switch ($State) {
+        1 { return "NotPresent" }
+        2 { return "Busy" }
+        3 { return "RunningD3dFullScreen" }
+        4 { return "PresentationMode" }
+        5 { return "AcceptsNotifications" }
+        6 { return "QuietTime" }
+        7 { return "App" }
+        default { return "Unknown" }
+    }
+}
+
+function Get-ResourceEnvironmentSnapshot {
+    Initialize-NativeResourceProbe
+
+    $notificationState = 0
+    $notificationResult = [ApcResourceBenchmark.NativeMethods]::SHQueryUserNotificationState(
+        [ref]$notificationState
+    )
+    if ($notificationResult -lt 0) {
+        [System.Runtime.InteropServices.Marshal]::ThrowExceptionForHR($notificationResult)
+    }
+
+    $powerStatus = [ApcResourceBenchmark.SystemPowerStatus]::new()
+    if (-not [ApcResourceBenchmark.NativeMethods]::GetSystemPowerStatus([ref]$powerStatus)) {
+        throw [System.ComponentModel.Win32Exception]::new(
+            [System.Runtime.InteropServices.Marshal]::GetLastWin32Error(),
+            "GetSystemPowerStatus failed."
+        )
+    }
+
+    return [pscustomobject][ordered]@{
+        CapturedUtc = [DateTime]::UtcNow.ToString("o")
+        UserNotificationState = [ordered]@{
+            Code = $notificationState
+            Name = Get-UserNotificationStateName -State $notificationState
+        }
+        Power = [ordered]@{
+            ActiveSchemeGuid = [ApcResourceBenchmark.NativeMethods]::GetActivePowerSchemeGuid().ToString("D")
+            ACLineStatus = [int]$powerStatus.ACLineStatus
+            BatteryFlag = [int]$powerStatus.BatteryFlag
+            BatteryLifePercent = [int]$powerStatus.BatteryLifePercent
+            EnergySaverEnabled = $powerStatus.SystemStatusFlag -ne 0
+            BatteryLifeTimeSeconds = [int]$powerStatus.BatteryLifeTime
+            BatteryFullLifeTimeSeconds = [int]$powerStatus.BatteryFullLifeTime
+        }
+    }
+}
+
+function Assert-ResourceEnvironment {
+    param(
+        [Parameter(Mandatory)]
+        [object]$Snapshot,
+
+        [Parameter(Mandatory)]
+        [string]$Phase,
+
+        [Parameter()]
+        [AllowNull()]
+        [object]$Baseline
+    )
+
+    if ($ExpectedUserNotificationState -ne "Any" -and
+        $Snapshot.UserNotificationState.Name -ne $ExpectedUserNotificationState) {
+        throw "User-notification state at $Phase was '$($Snapshot.UserNotificationState.Name)' " +
+            "($($Snapshot.UserNotificationState.Code)); expected '$ExpectedUserNotificationState'."
+    }
+
+    if ($RequireEnergySaverOff -and $Snapshot.Power.EnergySaverEnabled) {
+        throw "Energy Saver was enabled at $Phase. This run is not comparable."
+    }
+
+    if ($null -ne $Baseline) {
+        if ($Snapshot.UserNotificationState.Code -ne $Baseline.UserNotificationState.Code) {
+            throw "User-notification state changed between pre-launch and $Phase. This run is not comparable."
+        }
+        if ($Snapshot.Power.ActiveSchemeGuid -ne $Baseline.Power.ActiveSchemeGuid) {
+            throw "The active power scheme changed between pre-launch and $Phase. This run is not comparable."
+        }
+        if ($Snapshot.Power.ACLineStatus -ne $Baseline.Power.ACLineStatus) {
+            throw "The AC power source changed between pre-launch and $Phase. This run is not comparable."
+        }
+    }
+}
 
 function Test-PathEqual {
     param(
@@ -88,18 +277,30 @@ function Get-PackagedProcess {
         })
 }
 
-function Get-PrivateWorkingSet {
+function Get-ProcessMemorySnapshot {
     param(
         [Parameter(Mandatory)]
-        [int]$Id
+        [IntPtr]$Handle
     )
 
-    $perf = Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -Filter "IDProcess = $Id"
-    if ($null -eq $perf) {
-        return $null
+    $counters = [ApcResourceBenchmark.ProcessMemoryCountersEx2]::new()
+    $counters.cb = [System.Runtime.InteropServices.Marshal]::SizeOf($counters)
+    if (-not [ApcResourceBenchmark.NativeMethods]::GetProcessMemoryInfo(
+            $Handle,
+            [ref]$counters,
+            $counters.cb
+        )) {
+        throw [System.ComponentModel.Win32Exception]::new(
+            [System.Runtime.InteropServices.Marshal]::GetLastWin32Error(),
+            "GetProcessMemoryInfo failed."
+        )
     }
 
-    return [long]$perf.WorkingSetPrivate
+    return [pscustomobject][ordered]@{
+        WorkingSetBytes = [long]$counters.WorkingSetSize.ToUInt64()
+        PrivateWorkingSetBytes = [long]$counters.PrivateWorkingSetSize.ToUInt64()
+        PrivateCommitBytes = [long]$counters.PrivateUsage.ToUInt64()
+    }
 }
 
 function Get-Percentile {
@@ -212,6 +413,22 @@ if (-not (Test-Path -LiteralPath $installedExecutablePath -PathType Leaf)) {
     throw "The packaged executable was not found at '$installedExecutablePath'."
 }
 
+$executableSha256 = (Get-FileHash -LiteralPath $installedExecutablePath -Algorithm SHA256).Hash.ToUpperInvariant()
+if ($ExpectedExecutableSha256 -and $executableSha256 -ne $ExpectedExecutableSha256.ToUpperInvariant()) {
+    throw "Installed executable SHA-256 is '$executableSha256', expected '$($ExpectedExecutableSha256.ToUpperInvariant())'."
+}
+
+$installedManifestPath = Join-Path $package.InstallLocation "AppxManifest.xml"
+$manifestSha256 = if (Test-Path -LiteralPath $installedManifestPath -PathType Leaf) {
+    (Get-FileHash -LiteralPath $installedManifestPath -Algorithm SHA256).Hash.ToUpperInvariant()
+}
+else {
+    $null
+}
+
+$environmentBeforeLaunch = Get-ResourceEnvironmentSnapshot
+Assert-ResourceEnvironment -Snapshot $environmentBeforeLaunch -Phase "pre-launch"
+
 $existingProcesses = @(Get-PackagedProcess -ImageName $ExecutableName -ExpectedExecutablePath $installedExecutablePath)
 if ($existingProcesses.Count -gt 1) {
     throw "Found $($existingProcesses.Count) matching packaged processes. Stop them before collecting a reproducible benchmark."
@@ -257,6 +474,7 @@ try {
 
     $targetStartTimeUtc = $targetProcess.StartTime.ToUniversalTime()
     $targetId = $targetProcess.Id
+    $targetHandle = $targetProcess.Handle
 
     if ($WarmupSeconds -gt 0) {
         Start-Sleep -Milliseconds ([int][Math]::Ceiling($WarmupSeconds * 1000.0))
@@ -267,11 +485,18 @@ try {
         throw "The target process exited during warm-up."
     }
 
+    $environmentBeforeMeasurement = Get-ResourceEnvironmentSnapshot
+    Assert-ResourceEnvironment `
+        -Snapshot $environmentBeforeMeasurement `
+        -Phase "measurement start" `
+        -Baseline $environmentBeforeLaunch
+
     $logicalProcessorCount = [Environment]::ProcessorCount
     $operatingSystem = Get-CimInstance Win32_OperatingSystem
     $measurementStartedUtc = [DateTime]::UtcNow
     $measurementStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $previousCpuMilliseconds = $targetProcess.TotalProcessorTime.TotalMilliseconds
+    $measurementInitialCpuMilliseconds = $previousCpuMilliseconds
     $previousElapsedMilliseconds = 0.0
     $samples = [System.Collections.Generic.List[object]]::new()
 
@@ -303,14 +528,9 @@ try {
         $cpuTotalMilliseconds = $targetProcess.TotalProcessorTime.TotalMilliseconds
         $cpuDeltaMilliseconds = $cpuTotalMilliseconds - $previousCpuMilliseconds
         $elapsedDeltaMilliseconds = $elapsedMilliseconds - $previousElapsedMilliseconds
-        $privateWorkingSetBytes = Get-PrivateWorkingSet -Id $targetId
-        $workingSetBytes = [long]$targetProcess.WorkingSet64
-        $sharedWorkingSetEstimateBytes = if ($null -eq $privateWorkingSetBytes) {
-            $null
-        }
-        else {
-            [Math]::Max(0, $workingSetBytes - $privateWorkingSetBytes)
-        }
+        $memory = Get-ProcessMemorySnapshot -Handle $targetHandle
+        $sharedWorkingSetEstimateBytes =
+            [Math]::Max(0, $memory.WorkingSetBytes - $memory.PrivateWorkingSetBytes)
 
         $cpuPercentOneCore = if ($elapsedDeltaMilliseconds -gt 0) {
             ($cpuDeltaMilliseconds / $elapsedDeltaMilliseconds) * 100.0
@@ -329,10 +549,15 @@ try {
                 SampleIndex = $sampleIndex
                 TimestampUtc = $sampledUtc.ToString("o")
                 ElapsedMilliseconds = [Math]::Round($elapsedMilliseconds, 3)
-                WorkingSetBytes = $workingSetBytes
-                PrivateWorkingSetBytes = $privateWorkingSetBytes
+                ScheduledMilliseconds = [Math]::Round($targetMilliseconds, 3)
+                ScheduleLatenessMilliseconds = [Math]::Round(
+                    [Math]::Max(0.0, $elapsedMilliseconds - $targetMilliseconds),
+                    3
+                )
+                WorkingSetBytes = $memory.WorkingSetBytes
+                PrivateWorkingSetBytes = $memory.PrivateWorkingSetBytes
                 SharedWorkingSetEstimateBytes = $sharedWorkingSetEstimateBytes
-                PrivateCommitBytes = [long]$targetProcess.PrivateMemorySize64
+                PrivateCommitBytes = $memory.PrivateCommitBytes
                 ThreadCount = $targetProcess.Threads.Count
                 HandleCount = $targetProcess.HandleCount
                 CpuTotalMilliseconds = [Math]::Round($cpuTotalMilliseconds, 3)
@@ -346,7 +571,30 @@ try {
     }
 
     $measurementStopwatch.Stop()
+    $cpuTotalDeltaMilliseconds = $previousCpuMilliseconds - $measurementInitialCpuMilliseconds
     $completedUtc = [DateTime]::UtcNow
+    $environmentAfterMeasurement = Get-ResourceEnvironmentSnapshot
+    Assert-ResourceEnvironment `
+        -Snapshot $environmentAfterMeasurement `
+        -Phase "measurement completion" `
+        -Baseline $environmentBeforeLaunch
+
+    $completedExecutableSha256 =
+        (Get-FileHash -LiteralPath $installedExecutablePath -Algorithm SHA256).Hash.ToUpperInvariant()
+    if ($completedExecutableSha256 -ne $executableSha256) {
+        throw "The installed executable changed during measurement. The run is not comparable."
+    }
+
+    $completedManifestSha256 = if (Test-Path -LiteralPath $installedManifestPath -PathType Leaf) {
+        (Get-FileHash -LiteralPath $installedManifestPath -Algorithm SHA256).Hash.ToUpperInvariant()
+    }
+    else {
+        $null
+    }
+    if ($completedManifestSha256 -ne $manifestSha256) {
+        throw "The installed package manifest changed during measurement. The run is not comparable."
+    }
+
     $gitMetadata = Get-GitState -RepositoryRoot $repositoryRoot
     $summary = [ordered]@{
         WorkingSetBytes = Get-Distribution -Values @($samples.WorkingSetBytes)
@@ -357,6 +605,27 @@ try {
         CpuDeltaMilliseconds = Get-Distribution -Values @($samples.CpuDeltaMilliseconds)
         CpuPercentOneCore = Get-Distribution -Values @($samples.CpuPercentOneCore)
         CpuPercentMachine = Get-Distribution -Values @($samples.CpuPercentMachine)
+        ScheduleLatenessMilliseconds = Get-Distribution -Values @($samples.ScheduleLatenessMilliseconds)
+        CpuTotalDeltaMilliseconds = [Math]::Round($cpuTotalDeltaMilliseconds, 3)
+        CpuAveragePercentOneCore = if ($measurementStopwatch.Elapsed.TotalMilliseconds -gt 0) {
+            [Math]::Round(
+                ($cpuTotalDeltaMilliseconds / $measurementStopwatch.Elapsed.TotalMilliseconds) * 100.0,
+                6
+            )
+        }
+        else {
+            $null
+        }
+        CpuAveragePercentMachine = if ($measurementStopwatch.Elapsed.TotalMilliseconds -gt 0) {
+            [Math]::Round(
+                ($cpuTotalDeltaMilliseconds / $measurementStopwatch.Elapsed.TotalMilliseconds) * 100.0 /
+                    $logicalProcessorCount,
+                6
+            )
+        }
+        else {
+            $null
+        }
     }
 
     $runId = $runStartedUtc.ToString("yyyyMMdd'T'HHmmss.fff'Z'")
@@ -367,7 +636,7 @@ try {
     }
 
     $result = [pscustomobject][ordered]@{
-        SchemaVersion = 1
+        SchemaVersion = 2
         Run = [ordered]@{
             Id = $runId
             Scenario = $Scenario
@@ -380,15 +649,24 @@ try {
             SampleIntervalMilliseconds = $SampleIntervalMilliseconds
             SampleCount = $samples.Count
             AttachedToExistingProcess = -not $launchedByHarness
+            RequiredUserNotificationState = $ExpectedUserNotificationState
+            RequiredEnergySaverOff = [bool]$RequireEnergySaverOff
         }
         Package = [ordered]@{
             Name = $package.Name
+            FullName = $package.PackageFullName
             FamilyName = $package.PackageFamilyName
             Version = $packageVersion
+            Publisher = $package.Publisher
+            Architecture = $package.Architecture.ToString()
+            Status = $package.Status.ToString()
             ApplicationId = $ApplicationId
             InstallLocation = $package.InstallLocation
             ExecutablePath = $installedExecutablePath
             ExecutableFileVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($installedExecutablePath).FileVersion
+            ExecutableSha256 = $executableSha256
+            ManifestPath = if ($manifestSha256) { $installedManifestPath } else { $null }
+            ManifestSha256 = $manifestSha256
         }
         Process = [ordered]@{
             Id = $targetId
@@ -402,8 +680,12 @@ try {
             LogicalProcessorCount = $logicalProcessorCount
             TotalVisibleMemoryBytes = [long]$operatingSystem.TotalVisibleMemorySize * 1KB
             PowerShellVersion = $PSVersionTable.PSVersion.ToString()
+            EnvironmentBeforeLaunch = $environmentBeforeLaunch
+            EnvironmentBeforeMeasurement = $environmentBeforeMeasurement
+            EnvironmentAfterMeasurement = $environmentAfterMeasurement
         }
         Source = [ordered]@{
+            Role = "BenchmarkHarnessOnly"
             RepositoryRoot = $repositoryRoot
             GitCommit = $gitMetadata.Commit
             GitWorkingTreeDirty = $gitMetadata.Dirty

@@ -121,19 +121,21 @@ DeviceManager::DeviceManager() : m_discoveryService(std::make_shared<DeviceDisco
 /*------------------------------------------------------------------------------------------------------------*/
 
 void DeviceManager::StartDeviceWatcher() {
-    std::scoped_lock lifecycleLock(m_discoveryLifecycleMutex);
     {
         auto guard = m_lock.lock_exclusive();
         if (m_shutdownForProcessExit) return;
         m_reconnectController.AllowReconnects();
     }
     EnsureDiscoveryEventHandlers();
-    m_discoveryService->Start();
+    auto request = m_discoveryLifecycle.RequestStart();
+    RunDiscoveryLifecycle(std::move(request.OperationToStart));
+    m_discoveryLifecycle.WaitForIdle();
 }
 
 void DeviceManager::StopDeviceWatcher() {
-    std::scoped_lock lifecycleLock(m_discoveryLifecycleMutex);
-    if (m_discoveryService) m_discoveryService->Stop();
+    auto request = m_discoveryLifecycle.RequestStop();
+    RunDiscoveryLifecycle(std::move(request.OperationToStart));
+    m_discoveryLifecycle.WaitForIdle();
 }
 
 void DeviceManager::ShutdownForProcessExit() noexcept {
@@ -153,7 +155,9 @@ void DeviceManager::ShutdownForProcessExit() noexcept {
             m_closeBarriers.clear();
         }
 
-        StopDeviceWatcher();
+        auto stopDiscovery = m_discoveryLifecycle.RequestStop(true);
+        RunDiscoveryLifecycle(std::move(stopDiscovery.OperationToStart));
+        m_discoveryLifecycle.WaitForIdle();
 
         struct ConnectionForShutdown {
             winrt::Windows::Media::Audio::AudioPlaybackConnection Connection{nullptr};
@@ -1819,26 +1823,56 @@ void DeviceManager::PruneUserActionCascadeLocked(std::chrono::steady_clock::time
     }
 }
 
-void DeviceManager::EnsureDiscoveryEventHandlers() {
-    if (m_discoveryDeviceAddedToken && m_discoveryDeviceRemovedToken && m_discoveryInventoryChangedToken) return;
+void DeviceManager::RunDiscoveryLifecycle(
+    std::optional<LatestServiceLifecycleState::OperationToken> operation) noexcept {
+    if (operation && !m_discoveryLifecycle.BeginExecution(*operation)) {
+        DebugTrace(L"[DeviceManager] discovery lifecycle rejected duplicate executor");
+        return;
+    }
+    while (operation) {
+        try {
+            if (m_discoveryService) {
+                if (operation->State == LatestServiceLifecycleState::DesiredState::Running) {
+                    m_discoveryService->Start();
+                } else {
+                    m_discoveryService->Stop();
+                    if (operation->ClearState) m_discoveryService->ClearCache();
+                }
+            }
+        } catch (...) {
+            util::DebugTraceUnknownException(L"[DeviceManager] discovery lifecycle transition ignored exception");
+        }
+        operation = m_discoveryLifecycle.Complete(*operation);
+    }
+}
 
-    auto weak = weak_from_this();
-    if (!m_discoveryDeviceAddedToken) {
-        m_discoveryDeviceAddedToken = m_discoveryService->DeviceAdded += [weak](auto device) {
+void DeviceManager::EnsureDiscoveryEventHandlers() {
+    std::call_once(m_discoveryEventHandlersOnce, [this] {
+        auto weak = weak_from_this();
+        std::size_t deviceAddedToken = 0;
+        std::size_t deviceRemovedToken = 0;
+        std::size_t inventoryChangedToken = 0;
+        auto rollback = wil::scope_exit([&]() noexcept {
+            try {
+                if (deviceAddedToken) m_discoveryService->DeviceAdded -= deviceAddedToken;
+                if (deviceRemovedToken) m_discoveryService->DeviceRemoved -= deviceRemovedToken;
+                if (inventoryChangedToken) m_discoveryService->InventoryChanged -= inventoryChangedToken;
+            } catch (...) {
+                util::DebugTraceUnknownException(L"[DeviceManager] discovery event handler rollback ignored exception");
+            }
+        });
+
+        deviceAddedToken = m_discoveryService->DeviceAdded += [weak](auto device) {
             if (auto self = weak.lock()) {
                 self->OnDeviceAdded(device);
             }
         };
-    }
-    if (!m_discoveryDeviceRemovedToken) {
-        m_discoveryDeviceRemovedToken = m_discoveryService->DeviceRemoved += [weak](auto device) {
+        deviceRemovedToken = m_discoveryService->DeviceRemoved += [weak](auto device) {
             if (auto self = weak.lock()) {
                 self->OnDeviceRemoved(device);
             }
         };
-    }
-    if (!m_discoveryInventoryChangedToken) {
-        m_discoveryInventoryChangedToken = m_discoveryService->InventoryChanged += [weak]() {
+        inventoryChangedToken = m_discoveryService->InventoryChanged += [weak]() {
             if (auto self = weak.lock()) {
                 {
                     auto guard = self->m_lock.lock_shared();
@@ -1847,7 +1881,12 @@ void DeviceManager::EnsureDiscoveryEventHandlers() {
                 self->DeviceInventoryChanged();
             }
         };
-    }
+
+        m_discoveryDeviceAddedToken = deviceAddedToken;
+        m_discoveryDeviceRemovedToken = deviceRemovedToken;
+        m_discoveryInventoryChangedToken = inventoryChangedToken;
+        rollback.release();
+    });
 }
 
 void DeviceManager::OnConnectionStateChanged(winrt::hstring deviceId,

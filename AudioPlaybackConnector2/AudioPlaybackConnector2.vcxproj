@@ -161,6 +161,7 @@
     <ClInclude Include="include\core\DeviceConnectionInfo.hpp" />
     <ClInclude Include="include\core\DeviceDiscoveryService.hpp" />
     <ClInclude Include="include\core\DeviceManagerDiagnostics.hpp" />
+    <ClInclude Include="include\core\LatestServiceLifecycleState.hpp" />
     <ClInclude Include="include\core\DeviceOperationCoordinator.hpp" />
     <ClInclude Include="include\core\DeviceInventoryGeneration.hpp" />
     <ClInclude Include="include\core\DevicePickerSnapshot.hpp" />

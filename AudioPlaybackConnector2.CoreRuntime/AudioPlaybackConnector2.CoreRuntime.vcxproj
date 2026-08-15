@@ -98,6 +98,7 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceDiscoveryService.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceManager.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceManagerDiagnostics.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\LatestServiceLifecycleState.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceOperationCoordinator.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceInventoryGeneration.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DevicePickerSnapshot.hpp" />

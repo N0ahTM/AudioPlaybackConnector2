@@ -235,6 +235,9 @@
     <ClInclude Include="include\core\ThemeHelper.hpp">
       <Filter>include\core</Filter>
     </ClInclude>
+    <ClInclude Include="include\core\LatestServiceLifecycleState.hpp">
+      <Filter>include\core</Filter>
+    </ClInclude>
     <ClInclude Include="include\core\Settings.hpp">
       <Filter>include\core</Filter>
     </ClInclude>

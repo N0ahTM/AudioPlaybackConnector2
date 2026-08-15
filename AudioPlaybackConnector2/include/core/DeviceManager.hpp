@@ -1,6 +1,7 @@
 #pragma once
 
 #include <core/DeviceDiscoveryService.hpp>
+#include <core/LatestServiceLifecycleState.hpp>
 #include <core/DeviceOperationCoordinator.hpp>
 #include <core/DeviceSessionStore.hpp>
 #include <core/DeviceTrayPresentation.hpp>
@@ -200,6 +201,7 @@ private:
                                   winrt::Windows::Foundation::IInspectable);
     [[nodiscard]] bool ScheduleReconnect(winrt::hstring deviceId);
     void LogConnectionSnapshot(winrt::hstring const& reason) const noexcept;
+    void RunDiscoveryLifecycle(std::optional<LatestServiceLifecycleState::OperationToken> operation) noexcept;
     void EnsureDiscoveryEventHandlers();
     void OnDeviceAdded(winrt::Windows::Devices::Enumeration::DeviceInformation args);
     void OnDeviceRemoved(winrt::Windows::Devices::Enumeration::DeviceInformationUpdate args);
@@ -221,7 +223,8 @@ private:
     bool m_incomingConnectionsEnabled = false;
 
     std::shared_ptr<DeviceDiscoveryService> m_discoveryService;
-    std::mutex m_discoveryLifecycleMutex;
+    LatestServiceLifecycleState m_discoveryLifecycle;
+    std::once_flag m_discoveryEventHandlersOnce;
     std::size_t m_discoveryDeviceAddedToken = 0;
     std::size_t m_discoveryDeviceRemovedToken = 0;
     std::size_t m_discoveryInventoryChangedToken = 0;

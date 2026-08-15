@@ -412,6 +412,7 @@ int RunResourcePressureMonitorTests();
 int RunRuntimeApartmentTests();
 int RunSettingsLimitsTests();
 int RunSingleInstanceGuardTests();
+int RunTrayTooltipBuilderTests();
 int RunUpdateCoordinatorTests();
 
 int main() {
@@ -442,6 +443,7 @@ int main() {
     g_failures += RunRuntimeApartmentTests();
     g_failures += RunSettingsLimitsTests();
     g_failures += RunSingleInstanceGuardTests();
+    g_failures += RunTrayTooltipBuilderTests();
     g_failures += RunUpdateCoordinatorTests();
 
     if (g_failures != 0) {

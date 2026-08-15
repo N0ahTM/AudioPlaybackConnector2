@@ -1,6 +1,7 @@
 #include <pch.h>
 #include <services/TrayController.hpp>
-#include <core/DeviceDisplay.hpp>
+#include <core/Settings.hpp>
+#include <core/TrayTooltipBuilder.hpp>
 #include <core/DeviceManager.hpp>
 #include <core/StringResources.hpp>
 #include <core/ThemeHelper.hpp>
@@ -422,38 +423,22 @@ void TrayController::UpdateTooltip(std::wstring_view text) {
     }
 }
 
-void TrayController::UpdateTooltipFromConnections(std::vector<DeviceConnectionInfo> const& connected) {
+void TrayController::UpdateTooltipFromConnections(std::vector<DeviceTrayPresentationItem> const& connected) {
     if (!m_trayIcon) return;
-    if (connected.empty()) {
-        m_trayIcon->SetTooltip(_("AppName"));
-    } else {
-        SettingsData settingsSnapshot;
-        bool hasSettings = false;
-        if (m_settings) {
-            auto locked = m_settings->LockSharedData();
-            settingsSnapshot = *locked;
-            hasSettings = true;
-        }
-
-        std::wstring tip = std::wstring(_("AppName")) + L"\n";
-        for (const auto& c : connected) {
-            std::wstring alias;
-            std::wstring name = c.Name;
-            if (hasSettings) {
-                auto it = std::ranges::find_if(settingsSnapshot.Devices,
-                                               [&](auto const& device) { return device.Id == c.Id; });
-                if (it != settingsSnapshot.Devices.end()) {
-                    alias = it->Alias;
-                    if (!it->Name.empty()) {
-                        name = it->Name;
-                    }
-                }
-            }
-            tip += apc::display::DeviceNameOrId(c.Id, name, alias, hasSettings && settingsSnapshot.PrivacyModeEnabled);
-            tip += L"\n";
-        }
-        m_trayIcon->SetTooltip(tip);
+    auto const appName = std::wstring(_("AppName"));
+    auto const redactedDeviceName = std::wstring(_("Privacy_RedactedDevice"));
+    if (!m_settings) {
+        m_trayIcon->SetTooltip(apc::tray::BuildTooltip(appName, redactedDeviceName, connected, {}, false));
+        return;
     }
+
+    std::wstring tooltip;
+    {
+        auto locked = m_settings->LockSharedData();
+        tooltip = apc::tray::BuildTooltip(
+            appName, redactedDeviceName, connected, locked->Devices, locked->PrivacyModeEnabled);
+    }
+    m_trayIcon->SetTooltip(tooltip);
 }
 
 bool TrayController::RefreshDevicePickerState() noexcept {

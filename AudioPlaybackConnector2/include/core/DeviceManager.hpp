@@ -3,6 +3,7 @@
 #include <core/DeviceDiscoveryService.hpp>
 #include <core/DeviceOperationCoordinator.hpp>
 #include <core/DeviceSessionStore.hpp>
+#include <core/DeviceTrayPresentation.hpp>
 #include <core/ReconnectController.hpp>
 #include <chrono>
 #include <cstdint>
@@ -20,11 +21,6 @@
 /*------------------------------------------------------------------------------------------------------------*/
 
 enum class DeviceStatusKind { None, Ready, Connecting, Reconnecting, Connected, Error };
-
-struct DeviceTrayPresentationSnapshot {
-    std::vector<DeviceConnectionInfo> ConnectedDevices;
-    bool HasBusyOperations = false;
-};
 
 class DeviceManager : public std::enable_shared_from_this<DeviceManager> {
 public:

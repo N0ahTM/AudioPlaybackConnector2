@@ -101,6 +101,7 @@
     <ClCompile Include="src\RuntimeApartmentTests.cpp" />
     <ClCompile Include="src\SettingsLimitsTests.cpp" />
     <ClCompile Include="src\SingleInstanceGuardTests.cpp" />
+    <ClCompile Include="src\TrayTooltipBuilderTests.cpp" />
     <ClCompile Include="src\UpdateCoordinatorTests.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveResourcePolicy.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveActionRetryBackoff.cpp" />
@@ -116,6 +117,7 @@
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\DevicePickerSnapshot.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceInventoryGeneration.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\ReconnectController.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\TrayTooltipBuilder.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\CommandLineControlServer.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -134,6 +136,8 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceInventoryGeneration.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DevicePickerTypes.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsLimits.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceTrayPresentation.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\TrayTooltipBuilder.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResourcePressureMonitor.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResourcePressureState.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\SingleInstanceGuard.hpp" />

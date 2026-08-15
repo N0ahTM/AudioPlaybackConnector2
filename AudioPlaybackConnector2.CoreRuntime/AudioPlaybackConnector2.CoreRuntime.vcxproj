@@ -102,11 +102,13 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DevicePickerSnapshot.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DevicePickerTypes.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceSessionStore.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceTrayPresentation.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\ReconnectController.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\Settings.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsData.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsLimits.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\StringResources.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\TrayTooltipBuilder.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\CommandLineControlServer.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\SettingsController.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\StartupTaskController.hpp" />
@@ -141,6 +143,7 @@
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceInventoryGeneration.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceSessionStore.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\ReconnectController.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\TrayTooltipBuilder.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\Settings.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\StringResources.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\CommandLineControlServer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>

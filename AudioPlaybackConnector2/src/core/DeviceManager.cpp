@@ -895,7 +895,7 @@ apc::device_picker::DeviceInventorySnapshot DeviceManager::GetDevicePickerInvent
 DeviceTrayPresentationSnapshot DeviceManager::GetTrayPresentationSnapshot() const {
     auto guard = m_lock.lock_shared();
     DeviceTrayPresentationSnapshot snapshot;
-    snapshot.ConnectedDevices = m_sessions.ConnectedDevices();
+    snapshot.ConnectedDevices = m_sessions.ConnectedDevicePresentations();
     snapshot.HasBusyOperations = m_deviceOperations.HasActiveOperations() || !m_closeBarriers.empty() ||
                                  m_reconnectController.HasPendingTimers();
     return snapshot;

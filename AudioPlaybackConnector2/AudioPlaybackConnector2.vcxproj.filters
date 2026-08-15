@@ -253,6 +253,12 @@
     <ClInclude Include="include\core\DevicePickerTypes.hpp">
       <Filter>include\core</Filter>
     </ClInclude>
+    <ClInclude Include="include\core\DeviceTrayPresentation.hpp">
+      <Filter>include\core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\core\TrayTooltipBuilder.hpp">
+      <Filter>include\core</Filter>
+    </ClInclude>
     <ClInclude Include="include\core\DeviceSessionStore.hpp">
       <Filter>include\core</Filter>
     </ClInclude>

@@ -24,6 +24,16 @@ std::vector<DeviceConnectionInfo> DeviceSessionStore::ConnectedDevices() const {
     return result;
 }
 
+std::vector<DeviceTrayPresentationItem> DeviceSessionStore::ConnectedDevicePresentations() const {
+    auto guard = m_lock.lock_shared();
+    std::vector<DeviceTrayPresentationItem> result;
+    result.reserve(m_connections.size());
+    for (auto const& [id, connection] : m_connections) {
+        if (connection.IsOpen) result.push_back({id, connection.Name});
+    }
+    return result;
+}
+
 bool DeviceSessionStore::HasConnections() const {
     auto guard = m_lock.lock_shared();
     return std::ranges::any_of(m_connections, [](auto const& entry) { return entry.second.IsOpen; });

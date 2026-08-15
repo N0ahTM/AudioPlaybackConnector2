@@ -150,6 +150,7 @@
     <ClInclude Include="include\util\Logger.hpp" />
     <ClInclude Include="include\util\Util.hpp" />
     <ClInclude Include="include\core\StringResources.hpp" />
+    <ClInclude Include="include\core\TrayTooltipBuilder.hpp" />
     <ClInclude Include="include\core\ThemeHelper.hpp" />
     <ClInclude Include="include\core\Settings.hpp" />
     <ClInclude Include="include\core\SettingsData.hpp" />
@@ -163,6 +164,7 @@
     <ClInclude Include="include\core\DevicePickerSnapshot.hpp" />
     <ClInclude Include="include\core\DevicePickerTypes.hpp" />
     <ClInclude Include="include\core\DeviceSessionStore.hpp" />
+    <ClInclude Include="include\core\DeviceTrayPresentation.hpp" />
     <ClInclude Include="include\core\ReconnectController.hpp" />
     <ClInclude Include="include\core\DeviceManager.hpp" />
     <ClInclude Include="include\services\NotificationService.hpp" />

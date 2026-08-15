@@ -2,6 +2,7 @@
 
 #include <core/DeviceConnectionInfo.hpp>
 #include <core/DevicePickerSnapshot.hpp>
+#include <core/DeviceTrayPresentation.hpp>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -19,6 +20,7 @@ public:
     /*------------------------------------------------------------------------------------------------------------*/
 
     [[nodiscard]] std::vector<DeviceConnectionInfo> ConnectedDevices() const;
+    [[nodiscard]] std::vector<DeviceTrayPresentationItem> ConnectedDevicePresentations() const;
     [[nodiscard]] bool HasConnections() const;
     [[nodiscard]] bool HasConnection(winrt::hstring const& deviceId) const;
     [[nodiscard]] std::optional<DeviceConnectionInfo> FindConnection(winrt::hstring const& deviceId) const;

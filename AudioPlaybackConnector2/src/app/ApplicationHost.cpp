@@ -2179,6 +2179,8 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
         auto const addDevice =
             !hasExistingDevice && validDeviceId && locked->Devices.size() < apc::limits::c_maxPersistedDeviceCount;
         auto const updateDeviceName = hasExistingDevice && existingDevice->Name != deviceName;
+        auto const updatedNameIsVisible =
+            updateDeviceName && existingDevice->Alias.empty() && !locked->PrivacyModeEnabled;
         auto const promoteMru =
             validDeviceId && (locked->LastConnectedIds.empty() || locked->LastConnectedIds.front() != idString ||
                               std::ranges::count(locked->LastConnectedIds, idString) != 1);
@@ -2197,7 +2199,7 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
                 devicePresentationChanged = true;
             } else if (updateDeviceName) {
                 data.Devices[*existingDeviceIndex].Name = deviceName;
-                devicePresentationChanged = true;
+                devicePresentationChanged = updatedNameIsVisible;
             }
             if (promoteMru) {
                 static_cast<void>(AutoReconnectPlanner::PromoteMostRecentlyConnected(data.LastConnectedIds, idString));

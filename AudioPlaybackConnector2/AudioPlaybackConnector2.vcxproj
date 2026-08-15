@@ -178,6 +178,7 @@
     <ClInclude Include="include\ui\ButtonHelpers.hpp" />
     <ClInclude Include="include\ui\DevicePickerViewModel.hpp" />
     <ClInclude Include="include\ui\FlyoutPresenterStyle.hpp" />
+    <ClInclude Include="include\ui\SettingsDiagnosticsReport.hpp" />
     <ClInclude Include="include\ui\SettingsViewModel.hpp" />
     <ClInclude Include="include\ui\SettingsDeviceViewModel.hpp" />
     <ClInclude Include="include\ui\TrayIcon.hpp" />
@@ -219,6 +220,7 @@
     <ClCompile Include="src\services\TrayController.cpp" />
     <ClCompile Include="src\ui\DevicePickerViewModel.cpp" />
     <ClCompile Include="src\ui\FlyoutPresenterStyle.cpp" />
+    <ClCompile Include="src\ui\SettingsDiagnosticsReport.cpp" />
     <ClCompile Include="src\ui\SettingsViewModel.cpp" />
     <ClCompile Include="src\ui\TrayIcon.cpp" />
     <ClCompile Include="src\ui\TrayContextMenu.cpp" />

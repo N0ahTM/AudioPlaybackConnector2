@@ -86,7 +86,6 @@ private:
     void CommitAlias(std::wstring const& deviceId,
                      winrt::Microsoft::UI::Xaml::Controls::TextBox const& textBox,
                      std::wstring const& previousAlias);
-    [[nodiscard]] std::wstring BuildDiagnosticsText() const;
     [[nodiscard]] std::wstring BuildReportBugUri() const;
     void SetUpdateCheckBusy(bool busy);
     void SetStartupTaskBusy(bool busy);

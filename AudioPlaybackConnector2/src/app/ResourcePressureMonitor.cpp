@@ -107,6 +107,18 @@ struct ResourcePressureMonitor::Impl {
             SetThreadpoolTimer(PollTimer, &dueTime, 0, std::min<DWORD>(NormalPeriod / 5, 1000));
         }
 
+        [[nodiscard]] bool RequestProbe() noexcept {
+            try {
+                std::scoped_lock lock(ControlMutex);
+                if (!Running.load() || !IsOwnerEpochCurrent() || !PollTimer) return false;
+                auto dueTime = RelativeDueTime(std::chrono::milliseconds{1});
+                SetThreadpoolTimer(PollTimer, &dueTime, 0, 0);
+                return true;
+            } catch (...) {
+                return false;
+            }
+        }
+
         void Shutdown(bool waitForPublicCallbacks) noexcept {
             if (ShutdownStarted.exchange(true)) return;
             Running.store(false);
@@ -369,6 +381,20 @@ struct ResourcePressureMonitor::Impl {
 
     [[nodiscard]] bool IsRunning() const noexcept { return Running.load(); }
 
+    [[nodiscard]] bool RequestProbe() noexcept {
+        try {
+            std::shared_ptr<RunContext> context;
+            {
+                std::scoped_lock lock(LifecycleMutex);
+                if (!Running.load() || !Active) return false;
+                context = Active;
+            }
+            return context->RequestProbe();
+        } catch (...) {
+            return false;
+        }
+    }
+
     static void CALLBACK DeferredStopCallback(PTP_CALLBACK_INSTANCE, void* context, PTP_WORK) noexcept {
         auto self = static_cast<Impl*>(context);
         std::scoped_lock lock(self->LifecycleMutex);
@@ -420,6 +446,10 @@ ResourcePressureMonitor::~ResourcePressureMonitor() {
 
 bool ResourcePressureMonitor::Start() noexcept {
     return m_impl->Start();
+}
+
+bool ResourcePressureMonitor::RequestProbe() noexcept {
+    return m_impl->RequestProbe();
 }
 
 void ResourcePressureMonitor::Stop() noexcept {

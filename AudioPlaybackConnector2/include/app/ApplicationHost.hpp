@@ -164,6 +164,7 @@ private:
     AdaptiveResourcePolicy m_adaptiveResourcePolicy;
     ResourcePressureValues m_resourcePressureValues;
     std::unique_ptr<ResourcePressureMonitor> m_resourcePressureMonitor;
+    HPOWERNOTIFY m_powerSavingStatusNotification = nullptr;
     winrt::Microsoft::UI::Dispatching::DispatcherQueueTimer m_adaptiveResourceFallbackTimer{nullptr};
     AdaptiveActionRetryBackoff m_adaptiveActionRetryBackoff;
     AdaptiveScheduleState m_adaptiveScheduleState;

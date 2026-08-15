@@ -304,6 +304,11 @@ bool ApplicationHost::PerformTeardown(bool saveSettings) noexcept {
     if (m_exiting.exchange(true)) return m_teardownWindowCloseSucceeded.load();
 
     StopMainWindowLoadedWatchdog();
+    if (auto notification = std::exchange(m_powerSavingStatusNotification, nullptr)) {
+        if (!UnregisterPowerSettingNotification(notification)) {
+            DebugTrace(L"[App] Failed to unregister battery-saver notification: {0}", GetLastError());
+        }
+    }
     if (m_resourcePressureMonitor) {
         m_resourcePressureMonitor->Stop();
         m_resourcePressureMonitor.reset();
@@ -724,6 +729,13 @@ void ApplicationHost::InitializeAdaptiveResources() noexcept {
             m_resourcePressureMonitor.reset();
             DebugTrace(L"[App] Resource-pressure monitor unavailable; speculative preloading and automatic updates "
                        L"remain disabled");
+        } else {
+            m_powerSavingStatusNotification =
+                RegisterPowerSettingNotification(m_hwnd, &GUID_POWER_SAVING_STATUS, DEVICE_NOTIFY_WINDOW_HANDLE);
+            if (!m_powerSavingStatusNotification) {
+                DebugTrace(L"[App] Battery-saver notification registration unavailable; polling fallback remains "
+                           L"active");
+            }
         }
     } catch (...) {
         m_resourcePressureMonitor.reset();
@@ -2324,7 +2336,17 @@ LRESULT CALLBACK ApplicationHost::SubclassProc(
         switch (wParam) {
             case PBT_APMSUSPEND: host->HandlePowerSuspend(); return TRUE;
             case PBT_APMRESUMEAUTOMATIC:
-            case PBT_APMRESUMESUSPEND: host->HandlePowerResume(); return TRUE;
+            case PBT_APMRESUMESUSPEND:
+                host->HandlePowerResume();
+                if (host->m_resourcePressureMonitor) {
+                    static_cast<void>(host->m_resourcePressureMonitor->RequestProbe());
+                }
+                return TRUE;
+            case PBT_POWERSETTINGCHANGE:
+                if (host->m_resourcePressureMonitor) {
+                    static_cast<void>(host->m_resourcePressureMonitor->RequestProbe());
+                }
+                return TRUE;
             default: break;
         }
     }

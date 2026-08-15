@@ -365,6 +365,60 @@ void TestMonitorPublishesPeriodicLivenessHeartbeat() {
     monitor.Stop();
 }
 
+void TestExplicitProbeShortensLongPoll() {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::size_t callbacks = 0;
+    ResourcePressureMonitor monitor(
+        [&](ResourcePressureSnapshot const&) {
+            {
+                std::scoped_lock lock(mutex);
+                ++callbacks;
+            }
+            changed.notify_all();
+        },
+        {.PollInterval = 30s, .ConstrainedPollInterval = 30s, .SnapshotHeartbeatInterval = 1ms});
+
+    Check(!monitor.RequestProbe(), "an explicit probe must be rejected before the monitor starts");
+    Check(monitor.Start(), "explicit-probe monitor must start");
+    Check(WaitFor(changed, mutex, 2s, [&] { return callbacks >= 1; }),
+          "explicit-probe monitor must publish its initial snapshot");
+    std::this_thread::sleep_for(10ms);
+    Check(monitor.RequestProbe(), "a running monitor must accept an explicit probe request");
+    Check(WaitFor(changed, mutex, 2s, [&] { return callbacks >= 2; }),
+          "an explicit probe must not wait for the long periodic interval");
+    monitor.Stop();
+    Check(!monitor.RequestProbe(), "an explicit probe must be rejected after the monitor stops");
+}
+
+void TestExplicitProbeFromCallbackRemainsSafe() {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::size_t callbacks = 0;
+    std::atomic_bool requestAccepted = false;
+    ResourcePressureMonitor* monitorAddress = nullptr;
+    ResourcePressureMonitor monitor(
+        [&](ResourcePressureSnapshot const&) {
+            std::size_t callbackNumber = 0;
+            {
+                std::scoped_lock lock(mutex);
+                callbackNumber = ++callbacks;
+            }
+            if (callbackNumber == 1) {
+                requestAccepted.store(monitorAddress->RequestProbe());
+            }
+            changed.notify_all();
+        },
+        {.PollInterval = 30s, .ConstrainedPollInterval = 30s, .SnapshotHeartbeatInterval = 1ms});
+    monitorAddress = &monitor;
+
+    Check(monitor.Start(), "callback-probe monitor must start");
+    Check(WaitFor(changed, mutex, 2s, [&] { return callbacks >= 2; }),
+          "an explicit probe requested from a callback must not deadlock");
+    Check(requestAccepted.load(), "the active callback must be able to request a follow-up probe");
+    monitor.Stop();
+}
+
 void TestConcurrentStartAndStopRemainSafe() {
     std::atomic_bool startFailed = false;
     ResourcePressureMonitor monitor([](ResourcePressureSnapshot const&) {}, {.PollInterval = -1ms});
@@ -401,6 +455,7 @@ void TestRepeatedLifecycleDoesNotLeakHandles() {
           "test process handle baseline must be observable");
     for (std::size_t iteration = 0; iteration < 100; ++iteration) {
         Check(monitor.Start(), "repeated resource monitor start must succeed");
+        Check(monitor.RequestProbe(), "a running lifecycle iteration must accept an explicit probe");
         monitor.Stop();
     }
     Check(GetProcessHandleCount(GetCurrentProcess(), &handlesAfter) != FALSE,
@@ -423,6 +478,8 @@ int RunResourcePressureMonitorTests() {
     TestMonitorCanBeDestroyedFromItsOwnCallback();
     TestExternalStopWaitsForSelfStoppedCallback();
     TestMonitorPublishesPeriodicLivenessHeartbeat();
+    TestExplicitProbeShortensLongPoll();
+    TestExplicitProbeFromCallbackRemainsSafe();
     TestConcurrentStartAndStopRemainSafe();
     TestRepeatedLifecycleDoesNotLeakHandles();
     return g_failures;

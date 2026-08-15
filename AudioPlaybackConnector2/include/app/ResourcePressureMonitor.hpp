@@ -30,6 +30,7 @@ public:
     ResourcePressureMonitor& operator=(ResourcePressureMonitor const&) = delete;
 
     [[nodiscard]] bool Start() noexcept;
+    [[nodiscard]] bool RequestProbe() noexcept;
     void Stop() noexcept;
     [[nodiscard]] bool IsRunning() const noexcept;
 

@@ -267,6 +267,7 @@ void SettingsWindow::RootGrid_Loaded(IInspectable const&, RoutedEventArgs const&
         }
 
         RevealAtTarget(hwnd);
+        m_initializationSucceeded = true;
     } catch (winrt::hresult_error const& ex) {
         util::DebugTraceException(L"[SettingsWindow] initialization failed", ex);
         CloseAfterInitializationFailure();
@@ -277,6 +278,10 @@ void SettingsWindow::RootGrid_Loaded(IInspectable const&, RoutedEventArgs const&
         util::DebugTraceUnknownException(L"[SettingsWindow] initialization failed");
         CloseAfterInitializationFailure();
     }
+}
+
+bool SettingsWindow::InitializationSucceeded() const noexcept {
+    return m_initializationSucceeded;
 }
 
 void SettingsWindow::CloseAfterInitializationFailure() noexcept {

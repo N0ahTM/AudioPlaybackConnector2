@@ -84,7 +84,6 @@ bool SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settings
     try {
         candidate = std::make_shared<WindowState>();
         candidate->Window = winrt::AudioPlaybackConnector2::SettingsWindow();
-        candidate->SaveSettings = std::move(saveSettings);
         owner->Current = candidate;
 
         auto defaultPlacement =
@@ -140,6 +139,12 @@ bool SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settings
             DebugTrace(L"[SettingsWindowPresenter] SettingsWindow closed while activating");
             return false;
         }
+        if (!impl->InitializationSucceeded()) {
+            DebugTrace(L"[SettingsWindowPresenter] SettingsWindow initialization did not complete");
+            static_cast<void>(CloseWindow(owner, candidate, false));
+            return false;
+        }
+        candidate->SaveSettings = std::move(saveSettings);
         candidate->Activated = true;
 
         DebugTrace(L"[SettingsWindowPresenter] SettingsWindow created off-screen (hidden until ready)");

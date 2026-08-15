@@ -55,6 +55,7 @@ struct SettingsWindow : SettingsWindowT<SettingsWindow> {
     void SetDefaultPlacement(util::SettingsWindowPlacement placement);
     void SetTargetPlacement(util::SettingsWindowPlacement placement);
     void RefreshKnownDevices();
+    [[nodiscard]] bool InitializationSucceeded() const noexcept;
 
 private:
     enum class SettingsPage { Devices, App, Privacy, StreamDeck, Help, About };
@@ -141,6 +142,7 @@ private:
     bool m_adaptiveLayoutReady = false;
     bool m_loaded = false;
     bool m_hadPersistedPlacement = false;
+    bool m_initializationSucceeded = false;
 };
 } // namespace winrt::AudioPlaybackConnector2::implementation
 

@@ -443,6 +443,7 @@ int RunControlUiActionGateTests();
 int RunControlTargetMatcherTests();
 int RunDeviceOperationCoordinatorTests();
 int RunDevicePickerSnapshotTests();
+int RunLatestStartupTaskRequestStateTests();
 int RunResourcePressureMonitorTests();
 int RunRuntimeApartmentTests();
 int RunSettingsLimitsTests();
@@ -476,6 +477,7 @@ int main() {
     g_failures += RunControlTargetMatcherTests();
     g_failures += RunDeviceOperationCoordinatorTests();
     g_failures += RunDevicePickerSnapshotTests();
+    g_failures += RunLatestStartupTaskRequestStateTests();
     g_failures += RunResourcePressureMonitorTests();
     g_failures += RunRuntimeApartmentTests();
     g_failures += RunSettingsLimitsTests();

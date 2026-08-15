@@ -1453,7 +1453,7 @@ bool ApplicationHost::ShowSettingsWindow() {
     return m_settingsWindowPresenter.Show(
         m_settingsController, m_startupTaskCoordinator, m_trayController, m_updateCoordinator, [weak]() {
             auto self = weak.lock();
-            if (self) static_cast<void>(self->m_settingsSaver.FlushNow());
+            if (self) self->m_settingsSaver.RequestSave();
         });
 }
 

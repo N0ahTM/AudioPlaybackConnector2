@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 
 class NotificationService;
 class Settings;
@@ -20,5 +21,6 @@ public:
     CheckForUpdatesAsync(Settings& settings,
                          std::shared_ptr<NotificationService> notificationService,
                          std::shared_ptr<UpdateCoordinator> updateCoordinator,
+                         std::function<void()> requestSettingsSave,
                          std::atomic<bool>& exiting);
 };

@@ -24,8 +24,9 @@ winrt::Windows::Foundation::IAsyncAction
 StartupUpdateCoordinator::CheckForUpdatesAsync(Settings& settings,
                                                std::shared_ptr<NotificationService> notificationService,
                                                std::shared_ptr<UpdateCoordinator> updateCoordinator,
+                                               std::function<void()> requestSettingsSave,
                                                std::atomic<bool>& exiting) {
-    if (exiting.load() || !notificationService || !updateCoordinator) co_return;
+    if (exiting.load() || !notificationService || !updateCoordinator || !requestSettingsSave) co_return;
 
     const auto now = UnixNowSeconds();
     bool shouldCheck = false;
@@ -69,5 +70,5 @@ StartupUpdateCoordinator::CheckForUpdatesAsync(Settings& settings,
             data.LastNotifiedUpdateVersion = result.LatestVersion;
         }
     }
-    settings.Save(GetModuleHandleW(nullptr));
+    requestSettingsSave();
 }

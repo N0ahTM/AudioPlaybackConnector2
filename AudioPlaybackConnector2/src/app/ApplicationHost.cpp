@@ -1008,8 +1008,17 @@ winrt::fire_and_forget ApplicationHost::CheckForUpdatesOnStartupAsync() {
         auto notificationService = m_notificationService;
         auto updateCoordinator = m_updateCoordinator;
         if (m_exiting.load() || !settings || !notificationService || !updateCoordinator) co_return;
+        auto weak = weak_from_this();
         co_await StartupUpdateCoordinator::CheckForUpdatesAsync(
-            *settings, notificationService, updateCoordinator, m_exiting);
+            *settings,
+            notificationService,
+            updateCoordinator,
+            [weak]() {
+                if (auto self = weak.lock(); self && !self->m_exiting.load()) {
+                    self->m_settingsSaver.RequestSave();
+                }
+            },
+            m_exiting);
     } catch (winrt::hresult_error const& ex) {
         util::DebugTraceException(L"[App] Startup update check failed", ex);
     } catch (std::exception const& ex) {

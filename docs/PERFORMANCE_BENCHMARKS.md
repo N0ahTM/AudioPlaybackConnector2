@@ -14,7 +14,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Measure-ResourceUsag
     -ExpectedExecutableSha256 <64-character-installed-executable-hash> `
     -ExpectedUserNotificationState AcceptsNotifications `
     -RequireEnergySaverOff `
-    -Scenario idle-baseline `
+    -Scenario available-hot-idle `
+    -Variant candidate `
+    -PairId r01 `
     -WarmupSeconds 35 `
     -DurationSeconds 120 `
     -SampleIntervalMilliseconds 1000
@@ -86,6 +88,28 @@ distributions. Samples within one run are time-correlated and are not independen
 runs. Useful scenarios include idle, first picker open, repeated picker open,
 settings open/close, update due/not due, suspend/resume, and command-line control
 stress.
+
+Give both members of an A/B pair the same `-PairId` and distinct stable
+`-Variant` names. After collecting the series, run the strict paired comparison:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Compare-ResourceUsage.ps1 `
+    -InputDirectory .\artifacts\perf\available-hot `
+    -Scenario available-hot-idle `
+    -BaselineVariant develop `
+    -CandidateVariant head `
+    -MinimumPairs 20 `
+    -BootstrapIterations 10000
+```
+
+The comparator rejects missing or duplicate pairs, dirty harness worktrees,
+unstable executable hashes, mismatched package identity/architecture, differing
+host or measurement configuration, changed QUNS/power state, incomplete sample
+counts, and excessive schedule lateness. It reports paired median differences,
+median absolute deviation, and a deterministic 95% bootstrap interval for the
+paired median. Negative differences mean the candidate used fewer resources.
+Use `-AllowDirtyHarness` or `-AllowSameExecutable` only for explicit harness/control
+experiments, not release claims.
 
 The adaptive picker needs about 20 seconds to reach Hot after a healthy desktop
 snapshot, so use at least 35 seconds of warm-up for

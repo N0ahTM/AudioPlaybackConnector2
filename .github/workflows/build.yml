@@ -33,6 +33,9 @@ jobs:
         $files = git ls-files '*.cpp' '*.h' '*.hpp' '*.cxx' '*.cc' '*.ixx'
         clang-format --dry-run --Werror $files
 
+    - name: Run performance tool regression tests
+      run: .\scripts\test-performance-tools.ps1
+
     - name: Run CppCheck
       run: |
         $files = git ls-files 'AudioPlaybackConnector2/src/*.cpp' 'AudioPlaybackConnector2/ui/*.cpp'

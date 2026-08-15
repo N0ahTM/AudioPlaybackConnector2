@@ -34,6 +34,14 @@ param(
     [string]$Scenario = "idle",
 
     [Parameter()]
+    [ValidatePattern('^[A-Za-z0-9._-]+$')]
+    [string]$Variant,
+
+    [Parameter()]
+    [ValidatePattern('^[A-Za-z0-9._-]+$')]
+    [string]$PairId,
+
+    [Parameter()]
     [ValidatePattern('^\d+\.\d+\.\d+\.\d+$')]
     [string]$ExpectedPackageVersion,
 
@@ -640,6 +648,8 @@ try {
         Run = [ordered]@{
             Id = $runId
             Scenario = $Scenario
+            Variant = if ($Variant) { $Variant } else { $null }
+            PairId = if ($PairId) { $PairId } else { $null }
             StartedUtc = $runStartedUtc.ToString("o")
             MeasurementStartedUtc = $measurementStartedUtc.ToString("o")
             CompletedUtc = $completedUtc.ToString("o")

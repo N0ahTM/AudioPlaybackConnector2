@@ -132,9 +132,25 @@ private:
     void ReenableIncomingConnectionDetached(winrt::hstring deviceId);
     enum class DisconnectReason { UserInitiated, UserInitiatedCascade, Unexpected, Cleanup };
 
-    void ReportConnectionFailure(winrt::hstring const& deviceId, winrt::hstring const& message, bool cleanupConnection);
+    void ReportConnectionFailure(winrt::hstring const& deviceId,
+                                 winrt::hstring const& message,
+                                 OperationToken const& operation,
+                                 std::size_t attemptId,
+                                 bool restoreIncomingIfNoConnection = false);
     void Disconnect(winrt::hstring deviceId, DisconnectReason reason);
     void Disconnect(winrt::hstring deviceId, DisconnectReason reason, bool suppressCascade);
+    [[nodiscard]] bool DisconnectIfCurrent(winrt::hstring deviceId,
+                                           DisconnectReason reason,
+                                           bool suppressCascade,
+                                           OperationToken const& expectedOperation,
+                                           std::size_t expectedAttemptId);
+    [[nodiscard]] bool DisconnectInternal(winrt::hstring deviceId,
+                                          DisconnectReason reason,
+                                          bool suppressCascade,
+                                          OperationToken const* expectedOperation,
+                                          std::size_t expectedAttemptId,
+                                          winrt::hstring const* failureMessage,
+                                          bool restoreIncomingIfNoConnection);
     [[nodiscard]] std::optional<OperationToken>
     TryBeginOperationLocked(winrt::hstring const& deviceId, ConnectionIntent intent, OperationPhase phase);
     void InvalidateDeviceOperationLocked(winrt::hstring const& deviceId);

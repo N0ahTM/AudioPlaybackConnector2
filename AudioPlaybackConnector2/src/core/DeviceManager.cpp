@@ -975,6 +975,27 @@ void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason)
 }
 
 void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason, bool suppressCascade) {
+    OperationToken const* expectedOperation = nullptr;
+    static_cast<void>(
+        DisconnectInternal(std::move(deviceId), reason, suppressCascade, expectedOperation, 0, nullptr, false));
+}
+
+bool DeviceManager::DisconnectIfCurrent(winrt::hstring deviceId,
+                                        DisconnectReason reason,
+                                        bool suppressCascade,
+                                        OperationToken const& expectedOperation,
+                                        std::size_t expectedAttemptId) {
+    return DisconnectInternal(
+        std::move(deviceId), reason, suppressCascade, &expectedOperation, expectedAttemptId, nullptr, false);
+}
+
+bool DeviceManager::DisconnectInternal(winrt::hstring deviceId,
+                                       DisconnectReason reason,
+                                       bool suppressCascade,
+                                       OperationToken const* expectedOperation,
+                                       std::size_t expectedAttemptId,
+                                       winrt::hstring const* failureMessage,
+                                       bool restoreIncomingIfNoConnection) {
     auto reasonName = [](DisconnectReason value) -> std::wstring_view {
         switch (value) {
             case DisconnectReason::UserInitiated: return L"UserInitiated";
@@ -988,6 +1009,7 @@ void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason,
                std::wstring(deviceId),
                reasonName(reason),
                suppressCascade);
+    const std::wstring deviceIdKey(deviceId);
 
     bool reconnectOnConnectionLoss = false;
     bool acceptIncomingConnections = false;
@@ -999,10 +1021,18 @@ void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason,
     std::shared_ptr<CloseBarrier> closeBarrier;
     try {
         auto guard = m_lock.lock_exclusive();
-        if (m_shutdownForProcessExit) return;
+        if (m_shutdownForProcessExit) return false;
+
+        if (expectedOperation) {
+            auto const attempt = m_connectAttemptIds.find(deviceIdKey);
+            if (!IsOperationCurrentLocked(*expectedOperation) || attempt == m_connectAttemptIds.end() ||
+                attempt->second != expectedAttemptId) {
+                return false;
+            }
+        }
 
         InvalidateDeviceOperationLocked(deviceId);
-        ++m_connectAttemptIds[std::wstring(deviceId)];
+        ++m_connectAttemptIds[deviceIdKey];
         if (reason == DisconnectReason::UserInitiated) {
             m_reconnectController.CancelDevice(deviceId);
         }
@@ -1010,6 +1040,11 @@ void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason,
         auto extracted = m_sessions.ExtractConnection(deviceId);
         if (!extracted) {
             stateChanged = true;
+            if (expectedOperation) {
+                restoreIncoming =
+                    restoreIncomingIfNoConnection && m_incomingConnectionsEnabled && !m_powerTransitionSuspended;
+                closeBarrier = InstallCloseBarrierLocked(deviceId);
+            }
         } else {
             connection = std::move(extracted->Connection);
             stateChangedToken = extracted->StateChangedToken;
@@ -1039,7 +1074,7 @@ void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason,
 
     if (!closeBarrier) {
         if (stateChanged) DeviceActivityChanged(deviceId);
-        return;
+        return stateChanged;
     }
 
     bool cleanupHandedOff = false;
@@ -1056,6 +1091,14 @@ void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason,
     // Revoke the StateChanged token so the zombie cannot fire events at us.
     if (connection && stateChangedToken.value != 0) {
         AudioConnectionService::RevokeStateChanged(connection, stateChangedToken);
+    }
+
+    if (failureMessage) {
+        ConnectionError(deviceId, *failureMessage);
+        DeviceStatusChanged(deviceId,
+                            *failureMessage,
+                            winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::ShowRetryButton,
+                            DeviceStatusKind::Error);
     }
 
     bool activityPublished = false;
@@ -1088,23 +1131,16 @@ void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason,
     cleanupHandedOff = true;
 
     LogConnectionSnapshot(winrt::hstring(L"disconnect:") + winrt::hstring(reasonName(reason)));
+    return true;
 }
 
 void DeviceManager::ReportConnectionFailure(winrt::hstring const& deviceId,
                                             winrt::hstring const& message,
-                                            bool cleanupConnection) {
-    {
-        auto guard = m_lock.lock_shared();
-        if (m_shutdownForProcessExit) return;
-    }
-    ConnectionError(deviceId, message);
-    if (cleanupConnection) {
-        Disconnect(deviceId, DisconnectReason::Cleanup);
-    }
-    DeviceStatusChanged(deviceId,
-                        message,
-                        winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::ShowRetryButton,
-                        DeviceStatusKind::Error);
+                                            OperationToken const& operation,
+                                            std::size_t attemptId,
+                                            bool restoreIncomingIfNoConnection) {
+    static_cast<void>(DisconnectInternal(
+        deviceId, DisconnectReason::Cleanup, false, &operation, attemptId, &message, restoreIncomingIfNoConnection));
 }
 
 winrt::Windows::Foundation::IAsyncOperation<bool>
@@ -1184,14 +1220,17 @@ DeviceManager::ConnectInternalAsync(winrt::Windows::Devices::Enumeration::Device
                 }
                 if (!shutdownForProcessExit) {
                     if (reportFailures) {
-                        ReportConnectionFailure(deviceId, winrt::hstring(_("UnknownError")), false);
+                        ReportConnectionFailure(
+                            deviceId, winrt::hstring(_("UnknownError")), operation, attemptId, openImmediately);
+                    } else {
+                        static_cast<void>(DisconnectInternal(deviceId,
+                                                             DisconnectReason::Cleanup,
+                                                             false,
+                                                             &operation,
+                                                             attemptId,
+                                                             nullptr,
+                                                             openImmediately));
                     }
-                    bool restoreIncoming = false;
-                    {
-                        auto guard = m_lock.lock_shared();
-                        restoreIncoming = openImmediately && m_incomingConnectionsEnabled;
-                    }
-                    if (restoreIncoming) ReenableIncomingConnectionDetached(deviceId);
                 }
                 co_return false;
             }
@@ -1278,7 +1317,8 @@ DeviceManager::ConnectInternalAsync(winrt::Windows::Devices::Enumeration::Device
                     alreadyOpen = currentAttempt && currentInfo->IsOpen;
                 }
                 if (!currentAttempt) {
-                    Disconnect(deviceId, DisconnectReason::Cleanup);
+                    static_cast<void>(
+                        DisconnectIfCurrent(deviceId, DisconnectReason::Cleanup, false, operation, attemptId));
                     co_return false;
                 }
 
@@ -1357,16 +1397,18 @@ DeviceManager::ConnectInternalAsync(winrt::Windows::Devices::Enumeration::Device
                         continue;
                     }
                     if (reportFailures) {
-                        ReportConnectionFailure(deviceId, winrt::hstring(_("RequestTimedOut")), true);
+                        ReportConnectionFailure(deviceId, winrt::hstring(_("RequestTimedOut")), operation, attemptId);
                     } else {
-                        Disconnect(deviceId, DisconnectReason::Cleanup);
+                        static_cast<void>(
+                            DisconnectIfCurrent(deviceId, DisconnectReason::Cleanup, false, operation, attemptId));
                     }
                     co_return false;
                 case winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResultStatus::DeniedBySystem:
                     if (reportFailures) {
-                        ReportConnectionFailure(deviceId, winrt::hstring(_("DeniedBySystem")), true);
+                        ReportConnectionFailure(deviceId, winrt::hstring(_("DeniedBySystem")), operation, attemptId);
                     } else {
-                        Disconnect(deviceId, DisconnectReason::Cleanup);
+                        static_cast<void>(
+                            DisconnectIfCurrent(deviceId, DisconnectReason::Cleanup, false, operation, attemptId));
                     }
                     co_return false;
                 case winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResultStatus::UnknownFailure: {
@@ -1387,9 +1429,10 @@ DeviceManager::ConnectInternalAsync(winrt::Windows::Devices::Enumeration::Device
                     }
                     winrt::hresult_error err(result.ExtendedError());
                     if (reportFailures) {
-                        ReportConnectionFailure(deviceId, err.message(), true);
+                        ReportConnectionFailure(deviceId, err.message(), operation, attemptId);
                     } else {
-                        Disconnect(deviceId, DisconnectReason::Cleanup);
+                        static_cast<void>(
+                            DisconnectIfCurrent(deviceId, DisconnectReason::Cleanup, false, operation, attemptId));
                     }
                     co_return false;
                 }
@@ -1398,24 +1441,24 @@ DeviceManager::ConnectInternalAsync(winrt::Windows::Devices::Enumeration::Device
     } catch (winrt::hresult_error const& ex) {
         if (!IsConnectAttemptCurrent(operation, attemptId)) co_return false;
         if (reportFailures) {
-            ReportConnectionFailure(deviceId, ex.message(), true);
+            ReportConnectionFailure(deviceId, ex.message(), operation, attemptId);
         } else {
-            Disconnect(deviceId, DisconnectReason::Cleanup);
+            static_cast<void>(DisconnectIfCurrent(deviceId, DisconnectReason::Cleanup, false, operation, attemptId));
         }
     } catch (std::exception const& ex) {
         if (!IsConnectAttemptCurrent(operation, attemptId)) co_return false;
         if (reportFailures) {
-            ReportConnectionFailure(deviceId, winrt::hstring(util::Utf8ToUtf16(ex.what())), true);
+            ReportConnectionFailure(deviceId, winrt::hstring(util::Utf8ToUtf16(ex.what())), operation, attemptId);
         } else {
-            Disconnect(deviceId, DisconnectReason::Cleanup);
+            static_cast<void>(DisconnectIfCurrent(deviceId, DisconnectReason::Cleanup, false, operation, attemptId));
         }
     } catch (...) {
         util::DebugTraceUnknownException(L"[DeviceManager] ConnectInternalAsync ERROR");
         if (!IsConnectAttemptCurrent(operation, attemptId)) co_return false;
         if (reportFailures) {
-            ReportConnectionFailure(deviceId, winrt::hstring(_("UnknownError")), true);
+            ReportConnectionFailure(deviceId, winrt::hstring(_("UnknownError")), operation, attemptId);
         } else {
-            Disconnect(deviceId, DisconnectReason::Cleanup);
+            static_cast<void>(DisconnectIfCurrent(deviceId, DisconnectReason::Cleanup, false, operation, attemptId));
         }
     }
     co_return false;

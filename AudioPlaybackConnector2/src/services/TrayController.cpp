@@ -260,8 +260,7 @@ void TrayController::ShowTrayMenu() {
         }
     });
     try {
-        m_contextMenu->ShowAt(point);
-        resetTopmost.release();
+        if (m_contextMenu->ShowAt(point)) resetTopmost.release();
     } catch (winrt::hresult_error const& ex) {
         util::DebugTraceException(L"[TrayController] ERROR: failed to show context menu", ex);
     } catch (std::exception const& ex) {

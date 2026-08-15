@@ -317,8 +317,7 @@ bool ApplicationHost::PerformTeardown(bool saveSettings) noexcept {
     }
     static_cast<void>(m_adaptiveScheduleState.Supersede());
     m_deviceVisualRefreshCoalescer.Cancel();
-    m_settingsSaveCoordinator.Cancel();
-    CancelDeferredSettingsSaveTimer();
+    m_settingsSaver.Cancel();
     CancelNativeDeviceVisualRefreshRetry();
     {
         std::scoped_lock lock(m_uiFallbackWorkMutex);
@@ -349,7 +348,6 @@ bool ApplicationHost::PerformTeardown(bool saveSettings) noexcept {
             KillTimer(m_hwnd, c_timerTransientTrayError);
             KillTimer(m_hwnd, c_timerAdaptiveResources);
             KillTimer(m_hwnd, c_timerDeviceVisualRefreshRetry);
-            KillTimer(m_hwnd, c_timerDeferredSettingsSaveRetry);
             m_connectingAnimationTimerActive = false;
             if (m_windowSubclassInstalled) {
                 if (RemoveWindowSubclass(m_hwnd, SubclassProc, 1)) {
@@ -368,7 +366,7 @@ bool ApplicationHost::PerformTeardown(bool saveSettings) noexcept {
         m_notificationService->Teardown();
     }
     if (saveSettings) {
-        static_cast<void>(FlushSettingsNow(3));
+        static_cast<void>(m_settingsSaver.FlushNow(3));
     }
     if (m_deviceManager) {
         m_deviceManager->ShutdownForProcessExit();
@@ -504,6 +502,7 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept tr
 
     m_settings = std::make_shared<::Settings>();
     m_settings->Load(GetModuleHandleW(nullptr));
+    m_settingsSaver.Initialize(m_settings, m_hwnd);
     DebugTrace(L"[App] Settings loaded");
 
     {
@@ -666,7 +665,7 @@ void ApplicationHost::InitializeDeviceManager() {
     m_deviceManager = std::make_shared<DeviceManager>();
     auto weak = weak_from_this();
     m_settingsController = std::make_shared<SettingsController>(m_settings, m_deviceManager, [weak]() {
-        if (auto self = weak.lock(); self && !self->m_exiting.load()) self->ScheduleDeferredSettingsSave();
+        if (auto self = weak.lock(); self && !self->m_exiting.load()) self->m_settingsSaver.RequestSave();
     });
     m_deviceManager->SetReconnectOnConnectionLossPredicate([weak](auto id) {
         auto self = weak.lock();
@@ -952,38 +951,12 @@ void ApplicationHost::TryAutoReconnect() {
     }
 }
 
-bool ApplicationHost::FlushSettingsNow(unsigned int maximumAttempts) noexcept {
-    if (!m_settings) return true;
-    auto const saveToken = m_settingsSaveCoordinator.BeginExternalSave();
-    maximumAttempts = std::max(maximumAttempts, 1U);
-    for (unsigned int attempt = 1; attempt <= maximumAttempts; ++attempt) {
-        try {
-            if (m_settings->Save(GetModuleHandleW(nullptr))) {
-                auto const clean = !m_settings->HasUnsavedChanges();
-                static_cast<void>(m_settingsSaveCoordinator.CompleteExternalSave(saveToken, clean));
-                if (clean) return true;
-            }
-        } catch (winrt::hresult_error const& ex) {
-            util::DebugTraceException(L"[App] Synchronous settings flush ERROR", ex);
-        } catch (std::exception const& ex) {
-            util::DebugTraceException(L"[App] Synchronous settings flush ERROR", ex);
-        } catch (...) {
-            util::DebugTraceUnknownException(L"[App] Synchronous settings flush ERROR");
-        }
-        DebugTrace(L"[App] Synchronous settings flush attempt {0}/{1} failed", attempt, maximumAttempts);
-        if (attempt < maximumAttempts) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50U << (attempt - 1U)));
-        }
-    }
-    return false;
-}
-
 void ApplicationHost::HandlePowerSuspend() {
     auto weak = weak_from_this();
     m_powerTransitionCoordinator.HandleSuspend(
         [weak]() {
             if (auto self = weak.lock()) {
-                static_cast<void>(self->FlushSettingsNow());
+                static_cast<void>(self->m_settingsSaver.FlushNow());
             }
         },
         m_deviceManager);
@@ -1450,7 +1423,7 @@ bool ApplicationHost::ShowSettingsWindow() {
     auto weak = weak_from_this();
     return m_settingsWindowPresenter.Show(m_settingsController, m_trayController, m_updateCoordinator, [weak]() {
         auto self = weak.lock();
-        if (self) static_cast<void>(self->FlushSettingsNow());
+        if (self) static_cast<void>(self->m_settingsSaver.FlushNow());
     });
 }
 
@@ -2141,18 +2114,6 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
 /*//////// Device Event Handlers /////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-void ApplicationHost::ScheduleDeferredSettingsSave() {
-    if (m_exiting.load() || !m_settings) return;
-
-    auto request = m_settingsSaveCoordinator.MarkDirty();
-    if (!request.WorkerToStart) return;
-
-    if (!ScheduleDeferredSettingsSaveTimer(*request.WorkerToStart, std::chrono::milliseconds(300), true)) {
-        DebugTrace(L"[App] Deferred settings timer unavailable; saving synchronously");
-        RunDeferredSettingsSaveAttempt(*request.WorkerToStart);
-    }
-}
-
 void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
     if (m_exiting.load() || !m_deviceManager) return;
     DebugTrace(L"[App] OnDeviceConnected: {0}", std::wstring(id));
@@ -2222,7 +2183,7 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
     }
 
     if (settingsChanged) {
-        ScheduleDeferredSettingsSave();
+        m_settingsSaver.RequestSave();
         m_settingsWindowPresenter.RefreshKnownDevicesIfOpen();
         if (addedNew) {
             DebugTrace(L"[App] New device added to settings: {0}", std::wstring(rawDeviceName));
@@ -2384,14 +2345,7 @@ LRESULT CALLBACK ApplicationHost::SubclassProc(
         return 0;
     }
 
-    if (msg == WM_TIMER && wParam == c_timerDeferredSettingsSaveRetry) {
-        KillTimer(hwnd, c_timerDeferredSettingsSaveRetry);
-        std::optional<DeferredSaveCoordinator::WorkerToken> worker;
-        {
-            std::scoped_lock lock(host->m_settingsSaveTimerMutex);
-            worker = host->m_settingsSaveWorker;
-        }
-        if (worker) host->RunDeferredSettingsSaveAttempt(*worker);
+    if (msg == WM_TIMER && host->m_settingsSaver.HandleWindowTimer(wParam)) {
         return 0;
     }
 

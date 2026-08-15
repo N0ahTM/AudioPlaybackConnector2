@@ -127,6 +127,7 @@
   <ItemGroup>
     <ClInclude Include="include\pch.h" />
     <ClInclude Include="include\app\ApplicationHost.hpp" />
+    <ClInclude Include="include\app\DeferredSettingsSaver.hpp" />
     <ClInclude Include="include\app\AdaptiveActionRetryBackoff.hpp" />
     <ClInclude Include="include\app\AdaptiveResourcePolicy.hpp" />
     <ClInclude Include="include\app\AdaptiveScheduleState.hpp" />
@@ -212,7 +213,8 @@
       <PrecompiledHeader>Create</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="src\app\ApplicationHost.cpp" />
-    <ClCompile Include="src\app\ApplicationHostDeferredSave.cpp" />
+    <ClCompile Include="src\app\ApplicationHostVisualRefreshRetry.cpp" />
+    <ClCompile Include="src\app\DeferredSettingsSaver.cpp" />
     <ClCompile Include="src\app\SettingsWindowPresenter.cpp" />
     <ClCompile Include="src\app\StartupUpdateCoordinator.cpp" />
     <ClCompile Include="src\core\ThemeHelper.cpp" />

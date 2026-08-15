@@ -2,7 +2,7 @@
 
 #include <app/AdaptiveResourcePolicy.hpp>
 #include <app/ControlUiActionGate.hpp>
-#include <app/DeferredSaveCoordinator.hpp>
+#include <app/DeferredSettingsSaver.hpp>
 #include <app/DeviceEventRouter.hpp>
 #include <app/PowerTransitionCoordinator.hpp>
 #include <app/ResourcePressureMonitor.hpp>
@@ -69,13 +69,6 @@ private:
     void TeardownDeviceEvents();
     void TryAutoReconnect();
     winrt::fire_and_forget CheckForUpdatesOnStartupAsync();
-    [[nodiscard]] bool FlushSettingsNow(unsigned int maximumAttempts = 1) noexcept;
-    void ScheduleDeferredSettingsSave();
-    [[nodiscard]] bool ScheduleDeferredSettingsSaveTimer(DeferredSaveCoordinator::WorkerToken worker,
-                                                         std::chrono::milliseconds delay,
-                                                         bool resetFailures = false) noexcept;
-    void RunDeferredSettingsSaveAttempt(DeferredSaveCoordinator::WorkerToken worker) noexcept;
-    void CancelDeferredSettingsSaveTimer() noexcept;
     void HandlePowerSuspend();
     void HandlePowerResume();
     void ToggleLastConnectedDeviceFromTray();
@@ -126,7 +119,6 @@ private:
 
     static LRESULT CALLBACK
     SubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) noexcept;
-    static void CALLBACK DeferredSettingsSaveTimerCallback(PTP_CALLBACK_INSTANCE, void* context, PTP_TIMER) noexcept;
     static void CALLBACK DeviceVisualRefreshRetryTimerCallback(PTP_CALLBACK_INSTANCE,
                                                                void* context,
                                                                PTP_TIMER) noexcept;
@@ -160,7 +152,6 @@ private:
     static constexpr UINT_PTR c_timerTransientTrayError = 0x41504333;
     static constexpr UINT_PTR c_timerAdaptiveResources = 0x41504334;
     static constexpr UINT_PTR c_timerDeviceVisualRefreshRetry = 0x41504335;
-    static constexpr UINT_PTR c_timerDeferredSettingsSaveRetry = 0x41504336;
     static constexpr UINT c_messageDrainUiFallbackWork = WM_APP + 2;
     static constexpr UINT c_messageDrainDeviceVisualRefresh = WM_APP + 3;
     static constexpr UINT c_transientTrayErrorMs = 3000;
@@ -185,11 +176,7 @@ private:
     std::atomic<bool> m_started = false;
     std::atomic<bool> m_teardownWindowCloseSucceeded = true;
     bool m_windowSubclassInstalled = false;
-    DeferredSaveCoordinator m_settingsSaveCoordinator;
-    std::mutex m_settingsSaveTimerMutex;
-    wil::unique_threadpool_timer m_settingsSaveTimer;
-    std::optional<DeferredSaveCoordinator::WorkerToken> m_settingsSaveWorker;
-    unsigned int m_settingsSaveConsecutiveFailures = 0;
+    DeferredSettingsSaver m_settingsSaver{m_exiting};
     UiRefreshCoalescer m_deviceVisualRefreshCoalescer;
     unsigned int m_deviceVisualRefreshConsecutiveFailures = 0;
     std::mutex m_deviceVisualRefreshRetryTimerMutex;

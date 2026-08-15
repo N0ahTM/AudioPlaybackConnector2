@@ -26,6 +26,12 @@
     <ClCompile Include="src\app\ApplicationHost.cpp">
       <Filter>src\app</Filter>
     </ClCompile>
+    <ClCompile Include="src\app\ApplicationHostVisualRefreshRetry.cpp">
+      <Filter>src\app</Filter>
+    </ClCompile>
+    <ClCompile Include="src\app\DeferredSettingsSaver.cpp">
+      <Filter>src\app</Filter>
+    </ClCompile>
     <ClCompile Include="src\app\AdaptiveResourcePolicy.cpp">
       <Filter>src\app</Filter>
     </ClCompile>
@@ -164,6 +170,9 @@
       <Filter>include</Filter>
     </ClInclude>
     <ClInclude Include="include\app\ApplicationHost.hpp">
+      <Filter>include\app</Filter>
+    </ClInclude>
+    <ClInclude Include="include\app\DeferredSettingsSaver.hpp">
       <Filter>include\app</Filter>
     </ClInclude>
     <ClInclude Include="include\app\AdaptiveResourcePolicy.hpp">

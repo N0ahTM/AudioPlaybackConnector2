@@ -357,6 +357,20 @@ void DevicePickerView::RefreshDeviceStates() {
     RebuildDeviceListFromCache();
 }
 
+void DevicePickerView::ApplyLanguage() {
+    if (m_preparedForRelease.load()) return;
+    TitleText().Text(winrt::hstring(_("TrayMenu_SelectDevice")));
+    auto closeText = winrt::hstring(_("Close"));
+    auto disconnectAllText = winrt::hstring(_("DisconnectAll"));
+    auto reconnectAllText = winrt::hstring(_("ReconnectAll"));
+    apc::ui::SetButtonLabel(CloseButton(), closeText);
+    DisconnectAllText().Text(disconnectAllText);
+    ReconnectAllText().Text(reconnectAllText);
+    apc::ui::SetButtonLabel(DisconnectAllButton(), disconnectAllText);
+    apc::ui::SetButtonLabel(ReconnectAllButton(), reconnectAllText);
+    if (m_viewModel.HasInventory()) RebuildDeviceListFromCache(false, true);
+}
+
 bool DevicePickerView::InvalidateDeviceInventory() {
     if (m_preparedForRelease.load()) return true;
     static_cast<void>(m_inventoryGeneration->TryInvalidate());
@@ -586,7 +600,6 @@ ListViewItem DevicePickerView::BuildDeviceListItem(apc::device_picker::DeviceSna
 bool DevicePickerView::BeginPendingDeviceAction(winrt::hstring const& id) {
     if (id.empty() || m_pendingGlobalAction || IsDeviceActionPending(id)) return false;
     m_pendingDeviceActions[std::wstring(id)] = std::chrono::steady_clock::now();
-    RebuildDeviceListFromCache(false, true);
     return true;
 }
 

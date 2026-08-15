@@ -83,6 +83,36 @@ void TrayController::SetDeviceManager(std::shared_ptr<DeviceManager> deviceManag
 
 void TrayController::SetSettings(std::shared_ptr<Settings> settings) {
     m_settings = std::move(settings);
+    if (m_settings) {
+        auto locked = m_settings->LockSharedData();
+        SetSystemBackdropEffectsEnabled(locked->UseSystemBackdropEffects);
+    }
+}
+
+void TrayController::ApplyLanguage() {
+    if (m_contextMenu) m_contextMenu->ApplyLanguage();
+    if (m_devicePickerView) {
+        auto impl = m_devicePickerView.as<winrt::AudioPlaybackConnector2::implementation::DevicePickerView>();
+        impl->ApplyLanguage();
+    }
+}
+
+void TrayController::SetSystemBackdropEffectsEnabled(bool enabled) noexcept try {
+    m_useSystemBackdropEffects = enabled;
+    if (m_contextMenu) m_contextMenu->SetSystemBackdropEffectsEnabled(enabled);
+    if (m_pickerFlyout) {
+        if (enabled) {
+            m_pickerFlyout.SystemBackdrop(winrt::Microsoft::UI::Xaml::Media::DesktopAcrylicBackdrop());
+        } else {
+            m_pickerFlyout.SystemBackdrop(nullptr);
+        }
+        if (m_pickerFlyout.Content()) {
+            apc::ui::ApplyFlyoutPresenterStyle(
+                m_pickerFlyout.Content().as<winrt::Microsoft::UI::Xaml::DependencyObject>(), enabled);
+        }
+    }
+} catch (...) {
+    util::DebugTraceUnknownException(L"[TrayController] ERROR: failed to apply backdrop setting");
 }
 
 void TrayController::Teardown() noexcept try {
@@ -822,7 +852,9 @@ Controls::Flyout TrayController::CreatePickerFlyout() {
     }
     Controls::Flyout flyout;
     flyout.ShouldConstrainToRootBounds(false);
-    flyout.SystemBackdrop(winrt::Microsoft::UI::Xaml::Media::DesktopAcrylicBackdrop());
+    if (m_useSystemBackdropEffects) {
+        flyout.SystemBackdrop(winrt::Microsoft::UI::Xaml::Media::DesktopAcrylicBackdrop());
+    }
     flyout.Content(m_devicePickerView);
 
     auto weak = weak_from_this();
@@ -835,8 +867,9 @@ Controls::Flyout TrayController::CreatePickerFlyout() {
                 if (std::exchange(self->m_pickerRefreshPending, false)) {
                     if (!self->RefreshDevicePickerState()) self->m_pickerRefreshPending = true;
                 }
-                apc::ui::StripFlyoutPresenterStyle(
-                    self->m_pickerFlyout.Content().as<winrt::Microsoft::UI::Xaml::DependencyObject>());
+                apc::ui::ApplyFlyoutPresenterStyle(
+                    self->m_pickerFlyout.Content().as<winrt::Microsoft::UI::Xaml::DependencyObject>(),
+                    self->m_useSystemBackdropEffects);
             }
         } catch (winrt::hresult_error const& ex) {
             util::DebugTraceException(L"[TrayController] ERROR: Picker flyout opened handler failed", ex);

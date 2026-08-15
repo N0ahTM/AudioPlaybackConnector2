@@ -9,10 +9,6 @@
     Title=""
     mc:Ignorable="d">
 
-    <Window.SystemBackdrop>
-        <MicaBackdrop />
-    </Window.SystemBackdrop>
-
     <Grid
         x:Name="RootGrid"
         Background="Transparent"
@@ -200,22 +196,6 @@
                                                 Text="" />
                                         </Grid>
                                     </Button>
-                                    <Button
-                                        x:Name="ClearDefaultDeviceButton"
-                                        Click="ClearDefaultDeviceButton_Click">
-                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
-                                            <FontIcon
-                                                VerticalAlignment="Center"
-                                                FontSize="14"
-                                                Glyph="&#xE894;" />
-                                            <TextBlock
-                                                x:Name="ClearDefaultDeviceButtonText"
-                                                Grid.Column="1"
-                                                MinWidth="0"
-                                                TextWrapping="WrapWholeWords"
-                                                Text="" />
-                                        </Grid>
-                                    </Button>
                                 </StackPanel>
                             </Grid>
 
@@ -385,6 +365,26 @@
                                     </StackPanel>
                                     <ToggleSwitch
                                         x:Name="ShowNotificationsToggle"
+                                        Grid.Column="1"
+                                        VerticalAlignment="Center"
+                                        MinWidth="64" />
+                                </Grid>
+
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                    <StackPanel MinWidth="0">
+                                        <TextBlock
+                                            x:Name="SystemBackdropEffectsLabel"
+                                            Text=""
+                                            TextWrapping="Wrap" />
+                                        <TextBlock
+                                            x:Name="SystemBackdropEffectsDesc"
+                                            FontSize="12"
+                                            Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
+                                            Text=""
+                                            TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <ToggleSwitch
+                                        x:Name="SystemBackdropEffectsToggle"
                                         Grid.Column="1"
                                         VerticalAlignment="Center"
                                         MinWidth="64" />

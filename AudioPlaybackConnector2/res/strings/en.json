@@ -90,6 +90,8 @@
   "CrashDialogBody": "AudioPlaybackConnector2 crashed unexpectedly.\n\nError code: 0x{0:08X}\nCrash report: {1}\nMinidump: {2}\n\nYes = Open prefilled GitHub issue\nNo = Open crash folder\nCancel = Close",
   "Settings_ShowNotifications": "Show notifications",
   "Settings_ShowNotifications_Desc": "Show connection toasts.",
+  "Settings_SystemBackdropEffects": "Use Mica and acrylic effects",
+  "Settings_SystemBackdropEffects_Desc": "Use Windows material effects in settings and tray menus. Turn this off for solid backgrounds and lower visual overhead.",
   "Privacy_RedactedDevice": "Private device",
   "Privacy_RedactedValue": "<hidden>",
   "Settings_DefaultDevice": "Default device",

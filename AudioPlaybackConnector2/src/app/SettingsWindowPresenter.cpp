@@ -89,19 +89,21 @@ bool SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settings
         auto defaultPlacement =
             trayController ? trayController->GetSettingsWindowPlacement() : util::CalculateSettingsWindowPlacement();
         auto placement = defaultPlacement;
+        std::optional<SettingsData> initialSettings;
 
         if (settingsController) {
-            auto snapshot = settingsController->Snapshot();
-            if (snapshot.SettingsWindowBounds) {
+            initialSettings = settingsController->Snapshot();
+            if (initialSettings->SettingsWindowBounds) {
                 placement = util::CalculateSettingsWindowPlacementFromBounds(
-                    POINT{snapshot.SettingsWindowBounds->X, snapshot.SettingsWindowBounds->Y},
-                    SIZE{snapshot.SettingsWindowBounds->Width, snapshot.SettingsWindowBounds->Height},
-                    snapshot.SettingsWindowBounds->Dpi);
+                    POINT{initialSettings->SettingsWindowBounds->X, initialSettings->SettingsWindowBounds->Y},
+                    SIZE{initialSettings->SettingsWindowBounds->Width, initialSettings->SettingsWindowBounds->Height},
+                    initialSettings->SettingsWindowBounds->Dpi);
             }
         }
 
         auto impl = candidate->Window.as<winrt::AudioPlaybackConnector2::implementation::SettingsWindow>();
         impl->SetSettingsController(std::move(settingsController));
+        if (initialSettings) impl->SetInitialSettingsSnapshot(std::move(*initialSettings));
         impl->SetUpdateCoordinator(std::move(updateCoordinator));
         impl->SetDefaultPlacement(defaultPlacement);
         impl->SetTargetPlacement(placement);
@@ -158,6 +160,23 @@ bool SettingsWindowPresenter::Close(bool saveOnClose) noexcept {
     auto owner = m_state;
     if (!owner || !owner->Current) return true;
     return CloseWindow(owner, owner->Current, saveOnClose);
+}
+
+void SettingsWindowPresenter::RefreshKnownDevicesIfOpen() noexcept {
+    auto owner = m_state;
+    if (!owner || !owner->Current || owner->Current->Closed || owner->Current->Closing || !owner->Current->Window) {
+        return;
+    }
+    try {
+        owner->Current->Window.as<winrt::AudioPlaybackConnector2::implementation::SettingsWindow>()
+            ->RefreshKnownDevices();
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(L"[SettingsWindowPresenter] Failed to refresh known devices", ex);
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[SettingsWindowPresenter] Failed to refresh known devices", ex);
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[SettingsWindowPresenter] Failed to refresh known devices");
+    }
 }
 
 /*------------------------------------------------------------------------------------------------------------*/

@@ -1,8 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string]$ProjectPath,
-
-    [string]$ComponentName = 'CoreRuntime'
+    [string]$ProjectPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -210,4 +208,4 @@ if ($failures.Count -ne 0) {
     exit 1
 }
 
-Write-Host "$ComponentName boundary verified: no WinUI/XAML dependencies."
+Write-Host "CoreRuntime boundary verified: no WinUI/XAML dependencies."

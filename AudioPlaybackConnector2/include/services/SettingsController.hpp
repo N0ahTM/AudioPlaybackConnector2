@@ -12,7 +12,8 @@ class DeviceManager;
 
 class ISettingsController {
 public:
-    using PresentationChangedCallback = std::function<void()>;
+    enum class PresentationChangeKind { Content, Language, Appearance };
+    using PresentationChangedCallback = std::function<void(PresentationChangeKind)>;
 
     virtual ~ISettingsController() = default;
 
@@ -23,6 +24,7 @@ public:
     virtual void SetAllowIncomingConnections(bool enabled) = 0;
     virtual void SetStartWithWindows(bool enabled) = 0;
     virtual void SetShowNotifications(bool enabled) = 0;
+    virtual void SetSystemBackdropEffects(bool enabled) = 0;
     virtual void SetLanguage(std::wstring language) = 0;
     virtual void SetPrivacyMode(bool enabled) = 0;
     virtual bool SetSettingsWindowBounds(PersistedWindowBounds bounds) = 0;
@@ -40,7 +42,9 @@ public:
 
 class SettingsController final : public ISettingsController {
 public:
-    SettingsController(std::shared_ptr<Settings> settings, std::weak_ptr<DeviceManager> deviceManager);
+    SettingsController(std::shared_ptr<Settings> settings,
+                       std::weak_ptr<DeviceManager> deviceManager,
+                       std::function<void()> requestSave = {});
 
     SettingsData Snapshot() const override;
     void SetPresentationChangedCallback(PresentationChangedCallback callback) override;
@@ -49,6 +53,7 @@ public:
     void SetAllowIncomingConnections(bool enabled) override;
     void SetStartWithWindows(bool enabled) override;
     void SetShowNotifications(bool enabled) override;
+    void SetSystemBackdropEffects(bool enabled) override;
     void SetLanguage(std::wstring language) override;
     void SetPrivacyMode(bool enabled) override;
     bool SetSettingsWindowBounds(PersistedWindowBounds bounds) override;
@@ -63,9 +68,11 @@ public:
     void ForgetDevice(std::wstring const& deviceId) override;
 
 private:
-    void NotifyPresentationChanged();
+    void RequestSave();
+    void NotifyPresentationChanged(PresentationChangeKind kind = PresentationChangeKind::Content);
 
     std::shared_ptr<Settings> m_settings;
     std::weak_ptr<DeviceManager> m_deviceManager;
+    std::function<void()> m_requestSave;
     PresentationChangedCallback m_presentationChanged;
 };

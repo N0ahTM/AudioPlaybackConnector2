@@ -1,26 +1,12 @@
 #pragma once
 
+#include <core/DeviceConnectionInfo.hpp>
 #include <core/DevicePickerSnapshot.hpp>
 #include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-
-/*------------------------------------------------------------------------------------------------------------*/
-/*//////// Device Connection Info //////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------*/
-
-struct DeviceConnectionInfo {
-    // Plain-string metadata captured on the connect thread; never touch WinRT DeviceInformation from UI.
-    std::wstring Id;
-    std::wstring Name;
-    winrt::Windows::Media::Audio::AudioPlaybackConnection Connection{nullptr};
-    winrt::event_token StateChangedToken{};
-    bool ReconnectOnConnectionLoss = false;
-    bool AcceptIncomingConnections = false;
-    bool IsOpen = false;
-};
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Device Session Store ////////////////////////////////////////////////////////////////////////////*/
@@ -34,13 +20,9 @@ public:
 
     [[nodiscard]] std::vector<DeviceConnectionInfo> ConnectedDevices() const;
     [[nodiscard]] bool HasConnections() const;
-    [[nodiscard]] bool HasBusyOperations() const;
-    [[nodiscard]] bool IsDeviceBusy(winrt::hstring const& deviceId) const;
     [[nodiscard]] bool HasConnection(winrt::hstring const& deviceId) const;
     [[nodiscard]] std::optional<DeviceConnectionInfo> FindConnection(winrt::hstring const& deviceId) const;
     [[nodiscard]] bool IsDisconnecting(winrt::hstring const& deviceId) const;
-    [[nodiscard]] bool IsReconnecting(winrt::hstring const& deviceId) const;
-    [[nodiscard]] bool IsConnecting(winrt::hstring const& deviceId) const;
     [[nodiscard]] std::optional<DeviceConnectionInfo> ExtractConnection(winrt::hstring const& deviceId);
     [[nodiscard]] std::vector<std::pair<std::wstring, DeviceConnectionInfo>> ExtractAllConnections();
     [[nodiscard]] std::vector<std::pair<std::wstring, DeviceConnectionInfo>> GetConnectionsSnapshot() const;
@@ -57,10 +39,6 @@ public:
     void InsertOrUpdateConnection(winrt::hstring const& deviceId, DeviceConnectionInfo info);
     void MarkDisconnecting(winrt::hstring const& deviceId);
     void UnmarkDisconnecting(winrt::hstring const& deviceId);
-    void MarkReconnecting(winrt::hstring const& deviceId);
-    void UnmarkReconnecting(winrt::hstring const& deviceId);
-    void MarkConnecting(winrt::hstring const& deviceId);
-    void UnmarkConnecting(winrt::hstring const& deviceId);
 
 private:
     /*------------------------------------------------------------------------------------------------------------*/
@@ -72,7 +50,5 @@ private:
 
     ConnectionMap m_connections;
     DeviceIdSet m_disconnectingIds;
-    DeviceIdSet m_reconnectingIds;
-    DeviceIdSet m_connectingIds;
     mutable wil::srwlock m_lock;
 };

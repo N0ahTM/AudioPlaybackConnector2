@@ -90,6 +90,8 @@
   "CrashDialogBody": "AudioPlaybackConnector2 se cerró inesperadamente.\n\nCódigo de error: 0x{0:08X}\nInforme de bloqueo: {1}\nMinidump: {2}\n\nSí = Abrir issue de GitHub prellenado\nNo = Abrir carpeta de bloqueos\nCancelar = Cerrar",
   "Settings_ShowNotifications": "Mostrar notificaciones",
   "Settings_ShowNotifications_Desc": "Muestra avisos de conexión.",
+  "Settings_SystemBackdropEffects": "Usar efectos Mica y acrílico",
+  "Settings_SystemBackdropEffects_Desc": "Usa los efectos de material de Windows en la configuración y los menús de la bandeja. Desactívalo para usar fondos sólidos y reducir la carga visual.",
   "Privacy_RedactedDevice": "Dispositivo privado",
   "Privacy_RedactedValue": "<oculto>",
   "Settings_DefaultDevice": "Dispositivo predeterminado",

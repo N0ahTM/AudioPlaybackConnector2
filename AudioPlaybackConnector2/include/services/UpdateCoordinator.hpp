@@ -1,5 +1,6 @@
 #pragma once
 
+#include <services/AutomaticUpdateWindow.hpp>
 #include <services/UpdateService.hpp>
 
 #include <chrono>
@@ -15,19 +16,6 @@
 #include <winrt/Windows.Foundation.h>
 
 enum class UpdateCheckReason { Automatic, Manual };
-
-class AutomaticUpdateWindow {
-public:
-    using Clock = std::chrono::steady_clock;
-    using TimePoint = Clock::time_point;
-
-    [[nodiscard]] bool Update(bool allowed, bool stopping, TimePoint now, Clock::duration stableDelay) noexcept;
-    [[nodiscard]] Clock::duration Remaining(TimePoint now, Clock::duration stableDelay) const noexcept;
-    void Reset() noexcept;
-
-private:
-    std::optional<TimePoint> m_allowedSince;
-};
 
 class UpdateCoordinator : public std::enable_shared_from_this<UpdateCoordinator> {
 public:

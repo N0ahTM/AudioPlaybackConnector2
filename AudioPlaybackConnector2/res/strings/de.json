@@ -90,6 +90,8 @@
   "CrashDialogBody": "AudioPlaybackConnector2 wurde unerwartet beendet.\n\nFehlercode: 0x{0:08X}\nCrash-Bericht: {1}\nMinidump: {2}\n\nJa = Vorausgefülltes GitHub-Issue öffnen\nNein = Crash-Ordner öffnen\nAbbrechen = Schließen",
   "Settings_ShowNotifications": "Benachrichtigungen anzeigen",
   "Settings_ShowNotifications_Desc": "Zeigt Meldungen bei Verbindungen.",
+  "Settings_SystemBackdropEffects": "Mica- und Acryl-Effekte verwenden",
+  "Settings_SystemBackdropEffects_Desc": "Verwendet Windows-Materialeffekte in den Einstellungen und Tray-Menüs. Deaktivieren erzeugt einfarbige Hintergründe und reduziert den visuellen Aufwand.",
   "Privacy_RedactedDevice": "Privates Gerät",
   "Privacy_RedactedValue": "<ausgeblendet>",
   "Settings_DefaultDevice": "Standardgerät",

@@ -90,6 +90,8 @@
   "CrashDialogBody": "AudioPlaybackConnector2 が予期せず終了しました。\n\nエラー コード: 0x{0:08X}\nクラッシュ レポート: {1}\nミニダンプ: {2}\n\nはい = 入力済みの GitHub issue を開く\nいいえ = クラッシュ フォルダーを開く\nキャンセル = 閉じる",
   "Settings_ShowNotifications": "通知を表示",
   "Settings_ShowNotifications_Desc": "接続通知を表示します。",
+  "Settings_SystemBackdropEffects": "Mica とアクリル効果を使用する",
+  "Settings_SystemBackdropEffects_Desc": "設定画面とトレイメニューで Windows の素材効果を使用します。無効にすると単色の背景になり、描画負荷を抑えられます。",
   "Privacy_RedactedDevice": "非公開デバイス",
   "Privacy_RedactedValue": "<非表示>",
   "Settings_DefaultDevice": "既定のデバイス",

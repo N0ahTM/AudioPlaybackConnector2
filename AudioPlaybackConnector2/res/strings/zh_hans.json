@@ -90,6 +90,8 @@
   "CrashDialogBody": "AudioPlaybackConnector2 意外关闭。\n\n错误代码: 0x{0:08X}\n崩溃报告: {1}\nMinidump: {2}\n\n是 = 打开预填的 GitHub issue\n否 = 打开崩溃文件夹\n取消 = 关闭",
   "Settings_ShowNotifications": "显示通知",
   "Settings_ShowNotifications_Desc": "显示连接通知。",
+  "Settings_SystemBackdropEffects": "使用 Mica 和亚克力效果",
+  "Settings_SystemBackdropEffects_Desc": "在设置和托盘菜单中使用 Windows 材质效果。关闭后将使用纯色背景并降低视觉开销。",
   "Privacy_RedactedDevice": "私密设备",
   "Privacy_RedactedValue": "<已隐藏>",
   "Settings_DefaultDevice": "默认设备",

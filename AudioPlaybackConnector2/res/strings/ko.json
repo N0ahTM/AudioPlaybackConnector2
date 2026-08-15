@@ -90,6 +90,8 @@
   "CrashDialogBody": "AudioPlaybackConnector2가 예기치 않게 종료되었습니다.\n\n오류 코드: 0x{0:08X}\n크래시 보고서: {1}\n미니덤프: {2}\n\n예 = 미리 채운 GitHub issue 열기\n아니요 = 크래시 폴더 열기\n취소 = 닫기",
   "Settings_ShowNotifications": "알림 표시",
   "Settings_ShowNotifications_Desc": "연결 알림을 표시합니다.",
+  "Settings_SystemBackdropEffects": "Mica 및 아크릴 효과 사용",
+  "Settings_SystemBackdropEffects_Desc": "설정과 트레이 메뉴에 Windows 재질 효과를 사용합니다. 끄면 단색 배경을 사용하고 시각적 부하를 줄입니다.",
   "Privacy_RedactedDevice": "비공개 장치",
   "Privacy_RedactedValue": "<숨김>",
   "Settings_DefaultDevice": "기본 장치",

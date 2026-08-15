@@ -7,7 +7,6 @@
 #include <core/Settings.hpp>
 #include <core/SettingsLimits.hpp>
 #include <core/StringResources.hpp>
-#include <core/ThemeHelper.hpp>
 #include <services/StartupTaskController.hpp>
 #include <services/UpdateCoordinator.hpp>
 #include <services/UpdateService.hpp>
@@ -263,8 +262,11 @@ SettingsWindow::SettingsWindow() {
 
 SettingsWindow::~SettingsWindow() {
     StopPlacementSaveTimer();
-    if (m_themeChangedToken != 0) {
-        ThemeHelper::RemoveThemeChangedHandler(m_themeChangedToken);
+    if (m_actualThemeChangedToken.value != 0) {
+        try {
+            RootGrid().ActualThemeChanged(m_actualThemeChangedToken);
+        } catch (...) {
+        }
     }
 }
 
@@ -293,9 +295,9 @@ LRESULT CALLBACK SettingsWindow::SettingsWindowSubclassProc(
         if (self) {
             self->StopPlacementSaveTimer();
             self->m_placementSaveTimer = nullptr;
-            if (self->m_themeChangedToken != 0) {
-                ThemeHelper::RemoveThemeChangedHandler(self->m_themeChangedToken);
-                self->m_themeChangedToken = 0;
+            if (self->m_actualThemeChangedToken.value != 0) {
+                self->RootGrid().ActualThemeChanged(self->m_actualThemeChangedToken);
+                self->m_actualThemeChangedToken = {};
             }
             self->m_capturePlacementChanges = false;
             self->m_subclassInstalled = false;
@@ -317,25 +319,13 @@ void SettingsWindow::RootGrid_Loaded(IInspectable const&, RoutedEventArgs const&
 
     LocalizeSettingsText();
 
-    SetAutomationName(ConnectOnStartupToggle(), _("Settings_ConnectOnStartup"));
-    SetAutomationName(ReconnectOnConnectionLossToggle(), _("Settings_ReconnectOnConnectionLoss"));
-    SetAutomationName(AllowIncomingConnectionsToggle(), _("Settings_AllowIncomingConnections"));
-    SetAutomationName(PrivacyModeToggle(), _("Settings_PrivacyMode"));
-    SetAutomationName(StartWithWindowsToggle(), _("Settings_StartWithWindows"));
-    SetAutomationName(ShowNotificationsToggle(), _("Settings_ShowNotifications"));
-    SetAutomationName(LanguageComboBox(), _("Settings_Language"));
-
     InitializeSettingsContent();
     m_suppressNavigationSelection = true;
     SettingsNavigation().SelectedItem(DevicesNavItem());
     m_suppressNavigationSelection = false;
     ShowSettingsPage(SettingsPage::Devices);
 
-    bool restoredPlacement = false;
-    if (auto controller = m_settingsController) {
-        restoredPlacement = controller->Snapshot().SettingsWindowBounds.has_value();
-    }
-    if (!restoredPlacement) {
+    if (!m_hadPersistedPlacement) {
         ApplyAdaptiveLayout();
     } else {
         SettingsNavigation().OpenPaneLength(CalculateNavigationPaneLength());
@@ -351,9 +341,9 @@ void SettingsWindow::RootGrid_Loaded(IInspectable const&, RoutedEventArgs const&
         DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
 
         ApplyCurrentWindowTheme(hwnd);
-        if (m_themeChangedToken == 0) {
+        if (m_actualThemeChangedToken.value == 0) {
             auto weak = get_weak();
-            m_themeChangedToken = ThemeHelper::AddThemeChangedHandler([weak]() {
+            m_actualThemeChangedToken = RootGrid().ActualThemeChanged([weak](auto const&, auto const&) {
                 if (auto self = weak.get()) {
                     self->ApplyCurrentWindowTheme(util::GetWindowHandle(*self));
                 }
@@ -396,8 +386,6 @@ void SettingsWindow::LocalizeSettingsText() {
     apc::ui::SetButtonLabel(DefaultLastConnectedButton(),
                             DefaultLastConnectedButtonText(),
                             winrt::hstring(_("Settings_DefaultDevice_LastConnected")));
-    apc::ui::SetButtonLabel(
-        ClearDefaultDeviceButton(), ClearDefaultDeviceButtonText(), winrt::hstring(_("Settings_DefaultDevice_Clear")));
     ConnectOnStartupLabel().Text(winrt::hstring(_("Settings_ConnectOnStartup")));
     ConnectOnStartupDesc().Text(winrt::hstring(_("Settings_ConnectOnStartup_Desc")));
     ReconnectOnConnectionLossLabel().Text(winrt::hstring(_("Settings_ReconnectOnConnectionLoss")));
@@ -419,6 +407,8 @@ void SettingsWindow::LocalizeSettingsText() {
     StartWithWindowsDesc().Text(winrt::hstring(_("Settings_StartWithWindows_Desc")));
     ShowNotificationsLabel().Text(winrt::hstring(_("Settings_ShowNotifications")));
     ShowNotificationsDesc().Text(winrt::hstring(_("Settings_ShowNotifications_Desc")));
+    SystemBackdropEffectsLabel().Text(winrt::hstring(_("Settings_SystemBackdropEffects")));
+    SystemBackdropEffectsDesc().Text(winrt::hstring(_("Settings_SystemBackdropEffects_Desc")));
     WindowPlacementLabel().Text(winrt::hstring(_("Settings_WindowPlacement")));
     WindowPlacementDesc().Text(winrt::hstring(_("Settings_WindowPlacement_Desc")));
     apc::ui::SetButtonLabel(ResetWindowPlacementButton(),
@@ -462,6 +452,7 @@ void SettingsWindow::LocalizeSettingsText() {
     SetAutomationName(PrivacyModeToggle(), _("Settings_PrivacyMode"));
     SetAutomationName(StartWithWindowsToggle(), _("Settings_StartWithWindows"));
     SetAutomationName(ShowNotificationsToggle(), _("Settings_ShowNotifications"));
+    SetAutomationName(SystemBackdropEffectsToggle(), _("Settings_SystemBackdropEffects"));
     SetAutomationName(LanguageComboBox(), _("Settings_Language"));
 }
 
@@ -501,8 +492,22 @@ void SettingsWindow::QueuePlacementSave() {
 
 void SettingsWindow::ApplyCurrentWindowTheme(HWND hwnd) noexcept {
     if (!hwnd) return;
-    BOOL dark = ThemeHelper::GetSystemTheme() == Theme::Dark;
+    BOOL dark = RootGrid().ActualTheme() == ElementTheme::Dark;
     (void)DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
+}
+
+void SettingsWindow::ApplySystemBackdropEffects(bool enabled) noexcept try {
+    if (enabled) {
+        SystemBackdrop(winrt::Microsoft::UI::Xaml::Media::MicaBackdrop());
+    } else {
+        SystemBackdrop(nullptr);
+    }
+    RootGrid().Background(
+        enabled
+            ? winrt::Microsoft::UI::Xaml::Media::SolidColorBrush(winrt::Windows::UI::Colors::Transparent())
+            : apc::ui::ThemeBrushOrFallback(L"SolidBackgroundFillColorBaseBrush", winrt::Windows::UI::Colors::White()));
+} catch (...) {
+    util::DebugTraceUnknownException(L"[SettingsWindow] failed to apply backdrop setting");
 }
 
 void SettingsWindow::SavePlacementNow() noexcept {
@@ -526,17 +531,17 @@ void SettingsWindow::StopPlacementSaveTimer() noexcept {
 }
 
 winrt::fire_and_forget SettingsWindow::ClearAliasSavedAfterDelayAsync(uint64_t requestId) {
-    auto lifetime = get_strong();
+    auto weak = get_weak();
     try {
         winrt::apartment_context uiThread;
         co_await winrt::resume_after(c_aliasSavedFeedbackDelay);
         co_await uiThread;
 
-        if (requestId != m_aliasSavedRequestId.load()) co_return;
-        m_aliasSavedDeviceId.clear();
-        if (m_currentPage == SettingsPage::Devices) {
-            RebuildDeviceList();
-        }
+        auto self = weak.get();
+        if (!self || requestId != self->m_aliasSavedRequestId.load()) co_return;
+        self->m_aliasSavedDeviceId.clear();
+        if (self->m_aliasSavedIndicator) self->m_aliasSavedIndicator.Visibility(Visibility::Collapsed);
+        self->m_aliasSavedIndicator = nullptr;
     } catch (winrt::hresult_error const& ex) {
         util::DebugTraceException(L"[SettingsWindow] ClearAliasSavedAfterDelayAsync failed", ex);
     } catch (std::exception const& ex) {
@@ -592,13 +597,6 @@ void SettingsWindow::ResetWindowPlacementButton_Click(IInspectable const&, Route
 }
 
 void SettingsWindow::DefaultLastConnectedButton_Click(IInspectable const&, RoutedEventArgs const&) {
-    if (auto controller = m_settingsController) {
-        controller->ClearDefaultDevice();
-    }
-    RebuildDeviceList();
-}
-
-void SettingsWindow::ClearDefaultDeviceButton_Click(IInspectable const&, RoutedEventArgs const&) {
     if (auto controller = m_settingsController) {
         controller->ClearDefaultDevice();
     }
@@ -694,7 +692,6 @@ void SettingsWindow::LanguageComboBox_SelectionChanged(IInspectable const&, Sele
     if (auto controller = m_settingsController) {
         controller->SetLanguage(std::wstring(language));
     }
-    StringResources::Instance().Initialize(GetModuleHandleW(nullptr), std::wstring(language));
     LocalizeSettingsText();
     ShowSettingsPage(m_currentPage);
     RebuildDeviceList();
@@ -814,14 +811,13 @@ void SettingsWindow::InitializeSettingsContent() {
     auto controller = m_settingsController;
     if (!controller) return;
 
-    {
-        auto settings = controller->Snapshot();
-        ConnectOnStartupToggle().IsOn(settings.GlobalConnectOnStartup);
-        ReconnectOnConnectionLossToggle().IsOn(settings.GlobalReconnectOnConnectionLoss);
-        AllowIncomingConnectionsToggle().IsOn(settings.AllowIncomingConnections);
-        PrivacyModeToggle().IsOn(settings.PrivacyModeEnabled);
-        SelectLanguage(settings.Language);
-    }
+    auto settings = m_initialSettingsSnapshot ? std::move(*m_initialSettingsSnapshot) : controller->Snapshot();
+    m_initialSettingsSnapshot.reset();
+    ConnectOnStartupToggle().IsOn(settings.GlobalConnectOnStartup);
+    ReconnectOnConnectionLossToggle().IsOn(settings.GlobalReconnectOnConnectionLoss);
+    AllowIncomingConnectionsToggle().IsOn(settings.AllowIncomingConnections);
+    PrivacyModeToggle().IsOn(settings.PrivacyModeEnabled);
+    SelectLanguage(settings.Language);
     ConnectOnStartupToggle().OffContent(box_value(L""));
     ConnectOnStartupToggle().OnContent(box_value(L""));
     ReconnectOnConnectionLossToggle().OffContent(box_value(L""));
@@ -867,15 +863,16 @@ void SettingsWindow::InitializeSettingsContent() {
     });
 
     // Show cached value immediately; async init below corrects it from the actual task state.
-    {
-        auto settings = controller->Snapshot();
-        StartWithWindowsToggle().IsOn(settings.StartWithWindows);
-        ShowNotificationsToggle().IsOn(settings.ShowNotifications);
-    }
+    StartWithWindowsToggle().IsOn(settings.StartWithWindows);
+    ShowNotificationsToggle().IsOn(settings.ShowNotifications);
+    SystemBackdropEffectsToggle().IsOn(settings.UseSystemBackdropEffects);
+    ApplySystemBackdropEffects(settings.UseSystemBackdropEffects);
     StartWithWindowsToggle().OffContent(box_value(L""));
     StartWithWindowsToggle().OnContent(box_value(L""));
     ShowNotificationsToggle().OffContent(box_value(L""));
     ShowNotificationsToggle().OnContent(box_value(L""));
+    SystemBackdropEffectsToggle().OffContent(box_value(L""));
+    SystemBackdropEffectsToggle().OnContent(box_value(L""));
     SyncStartupTaskStateAsync();
 
     StartWithWindowsToggle().Toggled([weak](auto const& sender, auto const& args) {
@@ -892,6 +889,16 @@ void SettingsWindow::InitializeSettingsContent() {
         }
     });
 
+    SystemBackdropEffectsToggle().Toggled([weak](auto const& s, auto) {
+        if (auto self = weak.get()) {
+            auto enabled = s.template as<ToggleSwitch>().IsOn();
+            self->ApplySystemBackdropEffects(enabled);
+            if (auto settingsController = self->m_settingsController) {
+                settingsController->SetSystemBackdropEffects(enabled);
+            }
+        }
+    });
+
     RebuildDeviceList();
 }
 
@@ -903,7 +910,7 @@ void SettingsWindow::ShowDiagnosticsInfo(InfoBarSeverity severity, std::wstring_
 }
 
 winrt::fire_and_forget SettingsWindow::LaunchUri(std::wstring_view uri) {
-    auto lifetime = get_strong();
+    auto weak = get_weak();
     auto uriCopy = std::wstring(uri);
     winrt::apartment_context uiThread;
     bool launched = false;
@@ -919,8 +926,9 @@ winrt::fire_and_forget SettingsWindow::LaunchUri(std::wstring_view uri) {
 
     try {
         co_await uiThread;
-        if (!launched) {
-            ShowDiagnosticsInfo(
+        auto self = weak.get();
+        if (self && !launched) {
+            self->ShowDiagnosticsInfo(
                 InfoBarSeverity::Error, _("Settings_ActionFailed_Title"), _("Settings_ActionFailed_Message"));
         }
     } catch (...) {
@@ -1053,17 +1061,12 @@ void SettingsWindow::SelectLanguage(std::wstring_view language) {
 
 void SettingsWindow::CommitAlias(std::wstring const& deviceId,
                                  TextBox const& textBox,
-                                 std::wstring const& previousAlias,
-                                 bool alwaysRebuild) {
+                                 std::wstring const& previousAlias) {
     auto alias = TrimWhitespace(std::wstring(textBox.Text()));
     textBox.Text(winrt::hstring(alias));
 
-    if (alias == previousAlias) {
-        if (alwaysRebuild) {
-            RebuildDeviceList();
-        }
-        return;
-    }
+    if (alias == previousAlias) return;
+    if (m_lastCommittedAliasDeviceId == deviceId && m_lastCommittedAliasValue == alias) return;
 
     if (auto settingsController = m_settingsController) {
         if (!settingsController->SetDeviceAlias(deviceId, alias)) {
@@ -1072,6 +1075,8 @@ void SettingsWindow::CommitAlias(std::wstring const& deviceId,
             return;
         }
     }
+    m_lastCommittedAliasDeviceId = deviceId;
+    m_lastCommittedAliasValue = alias;
     m_aliasSavedDeviceId = deviceId;
     auto requestId = ++m_aliasSavedRequestId;
     RebuildDeviceList();
@@ -1154,7 +1159,8 @@ std::wstring SettingsWindow::BuildReportBugUri() const {
 }
 
 winrt::fire_and_forget SettingsWindow::RunManualUpdateCheckAsync() {
-    auto lifetime = get_strong();
+    auto weak = get_weak();
+    auto updateCoordinator = m_updateCoordinator;
     auto requestId = ++m_updateCheckRequestId;
     SetUpdateCheckBusy(true);
     bool completed = false;
@@ -1162,17 +1168,18 @@ winrt::fire_and_forget SettingsWindow::RunManualUpdateCheckAsync() {
 
     try {
         UpdateCheckResult result;
-        if (m_updateCoordinator) {
-            result = co_await m_updateCoordinator->CheckForUpdatesAsync(UpdateCheckReason::Manual);
+        if (updateCoordinator) {
+            result = co_await updateCoordinator->CheckForUpdatesAsync(UpdateCheckReason::Manual);
         } else {
             result = co_await UpdateService::CheckForUpdatesAsync();
         }
         co_await ui;
 
-        if (requestId != m_updateCheckRequestId.load()) co_return;
-        SetUpdateCheckBusy(false);
+        auto self = weak.get();
+        if (!self || requestId != self->m_updateCheckRequestId.load()) co_return;
+        self->SetUpdateCheckBusy(false);
         if (result.Status == UpdateCheckStatus::Cancelled) co_return;
-        ShowUpdateCheckResult(result);
+        self->ShowUpdateCheckResult(result);
         completed = true;
     } catch (winrt::hresult_error const& ex) {
         util::DebugTraceException(L"[SettingsWindow] RunManualUpdateCheckAsync failed", ex);
@@ -1184,9 +1191,10 @@ winrt::fire_and_forget SettingsWindow::RunManualUpdateCheckAsync() {
 
     try {
         co_await ui;
-        if (!completed && requestId == m_updateCheckRequestId.load()) {
-            SetUpdateCheckBusy(false);
-            ShowUpdateCheckResult(UpdateCheckResult{UpdateCheckStatus::Failed, L"", L""});
+        auto self = weak.get();
+        if (self && !completed && requestId == self->m_updateCheckRequestId.load()) {
+            self->SetUpdateCheckBusy(false);
+            self->ShowUpdateCheckResult(UpdateCheckResult{UpdateCheckStatus::Failed, L"", L""});
         }
     } catch (...) {
     }
@@ -1244,7 +1252,8 @@ void SettingsWindow::ShowUpdateCheckResult(UpdateCheckResult const& result) {
 /*------------------------------------------------------------------------------------------------------------*/
 
 winrt::fire_and_forget SettingsWindow::SyncStartupTaskStateAsync() {
-    auto lifetime = get_strong();
+    auto weak = get_weak();
+    auto settingsController = m_settingsController;
     winrt::apartment_context ui;
     auto requestId = m_startupRequestId.load();
     SetStartupTaskBusy(true);
@@ -1253,15 +1262,14 @@ winrt::fire_and_forget SettingsWindow::SyncStartupTaskStateAsync() {
         bool enabled = co_await StartupTaskController::IsEnabledAsync();
 
         co_await ui;
-        if (requestId != m_startupRequestId.load()) co_return;
-        SetStartupTaskBusy(false);
+        auto self = weak.get();
+        if (!self || requestId != self->m_startupRequestId.load()) co_return;
+        self->SetStartupTaskBusy(false);
 
-        m_suppressStartupToggle = true;
-        StartWithWindowsToggle().IsOn(enabled);
-        m_suppressStartupToggle = false;
-        if (auto settingsController = m_settingsController) {
-            settingsController->SetStartWithWindows(enabled);
-        }
+        self->m_suppressStartupToggle = true;
+        self->StartWithWindowsToggle().IsOn(enabled);
+        self->m_suppressStartupToggle = false;
+        if (settingsController) settingsController->SetStartWithWindows(enabled);
         co_return;
     } catch (winrt::hresult_error const& ex) {
         DebugTrace(L"[SettingsWindow] SyncStartupTaskStateAsync failed: 0x{0:08X} {1}",
@@ -1275,40 +1283,41 @@ winrt::fire_and_forget SettingsWindow::SyncStartupTaskStateAsync() {
 
     try {
         co_await ui;
-        if (requestId == m_startupRequestId.load()) {
-            SetStartupTaskBusy(false);
+        auto self = weak.get();
+        if (self && requestId == self->m_startupRequestId.load()) {
+            self->SetStartupTaskBusy(false);
         }
     } catch (...) {
     }
 }
 
 winrt::fire_and_forget SettingsWindow::ApplyStartWithWindowsAsync(bool on) {
-    auto lifetime = get_strong();
+    auto weak = get_weak();
+    auto settingsController = m_settingsController;
     winrt::apartment_context ui;
     auto requestId = ++m_startupRequestId;
     bool revertToggle = false;
     SetStartupTaskBusy(true);
+    if (settingsController) settingsController->SetStartWithWindows(on);
 
     try {
         bool success = co_await StartupTaskController::SetEnabledAsync(on);
 
         co_await ui;
-        if (requestId != m_startupRequestId.load()) co_return;
-        SetStartupTaskBusy(false);
+        auto self = weak.get();
+        if (self && requestId != self->m_startupRequestId.load()) co_return;
 
         if (!success) {
-            if (auto settingsController = m_settingsController) {
-                settingsController->SetStartWithWindows(!on);
-            }
-            m_suppressStartupToggle = true;
-            StartWithWindowsToggle().IsOn(!on);
-            m_suppressStartupToggle = false;
+            if (settingsController) settingsController->SetStartWithWindows(!on);
+            if (!self) co_return;
+            self->SetStartupTaskBusy(false);
+            self->m_suppressStartupToggle = true;
+            self->StartWithWindowsToggle().IsOn(!on);
+            self->m_suppressStartupToggle = false;
             co_return;
         }
 
-        if (auto settingsController = m_settingsController) {
-            settingsController->SetStartWithWindows(on);
-        }
+        if (self) self->SetStartupTaskBusy(false);
     } catch (winrt::hresult_error const& ex) {
         DebugTrace(L"[SettingsWindow] ApplyStartWithWindowsAsync failed: 0x{0:08X} {1}",
                    static_cast<uint32_t>(ex.code()),
@@ -1325,14 +1334,14 @@ winrt::fire_and_forget SettingsWindow::ApplyStartWithWindowsAsync(bool on) {
     if (revertToggle) {
         try {
             co_await ui;
-            if (requestId != m_startupRequestId.load()) co_return;
-            SetStartupTaskBusy(false);
-            if (auto settingsController = m_settingsController) {
-                settingsController->SetStartWithWindows(!on);
-            }
-            m_suppressStartupToggle = true;
-            StartWithWindowsToggle().IsOn(!on);
-            m_suppressStartupToggle = false;
+            auto self = weak.get();
+            if (self && requestId != self->m_startupRequestId.load()) co_return;
+            if (settingsController) settingsController->SetStartWithWindows(!on);
+            if (!self) co_return;
+            self->SetStartupTaskBusy(false);
+            self->m_suppressStartupToggle = true;
+            self->StartWithWindowsToggle().IsOn(!on);
+            self->m_suppressStartupToggle = false;
         } catch (...) {
         }
     }
@@ -1343,6 +1352,7 @@ winrt::fire_and_forget SettingsWindow::ApplyStartWithWindowsAsync(bool on) {
 /*------------------------------------------------------------------------------------------------------------*/
 
 void SettingsWindow::RebuildDeviceList() {
+    m_aliasSavedIndicator = nullptr;
     DevicesPanel().Children().Clear();
 
     auto controller = m_settingsController;
@@ -1356,7 +1366,6 @@ void SettingsWindow::RebuildDeviceList() {
     auto devices = SettingsViewModel::BuildDeviceItems(snapshot);
     bool globalConnectOnStartup = snapshot.GlobalConnectOnStartup;
     bool globalReconnectOnConnectionLoss = snapshot.GlobalReconnectOnConnectionLoss;
-    ClearDefaultDeviceButton().IsEnabled(snapshot.DefaultDevice == DefaultDeviceMode::SpecificDevice);
     DefaultLastConnectedButton().IsEnabled(snapshot.DefaultDevice != DefaultDeviceMode::LastConnected);
 
     if (devices.empty()) {
@@ -1481,6 +1490,7 @@ void SettingsWindow::RebuildDeviceList() {
             savedStatus.FontSize(12);
             savedStatus.TextWrapping(TextWrapping::Wrap);
             namePanel.Children().Append(savedStatus);
+            m_aliasSavedIndicator = savedStatus;
         }
 
         Grid::SetRow(namePanel, 0);
@@ -1502,7 +1512,7 @@ void SettingsWindow::RebuildDeviceList() {
         aliasBox.LostFocus([id = dev.Id, previousAlias = dev.Alias, weak](auto const& s, auto) {
             if (auto self = weak.get()) {
                 auto textBox = s.template as<TextBox>();
-                self->CommitAlias(id, textBox, previousAlias, false);
+                self->CommitAlias(id, textBox, previousAlias);
             }
         });
         aliasBox.KeyDown([id = dev.Id, previousAlias = dev.Alias, weak](auto const& s, auto const& e) {
@@ -1510,14 +1520,11 @@ void SettingsWindow::RebuildDeviceList() {
             auto textBox = s.template as<TextBox>();
             if (key == winrt::Windows::System::VirtualKey::Enter) {
                 if (auto self = weak.get()) {
-                    self->CommitAlias(id, textBox, previousAlias, true);
+                    self->CommitAlias(id, textBox, previousAlias);
                 }
                 e.Handled(true);
             } else if (key == winrt::Windows::System::VirtualKey::Escape) {
                 textBox.Text(winrt::hstring(previousAlias));
-                if (auto self = weak.get()) {
-                    self->RebuildDeviceList();
-                }
                 e.Handled(true);
             }
         });
@@ -1667,6 +1674,11 @@ void SettingsWindow::SetSettingsController(std::shared_ptr<ISettingsController> 
     m_settingsController = std::move(controller);
 }
 
+void SettingsWindow::SetInitialSettingsSnapshot(SettingsData snapshot) {
+    m_hadPersistedPlacement = snapshot.SettingsWindowBounds.has_value();
+    m_initialSettingsSnapshot = std::move(snapshot);
+}
+
 void SettingsWindow::SetUpdateCoordinator(std::shared_ptr<UpdateCoordinator> coordinator) {
     m_updateCoordinator = std::move(coordinator);
 }
@@ -1677,6 +1689,10 @@ void SettingsWindow::SetDefaultPlacement(util::SettingsWindowPlacement placement
 
 void SettingsWindow::SetTargetPlacement(util::SettingsWindowPlacement placement) {
     m_targetPlacement = placement;
+}
+
+void SettingsWindow::RefreshKnownDevices() {
+    if (m_contentInitialized) RebuildDeviceList();
 }
 
 } // namespace winrt::AudioPlaybackConnector2::implementation

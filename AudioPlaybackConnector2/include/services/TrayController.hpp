@@ -78,6 +78,8 @@ public:
     [[nodiscard]] bool RefreshDevicePickerState() noexcept;
     [[nodiscard]] bool InvalidateDevicePickerInventory() noexcept;
     void OnThemeChanged();
+    void ApplyLanguage();
+    void SetSystemBackdropEffectsEnabled(bool enabled) noexcept;
     [[nodiscard]] bool AdvanceConnectingFrame() noexcept;
     [[nodiscard]] bool ApplyPendingTrayUpdates() noexcept;
     void Reregister();
@@ -145,5 +147,6 @@ private:
     bool m_devicePickerPreloadInitialized = false;
     bool m_releaseDevicePickerPending = false;
     bool m_pickerRefreshPending = false;
+    bool m_useSystemBackdropEffects = true;
     std::atomic_bool m_isTearingDown = false;
 };

@@ -90,6 +90,8 @@
   "CrashDialogBody": "AudioPlaybackConnector2 s'est arrêté de façon inattendue.\n\nCode d'erreur: 0x{0:08X}\nRapport de plantage: {1}\nMinidump: {2}\n\nOui = Ouvrir une issue GitHub préremplie\nNon = Ouvrir le dossier des plantages\nAnnuler = Fermer",
   "Settings_ShowNotifications": "Afficher les notifications",
   "Settings_ShowNotifications_Desc": "Affiche les notifications de connexion.",
+  "Settings_SystemBackdropEffects": "Utiliser les effets Mica et acrylique",
+  "Settings_SystemBackdropEffects_Desc": "Utilise les effets de matériau Windows dans les paramètres et les menus de la zone de notification. Désactivez cette option pour des arrière-plans unis et moins de surcharge visuelle.",
   "Privacy_RedactedDevice": "Appareil privé",
   "Privacy_RedactedValue": "<masqué>",
   "Settings_DefaultDevice": "Appareil par défaut",

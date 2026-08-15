@@ -183,6 +183,7 @@ void Settings::Load(HINSTANCE hInst) {
         bool allowIncomingConnections = false;
         bool startWithWindows = false;
         bool showNotifications = true;
+        bool useSystemBackdropEffects = true;
         std::wstring language = L"system";
         int64_t lastUpdateCheckUnixSeconds = 0;
         std::wstring lastNotifiedUpdateVersion;
@@ -202,6 +203,7 @@ void Settings::Load(HINSTANCE hInst) {
         allowIncomingConnections = GetOptionalBoolean(json, L"allowIncomingConnections", false);
         startWithWindows = GetOptionalBoolean(json, L"startWithWindows", startWithWindows);
         showNotifications = GetOptionalBoolean(json, L"showNotifications", showNotifications);
+        useSystemBackdropEffects = GetOptionalBoolean(json, L"useSystemBackdropEffects", useSystemBackdropEffects);
         privacyModeEnabled = GetOptionalBoolean(json, L"privacyModeEnabled", privacyModeEnabled);
         lastUpdateCheckUnixSeconds = GetOptionalInt64(json, L"lastUpdateCheckUnixSeconds", lastUpdateCheckUnixSeconds);
         lastNotifiedUpdateVersion = BoundedString(GetOptionalString(json, L"lastNotifiedUpdateVersion", L""),
@@ -285,6 +287,7 @@ void Settings::Load(HINSTANCE hInst) {
         m_data.AllowIncomingConnections = allowIncomingConnections;
         m_data.StartWithWindows = startWithWindows;
         m_data.ShowNotifications = showNotifications;
+        m_data.UseSystemBackdropEffects = useSystemBackdropEffects;
         m_data.Language = std::move(language);
         m_data.LastUpdateCheckUnixSeconds = lastUpdateCheckUnixSeconds;
         m_data.LastNotifiedUpdateVersion = std::move(lastNotifiedUpdateVersion);
@@ -334,6 +337,8 @@ bool Settings::Save(HINSTANCE hInst) {
                     winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.StartWithWindows));
         json.Insert(L"showNotifications",
                     winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.ShowNotifications));
+        json.Insert(L"useSystemBackdropEffects",
+                    winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.UseSystemBackdropEffects));
         json.Insert(L"privacyModeEnabled",
                     winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.PrivacyModeEnabled));
         json.Insert(L"language", winrt::Windows::Data::Json::JsonValue::CreateStringValue(snapshot.Language));

@@ -36,6 +36,7 @@ struct DevicePickerView : DevicePickerViewT<DevicePickerView> {
     void CancelLoadDevices();
     void PrepareForRelease() noexcept;
     void RefreshDeviceStates();
+    void ApplyLanguage();
     [[nodiscard]] bool InvalidateDeviceInventory();
     void SetPresentationActive(bool active) noexcept;
 

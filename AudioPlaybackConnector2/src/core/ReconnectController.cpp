@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <ranges>
 #include <string>
+#include <utility>
 #else
 #include <pch.h>
 #endif
@@ -11,6 +12,7 @@
 namespace {
 constexpr std::size_t c_maxReconnectAttempts = 10;
 constexpr int c_initialReconnectDelaySeconds = 5;
+constexpr int c_blockedReconnectDelaySeconds = 5;
 constexpr int c_maxReconnectDelaySeconds = 60;
 constexpr std::chrono::milliseconds c_reconnectCloseCooldown{1500};
 
@@ -79,6 +81,18 @@ void ReconnectController::CancelDevice(std::wstring_view deviceId) {
     state.FailureNotified = false;
 }
 
+void ReconnectController::SetPolicyEnabled(std::wstring_view deviceId, bool enabled) {
+    auto& state = m_states[DeviceKey(deviceId)];
+    if (state.PolicyEnabled == enabled) return;
+
+    ++state.Generation;
+    state.CompletedAttempts = 0;
+    state.TimerPending = false;
+    state.AttemptInProgress = false;
+    state.PolicyEnabled = enabled;
+    state.FailureNotified = false;
+}
+
 void ReconnectController::CompleteConnectionSucceeded(std::wstring_view deviceId) {
     auto& state = m_states[DeviceKey(deviceId)];
     ++state.Generation;
@@ -133,7 +147,8 @@ ReconnectController::ScheduleDecision ReconnectController::PrepareSchedule(std::
     ScheduleDecision decision;
     decision.MaxAttempts = c_maxReconnectAttempts;
 
-    if (blocked || m_allReconnectsCancelled || state.UserCancelled || state.TimerPending || state.AttemptInProgress) {
+    if (blocked || m_allReconnectsCancelled || state.UserCancelled || !state.PolicyEnabled || state.TimerPending ||
+        state.AttemptInProgress) {
         return decision;
     }
 
@@ -153,21 +168,62 @@ ReconnectController::ScheduleDecision ReconnectController::PrepareSchedule(std::
     return decision;
 }
 
-bool ReconnectController::ClaimTimer(TimerToken const& token, bool blocked) {
+bool ReconnectController::ClaimTimer(TimerToken const& token) {
     auto iter = m_states.find(token.DeviceId);
-    if (blocked || m_allReconnectsCancelled || token.GlobalGeneration != m_globalGeneration || iter == m_states.end()) {
+    if (m_allReconnectsCancelled || token.GlobalGeneration != m_globalGeneration || iter == m_states.end()) {
         return false;
     }
 
     auto& state = iter->second;
     if (token.DeviceGeneration != state.Generation || token.Attempt != state.CompletedAttempts + 1 ||
-        !state.TimerPending || state.AttemptInProgress || state.UserCancelled) {
+        !state.TimerPending || state.AttemptInProgress || state.UserCancelled || !state.PolicyEnabled) {
         return false;
     }
-
     state.TimerPending = false;
     state.AttemptInProgress = true;
     return true;
+}
+
+bool ReconnectController::RetireTimer(TimerToken const& token) {
+    auto iter = m_states.find(token.DeviceId);
+    if (token.GlobalGeneration != m_globalGeneration || iter == m_states.end()) return false;
+
+    auto& state = iter->second;
+    if (token.DeviceGeneration != state.Generation || token.Attempt != state.CompletedAttempts + 1 ||
+        !state.TimerPending || state.AttemptInProgress) {
+        return false;
+    }
+
+    ++state.Generation;
+    state.TimerPending = false;
+    return true;
+}
+
+ReconnectController::ScheduleDecision ReconnectController::DeferTimer(TimerToken const& token) {
+    ScheduleDecision decision;
+    decision.MaxAttempts = c_maxReconnectAttempts;
+    auto iter = m_states.find(token.DeviceId);
+    if (m_allReconnectsCancelled || token.GlobalGeneration != m_globalGeneration || iter == m_states.end()) {
+        return decision;
+    }
+
+    auto& state = iter->second;
+    if (token.DeviceGeneration != state.Generation || token.Attempt != state.CompletedAttempts + 1 ||
+        !state.TimerPending || state.AttemptInProgress || state.UserCancelled || !state.PolicyEnabled) {
+        return decision;
+    }
+
+    auto const nextGeneration = state.Generation + 1;
+    ScheduleDecision deferred;
+    deferred.ShouldSchedule = true;
+    deferred.Attempt = token.Attempt;
+    deferred.MaxAttempts = c_maxReconnectAttempts;
+    deferred.Delay = std::chrono::seconds(c_blockedReconnectDelaySeconds);
+    deferred.Token = TimerToken{token.DeviceId, m_globalGeneration, nextGeneration, token.Attempt};
+
+    state.Generation = nextGeneration;
+    decision = std::move(deferred);
+    return decision;
 }
 
 ReconnectController::ScheduleDecision ReconnectController::CompleteAttemptFailed(TimerToken const& token) {

@@ -13,7 +13,6 @@ inline constexpr std::size_t c_maxPersistedDeviceCount = 384;
 inline constexpr std::size_t c_maxDeviceIdCharacters = 512;
 inline constexpr std::size_t c_maxDeviceNameCharacters = 256;
 inline constexpr std::size_t c_maxDeviceAliasCharacters = 128;
-inline constexpr std::size_t c_maxLanguageCharacters = 64;
 inline constexpr std::size_t c_maxVersionCharacters = 128;
 inline constexpr std::uint32_t c_minWindowDpi = 48;
 inline constexpr std::uint32_t c_maxWindowDpi = 960;

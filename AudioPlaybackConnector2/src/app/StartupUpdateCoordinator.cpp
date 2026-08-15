@@ -63,10 +63,10 @@ StartupUpdateCoordinator::CheckForUpdatesAsync(Settings& settings,
 
     {
         auto locked = settings.LockExclusiveData();
-        locked.MarkChanged();
-        locked->LastUpdateCheckUnixSeconds = now;
+        auto& data = locked.Mutate();
+        data.LastUpdateCheckUnixSeconds = now;
         if (notificationShown) {
-            locked->LastNotifiedUpdateVersion = result.LatestVersion;
+            data.LastNotifiedUpdateVersion = result.LatestVersion;
         }
     }
     settings.Save(GetModuleHandleW(nullptr));

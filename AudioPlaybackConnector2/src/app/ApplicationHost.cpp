@@ -529,6 +529,10 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept tr
     InitializeAdaptiveResources();
     InitializeNotifications();
     SetupDeviceEvents();
+    {
+        auto locked = m_settings->LockSharedData();
+        m_deviceManager->SetIncomingConnectionsEnabled(locked->AllowIncomingConnections);
+    }
     m_deviceManager->StartDeviceWatcher();
     DebugTrace(L"[App] Device watcher started");
     InitializeCommandLineControl();
@@ -550,10 +554,6 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept tr
         }
     }
     TryAutoReconnect();
-    {
-        auto locked = m_settings->LockSharedData();
-        m_deviceManager->SetIncomingConnectionsEnabled(locked->AllowIncomingConnections);
-    }
     ScheduleDeviceVisualRefresh(false);
 
     s_wmTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
@@ -590,9 +590,19 @@ void ApplicationHost::InitializeTray() {
     m_trayController->SetSettings(m_settings);
     auto weak = weak_from_this();
     if (m_settingsController) {
-        m_settingsController->SetPresentationChangedCallback([weak]() {
+        m_settingsController->SetPresentationChangedCallback([weak](ISettingsController::PresentationChangeKind kind) {
             auto self = weak.lock();
             if (!self || self->m_exiting.load()) return;
+            if (kind == ISettingsController::PresentationChangeKind::Language && self->m_trayController) {
+                self->m_trayController->ApplyLanguage();
+                return;
+            }
+            if (kind == ISettingsController::PresentationChangeKind::Appearance && self->m_trayController &&
+                self->m_settings) {
+                auto locked = self->m_settings->LockSharedData();
+                self->m_trayController->SetSystemBackdropEffectsEnabled(locked->UseSystemBackdropEffects);
+                return;
+            }
             self->ScheduleDeviceVisualRefresh(false);
         });
     }
@@ -654,8 +664,10 @@ void ApplicationHost::InitializeNotifications() {
 void ApplicationHost::InitializeDeviceManager() {
     DebugTrace(L"[App] InitializeDeviceManager()");
     m_deviceManager = std::make_shared<DeviceManager>();
-    m_settingsController = std::make_shared<SettingsController>(m_settings, m_deviceManager);
     auto weak = weak_from_this();
+    m_settingsController = std::make_shared<SettingsController>(m_settings, m_deviceManager, [weak]() {
+        if (auto self = weak.lock(); self && !self->m_exiting.load()) self->ScheduleDeferredSettingsSave();
+    });
     m_deviceManager->SetReconnectOnConnectionLossPredicate([weak](auto id) {
         auto self = weak.lock();
         if (!self || self->m_exiting.load() || !self->m_settings) return false;
@@ -1262,13 +1274,12 @@ bool ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstri
                hasBusyOperations,
                showTransientError,
                TrayIconStateToString(desiredState));
-    m_trayController->SetState(desiredState);
-
     if (showTransientError && !m_transientTrayErrorTooltip.empty()) {
         m_trayController->UpdateTooltip(m_transientTrayErrorTooltip);
     } else {
         m_trayController->UpdateTooltipFromConnections(presentation.ConnectedDevices);
     }
+    m_trayController->SetState(desiredState);
     auto const pickerUpdated = m_trayController->RefreshDevicePickerState();
     auto const shellUpdated = m_trayController->ApplyPendingTrayUpdates();
     if (!shellUpdated && m_connectingAnimationTimerActive) {
@@ -2169,31 +2180,35 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
     bool settingsChanged = false;
     try {
         auto locked = m_settings->LockExclusiveData();
-        auto existingDevice = std::ranges::find_if(locked->Devices, [&](const auto& d) { return d.Id == id; });
-        if (existingDevice == locked->Devices.end() && validDeviceId &&
-            locked->Devices.size() < apc::limits::c_maxPersistedDeviceCount) {
-            locked.MarkChanged();
-            DeviceSettings newDevice;
-            newDevice.Id = idString;
-            newDevice.Name = deviceName;
-            newDevice.ConnectOnStartup = locked->GlobalConnectOnStartup;
-            newDevice.ReconnectOnConnectionLoss = locked->GlobalReconnectOnConnectionLoss;
-            locked->Devices.push_back(std::move(newDevice));
-            addedNew = true;
-            settingsChanged = true;
-        } else if (existingDevice != locked->Devices.end() && existingDevice->Name != deviceName) {
-            locked.MarkChanged();
-            existingDevice->Name = deviceName;
-            settingsChanged = true;
-        }
-
-        const bool mruWillChange =
+        auto const existingDevice = std::ranges::find(locked->Devices, idString, &DeviceSettings::Id);
+        auto const hasExistingDevice = existingDevice != locked->Devices.end();
+        auto const existingDeviceIndex =
+            hasExistingDevice ? std::optional<std::size_t>(std::distance(locked->Devices.begin(), existingDevice))
+                              : std::nullopt;
+        auto const addDevice =
+            !hasExistingDevice && validDeviceId && locked->Devices.size() < apc::limits::c_maxPersistedDeviceCount;
+        auto const updateDeviceName = hasExistingDevice && existingDevice->Name != deviceName;
+        auto const promoteMru =
             validDeviceId && (locked->LastConnectedIds.empty() || locked->LastConnectedIds.front() != idString ||
                               std::ranges::count(locked->LastConnectedIds, idString) != 1);
-        if (mruWillChange) {
-            locked.MarkChanged();
-            settingsChanged = AutoReconnectPlanner::PromoteMostRecentlyConnected(locked->LastConnectedIds, idString) ||
-                              settingsChanged;
+
+        if (addDevice || updateDeviceName || promoteMru) {
+            auto& data = locked.Mutate();
+            settingsChanged = true;
+            if (addDevice) {
+                DeviceSettings newDevice;
+                newDevice.Id = idString;
+                newDevice.Name = deviceName;
+                newDevice.ConnectOnStartup = data.GlobalConnectOnStartup;
+                newDevice.ReconnectOnConnectionLoss = data.GlobalReconnectOnConnectionLoss;
+                data.Devices.push_back(std::move(newDevice));
+                addedNew = true;
+            } else if (updateDeviceName) {
+                data.Devices[*existingDeviceIndex].Name = deviceName;
+            }
+            if (promoteMru) {
+                static_cast<void>(AutoReconnectPlanner::PromoteMostRecentlyConnected(data.LastConnectedIds, idString));
+            }
         }
     } catch (winrt::hresult_error const& ex) {
         util::DebugTraceException(L"[App] OnDeviceConnected settings update ERROR", ex);
@@ -2208,6 +2223,7 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
 
     if (settingsChanged) {
         ScheduleDeferredSettingsSave();
+        m_settingsWindowPresenter.RefreshKnownDevicesIfOpen();
         if (addedNew) {
             DebugTrace(L"[App] New device added to settings: {0}", std::wstring(rawDeviceName));
         }
@@ -2328,7 +2344,7 @@ LRESULT CALLBACK ApplicationHost::SubclassProc(
 
     if (msg == WM_SETTINGCHANGE) {
         ThemeHelper::OnSettingChange(hwnd, lParam);
-        return 0;
+        return DefSubclassProc(hwnd, msg, wParam, lParam);
     }
 
     if (msg == WM_POWERBROADCAST) {

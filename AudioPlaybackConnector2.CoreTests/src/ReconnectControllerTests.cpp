@@ -31,8 +31,8 @@ void TestFullBackoffSequence() {
         Check(decision.Delay == std::chrono::seconds(expectedDelays[index]), "backoff delay must be deterministic");
         Check(controller.HasPendingTimer(id), "scheduled timer must be reported as pending");
         Check(!controller.PrepareSchedule(id, false).ShouldSchedule, "a device may have only one pending timer");
-        Check(controller.ClaimTimer(decision.Token, false), "the current timer token must be claimable exactly once");
-        Check(!controller.ClaimTimer(decision.Token, false), "a claimed timer token must not be claimable twice");
+        Check(controller.ClaimTimer(decision.Token), "the current timer token must be claimable exactly once");
+        Check(!controller.ClaimTimer(decision.Token), "a claimed timer token must not be claimable twice");
 
         auto completion = controller.CompleteAttemptFailed(decision.Token);
         Check(completion.AttemptCompleted, "a claimed attempt failure must be accepted");
@@ -51,12 +51,12 @@ void TestSuccessAndStaleTokens() {
     ReconnectController controller;
 
     auto first = controller.PrepareSchedule(id, false);
-    Check(controller.ClaimTimer(first.Token, false), "first timer must be claimable");
+    Check(controller.ClaimTimer(first.Token), "first timer must be claimable");
     auto firstFailure = controller.CompleteAttemptFailed(first.Token);
     Check(firstFailure.AttemptCompleted, "first failure must complete");
 
     auto second = controller.PrepareSchedule(id, false);
-    Check(controller.ClaimTimer(second.Token, false), "second timer must be claimable");
+    Check(controller.ClaimTimer(second.Token), "second timer must be claimable");
     controller.CompleteAttemptSucceeded(second.Token);
     Check(controller.Attempts(id) == 0, "success must reset attempts");
     Check(!controller.HasPendingTimer(id), "success must clear busy reconnect state");
@@ -65,7 +65,7 @@ void TestSuccessAndStaleTokens() {
 
     auto stale = controller.PrepareSchedule(id, false);
     controller.BeginManualOperation(id);
-    Check(!controller.ClaimTimer(stale.Token, false), "manual operations must invalidate older automatic timers");
+    Check(!controller.ClaimTimer(stale.Token), "manual operations must invalidate older automatic timers");
 }
 
 void TestCancellationAndTimerCreationFailure() {
@@ -74,7 +74,7 @@ void TestCancellationAndTimerCreationFailure() {
 
     auto pending = controller.PrepareSchedule(id, false);
     controller.CancelDevice(id);
-    Check(!controller.ClaimTimer(pending.Token, false), "device cancellation must invalidate a pending timer");
+    Check(!controller.ClaimTimer(pending.Token), "device cancellation must invalidate a pending timer");
     Check(controller.IsCancelled(id), "device cancellation must remain observable");
     Check(!controller.PrepareSchedule(id, false).ShouldSchedule, "cancelled devices must not silently restart");
 
@@ -86,7 +86,7 @@ void TestCancellationAndTimerCreationFailure() {
     Check(replacement.Attempt == 1, "timer creation failure must not consume an attempt");
 
     controller.CancelPendingReconnects();
-    Check(!controller.ClaimTimer(replacement.Token, false), "global cancellation must invalidate every timer token");
+    Check(!controller.ClaimTimer(replacement.Token), "global cancellation must invalidate every timer token");
     Check(controller.AllReconnectsCancelled(), "global cancellation must remain observable");
     Check(!controller.PrepareSchedule(id, false).ShouldSchedule, "global cancellation must block new timers");
 }
@@ -96,11 +96,79 @@ void TestObservedConnectionInvalidatesAttempt() {
     ReconnectController controller;
 
     auto decision = controller.PrepareSchedule(id, false);
-    Check(controller.ClaimTimer(decision.Token, false), "timer must be claimable before observed success");
+    Check(controller.ClaimTimer(decision.Token), "timer must be claimable before observed success");
     controller.CompleteConnectionSucceeded(id);
     Check(!controller.CompleteAttemptFailed(decision.Token).AttemptCompleted,
           "an observed connection must invalidate a late failure completion");
     Check(controller.Attempts(id) == 0, "an observed connection must reset attempts");
+}
+
+void TestBlockedTimerDoesNotRemainPending() {
+    constexpr std::wstring_view id = L"device-blocked";
+    ReconnectController controller;
+
+    auto blocked = controller.PrepareSchedule(id, false);
+    Check(controller.RetireTimer(blocked.Token), "a blocked current timer must be retired");
+    Check(!controller.HasPendingTimer(id), "a fired blocked timer must release its pending slot");
+    auto replacement = controller.PrepareSchedule(id, false);
+    Check(replacement.ShouldSchedule, "a later connection loss must be able to schedule after a blocked timer");
+    Check(replacement.Attempt == blocked.Attempt, "retiring a blocked timer must not consume an attempt");
+    Check(replacement.Token.DeviceGeneration != blocked.Token.DeviceGeneration,
+          "a replacement timer must not reuse the retired token generation");
+    Check(!controller.ClaimTimer(blocked.Token), "a retired callback must not claim its replacement timer");
+    Check(controller.ClaimTimer(replacement.Token), "the replacement timer must remain claimable");
+}
+
+void TestBusyTimerDeferralPreservesReconnect() {
+    constexpr std::wstring_view id = L"device-deferred";
+    ReconnectController controller;
+
+    auto original = controller.PrepareSchedule(id, false);
+    auto deferred = controller.DeferTimer(original.Token);
+    Check(deferred.ShouldSchedule, "a current timer blocked by another operation must be deferred");
+    Check(deferred.Attempt == original.Attempt, "deferral must not consume a reconnect attempt");
+    Check(deferred.Token.DeviceGeneration != original.Token.DeviceGeneration,
+          "deferral must invalidate the original callback token");
+    Check(controller.HasPendingTimer(id), "a deferred reconnect must remain observably pending");
+    Check(!controller.ClaimTimer(original.Token), "the original callback must be stale after deferral");
+    Check(controller.ClaimTimer(deferred.Token), "the deferred callback must remain claimable");
+
+    auto next = controller.PrepareSchedule(L"device-deferred-stale", false);
+    auto replacement = controller.DeferTimer(next.Token);
+    Check(!controller.DeferTimer(next.Token).ShouldSchedule,
+          "a stale callback must not replace a newer deferred timer");
+    Check(controller.ClaimTimer(replacement.Token), "stale deferral must leave the newer timer intact");
+}
+
+void TestReconnectPolicyDoesNotBecomeUserCancellation() {
+    constexpr std::wstring_view id = L"device-policy";
+    ReconnectController controller;
+
+    auto pending = controller.PrepareSchedule(id, false);
+    controller.SetPolicyEnabled(id, false);
+    Check(!controller.ClaimTimer(pending.Token), "disabling policy must invalidate a pending timer");
+    Check(!controller.IsCancelled(id), "policy disable must not be recorded as a user cancellation");
+    Check(!controller.PrepareSchedule(id, false).ShouldSchedule, "disabled policy must block reconnect scheduling");
+
+    controller.SetPolicyEnabled(id, true);
+    Check(controller.PrepareSchedule(id, false).ShouldSchedule,
+          "re-enabling policy must permit a later connection-loss reconnect");
+}
+
+void TestReconnectPolicyDoesNotClearUserCancellation() {
+    constexpr std::wstring_view id = L"device-user-cancelled";
+    ReconnectController controller;
+
+    controller.CancelDevice(id);
+    controller.SetPolicyEnabled(id, false);
+    controller.SetPolicyEnabled(id, true);
+    Check(controller.IsCancelled(id), "policy changes must not erase an explicit user cancellation");
+    Check(!controller.PrepareSchedule(id, false).ShouldSchedule,
+          "a user-cancelled device must remain blocked until a manual operation");
+
+    controller.BeginManualOperation(id);
+    Check(controller.PrepareSchedule(id, false).ShouldSchedule,
+          "a later manual operation must explicitly clear user cancellation");
 }
 
 class UniqueHandle {
@@ -338,23 +406,23 @@ int RunCommandClientTests();
 int RunCommandLineControlServerTests();
 int RunControlUiActionGateTests();
 int RunControlTargetMatcherTests();
-int RunCoreUiProtocolTests();
-int RunCoreUiProtocolPeer(std::wstring_view bootstrapToken);
+int RunDeviceOperationCoordinatorTests();
 int RunDevicePickerSnapshotTests();
 int RunResourcePressureMonitorTests();
 int RunRuntimeApartmentTests();
+int RunSettingsLimitsTests();
 int RunSingleInstanceGuardTests();
 int RunUpdateCoordinatorTests();
 
-int wmain(int argc, wchar_t* argv[]) {
-    if (argc == 3 && std::wstring_view(argv[1]) == L"--core-ui-peer") {
-        return RunCoreUiProtocolPeer(argv[2]);
-    }
-    if (argc != 1) return 2;
+int main() {
     TestFullBackoffSequence();
     TestSuccessAndStaleTokens();
     TestCancellationAndTimerCreationFailure();
     TestObservedConnectionInvalidatesAttempt();
+    TestBlockedTimerDoesNotRemainPending();
+    TestBusyTimerDeferralPreservesReconnect();
+    TestReconnectPolicyDoesNotBecomeUserCancellation();
+    TestReconnectPolicyDoesNotClearUserCancellation();
     TestCommandProtocolRoundTrip();
     TestCommandProtocolDelayedResponseReader();
     TestCommandProtocolStrictValidation();
@@ -368,10 +436,11 @@ int wmain(int argc, wchar_t* argv[]) {
     g_failures += RunCommandLineControlServerTests();
     g_failures += RunControlUiActionGateTests();
     g_failures += RunControlTargetMatcherTests();
-    g_failures += RunCoreUiProtocolTests();
+    g_failures += RunDeviceOperationCoordinatorTests();
     g_failures += RunDevicePickerSnapshotTests();
     g_failures += RunResourcePressureMonitorTests();
     g_failures += RunRuntimeApartmentTests();
+    g_failures += RunSettingsLimitsTests();
     g_failures += RunSingleInstanceGuardTests();
     g_failures += RunUpdateCoordinatorTests();
 

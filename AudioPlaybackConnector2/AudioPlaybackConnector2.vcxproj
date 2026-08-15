@@ -127,7 +127,9 @@
   <ItemGroup>
     <ClInclude Include="include\pch.h" />
     <ClInclude Include="include\app\ApplicationHost.hpp" />
+    <ClInclude Include="include\app\AdaptiveActionRetryBackoff.hpp" />
     <ClInclude Include="include\app\AdaptiveResourcePolicy.hpp" />
+    <ClInclude Include="include\app\AdaptiveScheduleState.hpp" />
     <ClInclude Include="include\app\ControlUiActionGate.hpp" />
     <ClInclude Include="include\app\DeferredSaveCoordinator.hpp" />
     <ClInclude Include="include\app\ResourcePressureMonitor.hpp" />
@@ -149,14 +151,21 @@
     <ClInclude Include="include\core\StringResources.hpp" />
     <ClInclude Include="include\core\ThemeHelper.hpp" />
     <ClInclude Include="include\core\Settings.hpp" />
+    <ClInclude Include="include\core\SettingsData.hpp" />
+    <ClInclude Include="include\core\SettingsLimits.hpp" />
     <ClInclude Include="include\core\AudioConnectionService.hpp" />
+    <ClInclude Include="include\core\DeviceConnectionInfo.hpp" />
     <ClInclude Include="include\core\DeviceDiscoveryService.hpp" />
     <ClInclude Include="include\core\DeviceManagerDiagnostics.hpp" />
+    <ClInclude Include="include\core\DeviceOperationCoordinator.hpp" />
+    <ClInclude Include="include\core\DeviceInventoryGeneration.hpp" />
     <ClInclude Include="include\core\DevicePickerSnapshot.hpp" />
+    <ClInclude Include="include\core\DevicePickerTypes.hpp" />
     <ClInclude Include="include\core\DeviceSessionStore.hpp" />
     <ClInclude Include="include\core\ReconnectController.hpp" />
     <ClInclude Include="include\core\DeviceManager.hpp" />
     <ClInclude Include="include\services\NotificationService.hpp" />
+    <ClInclude Include="include\services\AutomaticUpdateWindow.hpp" />
     <ClInclude Include="include\services\UpdateCoordinator.hpp" />
     <ClInclude Include="include\services\SettingsController.hpp" />
     <ClInclude Include="include\control\ControlTargetMatcher.hpp" />
@@ -170,6 +179,7 @@
     <ClInclude Include="include\ui\DevicePickerViewModel.hpp" />
     <ClInclude Include="include\ui\FlyoutPresenterStyle.hpp" />
     <ClInclude Include="include\ui\SettingsViewModel.hpp" />
+    <ClInclude Include="include\ui\SettingsDeviceViewModel.hpp" />
     <ClInclude Include="include\ui\TrayIcon.hpp" />
     <ClInclude Include="include\ui\TrayContextMenu.hpp" />
     <ClInclude Include="include\ui\XamlWindowInterop.hpp" />

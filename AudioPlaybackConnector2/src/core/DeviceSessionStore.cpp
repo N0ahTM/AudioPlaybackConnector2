@@ -29,26 +29,6 @@ bool DeviceSessionStore::HasConnections() const {
     return std::ranges::any_of(m_connections, [](auto const& entry) { return entry.second.IsOpen; });
 }
 
-bool DeviceSessionStore::HasBusyOperations() const {
-    auto guard = m_lock.lock_shared();
-    auto isPendingOpen = [&](std::wstring const& id) {
-        auto iter = m_connections.find(id);
-        return iter == m_connections.end() || !iter->second.IsOpen;
-    };
-
-    return std::ranges::any_of(m_connectingIds, isPendingOpen) || !m_reconnectingIds.empty() ||
-           !m_disconnectingIds.empty();
-}
-
-bool DeviceSessionStore::IsDeviceBusy(winrt::hstring const& deviceId) const {
-    auto guard = m_lock.lock_shared();
-    const auto key = DeviceKey(deviceId);
-    auto iter = m_connections.find(key);
-    const bool isOpen = iter != m_connections.end() && iter->second.IsOpen;
-    return m_reconnectingIds.count(key) > 0 || (m_connectingIds.count(key) > 0 && !isOpen) ||
-           m_disconnectingIds.count(key) > 0;
-}
-
 bool DeviceSessionStore::HasConnection(winrt::hstring const& deviceId) const {
     auto guard = m_lock.lock_shared();
     return m_connections.count(DeviceKey(deviceId)) > 0;
@@ -64,16 +44,6 @@ std::optional<DeviceConnectionInfo> DeviceSessionStore::FindConnection(winrt::hs
 bool DeviceSessionStore::IsDisconnecting(winrt::hstring const& deviceId) const {
     auto guard = m_lock.lock_shared();
     return m_disconnectingIds.count(DeviceKey(deviceId)) > 0;
-}
-
-bool DeviceSessionStore::IsReconnecting(winrt::hstring const& deviceId) const {
-    auto guard = m_lock.lock_shared();
-    return m_reconnectingIds.count(DeviceKey(deviceId)) > 0;
-}
-
-bool DeviceSessionStore::IsConnecting(winrt::hstring const& deviceId) const {
-    auto guard = m_lock.lock_shared();
-    return m_connectingIds.count(DeviceKey(deviceId)) > 0;
 }
 
 std::optional<DeviceConnectionInfo> DeviceSessionStore::ExtractConnection(winrt::hstring const& deviceId) {
@@ -114,15 +84,7 @@ apc::device_picker::DeviceActivitySnapshot DeviceSessionStore::GetDevicePickerAc
         if (connection.IsOpen) result.ConnectedIds.insert(id);
     }
 
-    result.BusyIds.reserve(m_connectingIds.size() + m_reconnectingIds.size() + m_disconnectingIds.size());
-    result.BusyIds.insert(m_reconnectingIds.begin(), m_reconnectingIds.end());
     result.BusyIds.insert(m_disconnectingIds.begin(), m_disconnectingIds.end());
-    for (auto const& id : m_connectingIds) {
-        auto connection = m_connections.find(id);
-        if (connection == m_connections.end() || !connection->second.IsOpen) {
-            result.BusyIds.insert(id);
-        }
-    }
     return result;
 }
 
@@ -134,8 +96,6 @@ void DeviceSessionStore::Clear() {
     auto guard = m_lock.lock_exclusive();
     m_connections.clear();
     m_disconnectingIds.clear();
-    m_reconnectingIds.clear();
-    m_connectingIds.clear();
 }
 
 void DeviceSessionStore::InsertOrUpdateConnection(winrt::hstring const& deviceId, DeviceConnectionInfo info) {
@@ -151,26 +111,6 @@ void DeviceSessionStore::MarkDisconnecting(winrt::hstring const& deviceId) {
 void DeviceSessionStore::UnmarkDisconnecting(winrt::hstring const& deviceId) {
     auto guard = m_lock.lock_exclusive();
     m_disconnectingIds.erase(DeviceKey(deviceId));
-}
-
-void DeviceSessionStore::MarkReconnecting(winrt::hstring const& deviceId) {
-    auto guard = m_lock.lock_exclusive();
-    m_reconnectingIds.insert(DeviceKey(deviceId));
-}
-
-void DeviceSessionStore::UnmarkReconnecting(winrt::hstring const& deviceId) {
-    auto guard = m_lock.lock_exclusive();
-    m_reconnectingIds.erase(DeviceKey(deviceId));
-}
-
-void DeviceSessionStore::MarkConnecting(winrt::hstring const& deviceId) {
-    auto guard = m_lock.lock_exclusive();
-    m_connectingIds.insert(DeviceKey(deviceId));
-}
-
-void DeviceSessionStore::UnmarkConnecting(winrt::hstring const& deviceId) {
-    auto guard = m_lock.lock_exclusive();
-    m_connectingIds.erase(DeviceKey(deviceId));
 }
 
 void DeviceSessionStore::SetReconnectOnConnectionLoss(winrt::hstring const& deviceId, bool enabled) {

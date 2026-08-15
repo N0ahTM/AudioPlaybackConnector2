@@ -33,7 +33,7 @@ public:
     [[nodiscard]] apc::device_picker::DevicePickerSnapshot const&
     RefreshSnapshot(TimePoint now = apc::device_picker::DevicePickerSnapshotCache::Clock::now());
     [[nodiscard]] apc::device_picker::DevicePickerSnapshot const& CachedSnapshot() const noexcept;
-    [[nodiscard]] bool CanSelect(winrt::hstring const& id);
+    [[nodiscard]] bool CanSelect(winrt::hstring const& id) const noexcept;
 
 private:
     /*------------------------------------------------------------------------------------------------------------*/

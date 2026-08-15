@@ -23,8 +23,6 @@ struct SettingsWindow : SettingsWindowT<SettingsWindow> {
                                           winrt::Microsoft::UI::Xaml::RoutedEventArgs const& e);
     void DefaultLastConnectedButton_Click(winrt::Windows::Foundation::IInspectable const& sender,
                                           winrt::Microsoft::UI::Xaml::RoutedEventArgs const& e);
-    void ClearDefaultDeviceButton_Click(winrt::Windows::Foundation::IInspectable const& sender,
-                                        winrt::Microsoft::UI::Xaml::RoutedEventArgs const& e);
     void RepositoryButton_Click(winrt::Windows::Foundation::IInspectable const& sender,
                                 winrt::Microsoft::UI::Xaml::RoutedEventArgs const& e);
     void FeatureRequestButton_Click(winrt::Windows::Foundation::IInspectable const& sender,
@@ -49,9 +47,11 @@ struct SettingsWindow : SettingsWindowT<SettingsWindow> {
     void LanguageComboBox_SelectionChanged(winrt::Windows::Foundation::IInspectable const& sender,
                                            winrt::Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const& e);
     void SetSettingsController(std::shared_ptr<ISettingsController> controller);
+    void SetInitialSettingsSnapshot(SettingsData snapshot);
     void SetUpdateCoordinator(std::shared_ptr<UpdateCoordinator> coordinator);
     void SetDefaultPlacement(util::SettingsWindowPlacement placement);
     void SetTargetPlacement(util::SettingsWindowPlacement placement);
+    void RefreshKnownDevices();
 
 private:
     enum class SettingsPage { Devices, App, Privacy, StreamDeck, Help, About };
@@ -62,6 +62,7 @@ private:
     void InitializeSettingsContent();
     void LocalizeSettingsText();
     void ApplyCurrentWindowTheme(HWND hwnd) noexcept;
+    void ApplySystemBackdropEffects(bool enabled) noexcept;
     void RevealAtTarget(HWND hwnd);
     void QueuePlacementSave();
     void SavePlacementNow() noexcept;
@@ -84,8 +85,7 @@ private:
     [[nodiscard]] double MeasureVisibleContentHeight(double contentWidth);
     void CommitAlias(std::wstring const& deviceId,
                      winrt::Microsoft::UI::Xaml::Controls::TextBox const& textBox,
-                     std::wstring const& previousAlias,
-                     bool alwaysRebuild);
+                     std::wstring const& previousAlias);
     [[nodiscard]] std::wstring BuildDiagnosticsText() const;
     [[nodiscard]] std::wstring BuildReportBugUri() const;
     void SetUpdateCheckBusy(bool busy);
@@ -106,7 +106,11 @@ private:
     std::shared_ptr<ISettingsController> m_settingsController;
     std::shared_ptr<UpdateCoordinator> m_updateCoordinator;
     std::wstring m_aliasSavedDeviceId;
-    std::size_t m_themeChangedToken = 0;
+    std::wstring m_lastCommittedAliasDeviceId;
+    std::wstring m_lastCommittedAliasValue;
+    winrt::Microsoft::UI::Xaml::Controls::TextBlock m_aliasSavedIndicator{nullptr};
+    std::optional<SettingsData> m_initialSettingsSnapshot;
+    winrt::event_token m_actualThemeChangedToken{};
     SettingsPage m_currentPage = SettingsPage::Devices;
     bool m_suppressStartupToggle = false;
     bool m_suppressLanguageSelection = false;
@@ -116,6 +120,7 @@ private:
     bool m_capturePlacementChanges = false;
     bool m_adaptiveLayoutReady = false;
     bool m_loaded = false;
+    bool m_hadPersistedPlacement = false;
 };
 } // namespace winrt::AudioPlaybackConnector2::implementation
 

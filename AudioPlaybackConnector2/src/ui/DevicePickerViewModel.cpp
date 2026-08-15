@@ -93,8 +93,7 @@ apc::device_picker::DevicePickerSnapshot const& DevicePickerViewModel::CachedSna
     return m_cache.CachedSnapshot();
 }
 
-bool DevicePickerViewModel::CanSelect(winrt::hstring const& id) {
+bool DevicePickerViewModel::CanSelect(winrt::hstring const& id) const noexcept {
     if (id.empty()) return false;
-    static_cast<void>(RefreshSnapshot());
     return m_cache.CanSelect(std::wstring_view(id));
 }

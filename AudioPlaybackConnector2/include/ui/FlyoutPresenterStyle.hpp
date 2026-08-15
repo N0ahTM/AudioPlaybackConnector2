@@ -2,6 +2,7 @@
 
 namespace apc::ui {
 
-void StripFlyoutPresenterStyle(winrt::Microsoft::UI::Xaml::DependencyObject const& content) noexcept;
+void ApplyFlyoutPresenterStyle(winrt::Microsoft::UI::Xaml::DependencyObject const& content,
+                               bool useSystemBackdropEffects) noexcept;
 
 } // namespace apc::ui

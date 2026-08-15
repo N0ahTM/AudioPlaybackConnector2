@@ -29,6 +29,12 @@
     <ClCompile Include="src\app\AdaptiveResourcePolicy.cpp">
       <Filter>src\app</Filter>
     </ClCompile>
+    <ClCompile Include="src\app\AdaptiveActionRetryBackoff.cpp">
+      <Filter>src\app</Filter>
+    </ClCompile>
+    <ClCompile Include="src\app\AdaptiveScheduleState.cpp">
+      <Filter>src\app</Filter>
+    </ClCompile>
     <ClCompile Include="src\app\ResourcePressureMonitor.cpp">
       <Filter>src\app</Filter>
     </ClCompile>
@@ -71,7 +77,13 @@
     <ClCompile Include="src\core\DeviceManagerDiagnostics.cpp">
       <Filter>src\core</Filter>
     </ClCompile>
+    <ClCompile Include="src\core\DeviceOperationCoordinator.cpp">
+      <Filter>src\core</Filter>
+    </ClCompile>
     <ClCompile Include="src\core\DevicePickerSnapshot.cpp">
+      <Filter>src\core</Filter>
+    </ClCompile>
+    <ClCompile Include="src\core\DeviceInventoryGeneration.cpp">
       <Filter>src\core</Filter>
     </ClCompile>
     <ClCompile Include="src\core\DeviceSessionStore.cpp">
@@ -87,6 +99,9 @@
       <Filter>src\services</Filter>
     </ClCompile>
     <ClCompile Include="src\services\UpdateCoordinator.cpp">
+      <Filter>src\services</Filter>
+    </ClCompile>
+    <ClCompile Include="src\services\AutomaticUpdateWindow.cpp">
       <Filter>src\services</Filter>
     </ClCompile>
     <ClCompile Include="src\services\SettingsController.cpp">
@@ -151,6 +166,12 @@
     <ClInclude Include="include\app\AdaptiveResourcePolicy.hpp">
       <Filter>include\app</Filter>
     </ClInclude>
+    <ClInclude Include="include\app\AdaptiveActionRetryBackoff.hpp">
+      <Filter>include\app</Filter>
+    </ClInclude>
+    <ClInclude Include="include\app\AdaptiveScheduleState.hpp">
+      <Filter>include\app</Filter>
+    </ClInclude>
     <ClInclude Include="include\app\ResourcePressureMonitor.hpp">
       <Filter>include\app</Filter>
     </ClInclude>
@@ -193,6 +214,12 @@
     <ClInclude Include="include\core\Settings.hpp">
       <Filter>include\core</Filter>
     </ClInclude>
+    <ClInclude Include="include\core\SettingsData.hpp">
+      <Filter>include\core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\core\SettingsLimits.hpp">
+      <Filter>include\core</Filter>
+    </ClInclude>
     <ClInclude Include="include\core\AudioConnectionService.hpp">
       <Filter>include\core</Filter>
     </ClInclude>
@@ -202,10 +229,22 @@
     <ClInclude Include="include\core\DeviceManagerDiagnostics.hpp">
       <Filter>include\core</Filter>
     </ClInclude>
+    <ClInclude Include="include\core\DeviceOperationCoordinator.hpp">
+      <Filter>include\core</Filter>
+    </ClInclude>
     <ClInclude Include="include\core\DevicePickerSnapshot.hpp">
       <Filter>include\core</Filter>
     </ClInclude>
+    <ClInclude Include="include\core\DeviceInventoryGeneration.hpp">
+      <Filter>include\core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\core\DevicePickerTypes.hpp">
+      <Filter>include\core</Filter>
+    </ClInclude>
     <ClInclude Include="include\core\DeviceSessionStore.hpp">
+      <Filter>include\core</Filter>
+    </ClInclude>
+    <ClInclude Include="include\core\DeviceConnectionInfo.hpp">
       <Filter>include\core</Filter>
     </ClInclude>
     <ClInclude Include="include\core\ReconnectController.hpp">
@@ -218,6 +257,9 @@
       <Filter>include\services</Filter>
     </ClInclude>
     <ClInclude Include="include\services\UpdateCoordinator.hpp">
+      <Filter>include\services</Filter>
+    </ClInclude>
+    <ClInclude Include="include\services\AutomaticUpdateWindow.hpp">
       <Filter>include\services</Filter>
     </ClInclude>
     <ClInclude Include="include\services\SettingsController.hpp">
@@ -251,6 +293,9 @@
       <Filter>include\ui</Filter>
     </ClInclude>
     <ClInclude Include="include\ui\SettingsViewModel.hpp">
+      <Filter>include\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="include\ui\SettingsDeviceViewModel.hpp">
       <Filter>include\ui</Filter>
     </ClInclude>
     <ClInclude Include="include\ui\TrayIcon.hpp">

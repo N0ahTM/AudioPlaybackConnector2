@@ -10,6 +10,5 @@
   <Project Path="AudioPlaybackConnector2.Control/AudioPlaybackConnector2.Control.vcxproj" Id="8701bf2f-61c8-4b6c-afbc-d5a5639f5eda" />
   <Project Path="AudioPlaybackConnector2.CoreRuntime/AudioPlaybackConnector2.CoreRuntime.vcxproj" Id="a7031b3f-1284-4ec5-a9b3-b7f6bcf82613" />
   <Project Path="AudioPlaybackConnector2.CoreTests/AudioPlaybackConnector2.CoreTests.vcxproj" Id="9436b856-8311-4b1d-9e67-fa52da8a963d" />
-  <Project Path="AudioPlaybackConnector2.Ipc/AudioPlaybackConnector2.Ipc.vcxproj" Id="c52fc647-44a9-402a-9ca7-2344a1ac34c9" />
   <Project Path="AudioPlaybackConnector2/AudioPlaybackConnector2.vcxproj" Id="ce789cd7-3a08-4b7d-9425-fe92984a66f9" />
 </Solution>

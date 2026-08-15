@@ -24,6 +24,7 @@ public:
                             std::shared_ptr<TrayController> trayController,
                             std::shared_ptr<UpdateCoordinator> updateCoordinator,
                             std::function<void()> saveSettings);
+    void RefreshKnownDevicesIfOpen() noexcept;
     [[nodiscard]] bool Close(bool saveOnClose = true) noexcept;
 
 private:

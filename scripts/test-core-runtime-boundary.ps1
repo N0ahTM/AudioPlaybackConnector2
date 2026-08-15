@@ -91,7 +91,7 @@ try {
 '@
 
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $resolvedVerifier `
-        -ProjectPath $cleanProject -ComponentName BoundarySelfTest *> $null
+        -ProjectPath $cleanProject *> $null
     if ($LASTEXITCODE -ne 0) {
         throw 'Boundary verifier rejected a clean project.'
     }
@@ -99,7 +99,7 @@ try {
     $previousErrorPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $resolvedVerifier `
-        -ProjectPath $rootProject -ComponentName BoundarySelfTest 2> $null 1> $null
+        -ProjectPath $rootProject 2> $null 1> $null
     $negativeExitCode = $LASTEXITCODE
     $ErrorActionPreference = $previousErrorPreference
     if ($negativeExitCode -eq 0) {
@@ -108,7 +108,7 @@ try {
 
     $ErrorActionPreference = 'Continue'
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $resolvedVerifier `
-        -ProjectPath $importProject -ComponentName BoundarySelfTest 2> $null 1> $null
+        -ProjectPath $importProject 2> $null 1> $null
     $negativeImportExitCode = $LASTEXITCODE
     $ErrorActionPreference = $previousErrorPreference
     if ($negativeImportExitCode -eq 0) {
@@ -117,7 +117,7 @@ try {
 
     $ErrorActionPreference = 'Continue'
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $resolvedVerifier `
-        -ProjectPath $nestedRootProject -ComponentName BoundarySelfTest 2> $null 1> $null
+        -ProjectPath $nestedRootProject 2> $null 1> $null
     $negativeNestedExitCode = $LASTEXITCODE
     $ErrorActionPreference = $previousErrorPreference
     if ($negativeNestedExitCode -eq 0) {
@@ -126,7 +126,7 @@ try {
 
     $ErrorActionPreference = 'Continue'
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $resolvedVerifier `
-        -ProjectPath $sourceRootProject -ComponentName BoundarySelfTest 2> $null 1> $null
+        -ProjectPath $sourceRootProject 2> $null 1> $null
     $negativeSourceExitCode = $LASTEXITCODE
     $ErrorActionPreference = $previousErrorPreference
     if ($negativeSourceExitCode -eq 0) {
@@ -135,7 +135,7 @@ try {
 
     $ErrorActionPreference = 'Continue'
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $resolvedVerifier `
-        -ProjectPath $wildcardProject -ComponentName BoundarySelfTest 2> $null 1> $null
+        -ProjectPath $wildcardProject 2> $null 1> $null
     $negativeWildcardExitCode = $LASTEXITCODE
     $ErrorActionPreference = $previousErrorPreference
     if ($negativeWildcardExitCode -eq 0) {

@@ -23,60 +23,6 @@ AdaptiveResourcePolicy::TimePoint SaturatingAdd(AdaptiveResourcePolicy::TimePoin
 }
 } // namespace
 
-AdaptiveActionRetryBackoff::AdaptiveActionRetryBackoff(std::chrono::milliseconds initialDelay,
-                                                       std::chrono::milliseconds maximumDelay) noexcept
-    : m_initialDelay(std::max(initialDelay, std::chrono::milliseconds{1})),
-      m_maximumDelay(std::max(maximumDelay, m_initialDelay)), m_currentDelay(m_initialDelay) {}
-
-std::chrono::milliseconds AdaptiveActionRetryBackoff::RecordFailure() noexcept {
-    auto const delay = m_currentDelay;
-    if (m_currentDelay >= m_maximumDelay) return delay;
-
-    auto const remaining = m_maximumDelay - m_currentDelay;
-    m_currentDelay = remaining < m_currentDelay ? m_maximumDelay : m_currentDelay * 2;
-    return delay;
-}
-
-void AdaptiveActionRetryBackoff::Reset() noexcept {
-    m_currentDelay = m_initialDelay;
-}
-
-std::chrono::milliseconds AdaptiveActionRetryBackoff::CurrentDelay() const noexcept {
-    return m_currentDelay;
-}
-
-std::uint64_t AdaptiveScheduleState::Supersede() noexcept {
-    ++m_generation;
-    if (m_generation == 0) ++m_generation;
-    m_win32NotBefore.reset();
-    m_active = true;
-    return m_generation;
-}
-
-bool AdaptiveScheduleState::SetWin32NotBefore(std::uint64_t generation, TimePoint notBefore) noexcept {
-    if (generation != m_generation || !m_active) return false;
-    m_win32NotBefore = notBefore;
-    return true;
-}
-
-bool AdaptiveScheduleState::Consume(std::uint64_t generation) noexcept {
-    if (generation != m_generation || !m_active) return false;
-    m_win32NotBefore.reset();
-    m_active = false;
-    return true;
-}
-
-bool AdaptiveScheduleState::ConsumeWin32IfDue(TimePoint now) noexcept {
-    if (!m_active || !m_win32NotBefore || now < *m_win32NotBefore) return false;
-    m_win32NotBefore.reset();
-    m_active = false;
-    return true;
-}
-
-std::uint64_t AdaptiveScheduleState::Generation() const noexcept {
-    return m_generation;
-}
-
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Constructors //////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/

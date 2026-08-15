@@ -1,6 +1,7 @@
 #include <pch.h>
 #include <ui/TrayContextMenu.hpp>
 #include <core/StringResources.hpp>
+#include <ui/FlyoutPresenterStyle.hpp>
 #include <util/Util.hpp>
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -23,6 +24,11 @@ void TrayContextMenu::Initialize(winrt::Microsoft::UI::Xaml::FrameworkElement an
     if (onClosed) {
         menu.Closed([onClosed](auto&, auto&) { onClosed(); });
     }
+    menu.Opened([this](auto&, auto&) {
+        if (m_settingsItem) {
+            apc::ui::ApplyFlyoutPresenterStyle(m_settingsItem, m_useSystemBackdropEffects);
+        }
+    });
 
     MenuFlyoutItem settingsItem;
     settingsItem.Text(winrt::hstring(_("OpenSettings")));
@@ -59,6 +65,19 @@ void TrayContextMenu::Initialize(winrt::Microsoft::UI::Xaml::FrameworkElement an
     menu.Items().Append(exitItem);
 
     m_menu = menu;
+    m_settingsItem = settingsItem;
+    m_bluetoothItem = btItem;
+    m_exitItem = exitItem;
+}
+
+void TrayContextMenu::ApplyLanguage() {
+    if (m_settingsItem) m_settingsItem.Text(winrt::hstring(_("OpenSettings")));
+    if (m_bluetoothItem) m_bluetoothItem.Text(winrt::hstring(_("BluetoothSettings")));
+    if (m_exitItem) m_exitItem.Text(winrt::hstring(_("Exit")));
+}
+
+void TrayContextMenu::SetSystemBackdropEffectsEnabled(bool enabled) noexcept {
+    m_useSystemBackdropEffects = enabled;
 }
 
 void TrayContextMenu::ShowAt(winrt::Windows::Foundation::Point point) {

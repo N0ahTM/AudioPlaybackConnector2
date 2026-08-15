@@ -46,6 +46,7 @@ public:
     void ClearTracking();
     void BeginManualOperation(std::wstring_view deviceId);
     void CancelDevice(std::wstring_view deviceId);
+    void SetPolicyEnabled(std::wstring_view deviceId, bool enabled);
     void CompleteConnectionSucceeded(std::wstring_view deviceId);
     [[nodiscard]] bool IsCancelled(std::wstring_view deviceId) const;
     [[nodiscard]] bool AllReconnectsCancelled() const;
@@ -56,7 +57,9 @@ public:
     [[nodiscard]] std::vector<std::wstring> PendingDeviceIds() const;
 
     [[nodiscard]] ScheduleDecision PrepareSchedule(std::wstring_view deviceId, bool blocked);
-    [[nodiscard]] bool ClaimTimer(TimerToken const& token, bool blocked);
+    [[nodiscard]] bool ClaimTimer(TimerToken const& token);
+    [[nodiscard]] bool RetireTimer(TimerToken const& token);
+    [[nodiscard]] ScheduleDecision DeferTimer(TimerToken const& token);
     [[nodiscard]] ScheduleDecision CompleteAttemptFailed(TimerToken const& token);
     void CompleteAttemptSucceeded(TimerToken const& token);
     void HandleTimerCreateFailed(TimerToken const& token);
@@ -72,6 +75,7 @@ private:
         bool TimerPending = false;
         bool AttemptInProgress = false;
         bool UserCancelled = false;
+        bool PolicyEnabled = true;
         bool FailureNotified = false;
     };
 

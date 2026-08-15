@@ -1904,7 +1904,25 @@ bool DeviceManager::StartReconnectTimer(ReconnectController::ScheduleDecision co
         (void)winrt::Windows::System::Threading::ThreadPoolTimer::CreateTimer(
             [weak, timerToken = decision.Token](auto) {
                 if (auto self = weak.lock()) {
-                    self->AutoReconnectAttemptDetached(timerToken);
+                    try {
+                        self->AutoReconnectAttemptDetached(timerToken);
+                    } catch (...) {
+                        bool activityChanged = false;
+                        try {
+                            auto guard = self->m_lock.lock_exclusive();
+                            activityChanged = self->m_reconnectController.AbortTimerOrAttempt(timerToken);
+                        } catch (...) {
+                            util::DebugTraceUnknownException(
+                                L"[DeviceManager] reconnect launch rollback ignored exception");
+                        }
+                        if (activityChanged) {
+                            try {
+                                self->DeviceActivityChanged(winrt::hstring(timerToken.DeviceId));
+                            } catch (...) {
+                            }
+                        }
+                        util::DebugTraceUnknownException(L"[DeviceManager] failed to launch auto reconnect callback");
+                    }
                 }
             },
             decision.Delay);

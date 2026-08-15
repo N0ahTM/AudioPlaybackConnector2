@@ -59,10 +59,11 @@ public:
     [[nodiscard]] ScheduleDecision PrepareSchedule(std::wstring_view deviceId, bool blocked);
     [[nodiscard]] bool ClaimTimer(TimerToken const& token);
     [[nodiscard]] bool RetireTimer(TimerToken const& token);
+    [[nodiscard]] bool AbortTimerOrAttempt(TimerToken const& token);
     [[nodiscard]] ScheduleDecision DeferTimer(TimerToken const& token);
     [[nodiscard]] ScheduleDecision CompleteAttemptFailed(TimerToken const& token);
     void CompleteAttemptSucceeded(TimerToken const& token);
-    void HandleTimerCreateFailed(TimerToken const& token);
+    [[nodiscard]] bool HandleTimerCreateFailed(TimerToken const& token);
 
 private:
     /*------------------------------------------------------------------------------------------------------------*/

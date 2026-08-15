@@ -80,7 +80,10 @@ void TestCancellationAndTimerCreationFailure() {
 
     controller.BeginManualOperation(id);
     auto retryable = controller.PrepareSchedule(id, false);
-    controller.HandleTimerCreateFailed(retryable.Token);
+    Check(controller.HandleTimerCreateFailed(retryable.Token),
+          "timer creation failure must report that pending activity changed");
+    Check(!controller.HandleTimerCreateFailed(retryable.Token),
+          "a stale timer creation failure must not report a second activity change");
     auto replacement = controller.PrepareSchedule(id, false);
     Check(replacement.ShouldSchedule, "timer creation failure must release the pending slot");
     Check(replacement.Attempt == 1, "timer creation failure must not consume an attempt");
@@ -138,6 +141,38 @@ void TestBusyTimerDeferralPreservesReconnect() {
     Check(!controller.DeferTimer(next.Token).ShouldSchedule,
           "a stale callback must not replace a newer deferred timer");
     Check(controller.ClaimTimer(replacement.Token), "stale deferral must leave the newer timer intact");
+}
+
+void TestAbortReleasesClaimedAttempt() {
+    constexpr std::wstring_view id = L"device-aborted-attempt";
+    ReconnectController controller;
+
+    auto claimed = controller.PrepareSchedule(id, false);
+    Check(controller.ClaimTimer(claimed.Token), "the timer must be claimed before aborting its attempt");
+    Check(controller.HasAttemptInProgress(id), "a claimed timer must expose an active attempt");
+    Check(controller.AbortTimerOrAttempt(claimed.Token), "the current claimed attempt must be abortable");
+    Check(!controller.HasAttemptInProgress(id), "aborting a claimed attempt must clear active reconnect state");
+    Check(!controller.HasPendingTimer(id), "aborting a claimed attempt must not leave a pending timer");
+    Check(!controller.AbortTimerOrAttempt(claimed.Token), "an aborted token must become stale immediately");
+
+    auto replacement = controller.PrepareSchedule(id, false);
+    Check(replacement.ShouldSchedule, "an exception-aborted attempt must remain retryable");
+    Check(replacement.Attempt == claimed.Attempt, "an exception-aborted attempt must not consume an attempt");
+    Check(replacement.Token.DeviceGeneration != claimed.Token.DeviceGeneration,
+          "an exception-aborted attempt must not reuse its token generation");
+}
+
+void TestAbortDoesNotMutateNewerTimer() {
+    constexpr std::wstring_view id = L"device-abort-stale";
+    ReconnectController controller;
+
+    auto original = controller.PrepareSchedule(id, false);
+    Check(controller.RetireTimer(original.Token), "the original timer must be retired before replacement");
+    auto replacement = controller.PrepareSchedule(id, false);
+    Check(replacement.ShouldSchedule, "a replacement timer must be schedulable");
+    Check(!controller.AbortTimerOrAttempt(original.Token), "a stale abort must not affect a replacement timer");
+    Check(controller.HasPendingTimer(id), "a stale abort must leave the replacement pending");
+    Check(controller.ClaimTimer(replacement.Token), "the replacement timer must remain claimable");
 }
 
 void TestReconnectPolicyDoesNotBecomeUserCancellation() {
@@ -422,6 +457,8 @@ int main() {
     TestObservedConnectionInvalidatesAttempt();
     TestBlockedTimerDoesNotRemainPending();
     TestBusyTimerDeferralPreservesReconnect();
+    TestAbortReleasesClaimedAttempt();
+    TestAbortDoesNotMutateNewerTimer();
     TestReconnectPolicyDoesNotBecomeUserCancellation();
     TestReconnectPolicyDoesNotClearUserCancellation();
     TestCommandProtocolRoundTrip();

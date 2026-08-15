@@ -199,6 +199,22 @@ bool ReconnectController::RetireTimer(TimerToken const& token) {
     return true;
 }
 
+bool ReconnectController::AbortTimerOrAttempt(TimerToken const& token) {
+    auto iter = m_states.find(token.DeviceId);
+    if (token.GlobalGeneration != m_globalGeneration || iter == m_states.end()) return false;
+
+    auto& state = iter->second;
+    if (token.DeviceGeneration != state.Generation || token.Attempt != state.CompletedAttempts + 1 ||
+        (!state.TimerPending && !state.AttemptInProgress)) {
+        return false;
+    }
+
+    ++state.Generation;
+    state.TimerPending = false;
+    state.AttemptInProgress = false;
+    return true;
+}
+
 ReconnectController::ScheduleDecision ReconnectController::DeferTimer(TimerToken const& token) {
     ScheduleDecision decision;
     decision.MaxAttempts = c_maxReconnectAttempts;
@@ -263,12 +279,15 @@ void ReconnectController::CompleteAttemptSucceeded(TimerToken const& token) {
     state.FailureNotified = false;
 }
 
-void ReconnectController::HandleTimerCreateFailed(TimerToken const& token) {
+bool ReconnectController::HandleTimerCreateFailed(TimerToken const& token) {
     auto iter = m_states.find(token.DeviceId);
-    if (token.GlobalGeneration != m_globalGeneration || iter == m_states.end()) return;
+    if (token.GlobalGeneration != m_globalGeneration || iter == m_states.end()) return false;
 
     auto& state = iter->second;
     if (token.DeviceGeneration == state.Generation && token.Attempt == state.CompletedAttempts + 1) {
+        auto const changed = state.TimerPending;
         state.TimerPending = false;
+        return changed;
     }
+    return false;
 }

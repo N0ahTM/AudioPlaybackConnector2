@@ -161,7 +161,9 @@ private:
                                       std::shared_ptr<CloseBarrier> barrier,
                                       bool restoreIncoming) noexcept;
     void AutoReconnectAttemptDetached(ReconnectController::TimerToken token);
-    void StartReconnectTimer(ReconnectController::ScheduleDecision const& decision, bool notifyTriggered);
+    [[nodiscard]] bool StartReconnectTimer(ReconnectController::ScheduleDecision const& decision,
+                                           bool notifyTriggered,
+                                           bool publishScheduledActivity = true);
     void NotifyAutoReconnectFailed(winrt::hstring const& deviceId, std::size_t maxAttempts);
     void TrackUserActionCascadeLocked(winrt::hstring const& deviceId);
     bool ConsumeUserActionCascadeLocked(winrt::hstring const& deviceId);
@@ -169,7 +171,7 @@ private:
     void OnConnectionStateChanged(winrt::hstring deviceId,
                                   winrt::Windows::Media::Audio::AudioPlaybackConnection sender,
                                   winrt::Windows::Foundation::IInspectable);
-    void ScheduleReconnect(winrt::hstring deviceId);
+    [[nodiscard]] bool ScheduleReconnect(winrt::hstring deviceId);
     void LogConnectionSnapshot(winrt::hstring const& reason) const;
     void EnsureDiscoveryEventHandlers();
     void OnDeviceAdded(winrt::Windows::Devices::Enumeration::DeviceInformation args);
@@ -192,6 +194,7 @@ private:
     bool m_incomingConnectionsEnabled = false;
 
     std::shared_ptr<DeviceDiscoveryService> m_discoveryService;
+    std::mutex m_discoveryLifecycleMutex;
     std::size_t m_discoveryDeviceAddedToken = 0;
     std::size_t m_discoveryDeviceRemovedToken = 0;
     std::size_t m_discoveryInventoryChangedToken = 0;

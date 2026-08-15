@@ -134,6 +134,7 @@ DeviceManager::DeviceManager() : m_discoveryService(std::make_shared<DeviceDisco
 /*------------------------------------------------------------------------------------------------------------*/
 
 void DeviceManager::StartDeviceWatcher() {
+    std::scoped_lock lifecycleLock(m_discoveryLifecycleMutex);
     {
         auto guard = m_lock.lock_exclusive();
         if (m_shutdownForProcessExit) return;
@@ -144,6 +145,7 @@ void DeviceManager::StartDeviceWatcher() {
 }
 
 void DeviceManager::StopDeviceWatcher() {
+    std::scoped_lock lifecycleLock(m_discoveryLifecycleMutex);
     if (m_discoveryService) m_discoveryService->Stop();
 }
 
@@ -1056,6 +1058,7 @@ void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason,
         AudioConnectionService::RevokeStateChanged(connection, stateChangedToken);
     }
 
+    bool activityPublished = false;
     if (reason != DisconnectReason::Cleanup && !powerTransitionSuspended) {
         if (reason == DisconnectReason::UserInitiatedCascade) {
             DeviceDisconnected(deviceId);
@@ -1064,7 +1067,7 @@ void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason,
                                 winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::None,
                                 DeviceStatusKind::None);
             if (reconnectOnConnectionLoss) {
-                ScheduleReconnect(deviceId);
+                activityPublished = ScheduleReconnect(deviceId);
             }
         } else {
             DeviceDisconnected(deviceId);
@@ -1073,12 +1076,12 @@ void DeviceManager::Disconnect(winrt::hstring deviceId, DisconnectReason reason,
                                 winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::None,
                                 DeviceStatusKind::None);
             if (reason == DisconnectReason::Unexpected && reconnectOnConnectionLoss) {
-                ScheduleReconnect(deviceId);
+                activityPublished = ScheduleReconnect(deviceId);
             }
         }
     }
 
-    DeviceActivityChanged(deviceId);
+    if (!activityPublished) DeviceActivityChanged(deviceId);
 
     StartCloseBarrierCleanup(
         std::move(connection), deviceId, std::move(closeBarrier), restoreIncoming, L"Disconnect cleanup");
@@ -1226,6 +1229,7 @@ DeviceManager::ConnectInternalAsync(winrt::Windows::Devices::Enumeration::Device
                     attempt->second != attemptId || m_sessions.HasConnection(deviceId)) {
                     duplicateConnection = true;
                 } else {
+                    m_reconnectController.SetPolicyEnabled(deviceId, info.ReconnectOnConnectionLoss);
                     m_sessions.InsertOrUpdateConnection(deviceId, std::move(info));
                 }
             }
@@ -1847,10 +1851,8 @@ void DeviceManager::OnConnectionStateChanged(winrt::hstring deviceId,
                             winrt::hstring(_("ReadyForConnection")),
                             winrt::Windows::Devices::Enumeration::DevicePickerDisplayStatusOptions::None,
                             DeviceStatusKind::Ready);
-        DeviceActivityChanged(deviceId);
-        if (wasOpen && reconnectOnConnectionLoss) {
-            ScheduleReconnect(deviceId);
-        }
+        auto const activityPublished = wasOpen && reconnectOnConnectionLoss && ScheduleReconnect(deviceId);
+        if (!activityPublished) DeviceActivityChanged(deviceId);
         LogConnectionSnapshot(L"incoming-closed-ready");
         return;
     }
@@ -1858,7 +1860,7 @@ void DeviceManager::OnConnectionStateChanged(winrt::hstring deviceId,
     Disconnect(deviceId, DisconnectReason::Unexpected);
 }
 
-void DeviceManager::ScheduleReconnect(winrt::hstring deviceId) {
+bool DeviceManager::ScheduleReconnect(winrt::hstring deviceId) {
     ReconnectController::ScheduleDecision decision;
     {
         auto guard = m_lock.lock_exclusive();
@@ -1868,14 +1870,35 @@ void DeviceManager::ScheduleReconnect(winrt::hstring deviceId) {
 
     if (decision.NotifyFailed) {
         NotifyAutoReconnectFailed(deviceId, decision.MaxAttempts);
-        return;
+        return false;
     }
-    StartReconnectTimer(decision, true);
+    return StartReconnectTimer(decision, true);
 }
 
-void DeviceManager::StartReconnectTimer(ReconnectController::ScheduleDecision const& decision, bool notifyTriggered) {
-    if (!decision.ShouldSchedule) return;
+bool DeviceManager::StartReconnectTimer(ReconnectController::ScheduleDecision const& decision,
+                                        bool notifyTriggered,
+                                        bool publishScheduledActivity) {
+    if (!decision.ShouldSchedule) return false;
 
+    auto handleCreateFailure = [&]() noexcept {
+        bool activityChanged = false;
+        try {
+            auto guard = m_lock.lock_exclusive();
+            activityChanged = m_reconnectController.HandleTimerCreateFailed(decision.Token);
+        } catch (...) {
+            util::DebugTraceUnknownException(L"[DeviceManager] reconnect timer failure cleanup failed");
+            return false;
+        }
+        if (activityChanged) {
+            try {
+                DeviceActivityChanged(winrt::hstring(decision.Token.DeviceId));
+            } catch (...) {
+                util::DebugTraceUnknownException(
+                    L"[DeviceManager] reconnect timer failure activity notification ignored exception");
+            }
+        }
+        return activityChanged;
+    };
     try {
         auto weak = weak_from_this();
         (void)winrt::Windows::System::Threading::ThreadPoolTimer::CreateTimer(
@@ -1886,22 +1909,27 @@ void DeviceManager::StartReconnectTimer(ReconnectController::ScheduleDecision co
             },
             decision.Delay);
     } catch (winrt::hresult_error const& ex) {
-        auto guard = m_lock.lock_exclusive();
-        m_reconnectController.HandleTimerCreateFailed(decision.Token);
+        auto const activityChanged = handleCreateFailure();
         util::DebugTraceException(L"[DeviceManager] ScheduleReconnect ERROR: failed to create reconnect timer", ex);
-        return;
+        return activityChanged;
     } catch (std::exception const& ex) {
-        auto guard = m_lock.lock_exclusive();
-        m_reconnectController.HandleTimerCreateFailed(decision.Token);
+        auto const activityChanged = handleCreateFailure();
         util::DebugTraceException(L"[DeviceManager] ScheduleReconnect ERROR: failed to create reconnect timer", ex);
-        return;
+        return activityChanged;
     } catch (...) {
-        auto guard = m_lock.lock_exclusive();
-        m_reconnectController.HandleTimerCreateFailed(decision.Token);
+        auto const activityChanged = handleCreateFailure();
         util::DebugTraceUnknownException(L"[DeviceManager] ScheduleReconnect ERROR: failed to create reconnect timer");
-        return;
+        return activityChanged;
     }
 
+    if (publishScheduledActivity) {
+        try {
+            DeviceActivityChanged(winrt::hstring(decision.Token.DeviceId));
+        } catch (...) {
+            util::DebugTraceUnknownException(
+                L"[DeviceManager] reconnect timer activity notification ignored exception");
+        }
+    }
     try {
         DebugTrace(L"[DeviceManager] Auto-reconnect scheduled: id={0} attempt={1} delaySeconds={2}",
                    decision.Token.DeviceId,
@@ -1911,6 +1939,7 @@ void DeviceManager::StartReconnectTimer(ReconnectController::ScheduleDecision co
     } catch (...) {
         util::DebugTraceUnknownException(L"[DeviceManager] reconnect timer notification ignored exception");
     }
+    return publishScheduledActivity;
 }
 
 void DeviceManager::AutoReconnectAttemptDetached(ReconnectController::TimerToken token) {
@@ -1919,37 +1948,37 @@ void DeviceManager::AutoReconnectAttemptDetached(ReconnectController::TimerToken
         auto self = weak.lock();
         if (!self) co_return;
 
+        OperationToken operation;
         try {
             const auto deviceId = winrt::hstring(timerToken.DeviceId);
-            OperationToken operation;
             ReconnectController::ScheduleDecision deferred;
+            bool timerRetired = false;
             {
                 auto guard = self->m_lock.lock_exclusive();
                 auto info = self->m_sessions.FindConnection(deviceId);
                 if (self->m_shutdownForProcessExit || self->m_powerTransitionSuspended || (info && info->IsOpen)) {
-                    static_cast<void>(self->m_reconnectController.RetireTimer(timerToken));
-                    co_return;
-                }
-                auto reservation = self->TryBeginOperationLocked(
-                    deviceId, ConnectionIntent::AutoReconnect, OperationPhase::Reconnecting);
-                if (!reservation) {
-                    deferred = self->m_reconnectController.DeferTimer(timerToken);
-                } else if (!self->m_reconnectController.ClaimTimer(timerToken)) {
-                    static_cast<void>(self->m_deviceOperations.Complete(*reservation));
+                    timerRetired = self->m_reconnectController.RetireTimer(timerToken);
                 } else {
-                    operation = std::move(*reservation);
+                    auto reservation = self->TryBeginOperationLocked(
+                        deviceId, ConnectionIntent::AutoReconnect, OperationPhase::Reconnecting);
+                    if (!reservation) {
+                        deferred = self->m_reconnectController.DeferTimer(timerToken);
+                    } else if (!self->m_reconnectController.ClaimTimer(timerToken)) {
+                        static_cast<void>(self->m_deviceOperations.Complete(*reservation));
+                    } else {
+                        operation = std::move(*reservation);
+                    }
                 }
             }
+            if (timerRetired) {
+                self->DeviceActivityChanged(deviceId);
+                co_return;
+            }
             if (deferred.ShouldSchedule) {
-                self->StartReconnectTimer(deferred, false);
+                static_cast<void>(self->StartReconnectTimer(deferred, false, false));
                 co_return;
             }
             if (operation.Id == 0) co_return;
-
-            bool operationCompleted = false;
-            auto completeOperation = wil::scope_exit([self, &operation, &operationCompleted]() noexcept {
-                if (!operationCompleted) self->CompleteDeviceOperation(operation);
-            });
 
             self->DeviceStatusChanged(
                 deviceId,
@@ -1987,26 +2016,38 @@ void DeviceManager::AutoReconnectAttemptDetached(ReconnectController::TimerToken
             {
                 auto guard = self->m_lock.lock_exclusive();
                 static_cast<void>(self->m_deviceOperations.Complete(operation));
-                operationCompleted = true;
                 if (success) {
                     self->m_reconnectController.CompleteAttemptSucceeded(timerToken);
                 } else {
                     completion = self->m_reconnectController.CompleteAttemptFailed(timerToken);
                 }
             }
-            self->DeviceActivityChanged(deviceId);
-
-            if (success) co_return;
-            if (!completion.AttemptCompleted) co_return;
+            if (success) {
+                self->DeviceActivityChanged(deviceId);
+                co_return;
+            }
+            if (!completion.AttemptCompleted) {
+                self->DeviceActivityChanged(deviceId);
+                co_return;
+            }
             if (completion.NotifyFailed) {
+                self->DeviceActivityChanged(deviceId);
                 self->NotifyAutoReconnectFailed(deviceId, completion.MaxAttempts);
                 co_return;
             }
-            self->ScheduleReconnect(deviceId);
+            if (!self->ScheduleReconnect(deviceId)) self->DeviceActivityChanged(deviceId);
         } catch (...) {
+            bool activityChanged = false;
             {
                 auto guard = self->m_lock.lock_exclusive();
-                static_cast<void>(self->m_reconnectController.RetireTimer(timerToken));
+                if (operation.Id != 0) activityChanged = self->m_deviceOperations.Complete(operation);
+                activityChanged = self->m_reconnectController.AbortTimerOrAttempt(timerToken) || activityChanged;
+            }
+            if (activityChanged) {
+                try {
+                    self->DeviceActivityChanged(winrt::hstring(timerToken.DeviceId));
+                } catch (...) {
+                }
             }
             util::DebugTraceUnknownException(L"[DeviceManager] auto reconnect callback ignored exception");
         }

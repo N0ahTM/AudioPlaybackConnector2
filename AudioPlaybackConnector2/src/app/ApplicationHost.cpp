@@ -2078,7 +2078,8 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
                 auto connected = m_deviceManager->GetConnectedDevices();
                 for (auto const& device : connected) {
                     if (!device.Id.empty()) {
-                        auto operation = m_deviceManager->ReconnectAsync(winrt::hstring(device.Id));
+                        auto const deviceId = winrt::hstring(device.Id);
+                        auto operation = m_deviceManager->ReconnectAsync(deviceId);
                         const auto waitResult = WaitForControlAsync(operation, stopToken, deadline);
                         if (waitResult != ControlWaitResult::Completed) {
                             return makeOperationResponse(ExitCode::Indeterminate,
@@ -2088,6 +2089,13 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
                                                          waitResult == ControlWaitResult::Cancelled
                                                              ? std::wstring(_("Command_NotReady"))
                                                              : FormatResource("Command_ReconnectFailed", device.Name));
+                        }
+                        if (!m_deviceManager->IsDeviceConnected(deviceId)) {
+                            return makeOperationResponse(ExitCode::OperationFailed,
+                                                         L"reconnect-all",
+                                                         device.Id,
+                                                         device.Name,
+                                                         FormatResource("Command_ReconnectFailed", device.Name));
                         }
                     }
                 }

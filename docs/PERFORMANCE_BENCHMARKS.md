@@ -87,6 +87,11 @@ pixels reaching the screen. Collect release A/B results as at least 20 alternati
 AB/BA pairs under the same host state and report the per-run metric rather than
 treating internal polling or timestamps as independent observations.
 
+Compare a completed series with `tools/Compare-PickerOpenAck.ps1`. It rejects
+missing/duplicate pairs, dirty harness state, unstable executable identities,
+non-advancing generations, and QUNS/power changes. The output includes per-variant
+medians and MAD plus a deterministic bootstrap interval for the paired median.
+
 ## Metrics
 
 - `WorkingSetBytes`: all physical pages currently resident for the process.

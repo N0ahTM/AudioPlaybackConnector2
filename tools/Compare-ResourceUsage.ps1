@@ -208,6 +208,38 @@ function Assert-RunIntegrity {
         throw "'$Path' required Energy Saver off but captured it enabled."
     }
 
+    $requiredAdaptiveResidency = if ($null -ne $Run.Run.PSObject.Properties['RequiredAdaptiveResidency']) {
+        [string]$Run.Run.RequiredAdaptiveResidency
+    }
+    else {
+        "Any"
+    }
+    if ($requiredAdaptiveResidency -ne "Any") {
+        $adaptiveStart = $Run.Host.AdaptiveResourcesBeforeMeasurement
+        $adaptiveAfter = $Run.Host.AdaptiveResourcesAfterMeasurement
+        if ($null -eq $adaptiveStart -or $null -eq $adaptiveAfter) {
+            throw "'$Path' required adaptive residency but has no adaptive-resource snapshots."
+        }
+        if (-not [bool]$adaptiveStart.evaluated -or -not [bool]$adaptiveAfter.evaluated) {
+            throw "'$Path' captured adaptive resources before policy evaluation."
+        }
+        if ([string]$adaptiveStart.residency -ne $requiredAdaptiveResidency -or
+            [string]$adaptiveAfter.residency -ne $requiredAdaptiveResidency) {
+            throw "'$Path' did not remain in its required adaptive residency."
+        }
+        if ($requiredAdaptiveResidency -eq "Hot" -and
+            (-not [bool]$adaptiveStart.uiResourcesLoaded -or
+                -not [bool]$adaptiveStart.uiResourcesInitialized -or
+                -not [bool]$adaptiveAfter.uiResourcesLoaded -or
+                -not [bool]$adaptiveAfter.uiResourcesInitialized)) {
+            throw "'$Path' recorded Hot residency without initialized, loaded UI resources."
+        }
+        if ($requiredAdaptiveResidency -eq "Cold" -and
+            ([bool]$adaptiveStart.uiResourcesLoaded -or [bool]$adaptiveAfter.uiResourcesLoaded)) {
+            throw "'$Path' recorded Cold residency with loaded UI resources."
+        }
+    }
+
     if ([double]$Run.Summary.ScheduleLatenessMilliseconds.Maximum -gt $MaximumScheduleLatenessMilliseconds) {
         throw "'$Path' exceeded the maximum schedule lateness: " +
             "$($Run.Summary.ScheduleLatenessMilliseconds.Maximum) ms."
@@ -384,6 +416,23 @@ foreach ($pairId in $pairIds) {
         }
         Assert-Equal $baselineValue $candidateValue "Pair '$pairId' $property"
     }
+
+    $baselineAdaptiveResidency = if ($null -ne $baseline.Run.PSObject.Properties['RequiredAdaptiveResidency']) {
+        [string]$baseline.Run.RequiredAdaptiveResidency
+    }
+    else {
+        "Any"
+    }
+    $candidateAdaptiveResidency = if ($null -ne $candidate.Run.PSObject.Properties['RequiredAdaptiveResidency']) {
+        [string]$candidate.Run.RequiredAdaptiveResidency
+    }
+    else {
+        "Any"
+    }
+    Assert-Equal `
+        $baselineAdaptiveResidency `
+        $candidateAdaptiveResidency `
+        "Pair '$pairId' required adaptive residency"
 
     $values = [ordered]@{}
     foreach ($metric in $metrics) {

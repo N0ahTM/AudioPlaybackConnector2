@@ -87,6 +87,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="src\AdaptiveResourceDiagnosticsTests.cpp" />
     <ClCompile Include="src\AdaptiveResourcePolicyTests.cpp" />
     <ClCompile Include="src\AppWorkCoordinatorTests.cpp" />
     <ClCompile Include="src\AutoReconnectPlannerTests.cpp" />
@@ -132,6 +133,7 @@
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\CommandLineControlServer.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveResourceDiagnostics.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveResourcePolicy.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveActionRetryBackoff.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveScheduleState.hpp" />

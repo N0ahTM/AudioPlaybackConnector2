@@ -13,6 +13,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Measure-ResourceUsag
     -ExpectedPackageVersion 0.7.0.0 `
     -ExpectedExecutableSha256 <64-character-installed-executable-hash> `
     -ExpectedUserNotificationState AcceptsNotifications `
+    -ExpectedAdaptiveResidency Hot `
     -RequireEnergySaverOff `
     -Scenario available-hot-idle `
     -Variant candidate `
@@ -48,6 +49,13 @@ matching fullscreen or presentation state for cold-policy measurements. Use
 Even when no notification state is requested, the observed state, active power
 scheme, and AC/DC source must remain unchanged across those three checkpoints or
 the run is rejected.
+
+For adaptive-resource measurements, `-ExpectedAdaptiveResidency Cold|Warm|Hot`
+queries the installed app immediately before and after sampling. The run is
+rejected unless the internal policy remains in that residency. Hot additionally
+requires initialized and loaded picker resources; Cold requires them to be
+released. Use this gate for release claims instead of inferring residency from
+QUNS and warm-up duration alone.
 
 Use `-AttachToExisting` only for scenarios that cannot begin with a clean process.
 An attached process is never stopped by the harness. Use `-LeaveRunning` when a
@@ -116,6 +124,9 @@ snapshot, so use at least 35 seconds of warm-up for
 `AcceptsNotifications`/Hot steady state. Fullscreen or presentation pressure moves
 to Cold after its grace period; use at least 15 seconds there. Do not mix those
 states into a single idle average.
+
+If the installed package is an app bundle, update it with the signed
+`.msixbundle`; installing only its nested `.msix` cannot replace the bundle.
 
 This harness intentionally does not create artificial memory pressure, manipulate
 the process working set, or run destructive low-memory experiments on the host.

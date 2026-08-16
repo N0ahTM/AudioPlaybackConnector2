@@ -129,6 +129,7 @@
     <ClInclude Include="include\app\ApplicationHost.hpp" />
     <ClInclude Include="include\app\DeferredSettingsSaver.hpp" />
     <ClInclude Include="include\app\AdaptiveActionRetryBackoff.hpp" />
+    <ClInclude Include="include\app\AdaptiveResourceDiagnostics.hpp" />
     <ClInclude Include="include\app\AdaptiveResourcePolicy.hpp" />
     <ClInclude Include="include\app\AdaptiveScheduleState.hpp" />
     <ClInclude Include="include\app\ControlUiActionGate.hpp" />

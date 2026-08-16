@@ -443,6 +443,7 @@ void TestToastXmlSanitization() {
 
 } // namespace
 
+int RunAdaptiveResourceDiagnosticsTests();
 int RunAdaptiveResourcePolicyTests();
 int RunAppWorkCoordinatorTests();
 int RunAutoReconnectPlannerTests();
@@ -483,6 +484,7 @@ int main() {
     TestCommandProtocolTimeoutAndCancellation();
     TestCommandProtocolRejectsInvalidHeader();
     TestToastXmlSanitization();
+    g_failures += RunAdaptiveResourceDiagnosticsTests();
     g_failures += RunAdaptiveResourcePolicyTests();
     g_failures += RunAppWorkCoordinatorTests();
     g_failures += RunAutoReconnectPlannerTests();

@@ -43,7 +43,13 @@ function Get-SyntheticRun {
         [int]$NotificationState = 5,
 
         [Parameter()]
-        [bool]$Dirty = $false
+        [bool]$Dirty = $false,
+
+        [Parameter()]
+        [string]$AdaptiveResidency = "Hot",
+
+        [Parameter()]
+        [bool]$UiResourcesLoaded = $true
     )
 
     $environment = Get-SyntheticEnvironment -NotificationState $NotificationState
@@ -64,6 +70,7 @@ function Get-SyntheticRun {
             else {
                 "RunningD3dFullScreen"
             }
+            RequiredAdaptiveResidency = $AdaptiveResidency
             RequiredEnergySaverOff = $true
         }
         Package = [ordered]@{
@@ -83,6 +90,18 @@ function Get-SyntheticRun {
             EnvironmentBeforeLaunch = $environment
             EnvironmentBeforeMeasurement = $environment
             EnvironmentAfterMeasurement = $environment
+            AdaptiveResourcesBeforeMeasurement = [ordered]@{
+                evaluated = $true
+                residency = $AdaptiveResidency
+                uiResourcesLoaded = $UiResourcesLoaded
+                uiResourcesInitialized = $UiResourcesLoaded
+            }
+            AdaptiveResourcesAfterMeasurement = [ordered]@{
+                evaluated = $true
+                residency = $AdaptiveResidency
+                uiResourcesLoaded = $UiResourcesLoaded
+                uiResourcesInitialized = $UiResourcesLoaded
+            }
         }
         Source = [ordered]@{
             GitCommit = "0123456789abcdef0123456789abcdef01234567"
@@ -171,6 +190,19 @@ try {
         $workingSet.PairedDifferenceBootstrap95.Upper95 -lt -15) {
         throw "Bootstrap interval did not cover both synthetic paired differences."
     }
+
+    Write-SyntheticRun (Join-Path $runsRoot "candidate-r02.json") `
+        (Get-SyntheticRun "r02" "candidate" $candidateHash 95 -UiResourcesLoaded $false)
+    Invoke-ExpectedFailure {
+        & $compareScript `
+            -InputDirectory $runsRoot `
+            -Scenario synthetic-hot `
+            -BaselineVariant baseline `
+            -CandidateVariant candidate `
+            -MinimumPairs 2 `
+            -BootstrapIterations 100 `
+            -OutputDirectory $outputRoot
+    } "Hot residency without initialized, loaded UI resources"
 
     Write-SyntheticRun (Join-Path $runsRoot "candidate-r02.json") `
         (Get-SyntheticRun "r02" "candidate" $baselineHash 95)

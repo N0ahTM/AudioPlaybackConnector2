@@ -63,6 +63,10 @@ param(
     [string]$ExpectedUserNotificationState = "Any",
 
     [Parameter()]
+    [ValidateSet("Any", "Cold", "Warm", "Hot")]
+    [string]$ExpectedAdaptiveResidency = "Any",
+
+    [Parameter()]
     [switch]$RequireEnergySaverOff,
 
     [Parameter()]
@@ -83,6 +87,78 @@ param(
 )
 
 Set-StrictMode -Version Latest
+
+function Get-AdaptiveResourceStatus {
+    param(
+        [Parameter(Mandatory)]
+        [string]$ControlExecutablePath,
+
+        [Parameter()]
+        [ValidateRange(1, 30)]
+        [int]$TimeoutSeconds = 5
+    )
+
+    $standardOutputPath = [System.IO.Path]::GetTempFileName()
+    $standardErrorPath = [System.IO.Path]::GetTempFileName()
+    try {
+        $probe = Start-Process `
+            -FilePath $ControlExecutablePath `
+            -ArgumentList @("status", "--json") `
+            -RedirectStandardOutput $standardOutputPath `
+            -RedirectStandardError $standardErrorPath `
+            -WindowStyle Hidden `
+            -PassThru
+        if (-not $probe.WaitForExit($TimeoutSeconds * 1000)) {
+            $probe.Kill()
+            $probe.WaitForExit()
+            throw "The adaptive-resource status probe timed out after $TimeoutSeconds seconds."
+        }
+        $probe.WaitForExit()
+        if ($probe.ExitCode -ne 0) {
+            [string]$errorText = Get-Content -LiteralPath $standardErrorPath -Raw -ErrorAction SilentlyContinue
+            $errorText = $errorText.Trim()
+            throw "The adaptive-resource status probe exited with code $($probe.ExitCode): $errorText"
+        }
+
+        $json = Get-Content -LiteralPath $standardOutputPath -Raw
+        $status = $json | ConvertFrom-Json
+        if ($null -eq $status.PSObject.Properties["adaptiveResources"]) {
+            throw "The installed application does not expose adaptive-resource status."
+        }
+        return $status.adaptiveResources
+    }
+    finally {
+        Remove-Item -LiteralPath $standardOutputPath, $standardErrorPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Assert-AdaptiveResourceStatus {
+    param(
+        [Parameter(Mandatory)]
+        [object]$Status,
+
+        [Parameter(Mandatory)]
+        [ValidateSet("Cold", "Warm", "Hot")]
+        [string]$ExpectedResidency,
+
+        [Parameter(Mandatory)]
+        [string]$Phase
+    )
+
+    if (-not [bool]$Status.evaluated) {
+        throw "Adaptive resources have not been evaluated at $Phase."
+    }
+    if ([string]$Status.residency -ne $ExpectedResidency) {
+        throw "Adaptive residency at $Phase is '$($Status.residency)', expected '$ExpectedResidency'."
+    }
+    if ($ExpectedResidency -eq "Hot" -and
+        (-not [bool]$Status.uiResourcesLoaded -or -not [bool]$Status.uiResourcesInitialized)) {
+        throw "Hot adaptive residency at $Phase does not have initialized, loaded UI resources."
+    }
+    if ($ExpectedResidency -eq "Cold" -and [bool]$Status.uiResourcesLoaded) {
+        throw "Cold adaptive residency at $Phase still has loaded UI resources."
+    }
+}
 $ErrorActionPreference = "Stop"
 
 function Initialize-NativeResourceProbe {
@@ -499,6 +575,23 @@ try {
         -Phase "measurement start" `
         -Baseline $environmentBeforeLaunch
 
+    $adaptiveResourcesBeforeMeasurement = $null
+    $adaptiveResourcesAfterMeasurement = $null
+    if ($ExpectedAdaptiveResidency -ne "Any") {
+        $controlExecutablePath = Join-Path `
+            $package.InstallLocation `
+            "AudioPlaybackConnector2.Control\AudioPlaybackConnector2.Control.exe"
+        if (-not (Test-Path -LiteralPath $controlExecutablePath -PathType Leaf)) {
+            throw "The installed control executable was not found at '$controlExecutablePath'."
+        }
+        $adaptiveResourcesBeforeMeasurement = Get-AdaptiveResourceStatus `
+            -ControlExecutablePath $controlExecutablePath
+        Assert-AdaptiveResourceStatus `
+            -Status $adaptiveResourcesBeforeMeasurement `
+            -ExpectedResidency $ExpectedAdaptiveResidency `
+            -Phase "measurement start"
+    }
+
     $logicalProcessorCount = [Environment]::ProcessorCount
     $operatingSystem = Get-CimInstance Win32_OperatingSystem
     $measurementStartedUtc = [DateTime]::UtcNow
@@ -587,6 +680,15 @@ try {
         -Phase "measurement completion" `
         -Baseline $environmentBeforeLaunch
 
+    if ($ExpectedAdaptiveResidency -ne "Any") {
+        $adaptiveResourcesAfterMeasurement = Get-AdaptiveResourceStatus `
+            -ControlExecutablePath $controlExecutablePath
+        Assert-AdaptiveResourceStatus `
+            -Status $adaptiveResourcesAfterMeasurement `
+            -ExpectedResidency $ExpectedAdaptiveResidency `
+            -Phase "measurement completion"
+    }
+
     $completedExecutableSha256 =
         (Get-FileHash -LiteralPath $installedExecutablePath -Algorithm SHA256).Hash.ToUpperInvariant()
     if ($completedExecutableSha256 -ne $executableSha256) {
@@ -660,6 +762,7 @@ try {
             SampleCount = $samples.Count
             AttachedToExistingProcess = -not $launchedByHarness
             RequiredUserNotificationState = $ExpectedUserNotificationState
+            RequiredAdaptiveResidency = $ExpectedAdaptiveResidency
             RequiredEnergySaverOff = [bool]$RequireEnergySaverOff
         }
         Package = [ordered]@{
@@ -693,6 +796,8 @@ try {
             EnvironmentBeforeLaunch = $environmentBeforeLaunch
             EnvironmentBeforeMeasurement = $environmentBeforeMeasurement
             EnvironmentAfterMeasurement = $environmentAfterMeasurement
+            AdaptiveResourcesBeforeMeasurement = $adaptiveResourcesBeforeMeasurement
+            AdaptiveResourcesAfterMeasurement = $adaptiveResourcesAfterMeasurement
         }
         Source = [ordered]@{
             Role = "BenchmarkHarnessOnly"

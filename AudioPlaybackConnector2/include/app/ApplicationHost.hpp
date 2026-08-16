@@ -1,6 +1,7 @@
 #pragma once
 
 #include <app/AdaptiveResourcePolicy.hpp>
+#include <app/AdaptiveResourceDiagnostics.hpp>
 #include <app/ControlUiActionGate.hpp>
 #include <app/DeferredSettingsSaver.hpp>
 #include <app/DeviceEventRouter.hpp>
@@ -171,6 +172,7 @@ private:
     AdaptiveActionRetryBackoff m_adaptiveActionRetryBackoff;
     AdaptiveScheduleState m_adaptiveScheduleState;
     std::mutex m_resourceAuthorizationMutex;
+    AdaptiveResourceDiagnostics m_adaptiveResourceDiagnostics;
     std::optional<AdaptiveResourcePolicy::TimePoint> m_lastResourcePressureObservedAt;
     std::uint64_t m_lastResourcePressureSequence = 0;
     std::uint64_t m_latestConstrainedResourcePressureSequence = 0;

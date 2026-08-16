@@ -832,6 +832,17 @@ void ApplicationHost::EvaluateAdaptiveResources(bool userInteraction, std::wstri
         } else {
             m_adaptiveActionRetryBackoff.Reset();
         }
+        m_adaptiveResourceDiagnostics = {
+            .Evaluated = true,
+            .Residency = decision.Residency,
+            .BackgroundResidency = decision.BackgroundResidency,
+            .Pressure = pressureValues,
+            .SnapshotFresh = snapshotFresh,
+            .PositiveAuthorizationCurrent = positiveAuthorizationCurrent,
+            .PreloadAllowed = input.PreloadAllowed,
+            .UiResourcesLoaded = m_trayController->IsDevicePickerLoaded(),
+            .UiResourcesInitialized = m_trayController->IsDevicePickerPreloadInitialized(),
+        };
         authorizationLock.unlock();
         ScheduleAdaptiveResourceEvaluation(reevaluateAt);
     } catch (...) {
@@ -1641,6 +1652,37 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
             root.Insert(L"running", JsonValue::CreateBooleanValue(true));
             root.Insert(L"connectedCount", JsonValue::CreateNumberValue(static_cast<double>(connected.size())));
             root.Insert(L"connectedDevices", connectedArray);
+
+            AdaptiveResourceDiagnostics diagnostics;
+            {
+                std::scoped_lock lock(m_resourceAuthorizationMutex);
+                diagnostics = m_adaptiveResourceDiagnostics;
+            }
+            JsonObject adaptiveResources;
+            adaptiveResources.Insert(L"evaluated", JsonValue::CreateBooleanValue(diagnostics.Evaluated));
+            adaptiveResources.Insert(L"residency",
+                                     JsonValue::CreateStringValue(ResidencyPolicyName(diagnostics.Residency)));
+            adaptiveResources.Insert(
+                L"backgroundResidency",
+                JsonValue::CreateStringValue(ResidencyPolicyName(diagnostics.BackgroundResidency)));
+            adaptiveResources.Insert(L"snapshotFresh", JsonValue::CreateBooleanValue(diagnostics.SnapshotFresh));
+            adaptiveResources.Insert(L"positiveAuthorizationCurrent",
+                                     JsonValue::CreateBooleanValue(diagnostics.PositiveAuthorizationCurrent));
+            adaptiveResources.Insert(L"preloadAllowed", JsonValue::CreateBooleanValue(diagnostics.PreloadAllowed));
+            adaptiveResources.Insert(L"uiResourcesLoaded",
+                                     JsonValue::CreateBooleanValue(diagnostics.UiResourcesLoaded));
+            adaptiveResources.Insert(L"uiResourcesInitialized",
+                                     JsonValue::CreateBooleanValue(diagnostics.UiResourcesInitialized));
+            adaptiveResources.Insert(
+                L"memoryPressure", JsonValue::CreateStringValue(MemoryPressureStateName(diagnostics.Pressure.Memory)));
+            adaptiveResources.Insert(
+                L"userActivity",
+                JsonValue::CreateStringValue(UserActivityStateName(diagnostics.Pressure.UserActivity)));
+            adaptiveResources.Insert(L"energySaver",
+                                     diagnostics.Pressure.EnergySaver
+                                         ? JsonValue::CreateBooleanValue(*diagnostics.Pressure.EnergySaver)
+                                         : JsonValue::CreateNullValue());
+            root.Insert(L"adaptiveResources", adaptiveResources);
             return {ExitCode::Success, std::wstring(root.Stringify())};
         }
 

@@ -184,6 +184,9 @@
     <ClInclude Include="include\app\AdaptiveResourcePolicy.hpp">
       <Filter>include\app</Filter>
     </ClInclude>
+    <ClInclude Include="include\app\AdaptiveResourceDiagnostics.hpp">
+      <Filter>include\app</Filter>
+    </ClInclude>
     <ClInclude Include="include\app\AdaptiveActionRetryBackoff.hpp">
       <Filter>include\app</Filter>
     </ClInclude>

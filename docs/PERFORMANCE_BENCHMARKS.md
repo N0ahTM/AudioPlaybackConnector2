@@ -141,3 +141,4 @@ test VM with separately reviewed tooling.
 ## Recorded results
 
 - [Adaptive Cold residency baseline — 2026-08-15](performance/2026-08-15-adaptive-cold-baseline.md)
+- [Visible picker Hot-residency baseline — 2026-08-15](performance/2026-08-15-visible-picker-hot-baseline.md)

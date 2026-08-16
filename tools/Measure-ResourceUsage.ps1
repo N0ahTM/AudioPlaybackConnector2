@@ -108,6 +108,9 @@ function Get-AdaptiveResourceStatus {
             -RedirectStandardError $standardErrorPath `
             -WindowStyle Hidden `
             -PassThru
+        # Windows PowerShell 5.1 does not reliably populate ExitCode unless the
+        # native process handle is materialized before waiting.
+        [void]$probe.Handle
         if (-not $probe.WaitForExit($TimeoutSeconds * 1000)) {
             $probe.Kill()
             $probe.WaitForExit()
@@ -116,7 +119,7 @@ function Get-AdaptiveResourceStatus {
         $probe.WaitForExit()
         if ($probe.ExitCode -ne 0) {
             [string]$errorText = Get-Content -LiteralPath $standardErrorPath -Raw -ErrorAction SilentlyContinue
-            $errorText = $errorText.Trim()
+            $errorText = ([string]$errorText).Trim()
             throw "The adaptive-resource status probe exited with code $($probe.ExitCode): $errorText"
         }
 

@@ -74,6 +74,8 @@ that generation advances:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Measure-PickerOpenAck.ps1 `
     -ExpectedPackageVersion 0.7.0.0 `
     -ExpectedExecutableSha256 <64-character-installed-executable-hash> `
+    -ExpectedUserNotificationState AcceptsNotifications `
+    -RequireEnergySaverOff `
     -Variant candidate `
     -PairId r01
 ```

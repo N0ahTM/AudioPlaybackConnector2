@@ -35,6 +35,22 @@ param(
     [int]$OpenTimeoutSeconds = 10,
 
     [Parameter()]
+    [ValidateSet(
+        "Any",
+        "NotPresent",
+        "Busy",
+        "RunningD3dFullScreen",
+        "PresentationMode",
+        "AcceptsNotifications",
+        "QuietTime",
+        "App"
+    )]
+    [string]$ExpectedUserNotificationState = "Any",
+
+    [Parameter()]
+    [switch]$RequireEnergySaverOff,
+
+    [Parameter()]
     [string]$OutputDirectory,
 
     [Parameter()]
@@ -46,6 +62,111 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+if (-not ("ApcPickerBenchmark.NativeMethods" -as [type])) {
+    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+namespace ApcPickerBenchmark {
+    public struct SystemPowerStatus {
+        public byte ACLineStatus;
+        public byte BatteryFlag;
+        public byte BatteryLifePercent;
+        public byte SystemStatusFlag;
+        public uint BatteryLifeTime;
+        public uint BatteryFullLifeTime;
+    }
+
+    public static class NativeMethods {
+        [DllImport("shell32.dll")]
+        public static extern int SHQueryUserNotificationState(out int state);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool GetSystemPowerStatus(out SystemPowerStatus status);
+    }
+}
+"@
+}
+
+function Get-EnvironmentSnapshot {
+    $notificationNames = @{
+        1 = "NotPresent"
+        2 = "Busy"
+        3 = "RunningD3dFullScreen"
+        4 = "PresentationMode"
+        5 = "AcceptsNotifications"
+        6 = "QuietTime"
+        7 = "App"
+    }
+    [int]$notificationCode = 0
+    $hr = [ApcPickerBenchmark.NativeMethods]::SHQueryUserNotificationState([ref]$notificationCode)
+    if ($hr -lt 0) {
+        [System.Runtime.InteropServices.Marshal]::ThrowExceptionForHR($hr)
+    }
+    $powerStatus = [ApcPickerBenchmark.SystemPowerStatus]::new()
+    if (-not [ApcPickerBenchmark.NativeMethods]::GetSystemPowerStatus([ref]$powerStatus)) {
+        throw [System.ComponentModel.Win32Exception]::new(
+            [System.Runtime.InteropServices.Marshal]::GetLastWin32Error(),
+            "GetSystemPowerStatus failed."
+        )
+    }
+    $schemeText = (& powercfg.exe /getactivescheme 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0 -or $schemeText -notmatch '([0-9a-fA-F-]{36})') {
+        throw "Unable to determine the active power scheme."
+    }
+    return [pscustomobject][ordered]@{
+        UserNotificationState = [pscustomobject][ordered]@{
+            Code = $notificationCode
+            Name = if ($notificationNames.ContainsKey($notificationCode)) {
+                $notificationNames[$notificationCode]
+            }
+            else {
+                "Unknown"
+            }
+        }
+        ActivePowerSchemeGuid = $Matches[1].ToLowerInvariant()
+        ACLineStatus = [int]$powerStatus.ACLineStatus
+        EnergySaverEnabled = $powerStatus.SystemStatusFlag -ne 0
+    }
+}
+
+function Assert-EnvironmentSnapshot {
+    param(
+        [Parameter(Mandatory)]
+        [object]$Snapshot,
+
+        [Parameter(Mandatory)]
+        [string]$Phase,
+
+        [Parameter()]
+        [AllowNull()]
+        [object]$Baseline
+    )
+
+    if ($ExpectedUserNotificationState -ne "Any" -and
+        $Snapshot.UserNotificationState.Name -ne $ExpectedUserNotificationState) {
+        throw "User notification state at $Phase is '$($Snapshot.UserNotificationState.Name)', expected '$ExpectedUserNotificationState'."
+    }
+    if ($RequireEnergySaverOff -and $Snapshot.EnergySaverEnabled) {
+        throw "Energy Saver is enabled at $Phase."
+    }
+    if ($null -ne $Baseline) {
+        if ($Snapshot.UserNotificationState.Code -ne $Baseline.UserNotificationState.Code) {
+            throw "User notification state changed before $Phase."
+        }
+        if ($Snapshot.ActivePowerSchemeGuid -ne $Baseline.ActivePowerSchemeGuid) {
+            throw "The active power scheme changed before $Phase."
+        }
+        if ($Snapshot.ACLineStatus -ne $Baseline.ACLineStatus) {
+            throw "The AC power source changed before $Phase."
+        }
+        if ($Snapshot.EnergySaverEnabled -ne $Baseline.EnergySaverEnabled) {
+            throw "Energy Saver state changed before $Phase."
+        }
+    }
+}
 
 function Invoke-ControlJson {
     param(
@@ -148,6 +269,8 @@ if ($existingProcesses.Count -ne 0) {
 $startedProcess = $null
 $measurement = $null
 try {
+    $environmentBeforeLaunch = Get-EnvironmentSnapshot
+    Assert-EnvironmentSnapshot -Snapshot $environmentBeforeLaunch -Phase "launch"
     $launchStartedUtc = [DateTime]::UtcNow
     $launchStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
     $applicationUserModelId = "$($package.PackageFamilyName)!$ApplicationId"
@@ -187,6 +310,11 @@ try {
         throw "The installed application does not expose devicePickerOpenedGeneration."
     }
     $initialGeneration = [uint64]$generationProperty.Value
+    $environmentBeforeOpen = Get-EnvironmentSnapshot
+    Assert-EnvironmentSnapshot `
+        -Snapshot $environmentBeforeOpen `
+        -Phase "picker open" `
+        -Baseline $environmentBeforeLaunch
 
     $showResult = Invoke-ControlJson `
         -ControlExecutablePath $controlExecutablePath `
@@ -200,6 +328,11 @@ try {
     if ($finalGeneration -le $initialGeneration) {
         throw "The show command returned before a new Flyout.Opened acknowledgement was observable."
     }
+    $environmentAfterOpen = Get-EnvironmentSnapshot
+    Assert-EnvironmentSnapshot `
+        -Snapshot $environmentAfterOpen `
+        -Phase "picker-open acknowledgement" `
+        -Baseline $environmentBeforeLaunch
 
     $gitCommit = (& git -C $repositoryRoot rev-parse HEAD 2>$null)
     $gitDirty = @(& git -C $repositoryRoot status --porcelain 2>$null).Count -gt 0
@@ -223,6 +356,11 @@ try {
             Publisher = $package.Publisher
             Architecture = $package.Architecture.ToString()
             ExecutableSha256 = $executableSha256
+        }
+        Host = [ordered]@{
+            EnvironmentBeforeLaunch = $environmentBeforeLaunch
+            EnvironmentBeforeOpen = $environmentBeforeOpen
+            EnvironmentAfterOpen = $environmentAfterOpen
         }
         Source = [ordered]@{
             GitCommit = [string]$gitCommit

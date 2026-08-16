@@ -61,6 +61,30 @@ Use `-AttachToExisting` only for scenarios that cannot begin with a clean proces
 An attached process is never stopped by the harness. Use `-LeaveRunning` when a
 newly launched process must remain alive after a run.
 
+## Picker-open acknowledgement
+
+`tools/Measure-PickerOpenAck.ps1` measures a fresh process's first picker open from
+control-client process creation until the matching WinUI `Flyout.Opened` callback
+is observed. The packaged application must not already be running. The harness
+verifies package version and executable hash, waits for control readiness, records
+the initial presentation generation, runs `show --json`, and rejects the run unless
+that generation advances:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Measure-PickerOpenAck.ps1 `
+    -ExpectedPackageVersion 0.7.0.0 `
+    -ExpectedExecutableSha256 <64-character-installed-executable-hash> `
+    -Variant candidate `
+    -PairId r01
+```
+
+This is an end-to-end command-to-framework acknowledgement measurement. It
+includes control-client startup and IPC, but does not measure compositor latency,
+screen presentation, or display scanout. Use ETW/PresentMon for claims about
+pixels reaching the screen. Collect release A/B results as at least 20 alternating
+AB/BA pairs under the same host state and report the per-run metric rather than
+treating internal polling or timestamps as independent observations.
+
 ## Metrics
 
 - `WorkingSetBytes`: all physical pages currently resident for the process.

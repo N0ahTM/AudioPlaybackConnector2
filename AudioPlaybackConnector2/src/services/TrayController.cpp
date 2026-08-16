@@ -737,6 +737,10 @@ bool TrayController::IsDevicePickerVisibleOrTransitioning() const noexcept {
     return m_pickerFlyoutState.load() != PickerFlyoutState::Closed;
 }
 
+uint64_t TrayController::DevicePickerOpenedGeneration() const noexcept {
+    return m_pickerOpenedGeneration.load();
+}
+
 void TrayController::ReleaseDevicePicker() noexcept {
     try {
         if (m_isTearingDown.load() || !m_devicePickerView) {
@@ -850,6 +854,7 @@ Controls::Flyout TrayController::CreatePickerFlyout() {
             auto openedFlyout = sender.template try_as<Controls::Flyout>();
             if (self && !self->m_isTearingDown.load() && openedFlyout && self->m_pickerFlyout == openedFlyout) {
                 self->m_pickerFlyoutState.store(PickerFlyoutState::Open);
+                self->m_pickerOpenedGeneration.fetch_add(1);
                 if (std::exchange(self->m_pickerRefreshPending, false)) {
                     if (!self->RefreshDevicePickerState()) self->m_pickerRefreshPending = true;
                 }

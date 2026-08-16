@@ -1652,6 +1652,10 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
             root.Insert(L"running", JsonValue::CreateBooleanValue(true));
             root.Insert(L"connectedCount", JsonValue::CreateNumberValue(static_cast<double>(connected.size())));
             root.Insert(L"connectedDevices", connectedArray);
+            root.Insert(
+                L"devicePickerOpenedGeneration",
+                JsonValue::CreateNumberValue(
+                    m_trayController ? static_cast<double>(m_trayController->DevicePickerOpenedGeneration()) : 0.0));
 
             AdaptiveResourceDiagnostics diagnostics;
             {
@@ -1919,13 +1923,24 @@ apc::control::Response ApplicationHost::HandleControlCommand(apc::control::Reque
     };
 
     auto showDevicePicker = [&]() -> Response {
-        const auto result = RunControlUiAction(
+        auto trayController = m_trayController;
+        const auto openedGeneration = trayController ? trayController->DevicePickerOpenedGeneration() : 0;
+        const auto wasVisible = trayController && trayController->IsDevicePickerVisibleOrTransitioning();
+        auto result = RunControlUiAction(
             [weak = weak_from_this()]() {
                 auto self = weak.lock();
                 return self && self->m_trayController && self->m_trayController->ShowDevicePicker(false);
             },
             stopToken,
             deadline);
+        while (result == ControlUiActionResult::Succeeded && !wasVisible && trayController &&
+               trayController->DevicePickerOpenedGeneration() == openedGeneration) {
+            if (stopToken.stop_requested() || m_exiting.load() || apc::control::RemainingWait(deadline) == 0) {
+                result = ControlUiActionResult::Indeterminate;
+                break;
+            }
+            Sleep(1);
+        }
         const auto code =
             result == ControlUiActionResult::Succeeded
                 ? ExitCode::Success

@@ -9,6 +9,7 @@
 #include <functional>
 #include <memory>
 #include <atomic>
+#include <cstdint>
 #include <string_view>
 
 class DeviceManager;
@@ -52,6 +53,7 @@ public:
     [[nodiscard]] bool IsDevicePickerLoaded() const noexcept;
     [[nodiscard]] bool IsDevicePickerPreloadInitialized() const noexcept;
     [[nodiscard]] bool IsDevicePickerVisibleOrTransitioning() const noexcept;
+    [[nodiscard]] uint64_t DevicePickerOpenedGeneration() const noexcept;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Callbacks /////////////////////////////////////////////////////////////////////////////////////////*/
@@ -143,6 +145,7 @@ private:
         Closing,
     };
     std::atomic<PickerFlyoutState> m_pickerFlyoutState{PickerFlyoutState::Closed};
+    std::atomic_uint64_t m_pickerOpenedGeneration{0};
 
     bool m_devicePickerPreloadInitialized = false;
     bool m_releaseDevicePickerPending = false;

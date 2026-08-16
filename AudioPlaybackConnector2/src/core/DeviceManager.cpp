@@ -712,6 +712,9 @@ void DeviceManager::DisconnectAll() {
     {
         auto guard = m_lock.lock_exclusive();
         if (m_shutdownForProcessExit || m_powerTransitionSuspended) return;
+        for (auto& id : m_reconnectController.PendingDeviceIds()) {
+            affectedIds.insert(std::move(id));
+        }
         m_reconnectController.CancelPendingReconnects();
         m_userActionCascadeIds.clear();
         for (auto const& operation : m_deviceOperations.Snapshot()) {

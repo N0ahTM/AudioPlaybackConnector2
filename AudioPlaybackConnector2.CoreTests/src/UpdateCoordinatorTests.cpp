@@ -6,6 +6,7 @@
 #include <barrier>
 #include <condition_variable>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string_view>
@@ -118,6 +119,10 @@ AwaitCheck(std::shared_ptr<UpdateCoordinator> coordinator, UpdateCheckReason rea
     result = co_await coordinator->CheckForUpdatesAsync(reason);
 }
 
+winrt::Windows::Foundation::IAsyncAction AwaitCheckTask(UpdateCheckTask task, UpdateCheckResult& result) {
+    result = co_await task;
+}
+
 winrt::Windows::Foundation::IAsyncAction AwaitAutomaticWindow(std::shared_ptr<UpdateCoordinator> coordinator,
                                                               bool& result) {
     result = co_await coordinator->WaitForAutomaticCheckWindowAsync(1h);
@@ -226,6 +231,25 @@ void TestShutdownWakesEveryAutomaticWindowWaiter() {
           "shutdown must wake and cancel every automatic-window waiter");
 }
 
+void TestCheckRetainsCoordinatorUntilCompletion() {
+    auto backend = std::make_shared<FakeUpdateBackend>();
+    auto coordinator = MakeCoordinator(backend);
+    std::weak_ptr<UpdateCoordinator> weakCoordinator = coordinator;
+    UpdateCheckResult result;
+    {
+        auto action = AwaitCheckTask(coordinator->CheckForUpdatesAsync(UpdateCheckReason::Manual), result);
+        Check(backend->WaitForCalls(1), "lifetime check must start its backend flight");
+
+        coordinator.reset();
+        Check(!weakCoordinator.expired(), "an active update check must retain its coordinator");
+        backend->Release(0);
+        action.get();
+
+        Check(result.Status == UpdateCheckStatus::UpToDate, "the retained update check must complete normally");
+    }
+    Check(weakCoordinator.expired(), "the coordinator must be released after its final update check completes");
+}
+
 void TestParallelSingleFlightStress() {
     constexpr size_t callerCount = 32;
     auto backend = std::make_shared<FakeUpdateBackend>();
@@ -277,6 +301,7 @@ int RunUpdateCoordinatorTests() {
     TestStableAutomaticWindowDeterministically();
     TestShutdownAndLateCompletion();
     TestShutdownWakesEveryAutomaticWindowWaiter();
+    TestCheckRetainsCoordinatorUntilCompletion();
     TestParallelSingleFlightStress();
     winrt::uninit_apartment();
     return g_failures;

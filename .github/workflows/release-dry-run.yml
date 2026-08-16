@@ -147,8 +147,8 @@ jobs:
         -ExpectedProcessorArchitecture x64
         -ExpectedName N0ahTM.AudioPlaybackConnector2
         -ExpectedPublisher 'CN=AudioPlaybackConnector2'
-        -RequiredEntries AudioPlaybackConnector2.exe,AudioPlaybackConnector2.Control.exe
-        -UniqueEntries AudioPlaybackConnector2.exe,AudioPlaybackConnector2.Control.exe
+        -RequiredEntries AudioPlaybackConnector2.exe,AudioPlaybackConnector2.Control/AudioPlaybackConnector2.Control.exe
+        -UniqueEntries AudioPlaybackConnector2.exe,AudioPlaybackConnector2.Control/AudioPlaybackConnector2.Control.exe
         -RequireSignature
         -WriteGitHubOutput
 

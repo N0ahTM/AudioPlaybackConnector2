@@ -49,6 +49,7 @@ UpdateCoordinator::~UpdateCoordinator() {
 }
 
 UpdateCheckTask UpdateCoordinator::CheckForUpdatesAsync(UpdateCheckReason reason) {
+    auto lifetime = shared_from_this();
     while (true) {
         std::shared_ptr<Flight> flight;
         std::optional<UpdateCheckResult> immediateResult;
@@ -184,9 +185,10 @@ void UpdateCoordinator::Shutdown() noexcept {
 }
 
 winrt::fire_and_forget UpdateCoordinator::RunFlightAsync(std::shared_ptr<Flight> flight) {
+    std::shared_ptr<UpdateCoordinator> lifetime;
     UpdateCheckResult result;
     try {
-        auto lifetime = shared_from_this();
+        lifetime = shared_from_this();
         result = co_await m_checkOperation(flight->StopSource.get_token());
     } catch (winrt::hresult_error const& ex) {
         try {

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-16
+
+### Added
+- Added support for phone-initiated A2DP playback connections.
+- Added adaptive Windows resource-pressure monitoring so picker residency, UI preloading, polling, and background work respond to memory, activity, and energy constraints.
+- Added a native core runtime boundary, broad regression coverage, and reproducible resource-usage and picker-latency benchmark tooling.
+
+### Changed
+- Restored a hardened single-process architecture while keeping XAML dependencies out of the reusable core runtime.
+- Made the device picker and tray paths faster through cached native snapshots, coalesced refreshes, and reduced invisible or unchanged UI work.
+- Reduced background overhead by deferring settings persistence, diagnostics collection, and automatic update work, and by removing diagnostic-only connection heartbeats.
+- Hardened command IPC with authenticated same-user endpoints, bounded concurrency and request retention, strict payload validation, and deterministic shutdown.
+
+### Fixed
+- Fixed connection, discovery, reconnect, suspend/resume, and shutdown races, including stale connection identities and failed coroutine launches.
+- Fixed settings-window, tray-menu, startup-task, notification, and update-check lifecycle failures during partial initialization or teardown.
+- Fixed an update-check coroutine lifetime issue that could access a destroyed coordinator, and bounded stale Stream Deck status and visual-generation state.
+- Fixed disconnect-all handling for devices with pending reconnects and improved reconnect-all failure reporting.
+- Hardened settings persistence, diagnostic retention, release packaging, signed payload verification, and App Installer feed publication.
+
 ## [0.7.0] - 2026-07-19
 
 ### Added

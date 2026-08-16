@@ -114,6 +114,9 @@ async function readCachedStatus(
 ): Promise<Apc2Response | undefined> {
   const key = JSON.stringify([resolveApc2ctl(settings), args]);
   const now = Date.now();
+  for (const [cachedKey, entry] of statusCache) {
+    if (!entry.inFlight && entry.expiresAt <= now) statusCache.delete(cachedKey);
+  }
   const cached = statusCache.get(key);
   if (cached?.inFlight) return cached.inFlight;
   if (cached && cached.expiresAt > now) return cached.value;
@@ -223,6 +226,7 @@ class Apc2CommandAction extends SingletonAction<ActionSettings> {
   private readonly commandsInFlight = new Set<string>();
   private readonly updateGenerations = new Map<string, number>();
   private readonly visibleActions = new Set<string>();
+  private nextUpdateGeneration = 0;
 
   constructor(
     private readonly args: string[],
@@ -240,7 +244,7 @@ class Apc2CommandAction extends SingletonAction<ActionSettings> {
 
   override onWillDisappear(event: WillDisappearEvent<ActionSettings>): void {
     this.visibleActions.delete(event.action.id);
-    this.invalidateVisualUpdates(event.action.id);
+    this.updateGenerations.delete(event.action.id);
     this.stopPolling(event.action.id);
     this.stopAnimation(event.action.id);
     this.stopDelayedRefresh(event.action.id);
@@ -327,7 +331,7 @@ class Apc2CommandAction extends SingletonAction<ActionSettings> {
   }
 
   private invalidateVisualUpdates(actionId: string): void {
-    this.updateGenerations.set(actionId, (this.updateGenerations.get(actionId) ?? 0) + 1);
+    this.updateGenerations.set(actionId, ++this.nextUpdateGeneration);
   }
 
   private async updateStatus(
@@ -337,7 +341,7 @@ class Apc2CommandAction extends SingletonAction<ActionSettings> {
     const actionId = event.action.id;
     if (!this.visibleActions.has(actionId) || this.commandsInFlight.has(actionId)) return;
 
-    const generation = (this.updateGenerations.get(actionId) ?? 0) + 1;
+    const generation = ++this.nextUpdateGeneration;
     this.updateGenerations.set(actionId, generation);
     try {
       if (this.scope === "open") {

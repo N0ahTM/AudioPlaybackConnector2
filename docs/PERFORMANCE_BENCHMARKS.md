@@ -137,3 +137,7 @@ This harness intentionally does not create artificial memory pressure, manipulat
 the process working set, or run destructive low-memory experiments on the host.
 Perform pressure and long-running fault-injection scenarios only in a disposable
 test VM with separately reviewed tooling.
+
+## Recorded results
+
+- [Adaptive Cold residency baseline — 2026-08-15](performance/2026-08-15-adaptive-cold-baseline.md)

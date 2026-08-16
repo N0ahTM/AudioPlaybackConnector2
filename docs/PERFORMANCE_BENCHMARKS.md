@@ -116,6 +116,11 @@ host or measurement configuration, changed QUNS/power state, incomplete sample
 counts, and excessive schedule lateness. It reports paired median differences,
 median absolute deviation, and a deterministic 95% bootstrap interval for the
 paired median. Negative differences mean the candidate used fewer resources.
+Adaptive-residency requirements must be stable within each variant, but may
+differ between variants when the policy itself is the treatment under test. For
+example, an always-preloaded baseline is gated as Hot while an adaptive candidate
+is gated as Cold under the same fullscreen/presentation environment; both values
+are retained in the comparison artifact and report.
 Use `-AllowDirtyHarness` or `-AllowSameExecutable` only for explicit harness/control
 experiments, not release claims.
 

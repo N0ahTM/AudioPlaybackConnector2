@@ -191,6 +191,27 @@ try {
         throw "Bootstrap interval did not cover both synthetic paired differences."
     }
 
+    Write-SyntheticRun (Join-Path $runsRoot "candidate-r01.json") `
+        (Get-SyntheticRun "r01" "candidate" $candidateHash 90 -AdaptiveResidency Cold -UiResourcesLoaded $false)
+    Write-SyntheticRun (Join-Path $runsRoot "candidate-r02.json") `
+        (Get-SyntheticRun "r02" "candidate" $candidateHash 95 -AdaptiveResidency Cold -UiResourcesLoaded $false)
+    $differentResidencies = & $compareScript `
+        -InputDirectory $runsRoot `
+        -Scenario synthetic-hot `
+        -BaselineVariant baseline `
+        -CandidateVariant candidate `
+        -MinimumPairs 2 `
+        -BootstrapIterations 100 `
+        -OutputDirectory $outputRoot `
+        -PassThru
+    if ($differentResidencies.Baseline.RequiredAdaptiveResidency -ne "Hot" -or
+        $differentResidencies.Candidate.RequiredAdaptiveResidency -ne "Cold") {
+        throw "Variant-specific adaptive-residency requirements were not preserved."
+    }
+
+    Write-SyntheticRun (Join-Path $runsRoot "candidate-r01.json") `
+        (Get-SyntheticRun "r01" "candidate" $candidateHash 90)
+
     Write-SyntheticRun (Join-Path $runsRoot "candidate-r02.json") `
         (Get-SyntheticRun "r02" "candidate" $candidateHash 95 -UiResourcesLoaded $false)
     Invoke-ExpectedFailure {

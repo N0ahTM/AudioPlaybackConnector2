@@ -278,6 +278,30 @@ function Get-UniqueValue {
     return $values[0]
 }
 
+function Get-UniqueAdaptiveResidency {
+    param(
+        [Parameter(Mandatory)]
+        [object[]]$Runs,
+
+        [Parameter(Mandatory)]
+        [string]$Label
+    )
+
+    $values = @($Runs | ForEach-Object {
+            $property = $_.Run.PSObject.Properties['RequiredAdaptiveResidency']
+            if ($null -eq $property) {
+                "Any"
+            }
+            else {
+                [string]$property.Value
+            }
+        } | Sort-Object -Unique)
+    if ($values.Count -ne 1) {
+        throw "$Label must be identical across runs; found: $($values -join ', ')."
+    }
+    return $values[0]
+}
+
 function Format-InvariantNumber {
     param(
         [Parameter(Mandatory)]
@@ -377,6 +401,12 @@ $baselineManifestHash = Get-UniqueValue $baselineRuns 'Package.ManifestSha256' '
 $candidateManifestHash = Get-UniqueValue $candidateRuns 'Package.ManifestSha256' 'Candidate manifest hash'
 $baselinePackageVersion = Get-UniqueValue $baselineRuns 'Package.Version' 'Baseline package version'
 $candidatePackageVersion = Get-UniqueValue $candidateRuns 'Package.Version' 'Candidate package version'
+$baselineAdaptiveResidency = Get-UniqueAdaptiveResidency `
+    $baselineRuns `
+    'Baseline adaptive-residency requirement'
+$candidateAdaptiveResidency = Get-UniqueAdaptiveResidency `
+    $candidateRuns `
+    'Candidate adaptive-residency requirement'
 
 $metrics = @(
     [ordered]@{ Name = 'PrivateWorkingSetAverageBytes'; Path = 'Summary.PrivateWorkingSetBytes.Average'; Unit = 'bytes' },
@@ -416,23 +446,6 @@ foreach ($pairId in $pairIds) {
         }
         Assert-Equal $baselineValue $candidateValue "Pair '$pairId' $property"
     }
-
-    $baselineAdaptiveResidency = if ($null -ne $baseline.Run.PSObject.Properties['RequiredAdaptiveResidency']) {
-        [string]$baseline.Run.RequiredAdaptiveResidency
-    }
-    else {
-        "Any"
-    }
-    $candidateAdaptiveResidency = if ($null -ne $candidate.Run.PSObject.Properties['RequiredAdaptiveResidency']) {
-        [string]$candidate.Run.RequiredAdaptiveResidency
-    }
-    else {
-        "Any"
-    }
-    Assert-Equal `
-        $baselineAdaptiveResidency `
-        $candidateAdaptiveResidency `
-        "Pair '$pairId' required adaptive residency"
 
     $values = [ordered]@{}
     foreach ($metric in $metrics) {
@@ -512,12 +525,14 @@ $result = [pscustomobject][ordered]@{
         PackageVersion = $baselinePackageVersion
         ExecutableSha256 = $baselineExecutableHash
         ManifestSha256 = $baselineManifestHash
+        RequiredAdaptiveResidency = $baselineAdaptiveResidency
     }
     Candidate = [ordered]@{
         Variant = $CandidateVariant
         PackageVersion = $candidatePackageVersion
         ExecutableSha256 = $candidateExecutableHash
         ManifestSha256 = $candidateManifestHash
+        RequiredAdaptiveResidency = $candidateAdaptiveResidency
     }
     Metrics = @($metricResults)
     Pairs = @($pairRecords)
@@ -539,8 +554,10 @@ $markdown = [System.Collections.Generic.List[string]]::new()
 $markdown.Add("# Resource comparison: $Scenario")
 $markdown.Add("")
 $markdown.Add("- Pairs: $($pairRecords.Count)")
-$markdown.Add("- Baseline: ``$BaselineVariant`` ($baselinePackageVersion)")
-$markdown.Add("- Candidate: ``$CandidateVariant`` ($candidatePackageVersion)")
+$markdown.Add(
+    "- Baseline: ``$BaselineVariant`` ($baselinePackageVersion), adaptive residency ``$baselineAdaptiveResidency``")
+$markdown.Add(
+    "- Candidate: ``$CandidateVariant`` ($candidatePackageVersion), adaptive residency ``$candidateAdaptiveResidency``")
 $markdown.Add("- Bootstrap iterations: $BootstrapIterations (seed $RandomSeed)")
 $markdown.Add("")
 $markdown.Add("| Metric | Baseline median | Candidate median | Paired median difference | Median difference 95% bootstrap interval | Paired median % |")

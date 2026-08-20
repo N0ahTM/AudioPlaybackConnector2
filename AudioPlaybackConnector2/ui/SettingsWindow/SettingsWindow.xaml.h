@@ -41,8 +41,6 @@ struct SettingsWindow : SettingsWindowT<SettingsWindow> {
                                      winrt::Microsoft::UI::Xaml::RoutedEventArgs const& e);
     void ReportBugButton_Click(winrt::Windows::Foundation::IInspectable const& sender,
                                winrt::Microsoft::UI::Xaml::RoutedEventArgs const& e);
-    void StreamDeckSetupButton_Click(winrt::Windows::Foundation::IInspectable const& sender,
-                                     winrt::Microsoft::UI::Xaml::RoutedEventArgs const& e);
     void SettingsNavigation_SelectionChanged(
         winrt::Windows::Foundation::IInspectable const& sender,
         winrt::Microsoft::UI::Xaml::Controls::NavigationViewSelectionChangedEventArgs const& e);
@@ -60,7 +58,7 @@ struct SettingsWindow : SettingsWindowT<SettingsWindow> {
     [[nodiscard]] InitializationState InitializationStatus() const noexcept;
 
 private:
-    enum class SettingsPage { Devices, App, Privacy, StreamDeck, Help, About };
+    enum class SettingsPage { Devices, App, Privacy, Help, About };
 
     static LRESULT CALLBACK SettingsWindowSubclassProc(
         HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) noexcept;

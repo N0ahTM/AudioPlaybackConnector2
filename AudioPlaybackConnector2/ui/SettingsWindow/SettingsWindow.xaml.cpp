@@ -40,8 +40,6 @@ constexpr std::wstring_view c_featureRequestUrl =
     L"https://github.com/N0ahTM/AudioPlaybackConnector2/issues/new?labels=enhancement";
 constexpr std::wstring_view c_troubleshootingUrl =
     L"https://github.com/N0ahTM/AudioPlaybackConnector2/blob/main/docs/TROUBLESHOOTING.md";
-constexpr std::wstring_view c_streamDeckSetupUrl =
-    L"https://github.com/N0ahTM/AudioPlaybackConnector2/tree/main/integrations/stream-deck";
 constexpr double c_navigationPaneMinLengthDip = 116.0;
 constexpr double c_navigationPaneChromeDip = 90.0;
 constexpr double c_settingsContentMinWidthDip = 480.0;
@@ -304,8 +302,6 @@ void SettingsWindow::LocalizeSettingsText() {
     SetItemContent(DevicesNavItem(), _("Settings_Devices"));
     SetItemContent(AppNavItem(), _("Settings_App"));
     SetItemContent(PrivacyNavItem(), _("Settings_Privacy"));
-    SetItemContent(StreamDeckNavItem(), _("Settings_StreamDeck"));
-    StreamDeckBetaIcon().Glyph(winrt::hstring(_("Settings_BetaBadge")));
     SetItemContent(HelpNavItem(), _("Settings_Help"));
     SetItemContent(InfoNavItem(), _("Settings_About"));
 
@@ -345,10 +341,6 @@ void SettingsWindow::LocalizeSettingsText() {
 
     PrivacyModeLabel().Text(winrt::hstring(_("Settings_PrivacyMode")));
     PrivacyModeDesc().Text(winrt::hstring(_("Settings_PrivacyMode_Desc")));
-
-    StreamDeckDesc().Text(winrt::hstring(_("Settings_StreamDeck_Desc")));
-    apc::ui::SetButtonLabel(
-        StreamDeckSetupButton(), StreamDeckSetupButtonText(), winrt::hstring(_("Settings_StreamDeck_SetupGuide")));
 
     DiagnosticsPrivacyText().Text(winrt::hstring(_("Settings_Diagnostics_PrivacyNote")));
     apc::ui::SetButtonLabel(
@@ -592,10 +584,6 @@ void SettingsWindow::ReportBugButton_Click(IInspectable const&, RoutedEventArgs 
     LaunchUri(BuildReportBugUri());
 }
 
-void SettingsWindow::StreamDeckSetupButton_Click(IInspectable const&, RoutedEventArgs const&) {
-    LaunchUri(c_streamDeckSetupUrl);
-}
-
 void SettingsWindow::SettingsNavigation_SelectionChanged(IInspectable const&,
                                                          NavigationViewSelectionChangedEventArgs const& args) {
     if (m_suppressNavigationSelection) return;
@@ -610,8 +598,6 @@ void SettingsWindow::SettingsNavigation_SelectionChanged(IInspectable const&,
         ShowSettingsPage(SettingsPage::App);
     } else if (tag == L"privacy") {
         ShowSettingsPage(SettingsPage::Privacy);
-    } else if (tag == L"streamDeck") {
-        ShowSettingsPage(SettingsPage::StreamDeck);
     } else if (tag == L"help") {
         ShowSettingsPage(SettingsPage::Help);
     } else if (tag == L"about") {
@@ -727,16 +713,13 @@ util::SettingsWindowPlacement SettingsWindow::CalculateAdaptivePlacement() {
 }
 
 double SettingsWindow::CalculateNavigationPaneLength() {
-    std::array<NavigationViewItem, 6> items{
-        DevicesNavItem(), AppNavItem(), PrivacyNavItem(), StreamDeckNavItem(), HelpNavItem(), InfoNavItem()};
+    std::array<NavigationViewItem, 5> items{
+        DevicesNavItem(), AppNavItem(), PrivacyNavItem(), HelpNavItem(), InfoNavItem()};
 
     auto maxLabelWidth = 0.0;
     for (auto const& item : items) {
         maxLabelWidth = std::max(maxLabelWidth, MeasureTextWidth(NavigationItemText(item), 14.0));
     }
-    auto const streamDeckLabelWidth = MeasureTextWidth(_("Settings_StreamDeck"), 14.0) + 24.0;
-    maxLabelWidth = std::max(maxLabelWidth, streamDeckLabelWidth);
-
     return std::max(c_navigationPaneMinLengthDip, std::ceil(maxLabelWidth + c_navigationPaneChromeDip));
 }
 
@@ -953,7 +936,6 @@ void SettingsWindow::ShowSettingsPage(SettingsPage page) {
     DevicesSection().Visibility(page == SettingsPage::Devices ? Visibility::Visible : Visibility::Collapsed);
     AppSection().Visibility(page == SettingsPage::App ? Visibility::Visible : Visibility::Collapsed);
     PrivacySection().Visibility(page == SettingsPage::Privacy ? Visibility::Visible : Visibility::Collapsed);
-    StreamDeckSection().Visibility(page == SettingsPage::StreamDeck ? Visibility::Visible : Visibility::Collapsed);
     HelpSection().Visibility(page == SettingsPage::Help ? Visibility::Visible : Visibility::Collapsed);
     InfoSection().Visibility(page == SettingsPage::About ? Visibility::Visible : Visibility::Collapsed);
 
@@ -973,10 +955,6 @@ void SettingsWindow::ShowSettingsPage(SettingsPage page) {
         case SettingsPage::Privacy:
             TitleText().Text(winrt::hstring(_("Settings_Privacy")));
             SubtitleText().Text(winrt::hstring(_("Settings_Privacy_Intro")));
-            break;
-        case SettingsPage::StreamDeck:
-            TitleText().Text(winrt::hstring(_("Settings_StreamDeck")));
-            SubtitleText().Text(winrt::hstring(_("Settings_StreamDeck_Intro")));
             break;
         case SettingsPage::Help:
             TitleText().Text(winrt::hstring(_("Settings_Help")));

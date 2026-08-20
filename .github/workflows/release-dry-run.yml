@@ -84,30 +84,6 @@ jobs:
           --template=gcc `
           $files
 
-    - name: Set up Node.js for Stream Deck plugin
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
-        cache: npm
-        cache-dependency-path: integrations/stream-deck/package-lock.json
-
-    - name: Build and package Stream Deck plugin
-      id: streamdeck
-      working-directory: integrations/stream-deck
-      shell: pwsh
-      run: |
-        npm ci
-        npm audit --audit-level=high
-        npm run pack
-        $plugin = Get-ChildItem -Path . -Filter '*.streamDeckPlugin' -File |
-          Sort-Object LastWriteTime -Descending |
-          Select-Object -First 1
-        if (-not $plugin) {
-          throw 'Stream Deck plugin package was not created.'
-        }
-        "PATH=$($plugin.FullName)" >> $env:GITHUB_OUTPUT
-        "NAME=$($plugin.Name)" >> $env:GITHUB_OUTPUT
-
     - name: Decode signing certificate
       id: cert
       shell: pwsh
@@ -211,7 +187,6 @@ jobs:
 
         Copy-Item -LiteralPath '${{ steps.msix.outputs.PATH }}' -Destination $staging -Force
         Copy-Item -LiteralPath '${{ steps.appinstaller.outputs.PATH }}' -Destination $staging -Force
-        Copy-Item -LiteralPath '${{ steps.streamdeck.outputs.PATH }}' -Destination $staging -Force
         Copy-Item -LiteralPath 'certs/AudioPlaybackConnector2.cer' -Destination $staging -Force
 
         $releaseNotes = Join-Path $staging 'RELEASE_NOTES.md'

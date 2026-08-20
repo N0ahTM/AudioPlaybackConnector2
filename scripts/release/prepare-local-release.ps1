@@ -92,24 +92,6 @@ try {
         $releaseNotes.Trim() + [Environment]::NewLine
     )
 
-    $streamDeckRoot = Join-Path $repoRoot "integrations/stream-deck"
-    Push-Location $streamDeckRoot
-    try {
-        npm ci | Out-Host
-        if ($LASTEXITCODE -ne 0) { throw "Stream Deck dependency restore failed." }
-        npm audit --audit-level=high | Out-Host
-        if ($LASTEXITCODE -ne 0) { throw "Stream Deck dependency audit failed." }
-        npm run pack | Out-Host
-        if ($LASTEXITCODE -ne 0) { throw "Stream Deck plugin build failed." }
-    } finally {
-        Pop-Location
-    }
-    $streamDeckPackage = Get-ChildItem -Path $streamDeckRoot -Filter "*.streamDeckPlugin" -File |
-        Sort-Object LastWriteTime -Descending |
-        Select-Object -First 1
-    if (-not $streamDeckPackage) { throw "Stream Deck plugin package was not created." }
-    Copy-Item -LiteralPath $streamDeckPackage.FullName -Destination $distRoot -Force
-
     Write-Host ""
     Write-Host "Local release bundle ready:" -ForegroundColor Green
     Get-ChildItem -LiteralPath $distRoot | Format-Table Name, Length, LastWriteTime

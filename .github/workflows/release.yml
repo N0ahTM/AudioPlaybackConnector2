@@ -89,30 +89,6 @@ jobs:
     - name: Restore NuGet packages
       run: msbuild AudioPlaybackConnector2.slnx -t:restore -p:RestorePackagesConfig=true
 
-    - name: Set up Node.js for Stream Deck plugin
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
-        cache: npm
-        cache-dependency-path: integrations/stream-deck/package-lock.json
-
-    - name: Build and package Stream Deck plugin
-      id: streamdeck
-      working-directory: integrations/stream-deck
-      shell: pwsh
-      run: |
-        npm ci
-        npm audit --audit-level=high
-        npm run pack
-        $plugin = Get-ChildItem -Path . -Filter '*.streamDeckPlugin' -File |
-          Sort-Object LastWriteTime -Descending |
-          Select-Object -First 1
-        if (-not $plugin) {
-          throw 'Stream Deck plugin package was not created.'
-        }
-        "PATH=$($plugin.FullName)" >> $env:GITHUB_OUTPUT
-        "NAME=$($plugin.Name)" >> $env:GITHUB_OUTPUT
-
     - name: Build signed MSIX (Release, x64)
       run: >
         msbuild AudioPlaybackConnector2.slnx
@@ -212,7 +188,7 @@ jobs:
 
         ---
 
-        **Installation:** Download the `.cer` once and install through the `.appinstaller` file. The optional Stream Deck integration is provided as a `.streamDeckPlugin` asset.
+        **Installation:** Download the `.cer` once and install through the `.appinstaller` file.
 
         ```powershell
         Import-Certificate -FilePath ".\AudioPlaybackConnector2.cer" -CertStoreLocation "Cert:\LocalMachine\Root"
@@ -239,7 +215,6 @@ jobs:
         files: |
           ${{ steps.msix.outputs.PATH }}
           ${{ steps.appinstaller.outputs.PATH }}
-          ${{ steps.streamdeck.outputs.PATH }}
           certs/AudioPlaybackConnector2.cer
         fail_on_unmatched_files: true
 

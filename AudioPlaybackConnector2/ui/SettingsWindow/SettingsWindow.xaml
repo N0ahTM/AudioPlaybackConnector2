@@ -74,31 +74,6 @@
                         <FontIcon Glyph="&#xE72E;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem
-                    x:Name="StreamDeckNavItem"
-                    Content=""
-                    Margin="4,0"
-                    MinHeight="40"
-                    Padding="8,0"
-                    Tag="streamDeck">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE950;" />
-                    </NavigationViewItem.Icon>
-                    <NavigationViewItem.InfoBadge>
-                        <InfoBadge
-                            x:Name="StreamDeckBetaBadge"
-                            Background="#2F7FE5">
-                            <InfoBadge.IconSource>
-                                <FontIconSource
-                                    x:Name="StreamDeckBetaIcon"
-                                    FontFamily="Segoe UI"
-                                    FontSize="10"
-                                    Foreground="White"
-                                    Glyph="&#x03B2;" />
-                            </InfoBadge.IconSource>
-                        </InfoBadge>
-                    </NavigationViewItem.InfoBadge>
-                </NavigationViewItem>
             </NavigationView.MenuItems>
             <NavigationView.FooterMenuItems>
                 <NavigationViewItem
@@ -452,44 +427,6 @@
                                     Grid.Column="1"
                                     VerticalAlignment="Center"
                                     MinWidth="64" />
-                        </Grid>
-                    </StackPanel>
-
-                    <StackPanel
-                        x:Name="StreamDeckSection"
-                        HorizontalAlignment="Stretch"
-                        Spacing="8"
-                        Visibility="Collapsed">
-                        <Grid
-                            Margin="0,4,12,8"
-                            RowDefinitions="Auto,Auto"
-                            RowSpacing="10">
-                                <TextBlock
-                                    x:Name="StreamDeckDesc"
-                                    MinWidth="0"
-                                    VerticalAlignment="Center"
-                                    Foreground="{ThemeResource SystemControlForegroundBaseMediumBrush}"
-                                    Text=""
-                                    TextWrapping="Wrap" />
-                                <Button
-                                    x:Name="StreamDeckSetupButton"
-                                    Grid.Row="1"
-                                    HorizontalAlignment="Left"
-                                    VerticalAlignment="Center"
-                                    Click="StreamDeckSetupButton_Click">
-                                    <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
-                                        <FontIcon
-                                            VerticalAlignment="Center"
-                                            FontSize="14"
-                                            Glyph="&#xE8A7;" />
-                                        <TextBlock
-                                            x:Name="StreamDeckSetupButtonText"
-                                            Grid.Column="1"
-                                            MinWidth="0"
-                                            TextWrapping="WrapWholeWords"
-                                        Text="" />
-                                    </Grid>
-                                </Button>
                         </Grid>
                     </StackPanel>
 

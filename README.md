@@ -46,7 +46,6 @@ For commands and certificate-store options, see [Installation](docs/INSTALLATION
 - Manual update checks through GitHub Releases and the App Installer feed.
 - Settings window placement persistence.
 - Local crash reports and minidumps for troubleshooting.
-- Native Stream Deck plugin source and example profile.
 - Localized UI in eight languages.
 
 ## Requirements
@@ -62,7 +61,7 @@ For commands and certificate-store options, see [Installation](docs/INSTALLATION
 - **Open tray menu:** Right-click the tray icon.
 - **Quick toggle:** Double-click the tray icon to connect or disconnect the last connected device.
 - **Settings:** Open from the tray menu to configure language, startup behavior, reconnect behavior, notifications, and update checks.
-- **Command line:** Use `apc2ctl.exe` from PowerShell, MacroPads, Stream Deck actions, or scripts:
+- **Command line:** Use `apc2ctl.exe` from PowerShell, MacroPads, or scripts:
 
 ```powershell
 apc2ctl status
@@ -78,10 +77,6 @@ apc2ctl reconnect-all
 ```
 
 Add `--json` for machine-readable output. Add `--raw` when you explicitly need real device IDs or names while privacy mode is enabled.
-
-## Stream Deck
-
-The official Stream Deck SDK plugin (currently in **beta** — expect bugs and report them via GitHub issues) is available as a `.streamDeckPlugin` asset with each release. Open that file to install it in Stream Deck. Its source is in [integrations/stream-deck](integrations/stream-deck/README.md). It wraps `apc2ctl.exe` and includes actions for default-device toggle/connect/disconnect/reconnect, reconnect all, disconnect all, opening the picker, and opening Settings.
 
 ## Installation Notes
 

@@ -29,6 +29,8 @@ jobs:
       tag: ${{ steps.version.outputs.TAG }}
       version: ${{ steps.version.outputs.VERSION }}
       msix_name: ${{ steps.msix.outputs.NAME }}
+      web_setup_name: ${{ steps.installers.outputs.WEB_NAME }}
+      bundle_setup_name: ${{ steps.installers.outputs.BUNDLE_NAME }}
 
     steps:
     - name: Checkout
@@ -170,6 +172,42 @@ jobs:
         ./scripts/release/generate-appinstaller.ps1 @params
         "PATH=$outputPath" >> $env:GITHUB_OUTPUT
 
+    - name: Install Inno Setup
+      run: choco install innosetup -y --no-progress
+
+    - name: Build bootstrapper installers
+      id: installers
+      shell: pwsh
+      run: |
+        $outputDir = Join-Path $env:RUNNER_TEMP 'installers'
+        $bundleParams = @{
+          Mode = 'Bundle'
+          MsixPath = '${{ steps.msix.outputs.PATH }}'
+          CertPath = 'certs/AudioPlaybackConnector2.cer'
+          Version = '${{ steps.version.outputs.SEMVER }}'
+          OutputDir = $outputDir
+        }
+        $depsDir = '${{ steps.deps.outputs.DIR }}'
+        if ($depsDir -and (Test-Path $depsDir)) {
+          $bundleParams['DependenciesDir'] = $depsDir
+        }
+        ./installer/build-installer.ps1 @bundleParams
+        ./installer/build-installer.ps1 `
+          -Mode Web `
+          -CertPath 'certs/AudioPlaybackConnector2.cer' `
+          -Version '${{ steps.version.outputs.SEMVER }}' `
+          -OutputDir $outputDir
+
+        $bundlePath = Join-Path $outputDir 'AudioPlaybackConnector2-Setup-${{ steps.version.outputs.SEMVER }}.exe'
+        $webPath = Join-Path $outputDir 'AudioPlaybackConnector2-WebSetup.exe'
+        if (-not (Test-Path $bundlePath) -or -not (Test-Path $webPath)) {
+          throw 'One or more bootstrapper installers were not created.'
+        }
+        "BUNDLE_PATH=$bundlePath" >> $env:GITHUB_OUTPUT
+        "WEB_PATH=$webPath" >> $env:GITHUB_OUTPUT
+        "BUNDLE_NAME=$([IO.Path]::GetFileName($bundlePath))" >> $env:GITHUB_OUTPUT
+        "WEB_NAME=$([IO.Path]::GetFileName($webPath))" >> $env:GITHUB_OUTPUT
+
     - name: Reject App Installer feed downgrades
       shell: pwsh
       run: >
@@ -188,14 +226,20 @@ jobs:
 
         ---
 
-        **Installation:** Download the `.cer` once and install through the `.appinstaller` file.
+        **Recommended installation:** Download and run `AudioPlaybackConnector2-WebSetup.exe`.
+
+        The versioned `AudioPlaybackConnector2-Setup-${{ steps.version.outputs.SEMVER }}.exe` contains the complete package for offline installation. Both setup variants install per-user without administrator rights. Windows SmartScreen may warn because the setup executable is not yet code-signed.
+
+        The `.appinstaller`, `.msix`, certificate, and dependency assets remain available for manual installation and the existing App Installer update feed.
 
         ```powershell
-        Import-Certificate -FilePath ".\AudioPlaybackConnector2.cer" -CertStoreLocation "Cert:\LocalMachine\Root"
-        Start-Process "ms-appinstaller:?source=${{ env.APPINSTALLER_URL }}"
+        Import-Certificate -FilePath ".\AudioPlaybackConnector2.cer" -CertStoreLocation "Cert:\CurrentUser\TrustedPeople"
+        $installer = Join-Path $env:TEMP "AudioPlaybackConnector2.appinstaller"
+        Invoke-WebRequest -Uri "${{ env.APPINSTALLER_URL }}" -OutFile $installer
+        Start-Process $installer
         ```
 
-        If Windows does not open App Installer from the protocol link, download and open the `.appinstaller` asset directly. Direct MSIX sideloading remains available, but installing through the `.appinstaller` file enables Windows App Installer update checks.
+        Direct MSIX sideloading remains available, but installing through the `.appinstaller` file enables Windows App Installer update checks.
 
         > Releases are signed with a self-signed certificate. A free open-source code-signing certificate has been requested but approval may take some time.
         '@
@@ -215,6 +259,8 @@ jobs:
         files: |
           ${{ steps.msix.outputs.PATH }}
           ${{ steps.appinstaller.outputs.PATH }}
+          ${{ steps.installers.outputs.WEB_PATH }}
+          ${{ steps.installers.outputs.BUNDLE_PATH }}
           certs/AudioPlaybackConnector2.cer
         fail_on_unmatched_files: true
 
@@ -255,19 +301,30 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: gh release edit "${{ needs.build-release.outputs.tag }}" --repo "${{ github.repository }}" --draft=false
 
-    - name: Verify public MSIX asset
+    - name: Verify public release assets
       shell: bash
       run: |
-        asset_url="https://github.com/${{ github.repository }}/releases/download/${{ needs.build-release.outputs.tag }}/${{ needs.build-release.outputs.msix_name }}"
-        for attempt in {1..6}; do
-          if curl --fail --location --silent --show-error --head "$asset_url" > /dev/null; then
-            echo "Public MSIX verified: $asset_url"
-            exit 0
+        assets=(
+          "${{ needs.build-release.outputs.msix_name }}"
+          "${{ needs.build-release.outputs.web_setup_name }}"
+          "${{ needs.build-release.outputs.bundle_setup_name }}"
+        )
+        for asset in "${assets[@]}"; do
+          asset_url="https://github.com/${{ github.repository }}/releases/download/${{ needs.build-release.outputs.tag }}/$asset"
+          verified=false
+          for attempt in {1..6}; do
+            if curl --fail --location --silent --show-error --head "$asset_url" > /dev/null; then
+              echo "Public asset verified: $asset_url"
+              verified=true
+              break
+            fi
+            if [ "$attempt" -lt 6 ]; then sleep 10; fi
+          done
+          if [ "$verified" != true ]; then
+            echo "Release asset did not become publicly reachable: $asset_url" >&2
+            exit 1
           fi
-          if [ "$attempt" -lt 6 ]; then sleep 10; fi
         done
-        echo "MSIX did not become publicly reachable: $asset_url" >&2
-        exit 1
 
   deploy-pages:
     runs-on: ubuntu-latest

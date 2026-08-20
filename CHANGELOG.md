@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added per-user web and offline bootstrapper installers with adaptive install, update, repair, and uninstall flows.
+
+### Changed
+- Extended release and dry-run workflows to build and verify both setup variants alongside the existing MSIX, App Installer feed, certificate, and dependency assets.
+- Made the web setup embed the pinned signing certificate and validate the selected x64 package identity before installation.
+
 ### Removed
 - Removed the unmaintained Stream Deck integration and its release artifact. The command-line client remains available for external automation.
 

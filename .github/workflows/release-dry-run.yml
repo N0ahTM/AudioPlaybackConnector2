@@ -177,6 +177,40 @@ jobs:
         ./scripts/release/generate-appinstaller.ps1 @params
         "PATH=$outputPath" >> $env:GITHUB_OUTPUT
 
+    - name: Install Inno Setup
+      run: choco install innosetup -y --no-progress
+
+    - name: Build bootstrapper installers
+      id: installers
+      shell: pwsh
+      run: |
+        $outputDir = Join-Path $env:RUNNER_TEMP 'installers'
+        $bundleParams = @{
+          Mode = 'Bundle'
+          MsixPath = '${{ steps.msix.outputs.PATH }}'
+          CertPath = 'certs/AudioPlaybackConnector2.cer'
+          Version = '${{ steps.version.outputs.SEMVER }}'
+          OutputDir = $outputDir
+        }
+        $depsDir = '${{ steps.deps.outputs.DIR }}'
+        if ($depsDir -and (Test-Path $depsDir)) {
+          $bundleParams['DependenciesDir'] = $depsDir
+        }
+        ./installer/build-installer.ps1 @bundleParams
+        ./installer/build-installer.ps1 `
+          -Mode Web `
+          -CertPath 'certs/AudioPlaybackConnector2.cer' `
+          -Version '${{ steps.version.outputs.SEMVER }}' `
+          -OutputDir $outputDir
+
+        $bundlePath = Join-Path $outputDir 'AudioPlaybackConnector2-Setup-${{ steps.version.outputs.SEMVER }}.exe'
+        $webPath = Join-Path $outputDir 'AudioPlaybackConnector2-WebSetup.exe'
+        if (-not (Test-Path $bundlePath) -or -not (Test-Path $webPath)) {
+          throw 'One or more bootstrapper installers were not created.'
+        }
+        "BUNDLE_PATH=$bundlePath" >> $env:GITHUB_OUTPUT
+        "WEB_PATH=$webPath" >> $env:GITHUB_OUTPUT
+
     - name: Stage dry-run artifacts and report sizes
       id: report
       shell: pwsh
@@ -187,6 +221,8 @@ jobs:
 
         Copy-Item -LiteralPath '${{ steps.msix.outputs.PATH }}' -Destination $staging -Force
         Copy-Item -LiteralPath '${{ steps.appinstaller.outputs.PATH }}' -Destination $staging -Force
+        Copy-Item -LiteralPath '${{ steps.installers.outputs.WEB_PATH }}' -Destination $staging -Force
+        Copy-Item -LiteralPath '${{ steps.installers.outputs.BUNDLE_PATH }}' -Destination $staging -Force
         Copy-Item -LiteralPath 'certs/AudioPlaybackConnector2.cer' -Destination $staging -Force
 
         $releaseNotes = Join-Path $staging 'RELEASE_NOTES.md'

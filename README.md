@@ -20,10 +20,9 @@ Built with **WinUI 3 Desktop**, **C++/WinRT**, and distributed as **MSIX**.
 ## Quick Start
 
 1. Pair your Bluetooth speaker, headset, or other A2DP audio device in Windows.
-2. Download the latest `.appinstaller` and `.cer` from [Releases](https://github.com/N0ahTM/AudioPlaybackConnector2/releases/latest).
-3. Trust the `.cer` certificate once.
-4. Open the `.appinstaller` file to install the app with its update feed.
-5. Launch AudioPlaybackConnector2 and use the tray icon to manage devices.
+2. Download `AudioPlaybackConnector2-WebSetup.exe` from the [latest release](https://github.com/N0ahTM/AudioPlaybackConnector2/releases/latest).
+3. Run the setup. It installs the app and its signing certificate for the current user.
+4. Launch AudioPlaybackConnector2 and use the tray icon to manage devices.
 
 For commands and certificate-store options, see [Installation](docs/INSTALLATION.md).
 
@@ -80,9 +79,9 @@ Add `--json` for machine-readable output. Add `--raw` when you explicitly need r
 
 ## Installation Notes
 
-The recommended install path is the `.appinstaller` file from the latest release. It preserves update-feed behavior and pulls in required framework packages such as VCLibs and the Windows App SDK runtime.
+The recommended install path is `AudioPlaybackConnector2-WebSetup.exe` from the latest release. A versioned offline setup is also provided. Both bootstrapper variants install the signing certificate, app package, and required framework packages for the current user.
 
-Direct `.msix` installation is still possible, but missing framework dependencies may need to be installed manually and update-feed behavior is not preserved.
+The `.appinstaller` feed and direct `.msix` package remain available for existing installations and manual fallback. Direct `.msix` installation may require framework dependencies to be installed manually and does not preserve update-feed behavior.
 
 Releases are currently signed with a self-signed certificate, so Windows must trust the release `.cer` before installation.
 

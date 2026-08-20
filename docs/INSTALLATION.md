@@ -1,32 +1,46 @@
 # Installation
 
-AudioPlaybackConnector2 supports two installation paths:
+AudioPlaybackConnector2 supports three installation paths:
 
 - Build from source (developer workflow)
-- Install the published MSIX release (end-user workflow)
+- Install with the web or offline bootstrapper (recommended end-user workflow)
+- Install the published MSIX release manually (advanced workflow)
 
 For local development, see [Developer setup and build](DEV_SETUP.md).
 
-## Install Released MSIX
+## Install with Setup
+
+Each GitHub release provides:
+
+- `AudioPlaybackConnector2-WebSetup.exe`, which downloads the current release payload
+- `AudioPlaybackConnector2-Setup-<version>.exe`, which contains the complete offline payload
+
+Both variants install per-user without administrator rights. They import the pinned release certificate into
+`Cert:\CurrentUser\TrustedPeople`, install the MSIX and its framework dependencies, and launch the app after an
+interactive installation. The setup executable itself is not yet code-signed, so Windows SmartScreen may display
+an unknown-publisher warning.
+
+## Manual MSIX Installation
 
 Each GitHub release provides:
 
 - `.appinstaller`
 - `.msix`
 - `.cer` certificate
+- framework dependency packages
 
 ### 1) Trust the release certificate
 
 Right-click the `.cer` file and choose **Install Certificate**, or use PowerShell:
 
 ```powershell
-Import-Certificate -FilePath ".\AudioPlaybackConnector2.cer" -CertStoreLocation "Cert:\LocalMachine\Root"
+Import-Certificate -FilePath ".\AudioPlaybackConnector2.cer" -CertStoreLocation "Cert:\CurrentUser\TrustedPeople"
 ```
 
-If you only want per-user trust, use:
+Machine-wide trust is optional and requires an elevated PowerShell session:
 
 ```powershell
-Import-Certificate -FilePath ".\AudioPlaybackConnector2.cer" -CertStoreLocation "Cert:\CurrentUser\TrustedPeople"
+Import-Certificate -FilePath ".\AudioPlaybackConnector2.cer" -CertStoreLocation "Cert:\LocalMachine\Root"
 ```
 
 ### 2) Install via App Installer

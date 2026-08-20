@@ -169,12 +169,10 @@ artifacts/
 static_analysis_log.txt
 
 # -----------------------------------------------------------------------------
-# 11. Stream Deck Plugin Build Artifacts
+# 11. Bootstrapper Installer Staging
 # -----------------------------------------------------------------------------
 
-node_modules/
-*.streamDeckPlugin
-!integrations/stream-deck/com.n0ahtm.audioplaybackconnector2.sdPlugin/
-!integrations/stream-deck/com.n0ahtm.audioplaybackconnector2.sdPlugin/**
-integrations/stream-deck/com.n0ahtm.audioplaybackconnector2.sdPlugin/bin/
-
+# Staged release payloads for the Inno Setup bootstrapper; only the runtime
+# script is source. Built installers land in dist/ (already ignored).
+installer/stage/*
+!installer/stage/install-app.ps1

@@ -8,6 +8,7 @@ param(
     [string]$CandidatePackageName = "",
     [string]$CandidatePublisher = "",
     [string]$CandidateProcessorArchitecture = "",
+    [string]$BackupPath = "",
     [int]$Attempts = 3,
     [int]$DelaySeconds = 5,
     [int]$TimeoutSeconds = 30
@@ -117,6 +118,15 @@ if ($comparison -eq 0) {
             throw "Refusing to replace App Installer version $packageVersion with a different $($expectation.Attribute)."
         }
     }
+}
+
+if (-not [string]::IsNullOrWhiteSpace($BackupPath)) {
+    $backupDirectory = Split-Path -Parent $BackupPath
+    if (-not [string]::IsNullOrWhiteSpace($backupDirectory)) {
+        New-Item -ItemType Directory -Path $backupDirectory -Force | Out-Null
+    }
+    [System.IO.File]::WriteAllText($BackupPath, $feedContent, [System.Text.UTF8Encoding]::new($false))
+    Write-Host "Existing App Installer feed backed up to '$BackupPath'."
 }
 
 Write-Host "App Installer version is monotonic: $packageVersion -> $CandidateVersion"

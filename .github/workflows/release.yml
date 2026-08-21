@@ -32,6 +32,8 @@ jobs:
       web_setup_name: ${{ steps.installers.outputs.WEB_NAME }}
       bundle_setup_name: ${{ steps.installers.outputs.BUNDLE_NAME }}
       dependency_names: ${{ steps.deps.outputs.NAMES }}
+      feed_backup_exists: ${{ steps.feed-backup.outputs.EXISTS }}
+      feed_backup_sha256: ${{ steps.feed-backup.outputs.SHA256 }}
 
     steps:
     - name: Checkout
@@ -215,16 +217,30 @@ jobs:
         "BUNDLE_NAME=$([IO.Path]::GetFileName($bundlePath))" >> $env:GITHUB_OUTPUT
         "WEB_NAME=$([IO.Path]::GetFileName($webPath))" >> $env:GITHUB_OUTPUT
 
-    - name: Reject App Installer feed downgrades
+    - name: Back up current feed and reject App Installer downgrades
+      id: feed-backup
       shell: pwsh
-      run: >
-        ./scripts/release/assert-appinstaller-monotonic.ps1
-        -AppInstallerUrl '${{ env.APPINSTALLER_URL }}'
-        -CandidateVersion '${{ steps.version.outputs.VERSION }}'
-        -CandidatePackageUri 'https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.TAG }}/${{ steps.msix.outputs.NAME }}'
-        -CandidatePackageName N0ahTM.AudioPlaybackConnector2
-        -CandidatePublisher 'CN=AudioPlaybackConnector2'
-        -CandidateProcessorArchitecture x64
+      run: |
+        $rollbackDir = Join-Path $env:RUNNER_TEMP 'pages-rollback'
+        $backupPath = Join-Path $rollbackDir 'AudioPlaybackConnector2.appinstaller'
+        ./scripts/release/assert-appinstaller-monotonic.ps1 `
+          -AppInstallerUrl '${{ env.APPINSTALLER_URL }}' `
+          -CandidateVersion '${{ steps.version.outputs.VERSION }}' `
+          -CandidatePackageUri 'https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.TAG }}/${{ steps.msix.outputs.NAME }}' `
+          -CandidatePackageName N0ahTM.AudioPlaybackConnector2 `
+          -CandidatePublisher 'CN=AudioPlaybackConnector2' `
+          -CandidateProcessorArchitecture x64 `
+          -BackupPath $backupPath
+
+        if (Test-Path -LiteralPath $backupPath) {
+          "EXISTS=true" >> $env:GITHUB_OUTPUT
+          "SHA256=$((Get-FileHash -LiteralPath $backupPath -Algorithm SHA256).Hash)" >> $env:GITHUB_OUTPUT
+        } else {
+          New-Item -ItemType Directory -Path $rollbackDir -Force | Out-Null
+          [IO.File]::WriteAllText((Join-Path $rollbackDir 'index.html'), 'No App Installer feed is currently published.')
+          "EXISTS=false" >> $env:GITHUB_OUTPUT
+          "SHA256=" >> $env:GITHUB_OUTPUT
+        }
 
     - name: Build release body
       id: body
@@ -293,11 +309,19 @@ jobs:
     - name: Upload GitHub Pages artifact
       uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
       with:
+        name: github-pages-candidate
         path: pages
+
+    - name: Upload App Installer rollback artifact
+      uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+      with:
+        name: github-pages-rollback
+        path: ${{ runner.temp }}/pages-rollback
 
   publish-release:
     runs-on: ubuntu-24.04
     needs: build-release
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     permissions:
       contents: write
     environment:
@@ -356,6 +380,8 @@ jobs:
     - name: Deploy GitHub Pages
       id: deployment
       uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+      with:
+        artifact_name: github-pages-candidate
 
   verify-release:
     runs-on: ubuntu-24.04
@@ -382,3 +408,101 @@ jobs:
         -ExpectedProcessorArchitecture x64
         -ExpectedPackageUri 'https://github.com/${{ github.repository }}/releases/download/${{ needs.build-release.outputs.tag }}/${{ needs.build-release.outputs.msix_name }}'
         -VerifyPackageUri
+
+  rollback-release:
+    runs-on: ubuntu-24.04
+    needs:
+      - build-release
+      - publish-release
+      - deploy-pages
+      - verify-release
+    if: >-
+      ${{
+        always() &&
+        github.event_name == 'workflow_dispatch' &&
+        needs.build-release.result == 'success' &&
+        (
+          needs.publish-release.result != 'success' ||
+          needs.deploy-pages.result != 'success' ||
+          needs.verify-release.result != 'success'
+        )
+      }}
+    permissions:
+      contents: write
+
+    steps:
+    - name: Return GitHub Release to draft
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh release edit "${{ needs.build-release.outputs.tag }}" --repo "${{ github.repository }}" --draft=true
+        is_draft=$(gh release view "${{ needs.build-release.outputs.tag }}" --repo "${{ github.repository }}" --json isDraft --jq .isDraft)
+        if [ "$is_draft" != "true" ]; then
+          echo "Release did not return to draft state." >&2
+          exit 1
+        fi
+
+  rollback-pages:
+    runs-on: ubuntu-24.04
+    needs:
+      - build-release
+      - publish-release
+      - deploy-pages
+      - verify-release
+      - rollback-release
+    if: >-
+      ${{
+        always() &&
+        github.event_name == 'workflow_dispatch' &&
+        needs.build-release.result == 'success' &&
+        (
+          needs.deploy-pages.result == 'failure' ||
+          needs.deploy-pages.result == 'cancelled' ||
+          (
+            needs.deploy-pages.result == 'success' &&
+            needs.verify-release.result != 'success'
+          )
+        )
+      }}
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.rollback-deployment.outputs.page_url }}
+
+    steps:
+    - name: Restore previous GitHub Pages feed
+      id: rollback-deployment
+      uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
+      with:
+        artifact_name: github-pages-rollback
+
+    - name: Verify restored App Installer feed
+      shell: pwsh
+      run: |
+        $hadFeed = '${{ needs.build-release.outputs.feed_backup_exists }}' -eq 'true'
+        $expectedHash = '${{ needs.build-release.outputs.feed_backup_sha256 }}'
+        $downloadPath = Join-Path $env:RUNNER_TEMP 'restored.appinstaller'
+        for ($attempt = 1; $attempt -le 6; $attempt++) {
+          try {
+            Invoke-WebRequest -Uri $env:APPINSTALLER_URL -OutFile $downloadPath -TimeoutSec 30 -ErrorAction Stop
+            if (-not $hadFeed) {
+              throw 'The App Installer feed still exists although no previous feed was available.'
+            }
+            $actualHash = (Get-FileHash -LiteralPath $downloadPath -Algorithm SHA256).Hash
+            if ($actualHash -ne $expectedHash) {
+              throw "Restored feed hash $actualHash does not match $expectedHash."
+            }
+            Write-Host "Previous App Installer feed restored: $actualHash"
+            exit 0
+          } catch {
+            $statusCode = if ($null -ne $_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
+            if (-not $hadFeed -and $statusCode -eq 404) {
+              Write-Host 'App Installer feed removal verified.'
+              exit 0
+            }
+            if ($attempt -eq 6) { throw }
+            Start-Sleep -Seconds 10
+          }
+        }

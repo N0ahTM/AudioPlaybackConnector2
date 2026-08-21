@@ -59,4 +59,4 @@ Before a release, test both variants on a clean supported Windows user account:
 
 ## CI Integration
 
-The release and dry-run workflows build both variants from the verified signed MSIX and publish them alongside the App Installer, MSIX, certificate, and dependency assets.
+The release workflow builds both variants from the verified signed MSIX. A tag push creates or refreshes a draft release with the App Installer, MSIX, certificate, and dependency assets. A manual workflow dispatch rebuilds and verifies the tagged source before publishing the draft and deploying the App Installer feed. If publication, Pages deployment, or feed verification fails, the release returns to draft; when Pages may have changed, the previous feed is restored and verified. The dry-run workflow performs the same build checks without creating a release.

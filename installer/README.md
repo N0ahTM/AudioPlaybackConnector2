@@ -39,10 +39,10 @@ The setup `.exe` is currently unsigned and may trigger SmartScreen. Its embedded
 | File | Role |
 |---|---|
 | `setup.iss` | Inno Setup UI and orchestration; `WEBBOOT` selects web mode |
-| `build-installer.ps1` | Validates inputs, stages release payloads, and invokes ISCC |
+| `build-installer.ps1` | Validates inputs, stages release payloads in a unique temporary directory, invokes ISCC, and always removes the staging directory |
 | `stage\install-app.ps1` | Certificate, package, verification, launch, and uninstall worker |
 
-All other staged files and compiled installers are ignored.
+Only the runtime worker is stored under `installer\stage`. Certificates, packages, and dependencies exist there neither before nor after a normal build. Compiled installers are ignored under `dist\`.
 
 ## Validation
 

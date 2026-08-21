@@ -18,6 +18,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$stage = $null
 Push-Location $repoRoot
 try {
     if ($Mode -eq 'Web') {
@@ -54,13 +55,10 @@ try {
     if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version must use SemVer format, for example 1.2.3: $Version" }
     if ($packageArchitecture -ne 'x64') { throw "Only the x64 application package is currently supported: $packageArchitecture" }
 
-    $stage = Join-Path $repoRoot 'installer\stage'
-    # Staged payloads from a previous build must not leak into this one.
-    Get-ChildItem $stage -Recurse -File |
-        Where-Object Name -ne 'install-app.ps1' |
-        Remove-Item -Force
-    Get-ChildItem $stage -Directory | Remove-Item -Recurse -Force
-
+    $stageName = 'AudioPlaybackConnector2-installer-' + [guid]::NewGuid().ToString('N')
+    $stage = Join-Path ([IO.Path]::GetTempPath()) $stageName
+    New-Item -ItemType Directory -Path $stage | Out-Null
+    Copy-Item (Join-Path $PSScriptRoot 'stage\install-app.ps1') (Join-Path $stage 'install-app.ps1')
     Copy-Item $CertPath (Join-Path $stage 'AudioPlaybackConnector2.cer')
     if ($Mode -eq 'Bundle') {
         Copy-Item $MsixPath $stage
@@ -97,7 +95,12 @@ try {
     if (-not [IO.Path]::IsPathRooted($OutputDir)) { $OutputDir = Join-Path $repoRoot $OutputDir }
     $OutputDir = [IO.Path]::GetFullPath($OutputDir)
     $null = New-Item -ItemType Directory -Path $OutputDir -Force
-    $isccArgs = @("/DAppVersion=$Version", "/DPackageArchitecture=$packageArchitecture", "/O$OutputDir")
+    $isccArgs = @(
+        "/DAppVersion=$Version",
+        "/DPackageArchitecture=$packageArchitecture",
+        "/DStageDir=$stage",
+        "/O$OutputDir"
+    )
     if ($Mode -eq 'Web') { $isccArgs += '/DWEBBOOT=1' }
     & $iscc @isccArgs (Join-Path $repoRoot 'installer\setup.iss')
     if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
@@ -108,5 +111,17 @@ try {
     if (-not (Test-Path $setup)) { throw "Expected output missing: $setup" }
     Write-Host "Done: $((Resolve-Path $setup).Path)"
 } finally {
-    Pop-Location
+    try {
+        if ($stage -and (Test-Path -LiteralPath $stage)) {
+            $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+            $resolvedStage = [IO.Path]::GetFullPath($stage)
+            if (-not $resolvedStage.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase) -or
+                [IO.Path]::GetFileName($resolvedStage) -notlike 'AudioPlaybackConnector2-installer-*') {
+                throw "Refusing to remove unexpected staging path: $resolvedStage"
+            }
+            Remove-Item -LiteralPath $resolvedStage -Recurse -Force
+        }
+    } finally {
+        Pop-Location
+    }
 }

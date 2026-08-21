@@ -10,7 +10,6 @@ on:
 
 env:
   APPINSTALLER_URL: https://n0ahtm.github.io/AudioPlaybackConnector2/AudioPlaybackConnector2.appinstaller
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   release-dry-run:
@@ -20,7 +19,7 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
     - name: Extract version
       id: version
@@ -47,12 +46,13 @@ jobs:
       run: ./scripts/release/update-package-version.ps1 -Version '${{ steps.version.outputs.VERSION }}'
 
     - name: Add MSBuild to PATH
-      uses: microsoft/setup-msbuild@v2
+      uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
 
     - name: Install static analysis tools
       shell: pwsh
       run: |
-        choco install llvm cppcheck -y --no-progress
+        choco install llvm --version=22.1.7 -y --no-progress
+        choco install cppcheck --version=2.19.0 -y --no-progress
         "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
         "C:\Program Files\Cppcheck" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
@@ -144,6 +144,9 @@ jobs:
         $staging = Join-Path $env:RUNNER_TEMP 'dependencies'
         New-Item -ItemType Directory -Path $staging -Force | Out-Null
         $files = Get-ChildItem -Path $depsDir -Recurse -Include @("*.appx", "*.msix")
+        ./scripts/release/verify-dependency-packages.ps1 `
+          -DependenciesDirectory $depsDir `
+          -ExpectedProcessorArchitecture x64
         foreach ($f in $files) {
           Copy-Item -LiteralPath $f.FullName -Destination $staging -Force
         }
@@ -179,7 +182,7 @@ jobs:
         "PATH=$outputPath" >> $env:GITHUB_OUTPUT
 
     - name: Install Inno Setup
-      run: choco install innosetup -y --no-progress
+      run: choco install innosetup --version=6.7.1 -y --no-progress
 
     - name: Build bootstrapper installers
       id: installers
@@ -271,7 +274,7 @@ jobs:
         "DIR=$staging" >> $env:GITHUB_OUTPUT
 
     - name: Upload release dry-run artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: AudioPlaybackConnector2-release-dry-run-${{ steps.version.outputs.VERSION }}-x64
         path: ${{ steps.report.outputs.DIR }}

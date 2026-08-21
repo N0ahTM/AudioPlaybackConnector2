@@ -8,7 +8,7 @@ AudioPlaybackConnector2 requires Windows 10 version 2004 (build 19041) or newer.
 2. Download `AudioPlaybackConnector2-WebSetup.exe`.
 3. Run the setup and select **Install**.
 
-Web Setup downloads the current x64 package and its dependencies, verifies them against its embedded release certificate, trusts that certificate for the current user, installs the app, and launches it. Administrator rights are not required.
+Web Setup downloads the current x64 package and its dependencies. It verifies the application package against its embedded release certificate and accepts only the expected Microsoft-signed x64 framework dependencies. It then trusts the application certificate for the current user, installs the app, and launches it. Administrator rights are not required.
 
 The setup executable is not yet code-signed, so Windows SmartScreen may show an unknown-publisher warning. Only continue when the file came from this repository's release page.
 

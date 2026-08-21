@@ -93,10 +93,6 @@ Copy-Item -LiteralPath $msix.FullName -Destination $assetPath -Force
 $msixDir = Split-Path -Parent $msix.FullName
 $depsDir = Join-Path $msixDir "Dependencies/$Architecture"
 if (-not (Test-Path $depsDir)) {
-    $depsDir = Join-Path $msixDir "Dependencies"
-}
-
-if (-not (Test-Path $depsDir)) {
     $depsDir = $null
 }
 

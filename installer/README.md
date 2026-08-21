@@ -1,6 +1,6 @@
 # Bootstrapper Installer
 
-The project ships two per-user Inno Setup bootstrapper variants. Both validate the x64 MSIX and signer, import the embedded self-signed release certificate into `Cert:\CurrentUser\TrustedPeople`, register the package, verify installation, and launch the app. They do not require administrator rights.
+The project ships two per-user Inno Setup bootstrapper variants. Both validate the x64 MSIX and signer, accept only the expected Microsoft-signed x64 framework dependencies, import the embedded self-signed release certificate into `Cert:\CurrentUser\TrustedPeople`, register the package, verify installation, and launch the app. They do not require administrator rights.
 
 | Variant | Payload | Intended use |
 |---|---|---|

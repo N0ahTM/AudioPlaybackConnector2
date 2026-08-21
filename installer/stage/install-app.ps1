@@ -138,22 +138,82 @@ function Assert-AppPackageSignature {
     Write-Host "Package signer verified: $($Certificate.Thumbprint)."
 }
 
-function Install-AppPackage {
+function Get-AppDependencies {
     param([string] $Dir)
-    $package = Get-AppPackage -Dir $Dir
-
     $depsRoot = Join-Path $Dir 'Dependencies'
-    $deps = @()
     if (Test-Path $depsRoot) {
         $archDir = Join-Path $depsRoot $PackageArchitecture
         $searchDir = if (Test-Path $archDir) { $archDir } else { $depsRoot }
-        $deps = @(Get-ChildItem -Path $searchDir -Recurse -File |
-                  Where-Object { $_.Extension -in '.msix', '.appx' })
-    } else {
-        # Web mode downloads dependencies flat next to the main package.
-        $deps = @(Get-ChildItem -Path $Dir -File | Where-Object {
-            ($_.Extension -in '.msix', '.appx') -and ($_.Name -notmatch '^AudioPlaybackConnector2_') })
+        return @(Get-ChildItem -Path $searchDir -Recurse -File |
+            Where-Object { $_.Extension -in '.msix', '.appx' })
     }
+    return @(Get-ChildItem -Path $Dir -File | Where-Object {
+            ($_.Extension -in '.msix', '.appx') -and ($_.Name -notmatch '^AudioPlaybackConnector2_') })
+}
+
+function Assert-AppDependencies {
+    param([string] $Dir)
+    $expectedPublisher = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
+    $allowedNames = @(
+        'Microsoft.VCLibs.140.00',
+        'Microsoft.VCLibs.140.00.UWPDesktop',
+        'Microsoft.WindowsAppRuntime.2'
+    )
+    $deps = @(Get-AppDependencies -Dir $Dir)
+    $identities = foreach ($dep in $deps) {
+        $archive = [System.IO.Compression.ZipFile]::OpenRead($dep.FullName)
+        try {
+            $manifestEntry = $archive.GetEntry('AppxManifest.xml')
+            $signatureEntry = $archive.GetEntry('AppxSignature.p7x')
+            if (-not $manifestEntry -or -not $signatureEntry) {
+                throw "Dependency '$($dep.Name)' is missing its manifest or signature."
+            }
+            $reader = [System.IO.StreamReader]::new($manifestEntry.Open())
+            try { [xml]$manifest = $reader.ReadToEnd() } finally { $reader.Dispose() }
+            $stream = $signatureEntry.Open()
+            $memory = [System.IO.MemoryStream]::new()
+            try {
+                $stream.CopyTo($memory)
+                $signatureBytes = $memory.ToArray()
+            } finally {
+                $memory.Dispose()
+                $stream.Dispose()
+            }
+        } finally {
+            $archive.Dispose()
+        }
+        $identity = $manifest.Package.Identity
+        if ($allowedNames -notcontains [string]$identity.Name -or
+            [string]$identity.Publisher -ne $expectedPublisher -or
+            [string]$identity.ProcessorArchitecture -ne $PackageArchitecture) {
+            throw "Unexpected dependency identity in '$($dep.Name)'."
+        }
+        if ($signatureBytes.Length -le 4 -or
+            [System.Text.Encoding]::ASCII.GetString($signatureBytes, 0, 4) -ne 'PKCX') {
+            throw "Dependency '$($dep.Name)' has an invalid signature header."
+        }
+        $cms = [System.Security.Cryptography.Pkcs.SignedCms]::new()
+        $cms.Decode($signatureBytes[4..($signatureBytes.Length - 1)])
+        $cms.CheckSignature($true)
+        $signers = @($cms.SignerInfos | ForEach-Object { $_.Certificate })
+        if ($signers.Count -ne 1 -or $signers[0].Subject -ne [string]$identity.Publisher) {
+            throw "Dependency signer does not match its manifest publisher in '$($dep.Name)'."
+        }
+        [string]$identity.Name
+    }
+    $duplicates = @($identities | Group-Object | Where-Object Count -gt 1)
+    if ($duplicates.Count -gt 0) {
+        throw "Duplicate dependency identities found: $($duplicates.Name -join ', ')."
+    }
+    if ($deps.Count -gt 0) {
+        Write-Host "$($deps.Count) Microsoft dependency package(s) verified."
+    }
+}
+
+function Install-AppPackage {
+    param([string] $Dir)
+    $package = Get-AppPackage -Dir $Dir
+    $deps = @(Get-AppDependencies -Dir $Dir)
     $addParams = @{ Path = $package.FullName; ErrorAction = 'Stop' }
     if ($deps.Count -gt 0) {
         $addParams['DependencyPath'] = $deps.FullName
@@ -197,6 +257,7 @@ function Test-AppPayload {
     $package = Get-AppPackage -Dir $Dir
     Assert-AppPackageIdentity -Path $package.FullName
     Assert-AppPackageSignature -Path $package.FullName -Certificate $cert
+    Assert-AppDependencies -Dir $Dir
     Write-Host "Pinned certificate verified: $($cert.Thumbprint)."
 }
 

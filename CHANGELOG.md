@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-08-21
+
 ### Added
 - Added per-user web and offline bootstrapper installers with adaptive install, update, repair, and uninstall flows.
 

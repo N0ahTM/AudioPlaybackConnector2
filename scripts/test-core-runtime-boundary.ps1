@@ -146,3 +146,4 @@ try {
 }
 
 Write-Host 'Boundary verifier self-test passed.'
+exit 0

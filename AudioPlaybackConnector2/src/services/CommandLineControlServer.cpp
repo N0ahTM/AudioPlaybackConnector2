@@ -721,7 +721,8 @@ void CALLBACK CommandLineControlServer::OnHandlerReady(PTP_CALLBACK_INSTANCE cal
         std::scoped_lock stateLock(instance->StateMutex);
         if (owner->m_running.load() && instance->Phase == PipePhase::RunningHandler) {
             instance->Response = responseToSend;
-            instance->AcknowledgementRecord = std::move(acknowledgementRecord);
+            instance->AcknowledgementRecord = acknowledgementRecord;
+            acknowledgementRecord.reset();
             instance->ResponseHeader = {};
             instance->ResponseHeader.CorrelationHigh = instance->Response.CorrelationId.High;
             instance->ResponseHeader.CorrelationLow = instance->Response.CorrelationId.Low;

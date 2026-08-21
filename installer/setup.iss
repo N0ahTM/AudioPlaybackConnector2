@@ -37,9 +37,7 @@ ArchitecturesAllowed=x64compatible
 MinVersion=10.0.19041
 OutputDir=..\dist\installer
 OutputBaseFilename={#BaseName}
-SetupIconFile=assets\setup.ico
-WizardImageFile=assets\wizard.bmp
-WizardSmallImageFile=assets\wizard-small.bmp
+SetupIconFile=..\AudioPlaybackConnector2\res\app.ico
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
@@ -47,10 +45,10 @@ DisableWelcomePage=yes
 DisableDirPage=yes
 DisableProgramGroupPage=yes
 DisableReadyPage=yes
-; The real payload is the MSIX; the app dir only holds a readme. No uninstaller
-; entry: uninstall is offered by this bootstrapper itself and via Windows Settings.
+; The bootstrapper only registers the MSIX and does not install files into {app}.
+; Uninstall is offered by this bootstrapper itself and via Windows Settings.
 Uninstallable=no
-CreateAppDir=yes
+CreateAppDir=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -62,7 +60,6 @@ Source: "{#StageDir}\AudioPlaybackConnector2.cer"; DestDir: "{tmp}\pkg"; Flags: 
 Source: "{#StageDir}\*.msix"; DestDir: "{tmp}\pkg"; Flags: ignoreversion
 Source: "{#StageDir}\Dependencies\*"; DestDir: "{tmp}\pkg\Dependencies"; Flags: ignoreversion recursesubdirs skipifsourcedoesntexist
 #endif
-Source: "README-INSTALL.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Code]
 var

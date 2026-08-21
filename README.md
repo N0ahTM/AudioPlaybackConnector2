@@ -5,17 +5,11 @@
 [![License](https://img.shields.io/github/license/N0ahTM/AudioPlaybackConnector2)](LICENSE)
 [![C++](https://img.shields.io/badge/C%2B%2B-23-00599C?logo=c%2B%2B)](https://en.cppreference.com/)
 
-<p align="center">
-  <a href="https://github.com/N0ahTM/AudioPlaybackConnector2">
-    <img src="https://img.shields.io/badge/⭐_Star_this_project-2d333b?style=for-the-badge&logo=github&logoColor=white&labelColor=1f2328" alt="Star this project">
-  </a>
-</p>
-
 AudioPlaybackConnector2 is a small Windows tray app for connecting paired Bluetooth audio devices as Windows playback outputs. It uses the Windows `AudioPlaybackConnection` API so you can connect, disconnect, and reconnect A2DP devices without opening Windows Settings.
 
 <img width="90%" alt="AudioPlaybackConnector2 device picker" src="https://github.com/user-attachments/assets/e0e2724a-82d3-40e7-849c-e6a870c0eeca" />
 
-Built with **WinUI 3 Desktop**, **C++/WinRT**, and distributed as **MSIX**.
+Built with **WinUI 3 Desktop** and **C++/WinRT** and distributed as a per-user Windows package.
 
 ## Quick Start
 
@@ -49,10 +43,9 @@ For commands and certificate-store options, see [Installation](docs/INSTALLATION
 
 ## Requirements
 
-- Windows 10 version 2004 or newer.
+- Windows 10 version 2004 (build 19041) or newer.
 - A Bluetooth adapter with A2DP support.
 - A paired Bluetooth audio playback device.
-- MSIX installation through a release package or local build.
 
 ## Usage
 
@@ -83,12 +76,11 @@ The recommended install path is `AudioPlaybackConnector2-WebSetup.exe` from the 
 
 The `.appinstaller` feed and direct `.msix` package remain available for existing installations and manual fallback. Direct `.msix` installation may require framework dependencies to be installed manually and does not preserve update-feed behavior.
 
-Releases are currently signed with a self-signed certificate, so Windows must trust the release `.cer` before installation.
+Releases are currently signed with a self-signed certificate. The setup installers establish per-user trust automatically; manual App Installer or MSIX installation requires importing the matching release `.cer` first.
 
 ## Documentation
 
 - [Installation](docs/INSTALLATION.md)
-- [Developer setup and build](docs/DEV_SETUP.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)

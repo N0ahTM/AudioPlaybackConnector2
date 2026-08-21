@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Consolidated the installation, troubleshooting, contributor, and installer documentation.
+- Simplified the bootstrapper source layout and reused the application icon directly.
+
+### Removed
+- Removed repository-tracked performance benchmark harnesses, archived benchmark results, and Windows Sandbox installer helpers. Local experiments are now ignored.
+- Removed unused developer helpers and generated documentation and installer image assets.
+
 ## [0.8.1] - 2026-08-21
 
 ### Added

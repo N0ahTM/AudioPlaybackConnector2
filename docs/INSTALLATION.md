@@ -1,81 +1,45 @@
 # Installation
 
-AudioPlaybackConnector2 supports three installation paths:
+AudioPlaybackConnector2 requires Windows 10 version 2004 (build 19041) or newer. Pair the Bluetooth audio device in Windows before launching the app.
 
-- Build from source (developer workflow)
-- Install with the web or offline bootstrapper (recommended end-user workflow)
-- Install the published MSIX release manually (advanced workflow)
+## Recommended: Web Setup
 
-For local development, see [Developer setup and build](DEV_SETUP.md).
+1. Open the [latest GitHub release](https://github.com/N0ahTM/AudioPlaybackConnector2/releases/latest).
+2. Download `AudioPlaybackConnector2-WebSetup.exe`.
+3. Run the setup and select **Install**.
 
-## Install with Setup
+Web Setup downloads the current x64 package and its dependencies, trusts the pinned release certificate for the current user, installs the app, and launches it. Administrator rights are not required.
 
-Each GitHub release provides:
+The setup executable is not yet code-signed, so Windows SmartScreen may show an unknown-publisher warning. Only continue when the file came from this repository's release page.
 
-- `AudioPlaybackConnector2-WebSetup.exe`, which downloads the current release payload
-- `AudioPlaybackConnector2-Setup-<version>.exe`, which contains the complete offline payload
+## Offline Setup
 
-Both variants install per-user without administrator rights. They import the pinned release certificate into
-`Cert:\CurrentUser\TrustedPeople`, install the MSIX and its framework dependencies, and launch the app after an
-interactive installation. The setup executable itself is not yet code-signed, so Windows SmartScreen may display
-an unknown-publisher warning.
+Use `AudioPlaybackConnector2-Setup-<version>.exe` when the target computer has no internet connection. It contains the application package, certificate, and framework dependencies. Installation is otherwise identical to Web Setup.
 
-## Manual MSIX Installation
+Both setup variants can update or repair an installation. Their uninstall option removes the package and trusted certificate but keeps user settings in `%LOCALAPPDATA%`.
 
-Each GitHub release provides:
+## App Installer and MSIX
 
-- `.appinstaller`
-- `.msix`
-- `.cer` certificate
-- framework dependency packages
+The release also includes the App Installer feed, raw `.msix`, `.cer`, and dependency packages for existing installations and advanced use.
 
-### 1) Trust the release certificate
+To use the App Installer feed, download and open the local file:
 
-Right-click the `.cer` file and choose **Install Certificate**, or use PowerShell:
+```powershell
+$path = Join-Path $env:TEMP "AudioPlaybackConnector2.appinstaller"
+Invoke-WebRequest -Uri "https://n0ahtm.github.io/AudioPlaybackConnector2/AudioPlaybackConnector2.appinstaller" -OutFile $path
+Start-Process $path
+```
+
+If Windows reports an untrusted publisher, import the certificate from the same release for the current user:
 
 ```powershell
 Import-Certificate -FilePath ".\AudioPlaybackConnector2.cer" -CertStoreLocation "Cert:\CurrentUser\TrustedPeople"
 ```
 
-Machine-wide trust is optional and requires an elevated PowerShell session:
+Installing the raw `.msix` is a fallback. Missing framework dependencies must then be installed manually, and a direct MSIX installation does not register the App Installer update feed.
 
-```powershell
-Import-Certificate -FilePath ".\AudioPlaybackConnector2.cer" -CertStoreLocation "Cert:\LocalMachine\Root"
-```
+## Build from Source
 
-### 2) Install via App Installer
+Source builds are intended for contributors. See [Contributing](../CONTRIBUTING.md) for prerequisites, build commands, certificates, and checks.
 
-Download the App Installer feed and open the local `.appinstaller` file:
-
-```powershell
-$installer = Join-Path $env:TEMP "AudioPlaybackConnector2.appinstaller"
-Invoke-WebRequest -Uri "https://n0ahtm.github.io/AudioPlaybackConnector2/AudioPlaybackConnector2.appinstaller" -OutFile $installer
-Start-Process $installer
-```
-
-Opening a downloaded `.appinstaller` avoids the `ms-appinstaller:` web protocol, which Microsoft has disabled by
-default on consumer devices since December 2023. The protocol can be re-enabled by enterprise policy, but the local
-`.appinstaller` flow is the supported path for general GitHub release distribution.
-
-The `.appinstaller` automatically pulls in required framework dependencies (VCLibs and Windows App SDK runtime).
-Because these are system framework packages, Windows may prompt for administrator approval during installation.
-
-See:
-
-- [Installing Windows apps from a web page](https://learn.microsoft.com/windows/msix/app-installer/installing-windows10-apps-web)
-- [DesktopAppInstaller policy CSP](https://learn.microsoft.com/windows/client-management/mdm/policy-csp-desktopappinstaller)
-
-### Optional fallback: direct MSIX install
-
-`Add-AppxPackage` works as a fallback, but it does not preserve update-feed behavior from `.appinstaller`.
-If you install the `.msix` directly, any missing framework dependencies will be reported and must be resolved manually.
-
-## Build and run locally
-
-Open `AudioPlaybackConnector2.slnx`, choose `Release | x64`, build, then run/install the generated package.
-
-Local builds use a temporary developer certificate, so manual certificate installation is usually not needed.
-
-## Notes on signing
-
-Releases are currently signed with a self-signed certificate. Installing the `.cer` is required before the `.msix` can be trusted by Windows.
+For installation errors, see [Troubleshooting](TROUBLESHOOTING.md).

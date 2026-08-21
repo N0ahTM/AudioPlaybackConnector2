@@ -26,9 +26,15 @@ labels: bug
 
 - **Windows version:** <!-- e.g. Windows 11 23H2, Build 22631.xxx -->
 - **App version:** <!-- shown in Settings → About, or the MSIX version -->
-- **Installation method:** <!-- Built from source / MSIX + .cer -->
+- **Installation method:** <!-- WebSetup / offline Setup / App Installer / MSIX / source -->
 - **Bluetooth adapter:** <!-- optional, manufacturer + model if known -->
+
+## Diagnostics
+
+<!-- In Settings > Support, copy the redacted diagnostics or open the log folder. -->
+<!-- Installer failures: %LOCALAPPDATA%\AudioPlaybackConnector2\install.log -->
+<!-- Minidumps may contain sensitive memory. Review them before uploading. -->
 
 ## Additional Context
 
-<!-- Logs from Event Viewer (Windows Logs → Application), device name/type, etc. -->
+<!-- Device type, screenshots, or other useful details. -->

@@ -41,9 +41,18 @@ jobs:
       env:
         INPUT_SEMVER: ${{ inputs.semver }}
 
-    - name: Patch version into package metadata
+    - name: Define deterministic MSIX output
+      id: msix
       shell: pwsh
-      run: ./scripts/release/update-package-version.ps1 -Version '${{ steps.version.outputs.VERSION }}'
+      run: |
+        $name = 'AudioPlaybackConnector2_${{ steps.version.outputs.VERSION }}_x64.msix'
+        $root = Join-Path $env:RUNNER_TEMP 'msix'
+        $dependencies = Join-Path $root 'Dependencies'
+        "ROOT=$root" >> $env:GITHUB_OUTPUT
+        "PATH=$(Join-Path $root $name)" >> $env:GITHUB_OUTPUT
+        "NAME=$name" >> $env:GITHUB_OUTPUT
+        "DEPS_ROOT=$dependencies" >> $env:GITHUB_OUTPUT
+        "DEPS_DIR=$dependencies" >> $env:GITHUB_OUTPUT
 
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
@@ -100,6 +109,11 @@ jobs:
         msbuild AudioPlaybackConnector2.slnx
         /p:Configuration=Release
         /p:Platform=x64
+        /p:PackageVersion=${{ steps.version.outputs.VERSION }}
+        /p:AppxPackageDir="${{ steps.msix.outputs.ROOT }}"
+        /p:AppxPackageTestDir="${{ steps.msix.outputs.ROOT }}"
+        /p:AppxPackageTestExternalPackagesDir="${{ steps.msix.outputs.DEPS_ROOT }}"
+        /p:AppxPackageOutput="${{ steps.msix.outputs.PATH }}"
         /p:AppxPackageSigningEnabled=true
         /p:PackageCertificateKeyFile=${{ steps.cert.outputs.CERT_PATH }}
         /p:PackageCertificatePassword=${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
@@ -107,11 +121,6 @@ jobs:
         /p:AppxBundle=Never
         /p:AppxBundlePlatforms=x64
         /t:Rebuild
-
-    - name: Locate MSIX
-      id: msix
-      shell: pwsh
-      run: ./scripts/release/locate-msix.ps1 -Version '${{ steps.version.outputs.VERSION }}' -Configuration Release -Architecture x64
 
     - name: Verify built MSIX metadata and payload
       id: package

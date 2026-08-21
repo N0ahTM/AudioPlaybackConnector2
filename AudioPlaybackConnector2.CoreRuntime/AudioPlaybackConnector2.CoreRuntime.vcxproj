@@ -162,14 +162,16 @@
   <ItemGroup><None Include="packages.config" /></ItemGroup>
   <Target Name="VerifyCoreRuntimeBoundary"
           BeforeTargets="ClCompile"
-          Inputs="@(ClCompile);@(ClInclude);$(MSBuildProjectFullPath);$(MSBuildProjectDirectory)\packages.config;$(MSBuildProjectDirectory)\..\scripts\verify-core-runtime-boundary.ps1;$(MSBuildProjectDirectory)\..\scripts\test-core-runtime-boundary.ps1"
+          Inputs="@(ClCompile);@(ClInclude);$(MSBuildProjectFullPath);$(MSBuildProjectDirectory)\packages.config;$(MSBuildProjectDirectory)\..\scripts\verify-core-runtime-boundary.ps1"
           Outputs="$(IntDir)CoreRuntimeBoundary.verified">
     <Error Condition="'$(UseWinUI)'=='true'" Text="CoreRuntime must never enable UseWinUI." />
     <Error Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('@(Reference);@(ReferencePath)', '(?i)(Microsoft.WindowsAppSDK.WinUI|Microsoft.UI.Xaml)'))"
            Text="CoreRuntime resolved a forbidden WinUI/XAML reference." />
     <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\scripts\verify-core-runtime-boundary.ps1&quot; -ProjectPath &quot;$(MSBuildProjectFullPath)&quot;" />
-    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\scripts\test-core-runtime-boundary.ps1&quot; -VerifierPath &quot;$(MSBuildProjectDirectory)\..\scripts\verify-core-runtime-boundary.ps1&quot;" />
     <Touch Files="$(IntDir)CoreRuntimeBoundary.verified" AlwaysCreate="true" />
+  </Target>
+  <Target Name="TestCoreRuntimeBoundaryVerifier">
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\scripts\test-core-runtime-boundary.ps1&quot; -VerifierPath &quot;$(MSBuildProjectDirectory)\..\scripts\verify-core-runtime-boundary.ps1&quot;" />
   </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

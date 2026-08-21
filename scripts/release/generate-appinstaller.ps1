@@ -19,7 +19,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-Add-Type -AssemblyName System.IO.Compression.FileSystem
+Import-Module (Join-Path $PSScriptRoot 'PackageVerification.psm1') -Force
 
 function Get-HoursBetweenUpdateChecks {
     param([string]$Path)
@@ -38,34 +38,6 @@ function Get-HoursBetweenUpdateChecks {
     }
 
     return "24"
-}
-
-function Get-PackageMetadata {
-    param([string]$PackagePath)
-
-    $zip = [System.IO.Compression.ZipFile]::OpenRead($PackagePath)
-    try {
-        $entry = $zip.GetEntry("AppxManifest.xml")
-        if (-not $entry) {
-            throw "No AppxManifest.xml found in $PackagePath"
-        }
-        $stream = $entry.Open()
-        $reader = [System.IO.StreamReader]::new($stream)
-        $xmlText = $reader.ReadToEnd()
-        $reader.Close()
-        $stream.Close()
-
-        [xml]$manifest = $xmlText
-        $identity = $manifest.Package.Identity
-        return [pscustomobject]@{
-            Name                  = $identity.Name
-            Publisher             = $identity.Publisher
-            Version               = $identity.Version
-            ProcessorArchitecture = $identity.ProcessorArchitecture
-        }
-    } finally {
-        $zip.Dispose()
-    }
 }
 
 $metadataParams = @{ MsixPath = $MsixPath }
@@ -108,7 +80,7 @@ try {
         if ($deps) {
             $writer.WriteStartElement("Dependencies", $appInstallerNs)
             foreach ($dep in $deps) {
-                $meta = Get-PackageMetadata -PackagePath $dep.FullName
+                $meta = (Read-AppPackage -Path $dep.FullName).Metadata
                 $depUrl = if (-not [string]::IsNullOrWhiteSpace($DependencyBaseUrl)) {
                     "$($DependencyBaseUrl.TrimEnd('/'))/$($dep.Name)"
                 } else {

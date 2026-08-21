@@ -5,11 +5,13 @@
 #include <windows.h>
 #undef APSTUDIO_READONLY_SYMBOLS
 
+#include "PackageVersion.rcinc"
+
 LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 0,8,1,0
- PRODUCTVERSION 0,8,1,0
+ FILEVERSION APC_PACKAGE_VERSION
+ PRODUCTVERSION APC_PACKAGE_VERSION
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -26,12 +28,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Noah Meyer"
             VALUE "FileDescription", "AudioPlaybackConnector2"
-            VALUE "FileVersion", "0.8.1.0"
+            VALUE "FileVersion", APC_PACKAGE_VERSION_STRING
             VALUE "InternalName", "AudioPlaybackConnector2.exe"
             VALUE "LegalCopyright", "Copyright (C) 2026 Noah Meyer"
             VALUE "OriginalFilename", "AudioPlaybackConnector2.exe"
             VALUE "ProductName", "AudioPlaybackConnector2"
-            VALUE "ProductVersion", "0.8.1.0"
+            VALUE "ProductVersion", APC_PACKAGE_VERSION_STRING
         END
     END
     BLOCK "VarFileInfo"

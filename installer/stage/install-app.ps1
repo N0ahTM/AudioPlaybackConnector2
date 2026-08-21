@@ -213,6 +213,7 @@ function Assert-AppDependencies {
 function Install-AppPackage {
     param([string] $Dir)
     $package = Get-AppPackage -Dir $Dir
+    $certificate = Get-AppCertificate -Dir $Dir
     $deps = @(Get-AppDependencies -Dir $Dir)
     $addParams = @{ Path = $package.FullName; ErrorAction = 'Stop' }
     if ($deps.Count -gt 0) {
@@ -220,6 +221,7 @@ function Install-AppPackage {
         Write-Host "Dependencies: $($deps.Count) package(s) for $PackageArchitecture."
     }
     Assert-AppPackageIdentity -Path $package.FullName
+    Assert-AppPackageSignature -Path $package.FullName -Certificate $certificate
     Write-Host "Installing $($package.Name) ..."
     Stop-AppProcess
     $addParams['ForceApplicationShutdown'] = $true

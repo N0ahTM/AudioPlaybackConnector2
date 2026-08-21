@@ -76,6 +76,26 @@
       <SubType>Designer</SubType>
     </AppxManifest>
   </ItemGroup>
+  <Target Name="GenerateVersionedPackageManifest" BeforeTargets="_ValidatePresenceOfAppxManifestItems">
+    <Error Condition="'$(_ApcPackageVersionFormatValid)' != 'true'"
+           Text="PackageVersion must contain four numeric components, for example 1.2.3.0." />
+    <Error Condition="$(_ApcPackageVersionMajor) &gt; 65535 or $(_ApcPackageVersionMinor) &gt; 65535 or $(_ApcPackageVersionBuild) &gt; 65535 or $(_ApcPackageVersionRevision) &gt; 65535"
+           Text="Every PackageVersion component must be between 0 and 65535." />
+    <PropertyGroup>
+      <_VersionedPackageManifest>$(IntermediateOutputPath)Package.versioned.appxmanifest</_VersionedPackageManifest>
+    </PropertyGroup>
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\Package.appxmanifest"
+          DestinationFiles="$(_VersionedPackageManifest)" />
+    <XmlPoke XmlInputPath="$(_VersionedPackageManifest)"
+             Query="/*[local-name()='Package']/*[local-name()='Identity']/@Version"
+             Value="$(PackageVersion)" />
+    <ItemGroup>
+      <AppxManifest Remove="@(AppxManifest)" />
+      <AppxManifest Include="$(_VersionedPackageManifest)">
+        <SubType>Designer</SubType>
+      </AppxManifest>
+    </ItemGroup>
+  </Target>
   <ItemGroup>
     <None Include="AudioPlaybackConnector2 %28Package%29_TemporaryKey.pfx" />
     <None Include="Images\ToastSource\ToastConnected.svg" />

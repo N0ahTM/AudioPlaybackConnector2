@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <PropertyGroup>
+    <PackageVersion Condition="'$(PackageVersion)' == ''">0.8.1.0</PackageVersion>
+    <_ApcPackageVersionFormatValid>$([System.Text.RegularExpressions.Regex]::IsMatch('$(PackageVersion)', '^\d{1,5}\.\d{1,5}\.\d{1,5}\.\d{1,5}$'))</_ApcPackageVersionFormatValid>
+    <_ApcPackageVersionMajor Condition="'$(_ApcPackageVersionFormatValid)' == 'true'">$([System.Version]::Parse('$(PackageVersion)').Major)</_ApcPackageVersionMajor>
+    <_ApcPackageVersionMinor Condition="'$(_ApcPackageVersionFormatValid)' == 'true'">$([System.Version]::Parse('$(PackageVersion)').Minor)</_ApcPackageVersionMinor>
+    <_ApcPackageVersionBuild Condition="'$(_ApcPackageVersionFormatValid)' == 'true'">$([System.Version]::Parse('$(PackageVersion)').Build)</_ApcPackageVersionBuild>
+    <_ApcPackageVersionRevision Condition="'$(_ApcPackageVersionFormatValid)' == 'true'">$([System.Version]::Parse('$(PackageVersion)').Revision)</_ApcPackageVersionRevision>
+  </PropertyGroup>
+</Project>

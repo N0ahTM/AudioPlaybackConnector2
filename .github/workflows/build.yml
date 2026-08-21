@@ -52,6 +52,13 @@ jobs:
     - name: Restore NuGet packages
       run: msbuild AudioPlaybackConnector2.slnx -t:restore -p:RestorePackagesConfig=true
 
+    - name: Test CoreRuntime boundary verifier
+      run: >
+        msbuild AudioPlaybackConnector2.CoreRuntime/AudioPlaybackConnector2.CoreRuntime.vcxproj
+        /p:Configuration=Release
+        /p:Platform=x64
+        /t:TestCoreRuntimeBoundaryVerifier
+
     # CI builds the .exe only; MSIX signing is intentionally disabled here because
     # this workflow does not produce release artifacts. Release signing happens
     # in release.yml using the repository's self-signed certificate.

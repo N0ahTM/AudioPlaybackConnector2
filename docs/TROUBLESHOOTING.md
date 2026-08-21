@@ -26,7 +26,7 @@ Public Windows installations may block web links using this protocol. Download t
 
 1. Confirm that the device is paired and available in Windows Bluetooth settings.
 2. Exit AudioPlaybackConnector2 from the tray menu and start it again.
-3. Open **Settings > Support** to copy redacted diagnostics or open the log folder.
+3. Open **Settings > Help** to copy redacted diagnostics or open the log folder.
 4. Include the app version, Windows build, installation method, and reproducible steps in a bug report.
 
 Privacy mode redacts device names and IDs. Crash dumps remain local unless you share them and may contain sensitive memory, so review them first.
@@ -36,18 +36,4 @@ Privacy mode redacts device names and IDs. Crash dumps remain local unless you s
 Windows may ignore the per-app output device selected in **Settings > System > Sound > Volume mixer** for an
 `A2DP Sink` entry. In that case the Bluetooth source audio keeps playing through the current default playback device.
 
-`AudioPlaybackConnection` does not expose a supported output-device selector. Windows may therefore ignore a per-app output selected for an A2DP Sink.
-
-As a last resort, an advanced registry workaround can expose the sink as a recording endpoint and route it through the legacy Sound control panel. This changes protected system audio configuration and can break the endpoint if the wrong value is removed. Create a restore point and export the affected registry key before proceeding.
-
-1. Open Registry Editor.
-2. Go to `HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture`.
-3. Find the capture endpoint whose `Properties` include the Bluetooth device name and export its complete key.
-4. Under that endpoint's `Properties`, delete only the value named `{9c119480-ddc2-4954-a150-5bd240d454ad},6`.
-5. Open `control mmsys.cpl sounds`, then switch to the **Recording** tab.
-6. Open the A2DP Sink device properties, switch to **Listen**, enable **Listen to this device**, and select the target
-   playback device.
-
-Do not enable both Windows listening and another routing application for the same endpoint, or audio may play twice. Restore the exported key if the endpoint stops working.
-
-Reference: [Microsoft Answers workaround](https://learn.microsoft.com/en-us/answers/questions/4123061/bluetooth-a2dp-snk-device-not-showing-up-in-sound).
+`AudioPlaybackConnection` does not expose a supported output-device selector. Windows may therefore ignore a per-app output selected for an A2DP Sink. AudioPlaybackConnector2 does not recommend registry modifications to change this unsupported Windows behavior.

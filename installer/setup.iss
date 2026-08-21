@@ -295,6 +295,8 @@ begin
     '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; ' +
     '$r = Invoke-RestMethod ''https://api.github.com/repos/N0ahTM/AudioPlaybackConnector2/releases/latest'' ' +
     '-Headers @{ ''User-Agent'' = ''apc2-setup'' } -TimeoutSec 30; ' +
+    '$resolvedVersion = ($r.tag_name.TrimStart(''v'')) + ''.0''; ' +
+    'if (''' + LatestVersion + ''' -ne '''' -and $resolvedVersion -ne ''' + LatestVersion + ''') { exit 3 }; ' +
     '$packages = @($r.assets | Where-Object { $_.Name -match ''^AudioPlaybackConnector2_[\d.]+_' + Arch + '\.msix$'' }); ' +
     'if ($packages.Count -ne 1) { exit 2 }; $out = @(); ' +
     '$out += @($packages | ' +
@@ -377,8 +379,9 @@ begin
   Params := '/c ""' + PsExe + '" -NoProfile -ExecutionPolicy Bypass -File "' +
             ExpandConstant('{tmp}\pkg\install-app.ps1') + '" -Step ' + StepName +
             ' -PackageArchitecture {#PackageArchitecture}';
-  if StepName <> 'verify' then
-    Params := Params + ' -PackageDir "' + ExpandConstant('{tmp}\pkg') + '"';
+  Params := Params + ' -PackageDir "' + ExpandConstant('{tmp}\pkg') + '"';
+  if (StepName = 'validate') and (LatestVersion <> '') then
+    Params := Params + ' -ExpectedPackageVersion "' + LatestVersion + '"';
   if (StepName = 'verify') and (not WizardSilent) then
     Params := Params + ' -Launch';
   Params := Params + ' > "' + OutFile + '" 2>&1"';
@@ -413,6 +416,7 @@ begin
     end
     else
     begin
+      RunStep('validate', 'Validating the downloaded package ...');
       RunStep('cert', 'Trusting the signing certificate ...');
       RunStep('install', 'Installing the app package ...');
       RunStep('verify', 'Verifying and launching ...');

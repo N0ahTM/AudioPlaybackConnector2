@@ -4,9 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       semver:
-        description: Release version to dry-run, for example 0.7.0.
+        description: Release version to dry-run, for example 1.2.3.
         required: true
-        default: 0.7.0
         type: string
 
 env:
@@ -29,7 +28,7 @@ jobs:
       run: |
         $semver = $env:INPUT_SEMVER
         if ($semver -notmatch '^\d+\.\d+\.\d+$') {
-          throw "Version must look like 0.6.0."
+          throw "Version must look like 1.2.3."
         }
         foreach ($part in $semver.Split('.')) {
           [uint64]$component = 0
@@ -106,6 +105,7 @@ jobs:
         /p:PackageCertificatePassword=${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
         /p:UapAppxPackageBuildMode=SideloadOnly
         /p:AppxBundle=Never
+        /p:AppxBundlePlatforms=x64
         /t:Rebuild
 
     - name: Locate MSIX
@@ -123,6 +123,7 @@ jobs:
         -ExpectedProcessorArchitecture x64
         -ExpectedName N0ahTM.AudioPlaybackConnector2
         -ExpectedPublisher 'CN=AudioPlaybackConnector2'
+        -ExpectedCertificatePath 'certs/AudioPlaybackConnector2.cer'
         -RequiredEntries AudioPlaybackConnector2.exe,AudioPlaybackConnector2.Control/AudioPlaybackConnector2.Control.exe
         -UniqueEntries AudioPlaybackConnector2.exe,AudioPlaybackConnector2.Control/AudioPlaybackConnector2.Control.exe
         -RequireSignature

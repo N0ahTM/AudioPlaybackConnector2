@@ -1,6 +1,6 @@
 # Bootstrapper Installer
 
-The project ships two per-user Inno Setup bootstrapper variants. Both import the pinned self-signed release certificate into `Cert:\CurrentUser\TrustedPeople`, register the x64 MSIX, verify the package, and launch the app. They do not require administrator rights.
+The project ships two per-user Inno Setup bootstrapper variants. Both validate the x64 MSIX and signer, import the embedded self-signed release certificate into `Cert:\CurrentUser\TrustedPeople`, register the package, verify installation, and launch the app. They do not require administrator rights.
 
 | Variant | Payload | Intended use |
 |---|---|---|
@@ -29,9 +29,10 @@ Install [Inno Setup 6](https://jrsoftware.org/isinfo.php), then run from the rep
 - If a shared Windows App SDK framework is already in use, installation retries without re-registering bundled framework packages.
 - Uninstall removes the package and pinned certificate but keeps settings under `%LOCALAPPDATA%`.
 - Logs are written to `%LOCALAPPDATA%\AudioPlaybackConnector2\install.log`.
+- The log rotates at 2 MiB and retains one previous file.
 - Silent install or repair is supported with `/VERYSILENT /NORESTART`; uninstall remains interactive.
 
-The setup `.exe` is currently unsigned and may trigger SmartScreen. The embedded MSIX is signed and is accepted only after its pinned certificate, expected identity, publisher, and x64 architecture have been validated. Sign the bootstrapper too when a trusted code-signing certificate becomes available.
+The setup `.exe` is currently unsigned and may trigger SmartScreen. Its embedded certificate prevents a package downloaded by an authentic installer from being silently exchanged for one signed by another key, but it does not authenticate a modified setup executable. Download setup only from the official release page. Sign the bootstrapper too when a trusted code-signing certificate becomes available.
 
 ## Source Layout
 

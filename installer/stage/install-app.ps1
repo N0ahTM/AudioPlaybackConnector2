@@ -7,13 +7,18 @@ param(
     [string] $PackageDir,
     [ValidateSet('validate', 'cert', 'install', 'verify', 'uninstall')] [string] $Step,
     [ValidateSet('x86', 'x64', 'arm64')] [string] $PackageArchitecture = 'x64',
+    [string] $ExpectedPackageVersion,
     [switch] $Launch
 )
 
 $ErrorActionPreference = 'Stop'
 $logDir = Join-Path $env:LOCALAPPDATA 'AudioPlaybackConnector2'
 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
-Start-Transcript -Path (Join-Path $logDir 'install.log') -Append | Out-Null
+$logPath = Join-Path $logDir 'install.log'
+if ((Test-Path -LiteralPath $logPath) -and (Get-Item -LiteralPath $logPath).Length -gt 2MB) {
+    Move-Item -LiteralPath $logPath -Destination "$logPath.1" -Force
+}
+Start-Transcript -Path $logPath -Append | Out-Null
 
 function Get-AppCertificate {
     param([string] $Dir)
@@ -38,6 +43,7 @@ function Import-AppCertificate {
         $existing = $store.Certificates.Find('FindByThumbprint', $cert.Thumbprint, $false)
         if ($existing.Count -eq 0) {
             $store.Add($cert)
+            Set-Content -LiteralPath (Join-Path $Dir '.certificate-added') -Value $cert.Thumbprint -Encoding ASCII
             Write-Host "Certificate $($cert.Thumbprint) added to CurrentUser\TrustedPeople."
         } else {
             Write-Host 'Certificate already trusted, skipping.'
@@ -45,6 +51,22 @@ function Import-AppCertificate {
     } finally {
         $store.Close()
     }
+}
+
+function Remove-NewlyImportedCertificate {
+    param([string] $Dir)
+    $markerPath = Join-Path $Dir '.certificate-added'
+    if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) { return }
+    $thumbprint = (Get-Content -LiteralPath $markerPath -Raw).Trim()
+    $store = [System.Security.Cryptography.X509Certificates.X509Store]::new('TrustedPeople', 'CurrentUser')
+    $store.Open('ReadWrite')
+    try {
+        $store.Certificates.Find('FindByThumbprint', $thumbprint, $false) | ForEach-Object { $store.Remove($_) }
+    } finally {
+        $store.Close()
+        Remove-Item -LiteralPath $markerPath -Force -ErrorAction SilentlyContinue
+    }
+    Write-Host "Rolled back certificate $thumbprint after installation failure."
 }
 
 function Get-AppPackage {
@@ -75,10 +97,45 @@ function Assert-AppPackageIdentity {
             $identity.ProcessorArchitecture -ne $PackageArchitecture) {
             throw "Unexpected package identity: $($identity.Name), $($identity.Publisher), $($identity.ProcessorArchitecture)."
         }
+        if ($ExpectedPackageVersion -and $identity.Version -ne $ExpectedPackageVersion) {
+            throw "Unexpected package version $($identity.Version); expected $ExpectedPackageVersion."
+        }
         Write-Host "Package identity verified: $($identity.Name) $($identity.Version) $($identity.ProcessorArchitecture)."
     } finally {
         $archive.Dispose()
     }
+}
+
+function Assert-AppPackageSignature {
+    param([string] $Path, $Certificate)
+    Add-Type -AssemblyName System.Security
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($Path)
+    try {
+        $entry = $archive.GetEntry('AppxSignature.p7x')
+        if (-not $entry) { throw 'AppxSignature.p7x is missing from the app package.' }
+        $stream = $entry.Open()
+        $memory = [System.IO.MemoryStream]::new()
+        try {
+            $stream.CopyTo($memory)
+            $bytes = $memory.ToArray()
+        } finally {
+            $memory.Dispose()
+            $stream.Dispose()
+        }
+    } finally {
+        $archive.Dispose()
+    }
+    if ($bytes.Length -le 4 -or [System.Text.Encoding]::ASCII.GetString($bytes, 0, 4) -ne 'PKCX') {
+        throw 'The app package signature has an invalid header.'
+    }
+    $cms = [System.Security.Cryptography.Pkcs.SignedCms]::new()
+    $cms.Decode($bytes[4..($bytes.Length - 1)])
+    $cms.CheckSignature($true)
+    $signers = @($cms.SignerInfos | ForEach-Object { $_.Certificate })
+    if ($signers.Count -ne 1 -or $signers[0].Thumbprint -ne $Certificate.Thumbprint) {
+        throw 'The app package signer does not match the bundled certificate.'
+    }
+    Write-Host "Package signer verified: $($Certificate.Thumbprint)."
 }
 
 function Install-AppPackage {
@@ -139,6 +196,7 @@ function Test-AppPayload {
     $cert = Get-AppCertificate -Dir $Dir
     $package = Get-AppPackage -Dir $Dir
     Assert-AppPackageIdentity -Path $package.FullName
+    Assert-AppPackageSignature -Path $package.FullName -Certificate $cert
     Write-Host "Pinned certificate verified: $($cert.Thumbprint)."
 }
 
@@ -204,6 +262,9 @@ try {
     Write-Host 'OK'
     exit 0
 } catch {
+    if ($PackageDir -and $Step -in 'install', 'verify') {
+        Remove-NewlyImportedCertificate -Dir $PackageDir
+    }
     Write-Host "FAILED: $($_.Exception.Message)"
     exit 1
 } finally {

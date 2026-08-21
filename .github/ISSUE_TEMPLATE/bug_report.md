@@ -31,7 +31,7 @@ labels: bug
 
 ## Diagnostics
 
-<!-- In Settings > Support, copy the redacted diagnostics or open the log folder. -->
+<!-- In Settings > Help, copy the redacted diagnostics or open the log folder. -->
 <!-- Installer failures: %LOCALAPPDATA%\AudioPlaybackConnector2\install.log -->
 <!-- Minidumps may contain sensitive memory. Review them before uploading. -->
 

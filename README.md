@@ -36,7 +36,7 @@ For commands and certificate-store options, see [Installation](docs/INSTALLATION
 - Animated, theme-aware tray icons for idle, connecting, connected, and error states.
 - Toast notifications for connection events, failures, and available updates.
 - Optional start with Windows.
-- Manual update checks through GitHub Releases and the App Installer feed.
+- Built-in GitHub release checks with App Installer handoff when an update is available.
 - Settings window placement persistence.
 - Local crash reports and minidumps for troubleshooting.
 - Localized UI in eight languages.
@@ -74,9 +74,9 @@ Add `--json` for machine-readable output. Add `--raw` when you explicitly need r
 
 The recommended install path is `AudioPlaybackConnector2-WebSetup.exe` from the latest release. A versioned offline setup is also provided. Both bootstrapper variants install the signing certificate, app package, and required framework packages for the current user.
 
-The `.appinstaller` feed and direct `.msix` package remain available for existing installations and manual fallback. Direct `.msix` installation may require framework dependencies to be installed manually and does not preserve update-feed behavior.
+The setup installers register the MSIX directly and do not initially register the Windows App Installer feed. The app checks GitHub for updates and opens the `.appinstaller` when an update is available. Direct `.msix` installation may require framework dependencies to be installed manually.
 
-Releases are currently signed with a self-signed certificate. The setup installers establish per-user trust automatically; manual App Installer or MSIX installation requires importing the matching release `.cer` first.
+The MSIX package is currently signed with a self-signed certificate; the setup executables are unsigned. Download installers only from this repository's release page. Manual App Installer or MSIX installation requires importing the matching release `.cer` first.
 
 ## Documentation
 

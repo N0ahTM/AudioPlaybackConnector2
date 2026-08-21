@@ -4,6 +4,10 @@ param(
 
     [string]$AppInstallerUrl = "",
     [string]$ExistingFeedPath = "",
+    [string]$CandidatePackageUri = "",
+    [string]$CandidatePackageName = "",
+    [string]$CandidatePublisher = "",
+    [string]$CandidateProcessorArchitecture = "",
     [int]$Attempts = 3,
     [int]$DelaySeconds = 5,
     [int]$TimeoutSeconds = 30
@@ -89,8 +93,30 @@ if ($rootVersion -ne $packageVersion) {
 }
 
 $current = Convert-PackageVersion -Value $packageVersion
-if ((Compare-PackageVersion -Left $candidate -Right $current) -lt 0) {
+$comparison = Compare-PackageVersion -Left $candidate -Right $current
+if ($comparison -lt 0) {
     throw "Refusing to replace App Installer version $packageVersion with older version $CandidateVersion."
+}
+if ($comparison -eq 0) {
+    $existingPackageUri = $packageNode.GetAttribute('Uri')
+    if ([string]::IsNullOrWhiteSpace($CandidatePackageUri)) {
+        throw 'CandidatePackageUri is required when replacing an existing App Installer version.'
+    }
+    if (-not [string]::Equals($existingPackageUri, $CandidatePackageUri, [System.StringComparison]::Ordinal)) {
+        throw "Refusing to replace App Installer version $packageVersion with a different package URI."
+    }
+    $equalVersionExpectations = @(
+        @{ Attribute = 'Name'; Expected = $CandidatePackageName },
+        @{ Attribute = 'Publisher'; Expected = $CandidatePublisher },
+        @{ Attribute = 'ProcessorArchitecture'; Expected = $CandidateProcessorArchitecture }
+    )
+    foreach ($expectation in $equalVersionExpectations) {
+        if (-not [string]::IsNullOrWhiteSpace($expectation.Expected) -and
+            -not [string]::Equals($packageNode.GetAttribute($expectation.Attribute), $expectation.Expected,
+                [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to replace App Installer version $packageVersion with a different $($expectation.Attribute)."
+        }
+    }
 }
 
 Write-Host "App Installer version is monotonic: $packageVersion -> $CandidateVersion"

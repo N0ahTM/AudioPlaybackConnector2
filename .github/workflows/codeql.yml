@@ -40,6 +40,8 @@ jobs:
         msbuild AudioPlaybackConnector2.slnx
         /p:Configuration=Release
         /p:Platform=x64
+        /p:AppxBundle=Never
+        /p:AppxBundlePlatforms=x64
         /p:AppxPackageSigningEnabled=false
         /t:Rebuild
         /m:1

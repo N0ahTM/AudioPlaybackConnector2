@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       package_version:
-        description: Four-part MSIX package version, for example 0.5.0.0.
+        description: Four-part MSIX package version, for example 1.2.3.0.
         required: true
         type: string
 
@@ -44,7 +44,7 @@ jobs:
       shell: pwsh
       run: |
         if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') {
-          throw 'Release tag must look like v0.8.0.'
+          throw 'Release tag must look like v1.2.3.'
         }
         $parts = $env:PACKAGE_VERSION.Split('.')
         if ($parts.Count -ne 4) {
@@ -55,6 +55,10 @@ jobs:
           if (-not [uint64]::TryParse($part, [ref]$component) -or $component -gt [uint16]::MaxValue) {
             throw 'Package version contains an invalid component.'
           }
+        }
+        $expectedVersion = $env:RELEASE_TAG.TrimStart('v') + '.0'
+        if ($env:PACKAGE_VERSION -ne $expectedVersion) {
+          throw "Package version $env:PACKAGE_VERSION does not match release tag $env:RELEASE_TAG."
         }
         $head = (git rev-parse HEAD).Trim()
         $tagCommit = (git rev-parse "$env:RELEASE_TAG^{commit}").Trim()
@@ -73,9 +77,17 @@ jobs:
         $packageDir = Join-Path $env:RUNNER_TEMP 'package'
         New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
         gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --dir $packageDir --pattern 'AudioPlaybackConnector2_*_x64.msix' --clobber
+        gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --dir $packageDir --pattern 'AudioPlaybackConnector2.cer' --clobber
         $packages = @(Get-ChildItem -Path $packageDir -Filter '*.msix' -File)
+        $certificates = @(Get-ChildItem -Path $packageDir -Filter '*.cer' -File)
         if ($packages.Count -ne 1) {
           throw "Expected one x64 AudioPlaybackConnector2 MSIX asset, found $($packages.Count)."
+        }
+        if ($certificates.Count -ne 1) {
+          throw "Expected one AudioPlaybackConnector2 certificate asset, found $($certificates.Count)."
+        }
+        if ((Get-FileHash $certificates[0].FullName).Hash -ne (Get-FileHash 'certs/AudioPlaybackConnector2.cer').Hash) {
+          throw 'Published certificate does not match the certificate in the tagged source.'
         }
         ./scripts/release/verify-msix-package.ps1 `
           -MsixPath $packages[0].FullName `
@@ -83,6 +95,7 @@ jobs:
           -ExpectedProcessorArchitecture x64 `
           -ExpectedName N0ahTM.AudioPlaybackConnector2 `
           -ExpectedPublisher 'CN=AudioPlaybackConnector2' `
+          -ExpectedCertificatePath $certificates[0].FullName `
           -RequiredEntries AudioPlaybackConnector2.exe,AudioPlaybackConnector2.Control/AudioPlaybackConnector2.Control.exe `
           -UniqueEntries AudioPlaybackConnector2.exe,AudioPlaybackConnector2.Control/AudioPlaybackConnector2.Control.exe `
           -RequireSignature
@@ -137,6 +150,12 @@ jobs:
         ./scripts/release/assert-appinstaller-monotonic.ps1
         -AppInstallerUrl '${{ env.APPINSTALLER_URL }}'
         -CandidateVersion $env:PACKAGE_VERSION
+        -CandidatePackageUri "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:RELEASE_TAG/$env:MSIX_NAME"
+        -CandidatePackageName N0ahTM.AudioPlaybackConnector2
+        -CandidatePublisher 'CN=AudioPlaybackConnector2'
+        -CandidateProcessorArchitecture x64
+      env:
+        MSIX_NAME: ${{ steps.msix.outputs.NAME }}
 
     - name: Configure GitHub Pages
       uses: actions/configure-pages@v5

@@ -51,7 +51,7 @@ try {
         }
         Write-Host "Building bundle bootstrapper for version $Version"
     }
-    if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version must use SemVer format, for example 0.8.1: $Version" }
+    if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version must use SemVer format, for example 1.2.3: $Version" }
     if ($packageArchitecture -ne 'x64') { throw "Only the x64 application package is currently supported: $packageArchitecture" }
 
     $stage = Join-Path $repoRoot 'installer\stage'

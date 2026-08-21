@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to publish, for example v0.8.0.
+        description: Existing release tag to publish, for example v1.2.3.
         required: true
         type: string
 
@@ -31,6 +31,7 @@ jobs:
       msix_name: ${{ steps.msix.outputs.NAME }}
       web_setup_name: ${{ steps.installers.outputs.WEB_NAME }}
       bundle_setup_name: ${{ steps.installers.outputs.BUNDLE_NAME }}
+      dependency_names: ${{ steps.deps.outputs.NAMES }}
 
     steps:
     - name: Checkout
@@ -49,7 +50,7 @@ jobs:
           $env:REF_NAME
         }
         if ($tag -notmatch '^v\d+\.\d+\.\d+$') {
-          throw "Release tag must look like v0.8.0."
+          throw "Release tag must look like v1.2.3."
         }
 
         $semver = $tag.TrimStart('v')
@@ -101,6 +102,7 @@ jobs:
         /p:PackageCertificatePassword=${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
         /p:UapAppxPackageBuildMode=SideloadOnly
         /p:AppxBundle=Never
+        /p:AppxBundlePlatforms=x64
         /t:Rebuild
 
     - name: Locate MSIX
@@ -118,6 +120,7 @@ jobs:
         -ExpectedProcessorArchitecture x64
         -ExpectedName N0ahTM.AudioPlaybackConnector2
         -ExpectedPublisher 'CN=AudioPlaybackConnector2'
+        -ExpectedCertificatePath 'certs/AudioPlaybackConnector2.cer'
         -RequiredEntries AudioPlaybackConnector2.exe,AudioPlaybackConnector2.Control/AudioPlaybackConnector2.Control.exe
         -UniqueEntries AudioPlaybackConnector2.exe,AudioPlaybackConnector2.Control/AudioPlaybackConnector2.Control.exe
         -RequireSignature
@@ -142,6 +145,7 @@ jobs:
           Copy-Item -LiteralPath $f.FullName -Destination $staging -Force
         }
         "DIR=$staging" >> $env:GITHUB_OUTPUT
+        "NAMES=$($files.Name -join ',')" >> $env:GITHUB_OUTPUT
         Get-ChildItem -Path $staging | ForEach-Object { Write-Host "Dependency: $($_.Name)" }
 
     - name: Extract changelog
@@ -214,6 +218,10 @@ jobs:
         ./scripts/release/assert-appinstaller-monotonic.ps1
         -AppInstallerUrl '${{ env.APPINSTALLER_URL }}'
         -CandidateVersion '${{ steps.version.outputs.VERSION }}'
+        -CandidatePackageUri 'https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.TAG }}/${{ steps.msix.outputs.NAME }}'
+        -CandidatePackageName N0ahTM.AudioPlaybackConnector2
+        -CandidatePublisher 'CN=AudioPlaybackConnector2'
+        -CandidateProcessorArchitecture x64
 
     - name: Build release body
       id: body
@@ -234,9 +242,9 @@ jobs:
 
         Both installers work per-user without administrator rights. Windows SmartScreen may warn because the setup executables are not yet code-signed.
 
-        For App Installer, direct MSIX installation, certificates, and dependency packages, see the [installation guide](https://github.com/N0ahTM/AudioPlaybackConnector2/blob/main/docs/INSTALLATION.md).
+        For App Installer, direct MSIX installation, certificates, and dependency packages, see the [installation guide](https://github.com/N0ahTM/AudioPlaybackConnector2/blob/${{ steps.version.outputs.TAG }}/docs/INSTALLATION.md).
 
-        > Releases are signed with a self-signed certificate. A free open-source code-signing certificate has been requested but approval may take some time.
+        > The MSIX package is signed with a self-signed certificate. The setup executables are not yet code-signed. A free open-source code-signing certificate has been requested but approval may take some time.
         '@
         $fullBody = ($changelog.Trim() + "`n" + $footer).Trim()
         $bodyPath = Join-Path $env:RUNNER_TEMP 'release-body.md'
@@ -289,6 +297,8 @@ jobs:
     needs: build-release
     permissions:
       contents: write
+    environment:
+      name: production-release
 
     steps:
     - name: Publish GitHub Release
@@ -303,7 +313,13 @@ jobs:
           "${{ needs.build-release.outputs.msix_name }}"
           "${{ needs.build-release.outputs.web_setup_name }}"
           "${{ needs.build-release.outputs.bundle_setup_name }}"
+          "AudioPlaybackConnector2.appinstaller"
+          "AudioPlaybackConnector2.cer"
         )
+        IFS=',' read -ra dependencies <<< "${{ needs.build-release.outputs.dependency_names }}"
+        for dependency in "${dependencies[@]}"; do
+          if [ -n "$dependency" ]; then assets+=("$dependency"); fi
+        done
         for asset in "${assets[@]}"; do
           asset_url="https://github.com/${{ github.repository }}/releases/download/${{ needs.build-release.outputs.tag }}/$asset"
           verified=false

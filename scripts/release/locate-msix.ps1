@@ -96,20 +96,8 @@ if (-not (Test-Path $depsDir)) {
     $depsDir = Join-Path $msixDir "Dependencies"
 }
 
-# If still not found, look in AppPackages for the latest matching architecture dependencies
-if (-not (Test-Path $depsDir) -and (Test-Path $PackageRoot)) {
-    $depsDir = Get-ChildItem -Path $PackageRoot -Recurse -Directory -Filter $Architecture |
-        Where-Object { $_.FullName -match "[\\/]Dependencies[\\/]" } |
-        Sort-Object LastWriteTimeUtc -Descending |
-        Select-Object -First 1 |
-        ForEach-Object { $_.FullName }
-    if (-not $depsDir) {
-        # Broader fallback: any Dependencies directory under AppPackages
-        $depsDir = Get-ChildItem -Path $PackageRoot -Recurse -Directory -Filter "Dependencies" |
-            Sort-Object LastWriteTimeUtc -Descending |
-            Select-Object -First 1 |
-            ForEach-Object { Join-Path $_.FullName $Architecture }
-    }
+if (-not (Test-Path $depsDir)) {
+    $depsDir = $null
 }
 
 if ($env:GITHUB_OUTPUT) {

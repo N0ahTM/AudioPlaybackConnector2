@@ -8,7 +8,7 @@ AudioPlaybackConnector2 requires Windows 10 version 2004 (build 19041) or newer.
 2. Download `AudioPlaybackConnector2-WebSetup.exe`.
 3. Run the setup and select **Install**.
 
-Web Setup downloads the current x64 package and its dependencies. It verifies the application package against its embedded release certificate and accepts only the expected Microsoft-signed x64 framework dependencies. It then trusts the application certificate for the current user, installs the app, and launches it. Administrator rights are not required.
+Web Setup detects whether Windows is running on x64 or ARM64, downloads the shared x64/ARM64 MSIX bundle and only the matching Microsoft-signed framework dependencies, verifies them, trusts the application certificate for the current user, installs the app, and launches it. Administrator rights are not required.
 
 The setup executable is not yet code-signed, so Windows SmartScreen may show an unknown-publisher warning. Only continue when the file came from this repository's release page.
 
@@ -22,7 +22,7 @@ Both setup variants register the raw MSIX with `Add-AppxPackage`; they do not us
 
 ## App Installer and MSIX
 
-The release also includes the App Installer feed, raw `.msix`, `.cer`, and dependency packages for existing installations and advanced use.
+The release also includes the App Installer feed, the x64/ARM64 `.msixbundle`, `.cer`, and architecture-specific dependency packages for existing installations and advanced use.
 
 For a fresh manual installation, download `AudioPlaybackConnector2.cer` from the same release and import it for the current user before opening the App Installer feed:
 
@@ -33,7 +33,7 @@ Invoke-WebRequest -Uri "https://n0ahtm.github.io/AudioPlaybackConnector2/AudioPl
 Start-Process $installer
 ```
 
-If the matching certificate is already trusted, the import step can be skipped. Installing the raw `.msix` is a fallback. Missing framework dependencies must then be installed manually, and a direct MSIX installation does not register the App Installer update feed.
+If the matching certificate is already trusted, the import step can be skipped. Installing the raw `.msixbundle` is a fallback. Missing framework dependencies must then be installed manually, and a direct bundle installation does not register the App Installer update feed.
 
 ## Build from Source
 

@@ -1,10 +1,18 @@
 name: Deploy App Installer Feed
 
 on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      package_version:
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       tag:
-        description: GitHub Release tag that contains the MSIX asset.
+        description: Published GitHub Release tag that contains the MSIX bundle.
         required: true
         type: string
       package_version:
@@ -16,11 +24,11 @@ env:
   APPINSTALLER_URL: https://n0ahtm.github.io/AudioPlaybackConnector2/AudioPlaybackConnector2.appinstaller
 
 concurrency:
-  group: audioplaybackconnector2-production-release
+  group: audioplaybackconnector2-appinstaller-feed
   cancel-in-progress: false
 
 jobs:
-  deploy-appinstaller:
+  deploy:
     runs-on: windows-2022
     env:
       RELEASE_TAG: ${{ inputs.tag }}
@@ -35,31 +43,26 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
-    - name: Checkout
+    - name: Checkout exact release tag
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         ref: ${{ inputs.tag }}
         fetch-depth: 0
 
-    - name: Validate inputs and exact tagged source checkout
+    - name: Validate release inputs
       shell: pwsh
       run: |
         if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') {
           throw 'Release tag must look like v1.2.3.'
         }
-        $parts = $env:PACKAGE_VERSION.Split('.')
-        if ($parts.Count -ne 4) {
-          throw 'Package version must have four components.'
+        if ($env:PACKAGE_VERSION -ne ($env:RELEASE_TAG.TrimStart('v') + '.0')) {
+          throw 'Package version does not match the release tag.'
         }
-        foreach ($part in $parts) {
+        foreach ($part in $env:PACKAGE_VERSION.Split('.')) {
           [uint64]$component = 0
           if (-not [uint64]::TryParse($part, [ref]$component) -or $component -gt [uint16]::MaxValue) {
             throw 'Package version contains an invalid component.'
           }
-        }
-        $expectedVersion = $env:RELEASE_TAG.TrimStart('v') + '.0'
-        if ($env:PACKAGE_VERSION -ne $expectedVersion) {
-          throw "Package version $env:PACKAGE_VERSION does not match release tag $env:RELEASE_TAG."
         }
         $head = (git rev-parse HEAD).Trim()
         $tagCommit = (git rev-parse "$env:RELEASE_TAG^{commit}").Trim()
@@ -67,8 +70,8 @@ jobs:
           throw "Checked out commit $head does not match $env:RELEASE_TAG ($tagCommit)."
         }
 
-    - name: Download and verify release MSIX
-      id: msix
+    - name: Download and verify release bundle
+      id: bundle
       shell: pwsh
       run: |
         $release = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json isDraft,isPrerelease | ConvertFrom-Json
@@ -77,91 +80,81 @@ jobs:
         }
         $packageDir = Join-Path $env:RUNNER_TEMP 'package'
         New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
-        gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --dir $packageDir --pattern 'AudioPlaybackConnector2_*_x64.msix' --clobber
-        gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --dir $packageDir --pattern 'AudioPlaybackConnector2.cer' --clobber
-        $packages = @(Get-ChildItem -Path $packageDir -Filter '*.msix' -File)
+        gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --dir $packageDir `
+          --pattern 'AudioPlaybackConnector2_*_x64_ARM64.msixbundle' --clobber
+        gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --dir $packageDir `
+          --pattern 'AudioPlaybackConnector2.cer' --clobber
+        $bundles = @(Get-ChildItem -Path $packageDir -Filter '*.msixbundle' -File)
         $certificates = @(Get-ChildItem -Path $packageDir -Filter '*.cer' -File)
-        if ($packages.Count -ne 1) {
-          throw "Expected one x64 AudioPlaybackConnector2 MSIX asset, found $($packages.Count)."
-        }
-        if ($certificates.Count -ne 1) {
-          throw "Expected one AudioPlaybackConnector2 certificate asset, found $($certificates.Count)."
-        }
+        if ($bundles.Count -ne 1) { throw "Expected one x64/ARM64 MSIX bundle, found $($bundles.Count)." }
+        if ($certificates.Count -ne 1) { throw "Expected one certificate, found $($certificates.Count)." }
         if ((Get-FileHash $certificates[0].FullName).Hash -ne (Get-FileHash 'certs/AudioPlaybackConnector2.cer').Hash) {
           throw 'Published certificate does not match the certificate in the tagged source.'
         }
-        ./scripts/release/verify-msix-package.ps1 `
-          -MsixPath $packages[0].FullName `
+        ./scripts/release/verify-msix-bundle.ps1 `
+          -BundlePath $bundles[0].FullName `
           -ExpectedPackageVersion $env:PACKAGE_VERSION `
-          -ExpectedProcessorArchitecture x64 `
           -ExpectedName N0ahTM.AudioPlaybackConnector2 `
           -ExpectedPublisher 'CN=AudioPlaybackConnector2' `
+          -ExpectedProcessorArchitectures x64,arm64 `
           -ExpectedCertificatePath $certificates[0].FullName `
-          -RequiredEntries AudioPlaybackConnector2.exe,AudioPlaybackConnector2.Control/AudioPlaybackConnector2.Control.exe `
-          -UniqueEntries AudioPlaybackConnector2.exe,AudioPlaybackConnector2.Control/AudioPlaybackConnector2.Control.exe `
           -RequireSignature
-        "PATH=$($packages[0].FullName)" >> $env:GITHUB_OUTPUT
-        "NAME=$($packages[0].Name)" >> $env:GITHUB_OUTPUT
+        "PATH=$($bundles[0].FullName)" >> $env:GITHUB_OUTPUT
+        "NAME=$($bundles[0].Name)" >> $env:GITHUB_OUTPUT
 
-    - name: Download release dependencies
-      id: deps
+    - name: Download and verify release dependencies
+      id: dependencies
       shell: pwsh
       run: |
-        $depsDir = Join-Path $env:RUNNER_TEMP 'dependencies'
-        New-Item -ItemType Directory -Path $depsDir -Force | Out-Null
-        # Download any framework packages published alongside the release
-        gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --dir $depsDir --pattern "*.appx" --pattern "*.msix" --clobber
-        # Remove the main app package so it is not treated as a dependency
-        Get-ChildItem -Path $depsDir -File | Where-Object { $_.Name -like "AudioPlaybackConnector2_*.msix" } | Remove-Item
-        if ((Get-ChildItem -Path $depsDir -File).Count -eq 0) {
-          Write-Warning "No dependency assets found in release."
-        } else {
+        $dependencies = Join-Path $env:RUNNER_TEMP 'dependencies'
+        New-Item -ItemType Directory -Path $dependencies -Force | Out-Null
+        gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --dir $dependencies `
+          --pattern '*.appx' --pattern '*.msix' --clobber
+        $packages = @(Get-ChildItem -Path $dependencies -File)
+        if ($packages.Count -gt 0) {
           ./scripts/release/verify-dependency-packages.ps1 `
-            -DependenciesDirectory $depsDir `
-            -ExpectedProcessorArchitecture x64
+            -DependenciesDirectory $dependencies `
+            -ExpectedProcessorArchitectures x64,arm64
+        } else {
+          Write-Warning 'No dependency packages were published with the release.'
         }
-        "DIR=$depsDir" >> $env:GITHUB_OUTPUT
+        "DIR=$dependencies" >> $env:GITHUB_OUTPUT
 
     - name: Generate App Installer feed
       shell: pwsh
       run: |
-        $msixUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:RELEASE_TAG/$env:MSIX_NAME"
-        $depBaseUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:RELEASE_TAG"
         New-Item -ItemType Directory -Path pages -Force | Out-Null
         $params = @{
-          MsixUrl = $msixUrl
+          PackageUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:RELEASE_TAG/$env:BUNDLE_NAME"
           AppInstallerUrl = $env:APPINSTALLER_URL
-          MsixPath = $env:MSIX_PATH
+          PackagePath = $env:BUNDLE_PATH
           OutputPath = 'pages/AudioPlaybackConnector2.appinstaller'
           ExpectedPackageVersion = $env:PACKAGE_VERSION
-          ProcessorArchitecture = 'x64'
         }
-        $depsDir = $env:DEPENDENCIES_DIR
-        if ($depsDir -and (Test-Path $depsDir) -and (Get-ChildItem -Path $depsDir -File).Count -gt 0) {
-          $params['DependenciesDirectory'] = $depsDir
-          $params['DependencyBaseUrl'] = $depBaseUrl
+        $dependencies = '${{ steps.dependencies.outputs.DIR }}'
+        if ((Get-ChildItem -Path $dependencies -File -ErrorAction SilentlyContinue).Count -gt 0) {
+          $params.DependenciesDirectory = $dependencies
+          $params.DependencyBaseUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:RELEASE_TAG"
         }
         ./scripts/release/generate-appinstaller.ps1 @params
       env:
-        MSIX_NAME: ${{ steps.msix.outputs.NAME }}
-        MSIX_PATH: ${{ steps.msix.outputs.PATH }}
-        DEPENDENCIES_DIR: ${{ steps.deps.outputs.DIR }}
+        BUNDLE_NAME: ${{ steps.bundle.outputs.NAME }}
+        BUNDLE_PATH: ${{ steps.bundle.outputs.PATH }}
 
-    - name: Back up current feed and reject App Installer downgrades
+    - name: Back up current feed and reject downgrades
       id: feed-backup
       shell: pwsh
       run: |
         $rollbackDir = Join-Path $env:RUNNER_TEMP 'pages-rollback'
         $backupPath = Join-Path $rollbackDir 'AudioPlaybackConnector2.appinstaller'
+        $packageUri = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:RELEASE_TAG/$env:BUNDLE_NAME"
         ./scripts/release/assert-appinstaller-monotonic.ps1 `
-          -AppInstallerUrl '${{ env.APPINSTALLER_URL }}' `
+          -AppInstallerUrl $env:APPINSTALLER_URL `
           -CandidateVersion $env:PACKAGE_VERSION `
-          -CandidatePackageUri "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:RELEASE_TAG/$env:MSIX_NAME" `
+          -CandidatePackageUri $packageUri `
           -CandidatePackageName N0ahTM.AudioPlaybackConnector2 `
           -CandidatePublisher 'CN=AudioPlaybackConnector2' `
-          -CandidateProcessorArchitecture x64 `
           -BackupPath $backupPath
-
         if (Test-Path -LiteralPath $backupPath) {
           "EXISTS=true" >> $env:GITHUB_OUTPUT
           "SHA256=$((Get-FileHash -LiteralPath $backupPath -Algorithm SHA256).Hash)" >> $env:GITHUB_OUTPUT
@@ -172,18 +165,18 @@ jobs:
           "SHA256=" >> $env:GITHUB_OUTPUT
         }
       env:
-        MSIX_NAME: ${{ steps.msix.outputs.NAME }}
+        BUNDLE_NAME: ${{ steps.bundle.outputs.NAME }}
 
     - name: Configure GitHub Pages
       uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
 
-    - name: Upload GitHub Pages artifact
+    - name: Upload GitHub Pages candidate
       uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
       with:
         name: github-pages-candidate
         path: pages
 
-    - name: Upload App Installer rollback artifact
+    - name: Upload GitHub Pages rollback
       uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
       with:
         name: github-pages-rollback
@@ -207,21 +200,16 @@ jobs:
         -ExpectedPackageVersion $env:PACKAGE_VERSION
         -ExpectedPackageName N0ahTM.AudioPlaybackConnector2
         -ExpectedPublisher 'CN=AudioPlaybackConnector2'
-        -ExpectedProcessorArchitecture x64
-        -ExpectedPackageUri "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:RELEASE_TAG/$env:MSIX_NAME"
+        -ExpectedPackageUri "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:RELEASE_TAG/${{ steps.bundle.outputs.NAME }}"
         -VerifyPackageUri
-      env:
-        MSIX_NAME: ${{ steps.msix.outputs.NAME }}
 
-    - name: Return GitHub Release to draft after deployment failure
+    - name: Return release to draft after deployment failure
       if: ${{ failure() && steps.deployment-attempt.outcome == 'success' }}
       shell: pwsh
       run: |
         gh release edit $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --draft=true
         $release = gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --json isDraft | ConvertFrom-Json
-        if (-not $release.isDraft) {
-          throw 'Release did not return to draft state.'
-        }
+        if (-not $release.isDraft) { throw 'Release did not return to draft state.' }
 
     - name: Restore previous GitHub Pages feed
       id: rollback-deployment
@@ -240,21 +228,13 @@ jobs:
         for ($attempt = 1; $attempt -le 6; $attempt++) {
           try {
             Invoke-WebRequest -Uri $env:APPINSTALLER_URL -OutFile $downloadPath -TimeoutSec 30 -ErrorAction Stop
-            if (-not $hadFeed) {
-              throw 'The App Installer feed still exists although no previous feed was available.'
-            }
+            if (-not $hadFeed) { throw 'The feed still exists although no previous feed was available.' }
             $actualHash = (Get-FileHash -LiteralPath $downloadPath -Algorithm SHA256).Hash
-            if ($actualHash -ne $expectedHash) {
-              throw "Restored feed hash $actualHash does not match $expectedHash."
-            }
-            Write-Host "Previous App Installer feed restored: $actualHash"
+            if ($actualHash -ne $expectedHash) { throw "Restored feed hash $actualHash does not match $expectedHash." }
             exit 0
           } catch {
             $statusCode = if ($null -ne $_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
-            if (-not $hadFeed -and $statusCode -eq 404) {
-              Write-Host 'App Installer feed removal verified.'
-              exit 0
-            }
+            if (-not $hadFeed -and $statusCode -eq 404) { exit 0 }
             if ($attempt -eq 6) { throw }
             Start-Sleep -Seconds 10
           }

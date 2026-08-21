@@ -72,6 +72,78 @@ function Read-AppPackage {
     }
 }
 
+function Read-AppBundle {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+
+        [switch]$RequireSignature
+    )
+
+    $resolvedPath = (Resolve-Path -LiteralPath $Path).Path
+    $signatureBytes = $null
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($resolvedPath)
+    try {
+        $manifestEntry = $zip.GetEntry('AppxMetadata/AppxBundleManifest.xml')
+        if (-not $manifestEntry) {
+            throw "No AppxMetadata/AppxBundleManifest.xml found in '$resolvedPath'."
+        }
+
+        $reader = [System.IO.StreamReader]::new($manifestEntry.Open())
+        try {
+            [xml]$manifest = $reader.ReadToEnd()
+        } finally {
+            $reader.Dispose()
+        }
+
+        if ($RequireSignature) {
+            $signatureEntry = $zip.GetEntry('AppxSignature.p7x')
+            if (-not $signatureEntry) {
+                throw "Bundle '$resolvedPath' is not signed."
+            }
+            $stream = $signatureEntry.Open()
+            $memory = [System.IO.MemoryStream]::new()
+            try {
+                $stream.CopyTo($memory)
+                $signatureBytes = $memory.ToArray()
+            } finally {
+                $memory.Dispose()
+                $stream.Dispose()
+            }
+        }
+
+        $entryNames = @($zip.Entries | ForEach-Object { $_.FullName })
+    } finally {
+        $zip.Dispose()
+    }
+
+    $identity = $manifest.Bundle.Identity
+    $applicationPackages = @($manifest.Bundle.Packages.Package | Where-Object Type -eq 'application')
+    $metadata = [ordered]@{
+        Path                     = $resolvedPath
+        Name                     = [string]$identity.Name
+        Publisher                = [string]$identity.Publisher
+        Version                  = [string]$identity.Version
+        ApplicationArchitectures = @($applicationPackages | ForEach-Object { [string]$_.Architecture })
+        ApplicationPackages      = @($applicationPackages | ForEach-Object { [string]$_.FileName })
+    }
+    foreach ($propertyName in @('Name', 'Publisher', 'Version')) {
+        if ([string]::IsNullOrWhiteSpace([string]$metadata[$propertyName])) {
+            throw "Bundle identity property '$propertyName' is missing in '$resolvedPath'."
+        }
+    }
+    if ($metadata.ApplicationArchitectures.Count -eq 0) {
+        throw "Bundle '$resolvedPath' contains no application packages."
+    }
+
+    [pscustomobject]@{
+        Metadata       = [pscustomobject]$metadata
+        EntryNames     = $entryNames
+        SignatureBytes = $signatureBytes
+    }
+}
+
 function Get-AppPackageSigner {
     [CmdletBinding()]
     param(
@@ -149,7 +221,12 @@ function Test-AppPackageIntegrity {
     $validationDirectory = Join-Path ([System.IO.Path]::GetTempPath()) `
         ('apc2-package-validation-' + [guid]::NewGuid().ToString('N'))
     try {
-        $makeAppxOutput = & $makeAppx unpack /p $PackagePath /d $validationDirectory /o 2>&1
+        $operation = if ([System.IO.Path]::GetExtension($PackagePath) -in '.msixbundle', '.appxbundle') {
+            'unbundle'
+        } else {
+            'unpack'
+        }
+        $makeAppxOutput = & $makeAppx $operation /p $PackagePath /d $validationDirectory /o 2>&1
         if ($LASTEXITCODE -ne 0) {
             $details = @($makeAppxOutput | Select-Object -Last 50) -join "`n"
             throw "MakeAppx integrity verification failed for '$PackagePath':`n$details"
@@ -174,4 +251,4 @@ function Test-AppPackageIntegrity {
     }
 }
 
-Export-ModuleMember -Function Read-AppPackage, Test-AppPackageIntegrity
+Export-ModuleMember -Function Read-AppPackage, Read-AppBundle, Test-AppPackageIntegrity

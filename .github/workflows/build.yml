@@ -2,14 +2,13 @@ name: Build
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, develop]
   pull_request:
-    branches: [ main, develop ]
+    branches: [main, develop]
 
 jobs:
-  build:
+  quality:
     runs-on: windows-2022
-
     steps:
     - name: Checkout
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -18,18 +17,21 @@ jobs:
       uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
 
     - name: Install static analysis tools
+      shell: pwsh
       run: |
         choco install llvm --version=22.1.7 -y --no-progress
         choco install cppcheck --version=2.19.0 -y --no-progress
-        "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-        "C:\Program Files\Cppcheck" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        'C:\Program Files\LLVM\bin' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        'C:\Program Files\Cppcheck' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
     - name: Check formatting
+      shell: pwsh
       run: |
         $files = git ls-files '*.cpp' '*.h' '*.hpp' '*.cxx' '*.cc' '*.ixx'
         clang-format --dry-run --Werror $files
 
     - name: Run CppCheck
+      shell: pwsh
       run: |
         $files = git ls-files 'AudioPlaybackConnector2/src/*.cpp' 'AudioPlaybackConnector2/ui/*.cpp'
         cppcheck `
@@ -59,25 +61,41 @@ jobs:
         /p:Platform=x64
         /t:TestCoreRuntimeBoundaryVerifier
 
-    # CI builds the .exe only; MSIX signing is intentionally disabled here because
-    # this workflow does not produce release artifacts. Release signing happens
-    # in release.yml using the repository's self-signed certificate.
-    - name: Build (Release, x64)
+  build:
+    name: Build (${{ matrix.architecture }})
+    needs: quality
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: [x64, ARM64]
+    steps:
+    - name: Checkout
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
+
+    - name: Restore NuGet packages
+      run: msbuild AudioPlaybackConnector2.slnx -t:restore -p:RestorePackagesConfig=true
+
+    - name: Build unsigned release
       run: >
         msbuild AudioPlaybackConnector2.slnx
         /p:Configuration=Release
-        /p:Platform=x64
+        /p:Platform=${{ matrix.architecture }}
         /p:AppxBundle=Never
-        /p:AppxBundlePlatforms=x64
+        /p:AppxBundlePlatforms=${{ matrix.architecture }}
         /p:AppxPackageSigningEnabled=false
         /t:Rebuild
 
     - name: Run native regression tests
+      if: ${{ matrix.architecture == 'x64' }}
       run: .\x64\Release\tests\AudioPlaybackConnector2.CoreTests.exe
 
     - name: Upload build artifact
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
-        name: AudioPlaybackConnector2-x64-Release
-        path: x64/Release/AudioPlaybackConnector2/AudioPlaybackConnector2.exe
+        name: AudioPlaybackConnector2-${{ matrix.architecture }}-Release
+        path: ${{ matrix.architecture }}/Release/AudioPlaybackConnector2/AudioPlaybackConnector2.exe
         if-no-files-found: error

@@ -31,9 +31,12 @@ for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
 
         [xml]$feed = $content
         $appInstallerVersion = $feed.DocumentElement.GetAttribute("Version")
-        $packageNode = $feed.DocumentElement.GetElementsByTagName("MainPackage", $feed.DocumentElement.NamespaceURI)[0]
+        $packageNode = $feed.DocumentElement.GetElementsByTagName("MainBundle", $feed.DocumentElement.NamespaceURI)[0]
         if (-not $packageNode) {
-            throw "MainPackage element not found."
+            $packageNode = $feed.DocumentElement.GetElementsByTagName("MainPackage", $feed.DocumentElement.NamespaceURI)[0]
+        }
+        if (-not $packageNode) {
+            throw "MainBundle or MainPackage element not found."
         }
 
         $actualPackageVersion = $packageNode.GetAttribute("Version")
@@ -45,7 +48,8 @@ for ($attempt = 1; $attempt -le $Attempts; $attempt++) {
             $actualPackageVersion -eq $ExpectedPackageVersion -and
             ([string]::IsNullOrWhiteSpace($ExpectedPackageName) -or $actualPackageName -eq $ExpectedPackageName) -and
             ([string]::IsNullOrWhiteSpace($ExpectedPublisher) -or $actualPublisher -eq $ExpectedPublisher) -and
-            ([string]::IsNullOrWhiteSpace($ExpectedProcessorArchitecture) -or $actualArchitecture -eq $ExpectedProcessorArchitecture) -and
+            ([string]::IsNullOrWhiteSpace($ExpectedProcessorArchitecture) -or
+                $actualArchitecture -eq $ExpectedProcessorArchitecture) -and
             ([string]::IsNullOrWhiteSpace($ExpectedPackageUri) -or $packageUri -eq $ExpectedPackageUri)
         if ($matches) {
             $verified = $true

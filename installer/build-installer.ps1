@@ -30,7 +30,6 @@ try {
             $Version = $release.tag_name.TrimStart('v')
         }
         $CertPath = (Resolve-Path $CertPath).Path
-        $packageArchitecture = 'x64'
         Write-Host "Building web bootstrapper version $Version"
     } else {
         if (-not $MsixPath) { throw '-MsixPath is required in Bundle mode.' }
@@ -40,11 +39,16 @@ try {
             $candidate = Join-Path (Split-Path $MsixPath) 'Dependencies'
             if (Test-Path $candidate) { $DependenciesDir = $candidate }
         }
-        if ((Split-Path $MsixPath -Leaf) -notmatch '_(\d+\.\d+\.\d+)(?:\.\d+)?_(x86|x64|arm64)\.msix$') {
-            throw 'Could not parse package version and architecture from MSIX filename.'
+        $packageName = Split-Path $MsixPath -Leaf
+        if ($packageName -match '_(\d+\.\d+\.\d+)(?:\.\d+)?_x64_ARM64\.msixbundle$') {
+            $packageVersion = $Matches[1]
+            $packageArchitectures = @('x64', 'arm64')
+        } elseif ($packageName -match '_(\d+\.\d+\.\d+)(?:\.\d+)?_(x64|arm64)\.msix$') {
+            $packageVersion = $Matches[1]
+            $packageArchitectures = @($Matches[2])
+        } else {
+            throw 'Could not parse package version and architecture from MSIX bundle filename.'
         }
-        $packageVersion = $Matches[1]
-        $packageArchitecture = $Matches[2]
         if (-not $Version) {
             $Version = $packageVersion
         } elseif ($Version -ne $packageVersion) {
@@ -53,7 +57,6 @@ try {
         Write-Host "Building bundle bootstrapper for version $Version"
     }
     if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version must use SemVer format, for example 1.2.3: $Version" }
-    if ($packageArchitecture -ne 'x64') { throw "Only the x64 application package is currently supported: $packageArchitecture" }
 
     $stageName = 'AudioPlaybackConnector2-installer-' + [guid]::NewGuid().ToString('N')
     $stage = Join-Path ([IO.Path]::GetTempPath()) $stageName
@@ -68,12 +71,16 @@ try {
             Write-Warning 'No Dependencies directory found; MSIX must carry all dependencies.'
         }
         $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-        & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass `
-            -File (Join-Path $stage 'install-app.ps1') `
-            -Step validate `
-            -PackageDir $stage `
-            -PackageArchitecture $packageArchitecture
-        if ($LASTEXITCODE -ne 0) { throw 'Staged installer payload validation failed.' }
+        foreach ($architecture in $packageArchitectures) {
+            & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass `
+                -File (Join-Path $stage 'install-app.ps1') `
+                -Step validate `
+                -PackageDir $stage `
+                -PackageArchitecture $architecture
+            if ($LASTEXITCODE -ne 0) {
+                throw "Staged installer payload validation failed for $architecture."
+            }
+        }
     }
 
     $iscc = Get-Command ISCC.exe -ErrorAction SilentlyContinue
@@ -97,7 +104,6 @@ try {
     $null = New-Item -ItemType Directory -Path $OutputDir -Force
     $isccArgs = @(
         "/DAppVersion=$Version",
-        "/DPackageArchitecture=$packageArchitecture",
         "/DStageDir=$stage",
         "/O$OutputDir"
     )

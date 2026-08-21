@@ -1,0 +1,279 @@
+name: Build Release Artifacts
+
+on:
+  workflow_call:
+    inputs:
+      source_ref:
+        required: true
+        type: string
+      tag:
+        required: true
+        type: string
+      semver:
+        required: true
+        type: string
+      package_version:
+        required: true
+        type: string
+      run_static_analysis:
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      SIGNING_CERTIFICATE_PFX:
+        required: true
+      SIGNING_CERTIFICATE_PASSWORD:
+        required: true
+    outputs:
+      artifact_name:
+        value: ${{ jobs.build.outputs.artifact_name }}
+      bundle_name:
+        value: ${{ jobs.build.outputs.bundle_name }}
+      web_setup_name:
+        value: ${{ jobs.build.outputs.web_setup_name }}
+      offline_setup_name:
+        value: ${{ jobs.build.outputs.offline_setup_name }}
+      dependency_names:
+        value: ${{ jobs.build.outputs.dependency_names }}
+
+env:
+  APPINSTALLER_URL: https://n0ahtm.github.io/AudioPlaybackConnector2/AudioPlaybackConnector2.appinstaller
+
+jobs:
+  build:
+    runs-on: windows-2022
+    permissions:
+      contents: read
+    outputs:
+      artifact_name: ${{ steps.artifacts.outputs.ARTIFACT_NAME }}
+      bundle_name: ${{ steps.artifacts.outputs.BUNDLE_NAME }}
+      web_setup_name: ${{ steps.artifacts.outputs.WEB_SETUP_NAME }}
+      offline_setup_name: ${{ steps.artifacts.outputs.OFFLINE_SETUP_NAME }}
+      dependency_names: ${{ steps.artifacts.outputs.DEPENDENCY_NAMES }}
+
+    steps:
+    - name: Checkout release source
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        ref: ${{ inputs.source_ref }}
+        fetch-depth: 0
+
+    - name: Validate release inputs
+      shell: pwsh
+      run: |
+        if ('${{ inputs.tag }}' -ne 'v${{ inputs.semver }}') {
+          throw 'Release tag and semantic version do not match.'
+        }
+        if ('${{ inputs.package_version }}' -ne '${{ inputs.semver }}.0') {
+          throw 'MSIX package version must be the semantic version plus .0.'
+        }
+        if ('${{ inputs.package_version }}' -notmatch '^\d{1,5}\.\d{1,5}\.\d{1,5}\.\d{1,5}$') {
+          throw 'MSIX package version must contain four numeric components.'
+        }
+        foreach ($part in '${{ inputs.package_version }}'.Split('.')) {
+          if ([uint32]$part -gt [uint16]::MaxValue) {
+            throw 'An MSIX package version component exceeds 65535.'
+          }
+        }
+
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
+
+    - name: Install static analysis tools
+      if: ${{ inputs.run_static_analysis }}
+      shell: pwsh
+      run: |
+        choco install llvm --version=22.1.7 -y --no-progress
+        choco install cppcheck --version=2.19.0 -y --no-progress
+        'C:\Program Files\LLVM\bin' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        'C:\Program Files\Cppcheck' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+    - name: Check formatting
+      if: ${{ inputs.run_static_analysis }}
+      shell: pwsh
+      run: |
+        $files = git ls-files '*.cpp' '*.h' '*.hpp' '*.cxx' '*.cc' '*.ixx'
+        clang-format --dry-run --Werror $files
+
+    - name: Run CppCheck
+      if: ${{ inputs.run_static_analysis }}
+      shell: pwsh
+      run: |
+        $files = git ls-files 'AudioPlaybackConnector2/src/*.cpp' 'AudioPlaybackConnector2/ui/*.cpp'
+        cppcheck `
+          --enable=warning,performance,portability `
+          --std=c++20 `
+          --language=c++ `
+          --platform=win64 `
+          --inline-suppr `
+          -IAudioPlaybackConnector2/include `
+          -IAudioPlaybackConnector2/res `
+          -IAudioPlaybackConnector2/ui `
+          -IAudioPlaybackConnector2/ui/App `
+          -IAudioPlaybackConnector2/ui/MainWindow `
+          -IAudioPlaybackConnector2/ui/DevicePickerView `
+          -IAudioPlaybackConnector2/ui/SettingsWindow `
+          --error-exitcode=1 `
+          --template=gcc `
+          $files
+
+    - name: Decode signing certificate
+      id: cert
+      shell: pwsh
+      env:
+        SIGNING_CERTIFICATE_PFX: ${{ secrets.SIGNING_CERTIFICATE_PFX }}
+      run: |
+        $certPath = Join-Path $env:RUNNER_TEMP 'AudioPlaybackConnector2.pfx'
+        [IO.File]::WriteAllBytes($certPath, [Convert]::FromBase64String($env:SIGNING_CERTIFICATE_PFX))
+        "PATH=$certPath" >> $env:GITHUB_OUTPUT
+
+    - name: Restore NuGet packages
+      run: msbuild AudioPlaybackConnector2.slnx -t:restore -p:RestorePackagesConfig=true
+
+    - name: Test CoreRuntime boundary verifier
+      run: >
+        msbuild AudioPlaybackConnector2.CoreRuntime/AudioPlaybackConnector2.CoreRuntime.vcxproj
+        /p:Configuration=Release
+        /p:Platform=x64
+        /t:TestCoreRuntimeBoundaryVerifier
+
+    - name: Build signed x64 and ARM64 MSIX bundle
+      shell: pwsh
+      env:
+        SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
+      run: |
+        $root = Join-Path $env:RUNNER_TEMP 'msix-bundle'
+        $dependencies = Join-Path $root 'Dependencies'
+        & msbuild 'AudioPlaybackConnector2 (Package)\AudioPlaybackConnector2 (Package).wapproj' `
+          /p:Configuration=Release `
+          /p:Platform=x64 `
+          /p:PackageVersion=${{ inputs.package_version }} `
+          "/p:AppxPackageDir=$root\" `
+          "/p:AppxPackageTestDir=$root\" `
+          "/p:AppxPackageTestExternalPackagesDir=$dependencies" `
+          /p:AppxPackageSigningEnabled=true `
+          "/p:PackageCertificateKeyFile=${{ steps.cert.outputs.PATH }}" `
+          "/p:PackageCertificatePassword=$env:SIGNING_CERTIFICATE_PASSWORD" `
+          /p:UapAppxPackageBuildMode=SideloadOnly `
+          /p:AppxBundle=Always `
+          '/p:AppxBundlePlatforms=x64|ARM64' `
+          /t:Rebuild
+        if ($LASTEXITCODE -ne 0) { throw "MSIX bundle build failed with exit code $LASTEXITCODE." }
+
+    - name: Build regression tests for both architectures
+      shell: pwsh
+      run: |
+        foreach ($architecture in @('x64', 'ARM64')) {
+          & msbuild AudioPlaybackConnector2.CoreTests/AudioPlaybackConnector2.CoreTests.vcxproj `
+            /p:Configuration=Release /p:Platform=$architecture /t:Rebuild
+          if ($LASTEXITCODE -ne 0) { throw "$architecture test build failed with exit code $LASTEXITCODE." }
+        }
+
+    - name: Run x64 regression tests
+      run: .\x64\Release\tests\AudioPlaybackConnector2.CoreTests.exe
+
+    - name: Verify signed bundle
+      id: bundle
+      shell: pwsh
+      run: |
+        $bundle = Join-Path $env:RUNNER_TEMP 'msix-bundle\AudioPlaybackConnector2 (Package)_${{ inputs.package_version }}_x64_ARM64.msixbundle'
+        ./scripts/release/verify-msix-bundle.ps1 `
+          -BundlePath $bundle `
+          -ExpectedPackageVersion '${{ inputs.package_version }}' `
+          -ExpectedName N0ahTM.AudioPlaybackConnector2 `
+          -ExpectedPublisher 'CN=AudioPlaybackConnector2' `
+          -ExpectedProcessorArchitectures x64,arm64 `
+          -ExpectedCertificatePath 'certs/AudioPlaybackConnector2.cer' `
+          -RequireSignature `
+          -WriteGitHubOutput
+
+    - name: Extract changelog
+      id: changelog
+      shell: pwsh
+      run: |
+        $outputPath = Join-Path $env:RUNNER_TEMP 'RELEASE_NOTES.md'
+        ./scripts/release/extract-changelog.ps1 -Version '${{ inputs.tag }}' -OutputPath $outputPath
+
+    - name: Install Inno Setup
+      run: choco install innosetup --version=6.7.1 -y --no-progress
+
+    - name: Assemble release artifacts
+      id: artifacts
+      shell: pwsh
+      run: |
+        $stage = Join-Path $env:RUNNER_TEMP 'release-artifacts'
+        $dependencies = Join-Path $stage 'Dependencies'
+        New-Item -ItemType Directory -Path $stage -Force | Out-Null
+
+        $bundleName = 'AudioPlaybackConnector2_${{ inputs.package_version }}_x64_ARM64.msixbundle'
+        $bundlePath = Join-Path $stage $bundleName
+        Copy-Item -LiteralPath '${{ steps.bundle.outputs.PATH }}' -Destination $bundlePath
+
+        $sourceDependencies = Join-Path $env:RUNNER_TEMP 'msix-bundle\Dependencies'
+        if (Test-Path -LiteralPath $sourceDependencies) {
+          ./scripts/release/collect-dependency-packages.ps1 `
+            -DependenciesDirectory $sourceDependencies `
+            -OutputDirectory $dependencies `
+            -Architectures x64,arm64
+        }
+
+        $packageUrl = 'https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}/' + $bundleName
+        $dependencyBaseUrl = 'https://github.com/${{ github.repository }}/releases/download/${{ inputs.tag }}'
+        $appInstallerPath = Join-Path $stage 'AudioPlaybackConnector2.appinstaller'
+        $feedParams = @{
+          PackageUrl = $packageUrl
+          AppInstallerUrl = $env:APPINSTALLER_URL
+          PackagePath = $bundlePath
+          OutputPath = $appInstallerPath
+          ExpectedPackageVersion = '${{ inputs.package_version }}'
+        }
+        if (Test-Path -LiteralPath $dependencies) {
+          $feedParams.DependenciesDirectory = $dependencies
+          $feedParams.DependencyBaseUrl = $dependencyBaseUrl
+        }
+        ./scripts/release/generate-appinstaller.ps1 @feedParams
+
+        $installerOutput = Join-Path $env:RUNNER_TEMP 'installers'
+        $installerParams = @{
+          Mode = 'Bundle'
+          MsixPath = $bundlePath
+          CertPath = 'certs/AudioPlaybackConnector2.cer'
+          Version = '${{ inputs.semver }}'
+          OutputDir = $installerOutput
+        }
+        if (Test-Path -LiteralPath $dependencies) {
+          $installerParams.DependenciesDir = $dependencies
+        }
+        ./installer/build-installer.ps1 @installerParams
+        ./installer/build-installer.ps1 `
+          -Mode Web `
+          -CertPath 'certs/AudioPlaybackConnector2.cer' `
+          -Version '${{ inputs.semver }}' `
+          -OutputDir $installerOutput
+
+        $offlineSetupName = 'AudioPlaybackConnector2-Setup-${{ inputs.semver }}.exe'
+        $webSetupName = 'AudioPlaybackConnector2-WebSetup.exe'
+        Copy-Item -LiteralPath (Join-Path $installerOutput $offlineSetupName) -Destination $stage
+        Copy-Item -LiteralPath (Join-Path $installerOutput $webSetupName) -Destination $stage
+        Copy-Item -LiteralPath 'certs/AudioPlaybackConnector2.cer' -Destination $stage
+
+        Copy-Item -LiteralPath '${{ steps.changelog.outputs.PATH }}' -Destination $stage
+
+        $dependencyNames = @(Get-ChildItem -Path $dependencies -Recurse -File -ErrorAction SilentlyContinue |
+          Sort-Object Name |
+          ForEach-Object Name)
+        $artifactName = 'AudioPlaybackConnector2-release-${{ inputs.package_version }}'
+        "ARTIFACT_NAME=$artifactName" >> $env:GITHUB_OUTPUT
+        "BUNDLE_NAME=$bundleName" >> $env:GITHUB_OUTPUT
+        "WEB_SETUP_NAME=$webSetupName" >> $env:GITHUB_OUTPUT
+        "OFFLINE_SETUP_NAME=$offlineSetupName" >> $env:GITHUB_OUTPUT
+        "DEPENDENCY_NAMES=$($dependencyNames -join ',')" >> $env:GITHUB_OUTPUT
+        "DIR=$stage" >> $env:GITHUB_OUTPUT
+
+    - name: Upload release artifacts
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: ${{ steps.artifacts.outputs.ARTIFACT_NAME }}
+        path: ${{ steps.artifacts.outputs.DIR }}
+        if-no-files-found: error
+        retention-days: 7

@@ -2,8 +2,10 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$DependenciesDirectory,
 
-    [ValidateSet('x86', 'x64', 'arm64')]
-    [string]$ExpectedProcessorArchitecture = 'x64'
+    [ValidateSet('x64', 'arm64')]
+    [string[]]$ExpectedProcessorArchitectures = @('x64'),
+
+    [switch]$IgnoreOtherArchitectures
 )
 
 $ErrorActionPreference = 'Stop'
@@ -24,11 +26,6 @@ if ($packages.Count -eq 0) {
     throw "No dependency packages found in '$resolvedDirectory'."
 }
 
-$duplicateFileNames = @($packages | Group-Object Name | Where-Object Count -gt 1)
-if ($duplicateFileNames.Count -gt 0) {
-    throw "Duplicate dependency filenames found: $($duplicateFileNames.Name -join ', ')."
-}
-
 $identities = foreach ($packagePath in $packages) {
     $package = Read-AppPackage -Path $packagePath.FullName -RequireSignature
     $identity = $package.Metadata
@@ -38,7 +35,8 @@ $identities = foreach ($packagePath in $packages) {
     if ($identity.Publisher -ne $expectedPublisher) {
         throw "Unexpected dependency publisher in '$($packagePath.Name)'."
     }
-    if ($identity.ProcessorArchitecture -ne $ExpectedProcessorArchitecture) {
+    if ($ExpectedProcessorArchitectures -notcontains $identity.ProcessorArchitecture) {
+        if ($IgnoreOtherArchitectures) { continue }
         throw "Unexpected dependency architecture '$($identity.ProcessorArchitecture)' in '$($packagePath.Name)'."
     }
 
@@ -48,6 +46,7 @@ $identities = foreach ($packagePath in $packages) {
         -ExpectedPublisher $identity.Publisher
 
     [pscustomobject]@{
+        Path                  = $identity.Path
         FileName              = $packagePath.Name
         Name                  = $identity.Name
         Publisher             = $identity.Publisher
@@ -57,7 +56,7 @@ $identities = foreach ($packagePath in $packages) {
     }
 }
 
-$duplicateIdentities = @($identities | Group-Object Name | Where-Object Count -gt 1)
+$duplicateIdentities = @($identities | Group-Object Name, ProcessorArchitecture | Where-Object Count -gt 1)
 if ($duplicateIdentities.Count -gt 0) {
     throw "Duplicate dependency identities found: $($duplicateIdentities.Name -join ', ')."
 }

@@ -84,9 +84,12 @@ if (-not [string]::IsNullOrWhiteSpace($ExistingFeedPath)) {
 
 [xml]$feed = $feedContent
 $rootVersion = $feed.DocumentElement.GetAttribute("Version")
-$packageNode = $feed.DocumentElement.GetElementsByTagName("MainPackage", $feed.DocumentElement.NamespaceURI)[0]
+$packageNode = $feed.DocumentElement.GetElementsByTagName("MainBundle", $feed.DocumentElement.NamespaceURI)[0]
 if (-not $packageNode) {
-    throw "Existing App Installer feed has no MainPackage element."
+    $packageNode = $feed.DocumentElement.GetElementsByTagName("MainPackage", $feed.DocumentElement.NamespaceURI)[0]
+}
+if (-not $packageNode) {
+    throw "Existing App Installer feed has no MainBundle or MainPackage element."
 }
 $packageVersion = $packageNode.GetAttribute("Version")
 if ($rootVersion -ne $packageVersion) {

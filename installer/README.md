@@ -1,11 +1,11 @@
 # Bootstrapper Installer
 
-The project ships two per-user Inno Setup bootstrapper variants. Both validate the x64 MSIX and signer, accept only the expected Microsoft-signed x64 framework dependencies, import the embedded self-signed release certificate into `Cert:\CurrentUser\TrustedPeople`, register the package, verify installation, and launch the app. They do not require administrator rights.
+The project ships two per-user Inno Setup bootstrapper variants for x64 and ARM64 Windows. Both validate the shared MSIX bundle and signer, select only the native architecture's Microsoft-signed framework dependencies, import the embedded self-signed release certificate into `Cert:\CurrentUser\TrustedPeople`, register the package, verify installation, and launch the app. They do not require administrator rights.
 
 | Variant | Payload | Intended use |
 |---|---|---|
 | `AudioPlaybackConnector2-WebSetup.exe` | Pinned certificate; downloads the current GitHub release package and dependencies | Recommended installation |
-| `AudioPlaybackConnector2-Setup-<version>.exe` | Certificate, MSIX, and dependencies | Offline installation and reproducible version installs |
+| `AudioPlaybackConnector2-Setup-<version>.exe` | Certificate, x64/ARM64 MSIX bundle, and dependencies for both architectures | Offline installation and reproducible version installs |
 
 ## Build
 
@@ -13,13 +13,13 @@ Install [Inno Setup 6](https://jrsoftware.org/isinfo.php), then run from the rep
 
 ```powershell
 # Offline bundle built from a signed release package
-.\installer\build-installer.ps1 -Mode Bundle -MsixPath "path\AudioPlaybackConnector2_<package-version>_x64.msix" -Version "<version>"
+.\installer\build-installer.ps1 -Mode Bundle -MsixPath "path\AudioPlaybackConnector2_<package-version>_x64_ARM64.msixbundle" -Version "<version>"
 
 # Web installer with deterministic displayed version
 .\installer\build-installer.ps1 -Mode Web -Version "<version>"
 ```
 
-`-CertPath` defaults to `certs\AudioPlaybackConnector2.cer`, `-DependenciesDir` defaults to the MSIX sibling `Dependencies` directory, and `-OutputDir` defaults to `dist\installer`. The bundle requires `-MsixPath`; pass `-Version` explicitly for release builds.
+`-CertPath` defaults to `certs\AudioPlaybackConnector2.cer`, `-DependenciesDir` defaults to the MSIX bundle's sibling `Dependencies` directory, and `-OutputDir` defaults to `dist\installer`. Bundle mode requires `-MsixPath`; pass `-Version` explicitly for release builds.
 
 ## Installer Behavior
 
@@ -46,7 +46,7 @@ Only the runtime worker is stored under `installer\stage`. Certificates, package
 
 ## Validation
 
-Before a release, test both variants on a clean supported Windows user account:
+Before a release, test both variants on clean x64 and ARM64 Windows user accounts:
 
 1. Fresh install and first launch.
 2. Repair of the same version.
@@ -59,4 +59,4 @@ Before a release, test both variants on a clean supported Windows user account:
 
 ## CI Integration
 
-The release workflow builds both variants from the verified signed MSIX. A tag push creates or refreshes a draft release with the App Installer, MSIX, certificate, and dependency assets. A manual workflow dispatch rebuilds and verifies the tagged source before publishing the draft and deploying the App Installer feed. If publication, Pages deployment, or feed verification fails, the release returns to draft; when Pages may have changed, the previous feed is restored and verified. The dry-run workflow performs the same build checks without creating a release.
+The shared release-artifact workflow builds both installers from one verified, signed x64/ARM64 MSIX bundle. A tag push creates or refreshes a draft release with the App Installer, bundle, certificate, and dependency assets. A manual workflow dispatch rebuilds and verifies the tagged source before publishing the draft and invoking the reusable feed-deployment workflow. If publication, Pages deployment, or feed verification fails, the release returns to draft; when Pages may have changed, the previous feed is restored and verified. The dry-run workflow calls the same artifact workflow without creating a release.

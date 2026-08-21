@@ -6,7 +6,7 @@
 param(
     [string] $PackageDir,
     [ValidateSet('validate', 'cert', 'install', 'verify', 'uninstall')] [string] $Step,
-    [ValidateSet('x86', 'x64', 'arm64')] [string] $PackageArchitecture = 'x64',
+    [ValidateSet('x64', 'arm64')] [string] $PackageArchitecture = 'x64',
     [string] $ExpectedPackageVersion,
     [switch] $Launch
 )
@@ -71,9 +71,12 @@ function Remove-NewlyImportedCertificate {
 
 function Get-AppPackage {
     param([string] $Dir)
-    $packages = @(Get-ChildItem -Path $Dir -Filter "AudioPlaybackConnector2_*_$PackageArchitecture.msix" -File)
+    $packages = @(Get-ChildItem -Path $Dir -Filter 'AudioPlaybackConnector2_*_x64_ARM64.msixbundle' -File)
+    if ($packages.Count -eq 0) {
+        $packages = @(Get-ChildItem -Path $Dir -Filter "AudioPlaybackConnector2_*_$PackageArchitecture.msix" -File)
+    }
     if ($packages.Count -ne 1) {
-        throw "Expected exactly one $PackageArchitecture app package in $Dir; found $($packages.Count)."
+        throw "Expected exactly one x64/ARM64 bundle or $PackageArchitecture app package in $Dir; found $($packages.Count)."
     }
     return $packages[0]
 }
@@ -83,24 +86,37 @@ function Assert-AppPackageIdentity {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive = [System.IO.Compression.ZipFile]::OpenRead($Path)
     try {
-        $entry = $archive.GetEntry('AppxManifest.xml')
-        if (-not $entry) { throw 'AppxManifest.xml is missing from the app package.' }
+        $isBundle = [System.IO.Path]::GetExtension($Path) -ieq '.msixbundle'
+        $manifestPath = if ($isBundle) { 'AppxMetadata/AppxBundleManifest.xml' } else { 'AppxManifest.xml' }
+        $entry = $archive.GetEntry($manifestPath)
+        if (-not $entry) { throw "$manifestPath is missing from the app package." }
         $reader = [IO.StreamReader]::new($entry.Open())
         try {
             [xml] $manifest = $reader.ReadToEnd()
         } finally {
             $reader.Dispose()
         }
-        $identity = $manifest.Package.Identity
+        $identity = if ($isBundle) { $manifest.Bundle.Identity } else { $manifest.Package.Identity }
         if ($identity.Name -ne 'N0ahTM.AudioPlaybackConnector2' -or
-            $identity.Publisher -ne 'CN=AudioPlaybackConnector2' -or
-            $identity.ProcessorArchitecture -ne $PackageArchitecture) {
-            throw "Unexpected package identity: $($identity.Name), $($identity.Publisher), $($identity.ProcessorArchitecture)."
+            $identity.Publisher -ne 'CN=AudioPlaybackConnector2') {
+            throw "Unexpected package identity: $($identity.Name), $($identity.Publisher)."
+        }
+        if ($isBundle) {
+            $architectures = @($manifest.Bundle.Packages.Package |
+                    Where-Object Type -eq 'application' |
+                    ForEach-Object { ([string]$_.Architecture).ToLowerInvariant() } |
+                    Sort-Object -Unique)
+            if (($architectures -join ',') -ne 'arm64,x64') {
+                throw "Unexpected bundle architectures: $($architectures -join ',')."
+            }
+        } elseif ($identity.ProcessorArchitecture -ne $PackageArchitecture) {
+            throw "Unexpected package architecture: $($identity.ProcessorArchitecture)."
         }
         if ($ExpectedPackageVersion -and $identity.Version -ne $ExpectedPackageVersion) {
             throw "Unexpected package version $($identity.Version); expected $ExpectedPackageVersion."
         }
-        Write-Host "Package identity verified: $($identity.Name) $($identity.Version) $($identity.ProcessorArchitecture)."
+        $architectureLabel = if ($isBundle) { 'x64,arm64' } else { [string]$identity.ProcessorArchitecture }
+        Write-Host "Package identity verified: $($identity.Name) $($identity.Version) $architectureLabel."
     } finally {
         $archive.Dispose()
     }
@@ -143,9 +159,16 @@ function Get-AppDependencies {
     $depsRoot = Join-Path $Dir 'Dependencies'
     if (Test-Path $depsRoot) {
         $archDir = Join-Path $depsRoot $PackageArchitecture
-        $searchDir = if (Test-Path $archDir) { $archDir } else { $depsRoot }
-        return @(Get-ChildItem -Path $searchDir -Recurse -File |
-            Where-Object { $_.Extension -in '.msix', '.appx' })
+        if (Test-Path $archDir) {
+            return @(Get-ChildItem -Path $archDir -Recurse -File |
+                Where-Object { $_.Extension -in '.msix', '.appx' })
+        }
+        return @(Get-ChildItem -Path $depsRoot -Recurse -File |
+            Where-Object {
+                $_.Extension -in '.msix', '.appx' -and
+                (($_.Name -match "\.$PackageArchitecture\.") -or
+                    ($_.Name -notmatch '\.(x64|arm64)\.'))
+            })
     }
     return @(Get-ChildItem -Path $Dir -File | Where-Object {
             ($_.Extension -in '.msix', '.appx') -and ($_.Name -notmatch '^AudioPlaybackConnector2_') })

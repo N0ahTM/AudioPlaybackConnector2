@@ -226,20 +226,15 @@ jobs:
 
         ---
 
-        **Recommended installation:** Download and run `AudioPlaybackConnector2-WebSetup.exe`.
+        ## Installation
 
-        The versioned `AudioPlaybackConnector2-Setup-${{ steps.version.outputs.SEMVER }}.exe` contains the complete package for offline installation. Both setup variants install per-user without administrator rights. Windows SmartScreen may warn because the setup executable is not yet code-signed.
+        **Recommended:** Download and run `AudioPlaybackConnector2-WebSetup.exe`.
 
-        The `.appinstaller`, `.msix`, certificate, and dependency assets remain available for manual installation and the existing App Installer update feed.
+        For offline installation, use the versioned `AudioPlaybackConnector2-Setup-${{ steps.version.outputs.SEMVER }}.exe`.
 
-        ```powershell
-        Import-Certificate -FilePath ".\AudioPlaybackConnector2.cer" -CertStoreLocation "Cert:\CurrentUser\TrustedPeople"
-        $installer = Join-Path $env:TEMP "AudioPlaybackConnector2.appinstaller"
-        Invoke-WebRequest -Uri "${{ env.APPINSTALLER_URL }}" -OutFile $installer
-        Start-Process $installer
-        ```
+        Both installers work per-user without administrator rights. Windows SmartScreen may warn because the setup executables are not yet code-signed.
 
-        Direct MSIX sideloading remains available, but installing through the `.appinstaller` file enables Windows App Installer update checks.
+        For App Installer, direct MSIX installation, certificates, and dependency packages, see the [installation guide](https://github.com/N0ahTM/AudioPlaybackConnector2/blob/main/docs/INSTALLATION.md).
 
         > Releases are signed with a self-signed certificate. A free open-source code-signing certificate has been requested but approval may take some time.
         '@

@@ -495,6 +495,7 @@ void TestRequestStopCancelsLeasedBridgeWorkBeforeBridgeDrain() {
             cancellationObserved = true;
             return LegacyAppUseCaseBridge::OperationResult{LegacyAppUseCaseBridge::OperationStatus::Cancelled};
         }
+        ++mutations;
         return LegacyAppUseCaseBridge::OperationResult{LegacyAppUseCaseBridge::OperationStatus::Failed};
     };
     operations.ShowSettings = [&](apc::app::AppCommandContext const&) {

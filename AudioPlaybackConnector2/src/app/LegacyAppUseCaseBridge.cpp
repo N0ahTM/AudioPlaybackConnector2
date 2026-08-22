@@ -234,6 +234,9 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
                                                                                  : m_operations.ShowSettings;
             UiActionResult actionResult;
             if (action) {
+                if (const auto code = MutationAdmissionFailure(context)) {
+                    return MakeFailure(command.Kind, *code, AppOutcomeReason::NotReady);
+                }
                 actionResult = action(context);
             }
             if (actionResult.Status != OperationStatus::Succeeded) {
@@ -311,6 +314,9 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
                 return MakeTargetResult(
                     command.Kind, resolution, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
             }
+            if (const auto code = MutationAdmissionFailure(context)) {
+                return MakeTargetResult(command.Kind, resolution, *code, AppOutcomeReason::None);
+            }
             const bool accepted = m_operations.SetDefaultDevice(resolution.Target.Id);
             if (!accepted) {
                 return MakeTargetResult(
@@ -336,6 +342,9 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
         case AppCommandKind::ClearDefault: {
             if (!m_operations.ClearDefaultDevice) {
                 return MakeFailure(command.Kind, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
+            }
+            if (const auto code = MutationAdmissionFailure(context)) {
+                return MakeFailure(command.Kind, *code, AppOutcomeReason::None);
             }
             const bool accepted = m_operations.ClearDefaultDevice();
             if (!accepted) {
@@ -379,6 +388,9 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
             if (!m_operations.SetDeviceAlias) {
                 return MakeTargetResult(
                     command.Kind, resolution, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
+            }
+            if (const auto code = MutationAdmissionFailure(context)) {
+                return MakeTargetResult(command.Kind, resolution, *code, AppOutcomeReason::None);
             }
             const bool accepted = m_operations.SetDeviceAlias(resolution.Target.Id, alias, resolution.Target.Name);
             if (!accepted) {
@@ -429,6 +441,9 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
             if (!m_operations.DisconnectAll) {
                 return MakeFailure(command.Kind, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
             }
+            if (const auto code = MutationAdmissionFailure(context)) {
+                return MakeFailure(command.Kind, *code, AppOutcomeReason::None);
+            }
             m_operations.DisconnectAll();
             {
                 std::scoped_lock lock(m_stateMutex);
@@ -445,6 +460,9 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
             if (context.Completion == AppCommandContext::CompletionMode::Detached) {
                 if (!m_operations.ReconnectAllDetached) {
                     return MakeFailure(command.Kind, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
+                }
+                if (const auto code = MutationAdmissionFailure(context)) {
+                    return MakeFailure(command.Kind, *code, AppOutcomeReason::None);
                 }
                 m_operations.ReconnectAllDetached();
                 {
@@ -464,13 +482,12 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
                 auto selector = DeviceSelector::ById(device.Id);
                 if (!selector) continue;
                 auto resolution = Resolve(*selector, devices);
-                if (context.IsCancellationRequested()) {
-                    return MakeTargetResult(
-                        command.Kind, resolution, AppResultCode::Cancelled, AppOutcomeReason::NotReady);
-                }
-                if (context.IsExpired(AppCommandContext::Clock::now())) {
-                    return MakeTargetResult(
-                        command.Kind, resolution, AppResultCode::TimedOut, AppOutcomeReason::ReconnectFailed);
+                if (const auto code = MutationAdmissionFailure(context)) {
+                    return MakeTargetResult(command.Kind,
+                                            resolution,
+                                            *code,
+                                            *code == AppResultCode::Cancelled ? AppOutcomeReason::NotReady
+                                                                              : AppOutcomeReason::ReconnectFailed);
                 }
                 if (!m_operations.Reconnect) {
                     return MakeTargetResult(
@@ -530,6 +547,9 @@ AppResult LegacyAppUseCaseBridge::ExecuteTargetOperation(AppCommand const& comma
         if (!m_operations.Disconnect) {
             return MakeTargetResult(command.Kind, resolution, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
         }
+        if (const auto code = MutationAdmissionFailure(context)) {
+            return MakeTargetResult(command.Kind, resolution, *code, AppOutcomeReason::None);
+        }
         m_operations.Disconnect(id);
         auto after = BuildDevicesWithoutRefresh();
         auto current = FindById(after, id);
@@ -553,6 +573,9 @@ AppResult LegacyAppUseCaseBridge::ExecuteTargetOperation(AppCommand const& comma
         if (!operation) {
             return MakeTargetResult(command.Kind, resolution, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
         }
+        if (const auto code = MutationAdmissionFailure(context)) {
+            return MakeTargetResult(command.Kind, resolution, *code, AppOutcomeReason::None);
+        }
         operation(id);
         {
             std::scoped_lock lock(m_stateMutex);
@@ -568,6 +591,9 @@ AppResult LegacyAppUseCaseBridge::ExecuteTargetOperation(AppCommand const& comma
     const auto operation = command.Kind == AppCommandKind::Connect ? m_operations.Connect : m_operations.Reconnect;
     if (!operation) {
         return MakeTargetResult(command.Kind, resolution, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
+    }
+    if (const auto code = MutationAdmissionFailure(context)) {
+        return MakeTargetResult(command.Kind, resolution, *code, AppOutcomeReason::None);
     }
     const auto operationResult = operation(id, context);
     if (!IsSuccess(operationResult.Status)) {
@@ -1084,6 +1110,13 @@ AppOutcomeReason LegacyAppUseCaseBridge::OperationReason(AppCommandKind command)
 
 bool LegacyAppUseCaseBridge::IsSuccess(OperationStatus status) noexcept {
     return status == OperationStatus::Succeeded;
+}
+
+std::optional<AppResultCode>
+LegacyAppUseCaseBridge::MutationAdmissionFailure(AppCommandContext const& context) noexcept {
+    if (context.IsCancellationRequested()) return AppResultCode::Cancelled;
+    if (context.IsExpired(AppCommandContext::Clock::now())) return AppResultCode::TimedOut;
+    return std::nullopt;
 }
 
 void LegacyAppUseCaseBridge::ApplyObservedStates(std::vector<DeviceRecord>& devices) const {

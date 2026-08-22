@@ -298,6 +298,152 @@ void TestRefreshCapAndCurrentInputFallback() {
     auto status = harness.Bridge.Execute(Command(AppCommandKind::Status));
     Check(harness.RefreshCalls == 2, "status must not trigger the list/target refresh path");
     Check(status.Code == AppResultCode::Success, "status must remain available after a refresh failure");
+
+    harness.RefreshResponse = {OperationStatus::TimedOut, {}};
+    const auto liveTarget = DeviceSelector::ByQuery(DeviceSelectorKind::Name, L"Live");
+    const auto setDefault = harness.Bridge.Execute(Command(AppCommandKind::SetDefault, liveTarget));
+    Check(setDefault.Code == AppResultCode::Success && harness.SetDefaultCalls == 1,
+          "a private refresh-cap timeout must retain the live-input fallback while the original context remains live");
+}
+
+void TestMutationAdmissionRejectsCancellationAfterRefreshFallback() {
+    SettingsData settings;
+    const auto liveDevice = Device(L"device-id", L"Headphones", L"Desk");
+    settings.Devices.push_back(DeviceSettings{liveDevice.Id, liveDevice.Name, liveDevice.Alias, false, false});
+    std::mutex refreshMutex;
+    std::condition_variable refreshChanged;
+    bool refreshEntered = false;
+    bool releaseRefresh = false;
+    std::atomic<int> defaultMutations = 0;
+    std::atomic<int> aliasMutations = 0;
+
+    LegacyAppUseCaseBridge::Operations operations;
+    operations.ReadSettings = [&] { return settings; };
+    operations.ReadConnectedDevices = [&] { return std::vector<DeviceRecord>{liveDevice}; };
+    operations.Refresh = [&](AppCommandContext const&) {
+        {
+            std::scoped_lock lock(refreshMutex);
+            refreshEntered = true;
+        }
+        refreshChanged.notify_all();
+        std::unique_lock lock(refreshMutex);
+        refreshChanged.wait(lock, [&] { return releaseRefresh; });
+        return LegacyAppUseCaseBridge::RefreshResult{OperationStatus::Cancelled, {}};
+    };
+    operations.SetDefaultDevice = [&](std::wstring_view) {
+        ++defaultMutations;
+        return true;
+    };
+    operations.SetDeviceAlias = [&](std::wstring_view, std::wstring_view, std::wstring_view) {
+        ++aliasMutations;
+        return true;
+    };
+    LegacyAppUseCaseBridge bridge(std::move(operations), settings);
+
+    const auto runCancelledMutation = [&](AppCommand command,
+                                          AppResultCode expectedCode,
+                                          std::string_view description) {
+        std::stop_source stop;
+        AppCommandContext context;
+        context.StopToken = stop.get_token();
+        AppResultCode resultCode = AppResultCode::InternalError;
+        std::thread commandThread([&] { resultCode = bridge.Execute(std::move(command), context).Code; });
+        {
+            std::unique_lock lock(refreshMutex);
+            const bool entered = refreshChanged.wait_for(lock, std::chrono::seconds(1), [&] { return refreshEntered; });
+            Check(entered, "the mutation refresh must enter before cancellation is requested");
+        }
+        stop.request_stop();
+        {
+            std::scoped_lock lock(refreshMutex);
+            releaseRefresh = true;
+        }
+        refreshChanged.notify_all();
+        commandThread.join();
+        Check(resultCode == expectedCode, description);
+    };
+
+    const auto namedTarget = DeviceSelector::ByQuery(DeviceSelectorKind::Name, L"Headphones");
+    runCancelledMutation(Command(AppCommandKind::SetDefault, namedTarget),
+                         AppResultCode::Cancelled,
+                         "a cancelled name-refresh set-default must report cancellation after controller dispatch");
+    Check(defaultMutations.load() == 0,
+          "a cancelled name-refresh set-default must not invoke its settings mutation callback");
+
+    {
+        std::scoped_lock lock(refreshMutex);
+        refreshEntered = false;
+        releaseRefresh = false;
+    }
+    const auto automaticTarget = DeviceSelector::ByQuery(DeviceSelectorKind::Auto, L"Headphones");
+    runCancelledMutation(Command(AppCommandKind::SetAlias, automaticTarget, L"Office"),
+                         AppResultCode::Cancelled,
+                         "a cancelled auto-refresh set-alias must report cancellation after controller dispatch");
+    Check(aliasMutations.load() == 0,
+          "a cancelled auto-refresh set-alias must not invoke its settings mutation callback");
+}
+
+void TestMutationAdmissionRejectsDeadlineAfterRefreshFallback() {
+    SettingsData settings;
+    const auto liveDevice = Device(L"device-id", L"Headphones", L"Desk");
+    settings.Devices.push_back(DeviceSettings{liveDevice.Id, liveDevice.Name, liveDevice.Alias, false, false});
+    std::mutex refreshMutex;
+    std::condition_variable refreshChanged;
+    bool refreshEntered = false;
+    std::atomic<int> aliasMutations = 0;
+
+    LegacyAppUseCaseBridge::Operations operations;
+    operations.ReadSettings = [&] { return settings; };
+    operations.ReadConnectedDevices = [&] { return std::vector<DeviceRecord>{liveDevice}; };
+    operations.Refresh = [&](AppCommandContext const& context) {
+        {
+            std::scoped_lock lock(refreshMutex);
+            refreshEntered = true;
+        }
+        refreshChanged.notify_all();
+        std::unique_lock lock(refreshMutex);
+        refreshChanged.wait_until(
+            lock, context.Deadline, [&] { return context.IsExpired(AppCommandContext::Clock::now()); });
+        return LegacyAppUseCaseBridge::RefreshResult{OperationStatus::TimedOut, {}};
+    };
+    operations.SetDeviceAlias = [&](std::wstring_view, std::wstring_view, std::wstring_view) {
+        ++aliasMutations;
+        return true;
+    };
+    LegacyAppUseCaseBridge bridge(std::move(operations), settings);
+    const auto automaticTarget = DeviceSelector::ByQuery(DeviceSelectorKind::Auto, L"Headphones");
+    AppCommandContext context;
+    context.Deadline = AppCommandContext::Clock::now() + std::chrono::milliseconds(100);
+    const auto result = bridge.Execute(Command(AppCommandKind::SetAlias, automaticTarget, L"Office"), context);
+    {
+        std::scoped_lock lock(refreshMutex);
+        Check(refreshEntered, "the deadline test must begin its refresh before the original command expires");
+    }
+    Check(result.Code == AppResultCode::TimedOut && aliasMutations.load() == 0,
+          "an expired auto-refresh command must not invoke its alias mutation callback after fallback resolution");
+}
+
+void TestMutationAdmissionRejectsLateCancellationWithoutRefresh() {
+    SettingsData settings;
+    settings.DefaultDevice = ::DefaultDeviceMode::SpecificDevice;
+    settings.DefaultDeviceId = L"device-id";
+    std::stop_source stop;
+    std::atomic<int> clearDefaultMutations = 0;
+    LegacyAppUseCaseBridge::Operations operations;
+    operations.ReadSettings = [&] {
+        stop.request_stop();
+        return settings;
+    };
+    operations.ClearDefaultDevice = [&] {
+        ++clearDefaultMutations;
+        return true;
+    };
+    LegacyAppUseCaseBridge bridge(std::move(operations), settings);
+    AppCommandContext context;
+    context.StopToken = stop.get_token();
+    const auto result = bridge.Execute(Command(AppCommandKind::ClearDefault), context);
+    Check(result.Code == AppResultCode::Cancelled && clearDefaultMutations.load() == 0,
+          "cancellation after command admission but before a non-refresh callback must prevent the mutation");
 }
 
 void TestMergePrecedence() {
@@ -850,6 +996,9 @@ void TestAuthoritativeBusyFactSurvivesSnapshotNormalization() {
 int RunLegacyAppUseCaseBridgeTests() {
     TestTargetRanksAmbiguityAndUnknownExternalId();
     TestRefreshCapAndCurrentInputFallback();
+    TestMutationAdmissionRejectsCancellationAfterRefreshFallback();
+    TestMutationAdmissionRejectsDeadlineAfterRefreshFallback();
+    TestMutationAdmissionRejectsLateCancellationWithoutRefresh();
     TestMergePrecedence();
     TestAwaitedAndDetachedOperationOutcomes();
     TestIdempotencyAndTrayOnlyBusyPolicy();

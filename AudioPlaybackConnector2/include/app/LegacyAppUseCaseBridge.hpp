@@ -229,6 +229,12 @@ private:
     [[nodiscard]] static AppResultCode ToResultCode(OperationStatus status) noexcept;
     [[nodiscard]] static AppOutcomeReason OperationReason(AppCommandKind command) noexcept;
     [[nodiscard]] static bool IsSuccess(OperationStatus status) noexcept;
+    // A refresh may use a shorter private deadline and fall back to current
+    // inputs. Mutations instead admit against the original P01 context at the
+    // callback commit point, so a cancelled command cannot act on that
+    // fallback after it has already entered the bridge.
+    [[nodiscard]] static std::optional<AppResultCode>
+    MutationAdmissionFailure(AppCommandContext const& context) noexcept;
     [[nodiscard]] static bool IsRefreshNeeded(AppCommandKind command,
                                               DeviceSelectorKind selectorKind = DeviceSelectorKind::Id) noexcept;
     [[nodiscard]] static AppCommandContext CappedRefreshContext(AppCommandContext const& context);

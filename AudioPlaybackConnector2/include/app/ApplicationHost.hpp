@@ -2,9 +2,11 @@
 
 #include <app/AdaptiveResourcePolicy.hpp>
 #include <app/AdaptiveResourceDiagnostics.hpp>
+#include <app/AppController.hpp>
 #include <app/ControlUiActionGate.hpp>
 #include <app/DeferredSettingsSaver.hpp>
 #include <app/DeviceEventRouter.hpp>
+#include <app/LegacyAppUseCaseBridge.hpp>
 #include <app/PowerTransitionCoordinator.hpp>
 #include <app/ResourcePressureMonitor.hpp>
 #include <app/SettingsWindowPresenter.hpp>
@@ -16,6 +18,8 @@
 #include <services/NotificationService.hpp>
 #include <services/SettingsController.hpp>
 #include <services/TrayController.hpp>
+
+#include <control/ControlCommandAdapter.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -65,6 +69,7 @@ private:
     void InitializeTray();
     void InitializeNotifications();
     void InitializeDeviceManager();
+    void InitializeAppController();
     void InitializeCommandLineControl();
     void InitializeAdaptiveResources() noexcept;
     void SetupDeviceEvents();
@@ -73,7 +78,9 @@ private:
     winrt::fire_and_forget CheckForUpdatesOnStartupAsync();
     void HandlePowerSuspend();
     void HandlePowerResume();
-    void ToggleLastConnectedDeviceFromTray();
+    void ExecuteTrayCommand(
+        apc::app::AppCommand command,
+        apc::app::AppCommandContext::CompletionMode completion = apc::app::AppCommandContext::CompletionMode::Detached);
     [[nodiscard]] bool RefreshTrayVisualState(bool forceErrorWhenIdle = false,
                                               std::wstring_view reason = L"unspecified");
     void ScheduleDeviceVisualRefresh(bool forceErrorWhenIdle = false,
@@ -87,7 +94,6 @@ private:
     void EvaluateAdaptiveResources(bool userInteraction, std::wstring_view reason) noexcept;
     void ScheduleAdaptiveResourceEvaluation(std::optional<AdaptiveResourcePolicy::TimePoint> reevaluateAt) noexcept;
     [[nodiscard]] winrt::hstring ResolveKnownDeviceName(winrt::hstring const& id) const;
-    [[nodiscard]] std::optional<std::wstring> ResolveDefaultDeviceId() const;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Actions ///////////////////////////////////////////////////////////////////////////////////////////*/
@@ -96,14 +102,13 @@ private:
     [[nodiscard]] bool ShowSettingsWindow();
     void ExitApplication() noexcept;
     [[nodiscard]] bool CloseMainWindow(std::wstring_view reason) noexcept;
-    apc::control::Response
-    HandleControlCommand(apc::control::Request const& request, std::stop_token stopToken, std::uint64_t deadline);
     [[nodiscard]] bool PerformTeardown(bool saveSettings) noexcept;
     [[nodiscard]] bool RunOnUIThread(std::function<void()> work) noexcept;
     [[nodiscard]] bool QueueUiFallbackWork(std::function<void()> work) noexcept;
     void DrainUiFallbackWork() noexcept;
-    ControlUiActionResult
-    RunControlUiAction(std::function<bool()> work, std::stop_token stopToken, std::uint64_t deadline);
+    ControlUiActionResult RunControlUiAction(std::function<bool()> work, apc::app::AppCommandContext const& context);
+
+    void PublishDeviceFact(apc::app::LegacyAppUseCaseBridge::DeviceFact fact) noexcept;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Device Event Handlers /////////////////////////////////////////////////////////////////////////////*/
@@ -143,8 +148,10 @@ private:
     std::shared_ptr<NotificationService> m_notificationService;
     std::shared_ptr<UpdateCoordinator> m_updateCoordinator;
     std::shared_ptr<TrayController> m_trayController;
+    std::shared_ptr<apc::app::LegacyAppUseCaseBridge> m_appBridge;
+    std::unique_ptr<apc::app::AppController> m_appController;
+    std::unique_ptr<apc::control::ControlCommandAdapter> m_controlCommandAdapter;
     CommandLineControlServer m_commandLineControlServer;
-    std::mutex m_controlMutationMutex;
     std::mutex m_uiFallbackWorkMutex;
     std::deque<std::function<void()>> m_uiFallbackWork;
     bool m_uiFallbackMessagePending = false;

@@ -273,7 +273,7 @@ private:
     mutable std::condition_variable m_noActiveCalls;
     mutable std::unordered_map<std::wstring, DeviceRecord> m_observedStates;
     mutable std::optional<std::uint64_t> m_lastSettingsRevision;
-    std::uint64_t m_generation = 0;
+    mutable std::uint64_t m_generation = 0;
     std::uint64_t m_pickerGeneration = 0;
     mutable std::size_t m_activeCalls = 0;
     bool m_running = true;

@@ -173,7 +173,7 @@ public:
 
     bool WriteAtomically(std::filesystem::path const& path, std::string_view bytes) override {
         const auto temporaryPath = std::filesystem::path(path.wstring() + L".tmp");
-        const auto cleanup = wil::scope_exit([&] { DeleteFileW(temporaryPath.c_str()); });
+        auto cleanup = wil::scope_exit([&] { DeleteFileW(temporaryPath.c_str()); });
         wil::unique_hfile file(CreateFileW(
             temporaryPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr));
         if (!file) return false;
@@ -473,8 +473,9 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
         }
     }
 
-    void EnqueuePublicationWithLockHeld(SettingsSnapshot snapshot, std::vector<SubscriptionStatePtr> subscriptions) {
-        pendingPublications.push_back({std::move(snapshot), std::move(subscriptions)});
+    void EnqueuePublicationWithLockHeld(SettingsSnapshot snapshot,
+                                        std::vector<SubscriptionStatePtr> subscriptionStates) {
+        pendingPublications.push_back({std::move(snapshot), std::move(subscriptionStates)});
     }
 
     void DeactivateSubscriptionsLocked() noexcept {

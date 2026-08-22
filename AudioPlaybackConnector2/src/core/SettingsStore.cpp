@@ -724,32 +724,38 @@ SettingsMutationResult SettingsStore::SetDeviceReconnectOnConnectionLoss(std::ws
         return std::exchange(device->ReconnectOnConnectionLoss, enabled) != enabled;
     });
 }
-SettingsMutationResult SettingsStore::SetDeviceAlias(std::wstring_view deviceId,
-                                                     std::wstring_view alias,
-                                                     std::optional<std::wstring> deviceName) {
+DeviceAliasResult SettingsStore::SetDeviceAlias(std::wstring_view deviceId,
+                                                std::wstring_view alias,
+                                                std::optional<std::wstring> deviceName) {
+    DeviceAliasResult result;
     if (deviceId.empty() || !apc::limits::IsBoundedUtf16(deviceId, apc::limits::c_maxDeviceIdCharacters) ||
         !apc::limits::IsBoundedUtf16(alias, apc::limits::c_maxDeviceAliasCharacters) ||
         (deviceName && !apc::limits::IsBoundedUtf16(*deviceName, apc::limits::c_maxDeviceNameCharacters)))
-        return {SettingsMutationStatus::Rejected, Snapshot().Revision};
-    return m_impl->Commit([deviceId = std::wstring(deviceId),
-                           alias = std::wstring(alias),
-                           deviceName = std::move(deviceName)](auto& data) {
-        auto* device = FindDevice(data, deviceId);
-        if (!device) {
-            if (alias.empty() || data.Devices.size() == apc::limits::c_maxPersistedDeviceCount) return false;
-            data.Devices.push_back({deviceId,
-                                    deviceName.value_or(L""),
-                                    alias,
-                                    data.GlobalConnectOnStartup,
-                                    data.GlobalReconnectOnConnectionLoss});
-            return true;
-        }
-        const auto shouldUpdateName = deviceName && !deviceName->empty() && device->Name != *deviceName;
-        const auto changed = device->Alias != alias || shouldUpdateName;
-        device->Alias = alias;
-        if (shouldUpdateName) device->Name = *deviceName;
-        return changed;
-    });
+        result.Mutation = {SettingsMutationStatus::Rejected, Snapshot().Revision};
+    else
+        result.Mutation = m_impl->Commit([&result,
+                                          deviceId = std::wstring(deviceId),
+                                          alias = std::wstring(alias),
+                                          deviceName = std::move(deviceName)](auto& data) {
+            auto* device = FindDevice(data, deviceId);
+            if (!device) {
+                if (alias.empty() || data.Devices.size() == apc::limits::c_maxPersistedDeviceCount) return false;
+                data.Devices.push_back({deviceId,
+                                        deviceName.value_or(L""),
+                                        alias,
+                                        data.GlobalConnectOnStartup,
+                                        data.GlobalReconnectOnConnectionLoss});
+                result.DeviceExists = true;
+                return true;
+            }
+            result.DeviceExists = true;
+            const auto shouldUpdateName = deviceName && !deviceName->empty() && device->Name != *deviceName;
+            const auto changed = device->Alias != alias || shouldUpdateName;
+            device->Alias = alias;
+            if (shouldUpdateName) device->Name = *deviceName;
+            return changed;
+        });
+    return result;
 }
 SettingsMutationResult SettingsStore::SetDefaultDevice(std::wstring_view deviceId) {
     if (deviceId.empty() || !apc::limits::IsBoundedUtf16(deviceId, apc::limits::c_maxDeviceIdCharacters))

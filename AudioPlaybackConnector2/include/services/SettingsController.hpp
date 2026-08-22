@@ -1,6 +1,6 @@
 #pragma once
 
-#include <core/Settings.hpp>
+#include <core/SettingsStore.hpp>
 
 #include <functional>
 
@@ -29,7 +29,6 @@ public:
     virtual void SetPrivacyMode(bool enabled) = 0;
     virtual bool SetSettingsWindowBounds(PersistedWindowBounds bounds) = 0;
     virtual bool ClearSettingsWindowBounds() = 0;
-    virtual void Save() = 0;
     virtual void SetDeviceConnectOnStartup(std::wstring const& deviceId, bool enabled) = 0;
     virtual void SetDeviceReconnectOnConnectionLoss(std::wstring const& deviceId, bool enabled) = 0;
     virtual bool
@@ -42,9 +41,7 @@ public:
 
 class SettingsController final : public ISettingsController {
 public:
-    SettingsController(std::shared_ptr<Settings> settings,
-                       std::weak_ptr<DeviceManager> deviceManager,
-                       std::function<void()> requestSave = {});
+    SettingsController(std::shared_ptr<SettingsStore> settings, std::weak_ptr<DeviceManager> deviceManager);
 
     SettingsData Snapshot() const override;
     void SetPresentationChangedCallback(PresentationChangedCallback callback) override;
@@ -58,7 +55,6 @@ public:
     void SetPrivacyMode(bool enabled) override;
     bool SetSettingsWindowBounds(PersistedWindowBounds bounds) override;
     bool ClearSettingsWindowBounds() override;
-    void Save() override;
     void SetDeviceConnectOnStartup(std::wstring const& deviceId, bool enabled) override;
     void SetDeviceReconnectOnConnectionLoss(std::wstring const& deviceId, bool enabled) override;
     bool SetDeviceAlias(std::wstring const& deviceId, std::wstring alias, std::wstring const& deviceName = {}) override;
@@ -68,11 +64,9 @@ public:
     void ForgetDevice(std::wstring const& deviceId) override;
 
 private:
-    void RequestSave();
     void NotifyPresentationChanged(PresentationChangeKind kind = PresentationChangeKind::Content);
 
-    std::shared_ptr<Settings> m_settings;
+    std::shared_ptr<SettingsStore> m_settings;
     std::weak_ptr<DeviceManager> m_deviceManager;
-    std::function<void()> m_requestSave;
     PresentationChangedCallback m_presentationChanged;
 };

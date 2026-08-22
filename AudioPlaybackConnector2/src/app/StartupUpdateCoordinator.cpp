@@ -2,7 +2,7 @@
 
 #include <app/StartupUpdateCoordinator.hpp>
 
-#include <core/Settings.hpp>
+#include <core/SettingsStore.hpp>
 #include <services/NotificationService.hpp>
 #include <services/UpdateCoordinator.hpp>
 
@@ -16,59 +16,39 @@ int64_t UnixNowSeconds() {
 }
 } // namespace
 
-/*------------------------------------------------------------------------------------------------------------*/
-/*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------*/
-
 winrt::Windows::Foundation::IAsyncAction
-StartupUpdateCoordinator::CheckForUpdatesAsync(Settings& settings,
+StartupUpdateCoordinator::CheckForUpdatesAsync(SettingsStore& settings,
                                                std::shared_ptr<NotificationService> notificationService,
                                                std::shared_ptr<UpdateCoordinator> updateCoordinator,
-                                               std::function<void()> requestSettingsSave,
                                                std::atomic<bool>& exiting) {
-    if (exiting.load() || !notificationService || !updateCoordinator || !requestSettingsSave) co_return;
+    if (exiting.load() || !notificationService || !updateCoordinator) co_return;
 
     const auto now = UnixNowSeconds();
-    bool shouldCheck = false;
-    {
-        auto locked = settings.LockSharedData();
-        shouldCheck = locked->LastUpdateCheckUnixSeconds <= 0 || locked->LastUpdateCheckUnixSeconds > now ||
-                      now - locked->LastUpdateCheckUnixSeconds >= c_startupUpdateCheckInterval.count();
-    }
+    const auto settingsSnapshot = settings.Snapshot();
+    const auto shouldCheck =
+        settingsSnapshot.Data.LastUpdateCheckUnixSeconds <= 0 ||
+        settingsSnapshot.Data.LastUpdateCheckUnixSeconds > now ||
+        now - settingsSnapshot.Data.LastUpdateCheckUnixSeconds >= c_startupUpdateCheckInterval.count();
+    if (!shouldCheck || exiting.load()) co_return;
 
-    if (!shouldCheck) co_return;
-    if (exiting.load()) co_return;
-
+    // G04 remains unapproved, so automatic startup checks retain their existing delay and behavior.
     if (!co_await updateCoordinator->WaitForAutomaticCheckWindowAsync(c_automaticCheckStableDelay)) co_return;
     if (exiting.load()) co_return;
 
     winrt::apartment_context ui;
-    auto result = co_await updateCoordinator->CheckForUpdatesAsync(UpdateCheckReason::Automatic);
+    const auto result = co_await updateCoordinator->CheckForUpdatesAsync(UpdateCheckReason::Automatic);
     co_await ui;
-
-    if (exiting.load() || !notificationService) co_return;
-    if (result.Status == UpdateCheckStatus::Failed || result.Status == UpdateCheckStatus::Cancelled) co_return;
-
-    bool notificationShown = false;
-    bool shouldNotify = false;
-    {
-        auto locked = settings.LockSharedData();
-        shouldNotify = result.Status == UpdateCheckStatus::UpdateAvailable && !result.LatestVersion.empty() &&
-                       locked->LastNotifiedUpdateVersion != result.LatestVersion;
+    if (exiting.load() || !notificationService || result.Status == UpdateCheckStatus::Failed ||
+        result.Status == UpdateCheckStatus::Cancelled) {
+        co_return;
     }
 
-    if (shouldNotify) {
-        if (exiting.load()) co_return;
-        notificationShown = notificationService->ShowUpdateAvailable(result.LatestVersion);
+    const auto notificationSnapshot = settings.Snapshot();
+    const auto shouldNotify = result.Status == UpdateCheckStatus::UpdateAvailable && !result.LatestVersion.empty() &&
+                              notificationSnapshot.Data.LastNotifiedUpdateVersion != result.LatestVersion;
+    auto notifiedVersion = std::optional<std::wstring>{};
+    if (shouldNotify && !exiting.load() && notificationService->ShowUpdateAvailable(result.LatestVersion)) {
+        notifiedVersion = result.LatestVersion;
     }
-
-    {
-        auto locked = settings.LockExclusiveData();
-        auto& data = locked.Mutate();
-        data.LastUpdateCheckUnixSeconds = now;
-        if (notificationShown) {
-            data.LastNotifiedUpdateVersion = result.LatestVersion;
-        }
-    }
-    requestSettingsSave();
+    static_cast<void>(settings.RecordUpdateCheckMetadata(now, std::move(notifiedVersion)));
 }

@@ -185,11 +185,20 @@ void TestValidationAndLoadNormalizationMatrix() {
     Check(store.SetSettingsWindowBounds(PersistedWindowBounds{0, 0, 1, 1, 1}).Status ==
               SettingsMutationStatus::Rejected,
           "out-of-range DPI must be rejected");
-    Check(store.SetDeviceAlias(L"a", std::wstring(129, L'x')).Status == SettingsMutationStatus::Rejected,
+    Check(store.SetDeviceAlias(L"a", std::wstring(129, L'x')).Mutation.Status == SettingsMutationStatus::Rejected,
           "overlength alias must be rejected");
-    Check(store.SetDeviceAlias(L"a", std::wstring(1, static_cast<wchar_t>(0xD800))).Status ==
+    Check(store.SetDeviceAlias(L"a", std::wstring(1, static_cast<wchar_t>(0xD800))).Mutation.Status ==
               SettingsMutationStatus::Rejected,
           "invalid UTF-16 must be rejected");
+    const auto unknownEmpty = store.SetDeviceAlias(L"unknown", L"", L"Name");
+    Check(!unknownEmpty.DeviceExists && unknownEmpty.Mutation.Status == SettingsMutationStatus::Unchanged,
+          "an unknown device with an empty alias must not be reported as existing");
+    const auto created = store.SetDeviceAlias(L"created", L"Desk", L"Name");
+    Check(created.DeviceExists && created.Mutation.Status == SettingsMutationStatus::Applied,
+          "a non-empty alias must create a previously unknown device");
+    const auto unchanged = store.SetDeviceAlias(L"created", L"Desk", L"Name");
+    Check(unchanged.DeviceExists && unchanged.Mutation.Status == SettingsMutationStatus::Unchanged,
+          "an unchanged known device must remain distinguishable from an unknown device");
     static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
 }
 

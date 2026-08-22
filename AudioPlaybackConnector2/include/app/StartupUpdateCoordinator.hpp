@@ -1,10 +1,9 @@
 #pragma once
 
 #include <atomic>
-#include <functional>
 
 class NotificationService;
-class Settings;
+class SettingsStore;
 class UpdateCoordinator;
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -18,9 +17,8 @@ public:
     /*------------------------------------------------------------------------------------------------------------*/
 
     static winrt::Windows::Foundation::IAsyncAction
-    CheckForUpdatesAsync(Settings& settings,
+    CheckForUpdatesAsync(SettingsStore& settings,
                          std::shared_ptr<NotificationService> notificationService,
                          std::shared_ptr<UpdateCoordinator> updateCoordinator,
-                         std::function<void()> requestSettingsSave,
                          std::atomic<bool>& exiting);
 };

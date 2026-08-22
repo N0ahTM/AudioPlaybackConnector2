@@ -28,6 +28,11 @@ struct SettingsMutationResult {
     [[nodiscard]] bool IsApplied() const noexcept { return Status == SettingsMutationStatus::Applied; }
 };
 
+struct DeviceAliasResult {
+    SettingsMutationResult Mutation;
+    bool DeviceExists = false;
+};
+
 struct RecordConnectedDeviceResult {
     SettingsMutationResult Mutation;
     bool AddedDevice = false;
@@ -93,9 +98,9 @@ public:
     [[nodiscard]] SettingsMutationResult SetSettingsWindowBounds(std::optional<PersistedWindowBounds> bounds);
     [[nodiscard]] SettingsMutationResult SetDeviceConnectOnStartup(std::wstring_view deviceId, bool enabled);
     [[nodiscard]] SettingsMutationResult SetDeviceReconnectOnConnectionLoss(std::wstring_view deviceId, bool enabled);
-    [[nodiscard]] SettingsMutationResult SetDeviceAlias(std::wstring_view deviceId,
-                                                        std::wstring_view alias,
-                                                        std::optional<std::wstring> deviceName = std::nullopt);
+    [[nodiscard]] DeviceAliasResult SetDeviceAlias(std::wstring_view deviceId,
+                                                   std::wstring_view alias,
+                                                   std::optional<std::wstring> deviceName = std::nullopt);
     [[nodiscard]] SettingsMutationResult SetDefaultDevice(std::wstring_view deviceId);
     [[nodiscard]] SettingsMutationResult ClearDefaultDevice();
     [[nodiscard]] SettingsMutationResult ForgetDevice(std::wstring_view deviceId);

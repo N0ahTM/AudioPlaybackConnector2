@@ -1,6 +1,6 @@
 #pragma once
 
-#include <core/Settings.hpp>
+#include <core/SettingsData.hpp>
 #include <core/StringResources.hpp>
 
 namespace apc::display {

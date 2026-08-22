@@ -8,7 +8,7 @@ Base commit: `de1ac9ec2285b8fe953960c33433de6a9ff47972`
 
 This document set defines a ground-up structural rework of AudioPlaybackConnector2 while preserving its product-critical behavior. The goal is not a small line count at any cost. The goal is a codebase whose normal execution path can be understood through a small number of cohesive components, with concurrency and platform complexity contained inside the feature that owns it.
 
-The current baseline has approximately 25,000 lines across 138 hand-written C++/XAML source files. The rework targets roughly 16,000-19,000 product lines and 55-70 hand-written C++/XAML files, but those figures are directional rather than acceptance criteria.
+The current baseline has approximately 25,000 lines across 138 hand-written C++/XAML source files. The rework targets roughly 16,000-19,000 product lines and 55-70 hand-written C++/XAML files, but those figures are directional rather than acceptance criteria. A smaller design is successful only when it lowers total comprehension and maintenance cost without weakening the requirements.
 
 ## Locked product decisions
 
@@ -26,12 +26,14 @@ The current baseline has approximately 25,000 lines across 138 hand-written C++/
 2. Feature modules accept commands and expose immutable snapshots plus typed events.
 3. Threading, retries, generations, timers, and cancellation stay inside the module that owns the operation.
 4. Small state machines may exist, but single-use helpers live privately in a `.cpp` file instead of becoming public architectural concepts.
-5. Concrete constructor injection is preferred. Interfaces exist only for a genuine platform boundary, multiple implementations, or a valuable test seam.
+5. Concrete constructor injection is preferred. A single-implementation interface is valid when it expresses a genuine platform, process, protocol, storage, or test boundary; speculative interfaces are not.
 6. There is no global service locator and no generic application-wide event bus.
 7. UI components render prepared presentation models and emit user intent; they do not coordinate domain services.
 8. No production `.cpp` file should normally exceed 1,200 lines. Exceptions require a written justification.
 9. Existing behavior is characterized before its owner is replaced.
 10. Each migration phase must build and be reviewable independently.
+11. The completed rework targets C++26, introduced through a dedicated toolchain change that is verified on x64 and ARM64; the current executable baseline remains C++23 until that gate passes.
+12. No build, test, compatibility, or performance claim is made without running the validation that supports it.
 
 ## Documents
 

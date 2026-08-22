@@ -18,12 +18,15 @@ Deliverables:
 - characterize settings compatibility, bounds, corrupt file behavior, atomic replacement, and shutdown flush;
 - inventory notification kind-to-image mappings and explicitly mark normal disconnect for removal;
 - capture tray static states and current animation-only behavior;
-- add missing deterministic tests before moving ownership.
+- add missing deterministic tests before moving ownership;
+- establish the supported Visual Studio/MSVC and Windows SDK versions for the C++26 target;
+- change all product and test projects from `stdcpp23` to the selected C++26 mode in one dedicated change, then validate x64 and ARM64 before feature migrations use C++26 facilities.
 
 Exit gate:
 
 - a feature-compatibility matrix exists;
 - all high-risk behavior has either an automated characterization test or a named manual scenario;
+- the current language baseline is reported accurately; if the C++26 toolchain gate has not passed, migrations continue to build as C++23 without pretending otherwise;
 - baseline Debug and Release builds succeed on the supported target platforms.
 
 ## Phase 1: Shared models and application command surface

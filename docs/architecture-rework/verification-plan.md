@@ -4,6 +4,8 @@
 
 Every implementation phase must pass the relevant automated tests, formatting/static analysis, and focused manual scenarios before the replaced code is deleted. Final verification covers all supported build targets and packaged behavior.
 
+No document, pull request, or release note may claim a build, test, compatibility, or performance result that was not actually produced by the corresponding validation run.
+
 ## Build and static checks
 
 Use the repository-supported restore and build commands for the active branch. At minimum:
@@ -17,6 +19,8 @@ cppcheck --enable=warning,performance,portability --std=c++20 --platform=win64 A
 ```
 
 The final phase also builds every platform still declared supported by the solution/package and runs the repository's package-verification scripts. Update paths/globs when the new colocated source layout lands.
+
+When the C++26 migration gate is reached, product and test projects must use the same selected language-standard mode. A local x64 compiler accepting a feature is not sufficient. The Windows SDK, C++/WinRT generation, dependencies, ARM64 compiler, tests, and packaging must pass before C++26 becomes the repository baseline.
 
 ## Automated test suites
 

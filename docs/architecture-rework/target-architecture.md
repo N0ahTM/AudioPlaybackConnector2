@@ -1,5 +1,11 @@
 # Target Architecture
 
+## Language and toolchain baseline
+
+The completed architecture targets C++26. The repository currently configures its C++ projects as `stdcpp23`; changing that baseline is a distinct migration step rather than an assumption hidden inside component rewrites. The selected Visual Studio/MSVC version, Windows SDK, C++/WinRT projections, WIL, Windows App SDK, x64 build, ARM64 build, and test suite must all pass before C++26 becomes mandatory.
+
+Only C++26 facilities supported consistently by the shipping toolchain may enter shared product code. This target does not justify adopting a newer construct when a stable C++23 form is clearer or more portable across the supported architectures.
+
 ## Solution projects
 
 The five-project solution remains because the projects have distinct build and deployment roles:

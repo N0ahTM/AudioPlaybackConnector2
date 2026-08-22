@@ -74,6 +74,7 @@
   <ItemGroup>
     <ClInclude Include="include\pch.h" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveResourcePolicy.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppModels.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveActionRetryBackoff.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveScheduleState.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AutoReconnectPlanner.hpp" />
@@ -91,6 +92,7 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\ControlTargetMatcher.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\AudioConnectionService.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceConnectionInfo.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceId.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceDiscoveryService.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceManager.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceManagerDiagnostics.hpp" />

@@ -445,6 +445,7 @@ void TestToastXmlSanitization() {
 
 int RunAdaptiveResourceDiagnosticsTests();
 int RunAdaptiveResourcePolicyTests();
+int RunAppModelsTests();
 int RunAppWorkCoordinatorTests();
 int RunAutoReconnectPlannerTests();
 int RunCommandClientTests();
@@ -487,6 +488,7 @@ int main() {
     TestToastXmlSanitization();
     g_failures += RunAdaptiveResourceDiagnosticsTests();
     g_failures += RunAdaptiveResourcePolicyTests();
+    g_failures += RunAppModelsTests();
     g_failures += RunAppWorkCoordinatorTests();
     g_failures += RunAutoReconnectPlannerTests();
     g_failures += RunCommandClientTests();

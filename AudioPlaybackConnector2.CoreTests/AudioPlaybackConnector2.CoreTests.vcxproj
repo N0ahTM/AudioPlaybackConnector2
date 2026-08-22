@@ -123,7 +123,7 @@
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceInventoryGeneration.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\ReconnectController.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\Settings.cpp">
-      <PreprocessorDefinitions>APC_SETTINGS_PERSISTENCE_STANDALONE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>..\AudioPlaybackConnector2.CoreRuntime\include;..\AudioPlaybackConnector2\res;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\TrayTooltipBuilder.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\CommandLineControlServer.cpp" />

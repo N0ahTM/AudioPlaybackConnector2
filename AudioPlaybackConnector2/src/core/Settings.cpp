@@ -1,32 +1,12 @@
-#ifdef APC_SETTINGS_PERSISTENCE_STANDALONE
-#include <windows.h>
-
-#include <wil/cppwinrt.h>
-#include <wil/resource.h>
-#include <wil/result.h>
-
-#include <winrt/Windows.Foundation.h>
-#include <winrt/Windows.Foundation.Collections.h>
-#include <winrt/Windows.Data.Json.h>
-#include <winrt/Windows.Storage.h>
-
-#include <algorithm>
-#include <cmath>
-#include <cstring>
-#include <exception>
-#include <cstdlib>
-#include <format>
-#include <limits>
-#include <ranges>
-#include <unordered_set>
-#else
 #include <pch.h>
-#endif
 
 #include <core/Settings.hpp>
 #include <core/SettingsLimits.hpp>
 #include <util/Logger.hpp>
 #include <util/Util.hpp>
+
+#include <cstring>
+#include <exception>
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Helpers ///////////////////////////////////////////////////////////////////////////////////////////*/
@@ -165,7 +145,7 @@ void BackupUnreadableSettingsFile(std::filesystem::path const& path) noexcept {
             DebugTrace(L"[Settings] ERROR: failed to move corrupt settings file: {0}", path.wstring());
         }
     } catch (std::exception const& ex) {
-        DebugTrace(L"[Settings] ERROR: failed to backup corrupt settings file: {0}", util::Utf8ToUtf16(ex.what()));
+        DebugTrace(L"[Settings] ERROR: failed to backup corrupt settings file: {0}", BoundedExceptionMessage(ex));
     } catch (...) {
         DebugTrace(L"[Settings] ERROR: failed to backup corrupt settings file");
     }
@@ -452,7 +432,7 @@ bool Settings::Save(HINSTANCE hInst) {
     } catch (winrt::hresult_error const& ex) {
         DebugTrace(L"[Settings] Save ERROR (hresult): {0}", ex.message());
     } catch (std::exception const& ex) {
-        DebugTrace(L"[Settings] Save ERROR (std): {0}", util::Utf8ToUtf16(ex.what()));
+        DebugTrace(L"[Settings] Save ERROR (std): {0}", BoundedExceptionMessage(ex));
     } catch (...) {
         DebugTrace(L"[Settings] Save ERROR: Unknown exception");
     }

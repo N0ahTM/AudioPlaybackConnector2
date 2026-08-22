@@ -2,6 +2,8 @@
 
 Goal: preserve required behavior while replacing unnecessary indirection with cohesive owners and lower total comprehension cost. Code size and file count are never targets or acceptance criteria.
 
+Phase 0 characterization matrix: [phase-0-characterization.md](phase-0-characterization.md).
+
 ## Required reading
 
 Load only what the task needs:

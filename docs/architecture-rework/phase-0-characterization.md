@@ -1,0 +1,330 @@
+# Phase 0 characterization matrix
+
+Status: characterization evidence for the legacy implementation at the pre-artifact
+candidate ref `c2dfd87c2b9344b8651e616143d385a8d42b2220` (2026-08-22). This document
+does not change product or test code and does not declare Phase 0 complete by itself.
+
+The matrix records what is implemented, what an existing test proves, and what still
+needs a named manual scenario or future deterministic automation. A primitive unit test
+is not treated as proof of the corresponding WinRT, shell, pipe, or persisted-file
+integration path.
+
+## Evidence conventions
+
+* `AUTOMATED` names an existing test function exactly as it appears in
+  `AudioPlaybackConnector2.CoreTests/src`.
+* `MANUAL` is a uniquely named scenario. The scenario has not been run by this
+  documentation-only slice unless a command is explicitly listed in the validation
+  section.
+* `GAP` identifies missing coverage or a required future automation seam. A gap is not
+  an approval to change behavior.
+* Source references use `path:line` and describe the current legacy owner, not the
+  target owner from `architecture.md`.
+
+## Baseline and language facts
+
+The source and test roots are equivalent to the existing performance-baseline source
+commit `d2a4587831e8d7155a2fe8b331a38f07d0b4c428` at the characterization candidate:
+
+```text
+git diff --name-status d2a4587831e8d7155a2fe8b331a38f07d0b4c428 HEAD --
+  AudioPlaybackConnector2 AudioPlaybackConnector2.CoreTests
+  AudioPlaybackConnector2.Control AudioPlaybackConnector2.CoreRuntime scripts
+```
+
+produced no paths. The current commit `c2dfd87...` adds architecture-rework guidance
+and agent configuration above that product baseline; it does not alter the legacy
+product/test sources being characterized. The repository contains
+`performance-baseline-2026-08-22.md`; this slice did not rerun its measurements. The
+existing baseline evidence is x64 Release-only, so it must not be read as Debug or
+ARM64 performance evidence. Separately, the lead-provided candidate evidence below
+records successful Debug and Release build/package outputs for x64 and ARM64, plus
+passing x64 CoreTests. Those build artifacts do not imply that ARM64 native execution
+or the remaining manual, static-analysis, security, and package-verification gates
+were run.
+
+All four native project files explicitly set `<LanguageStandard>stdcpp23</LanguageStandard>`:
+
+* `AudioPlaybackConnector2/AudioPlaybackConnector2.vcxproj:92`
+* `AudioPlaybackConnector2.Control/AudioPlaybackConnector2.Control.vcxproj:57`
+* `AudioPlaybackConnector2.CoreRuntime/AudioPlaybackConnector2.CoreRuntime.vcxproj:54`
+* `AudioPlaybackConnector2.CoreTests/AudioPlaybackConnector2.CoreTests.vcxproj:54`
+
+The accurate language baseline is therefore C++23 (`stdcpp23`), with v143 projects;
+there is no C++26 claim. P10 remains gated on the dedicated C++26 x64/ARM64 toolchain,
+packaging, and CI validation; that gate has not been attempted. The candidate evidence
+below records Debug and Release build/package outputs for both supported architectures,
+but ARM64 native CoreTests, manual/static-analysis/security/package-verification checks,
+and the C++26 gate remain unrun or unattempted.
+
+## Legacy owner map used by this matrix
+
+| Decision area | Current owner and evidence | Boundary risk to preserve |
+|---|---|---|
+| P01 control | `CommandLineControlServer` owns pipe transport in `AudioPlaybackConnector2/include/services/CommandLineControlServer.hpp:21-129` and `src/services/CommandLineControlServer.cpp`; `ApplicationHost::HandleControlCommand` owns mapping/use cases at `src/app/ApplicationHost.cpp:1494-2205`; `AudioPlaybackConnector2.Control/src/main.cpp:122-825` owns CLI parsing/presentation. | Protocol transport, command mapping, and presentation are presently intertwined across three components. |
+| P02 resources | `ApplicationHost::InitializeAdaptiveResources`, `HandleResourcePressureSnapshot`, `EvaluateAdaptiveResources`, and `ScheduleAdaptiveResourceEvaluation` at `src/app/ApplicationHost.cpp:709-910`; `AdaptiveResourcePolicy` and `ResourcePressureMonitor` are tested primitives. | Sequence/freshness/authorization, timers, retries, and Tray preload/release calls must remain coupled in behavior even when ownership moves. |
+| P03/P09 tray | `TrayController` owns flyout/menu and direct UI/device/settings references; `TrayIcon` owns frames and rendering; `ApplicationHost` owns the connecting timer at `include/app/ApplicationHost.hpp:154-176` and `src/app/ApplicationHost.cpp:1248-1300,2430-2434`. | Connecting animation, click suppression, theme/DPI, and shell re-registration are high-risk UI behavior. |
+| P05/P04 notifications | `NotificationService` renders six retained kinds at `src/services/NotificationService.cpp:319-400`; `ApplicationHost` chooses policy and calls it at `src/app/ApplicationHost.cpp:2309-2378`. | Normal disconnect currently calls `ShowDeviceDisconnected`, which conflicts with locked P04. G07 fallback remains unresolved. |
+| P06 devices | `DeviceManager` owns sessions, operation epochs, close barriers, discovery, incoming state, reconnect scheduling, and power/shutdown at `include/core/DeviceManager.hpp:26-230` and `src/core/DeviceManager.cpp:123-2260`; helpers are `DeviceOperationCoordinator`, `DeviceSessionStore`, `DeviceDiscoveryService`, and `ReconnectController`. | WinRT callbacks, connection tokens, close-before-reconnect, and stale completion protection are not covered by an end-to-end fake. |
+| P07 settings | `Settings` owns mutable data and exposed locks at `include/core/Settings.hpp:77-117`; JSON load/save is `src/core/Settings.cpp:146-430`; debounce/retry/final flush is split between `DeferredSettingsSaver` and `DeferredSaveCoordinator`. | File atomicity and no-lost-update behavior span real files and mutable revisions; current tests mostly cover the coordinator in isolation. |
+
+## P01 — CLI, named pipe, and control compatibility
+
+The wire constants and schema are in `AudioPlaybackConnector2/include/control/CommandProtocol.hpp:15-391`:
+protocol version 2; request/response/ack magic values; 64 KiB maximum UTF-16 payload;
+4 KiB pipe buffers; four pipe instances; `CommandType` values 1–16; target kinds
+`Id`, `Name`, `Mac`, `Last`, `Auto`, `Alias`, and `Default`; flags `Json` and `Raw`;
+exit codes `0`, `3`–`9`; and a non-empty 128-bit correlation ID. `ReadRequest` and
+`ReadResponse` validate headers before allocation, transfer exact bytes with overlapped
+I/O, and return typed `IoStatus` values.
+
+| ID / required behavior | Legacy evidence | Existing automated evidence or named scenario | Status and required future automation |
+|---|---|---|---|
+| P01-01 command names and arguments: `show`, `settings`, `status`, `list`, `connect`, `disconnect`, `reconnect`, `toggle`, `disconnect-all`, `reconnect-all`, `default show/set/clear`, and `alias list/set/clear`; target selectors and `--` handling | CLI grammar/help at `AudioPlaybackConnector2.Control/src/main.cpp:122-148`; parser at `:245-518`; enum at `CommandProtocol.hpp:25-45`. | `MANUAL P01-CLI-Command-Argument-Matrix`: execute every help form, every selector (`--id`, `--name`, `--mac`, `--alias`, `--last`, `--default`, positional), alias value forms, duplicate selectors, missing values, leading-dash values, case variants, and unknown options. | `GAP`: no CoreTests target the CLI parser or `wmain`; add parser-table tests before changing it. |
+| P01-02 exit behavior and local failures | CLI returns help/0, invalid syntax/3, unavailable/7, indeterminate/9, or server response codes at `main.cpp:711-825`; protocol values at `CommandProtocol.hpp:49-58`; host maps target/operation outcomes at `ApplicationHost.cpp:1515-2205`. | `MANUAL P01-CLI-Exit-Code-Matrix`: assert process exit and stdout/stderr for success 0, invalid request 3, not found 4, ambiguous 5, operation failure 6, unavailable 7, busy 8, and indeterminate 9, including server-not-running and late UI action cases. | `GAP`: no executable-level exit assertions; add CLI integration tests with a fake transport and fake controller result. |
+| P01-03 text, JSON, raw, and privacy output | `ApplicationHost.cpp:1494-1540,1640-1720,1738-2205` emits text or JSON; `ResponseId`, `ResponseName`, `InsertDeviceJson`, and `redactOutput` are at `:199-220`; CLI error JSON is at `main.cpp:219-229,711-825`. Privacy mode redacts IDs/names unless `--raw`. | `MANUAL P01-CLI-Output-Schema-Privacy`: capture `list`, `status`, `default`, and `alias` in text/JSON with privacy off/on and raw off/on; validate keys, `ok`, `exitCode`, `action`, `id`, `name`, `displayName`, `connected`, `known`, `privacyRedacted`, and adaptive-resource status fields; verify no device identity leaks to stderr. | `GAP`: no parser/presentation schema snapshot tests, and no privacy-output test invokes the production handler. Add golden JSON/text tests without depending on localized prose. |
+| P01-04 framing, bounds, malformed input, and response schema | `CommandProtocol.hpp:21-23,71-120,145-205,227-391` defines fixed headers, UTF-16 even-byte payloads, maximum payload, command/target/flag validation, response exit validation, and correlation-preserving acknowledgements. | `AUTOMATED`: `TestCommandProtocolRoundTrip`, `TestCommandProtocolDelayedResponseReader`, `TestCommandProtocolStrictValidation`, `TestCommandProtocolRejectsInvalidHeader` (`AudioPlaybackConnector2.CoreTests/src/ReconnectControllerTests.cpp:271-423`); `TestProductionRoundTripFragmentationAndRearm`, `TestMalformedTimeoutOversizeAndRecovery`, `TestMaximumRequestAndIdleCachePruning` (`CommandLineControlServerTests.cpp:170-229,403-465,813-870`). | Covered at protocol/server primitive level. `GAP`: add negative response-header cases and a cross-process compatibility fixture for version/magic/odd-byte payloads. |
+| P01-05 identity, ACL, and rogue endpoint rejection | Server creates current-user-only protected security attributes and validates the client at `CommandLineControlServer.cpp:173-190,273-325`; client captures live server PID/creation time and executable/package identity at `AudioPlaybackConnector2.Control/src/main.cpp:550-647`. | `AUTOMATED`: `TestStartupSquattingAndSecurityDescriptor` (`CommandLineControlServerTests.cpp:613-776`); `TestRejectedEndpointMayLaunchTrustedApp`, `TestIndeterminateReplaysOnlyToSameServer`, `TestLaunchAndReplayBoundaries` (`CommandClientTests.cpp:142-233`); security helper checks are included in the startup-squatting test. | Covered for same-user fixtures and current-process identity. `MANUAL P01-Control-Identity-Deadline-Retry`: packaged/unpackaged client, another-user process, rogue same-user server, and server replacement. `GAP`: no multi-user/packaged deployment test in CoreTests. |
+| P01-06 concurrency, mutation serialization, duplicate requests, cache/replay, and correlation conflicts | `ApplicationHost.cpp:1528-1555` uses `m_controlMutationMutex` and returns Busy for concurrent mutators; server request records/cache/pending deliveries are declared at `CommandLineControlServer.hpp:29-45,111-128` and implemented in `CommandLineControlServer.cpp`. | `AUTOMATED`: `TestParallelDuplicatesAndCorrelationConflict`, `TestDisconnectBeforeResponseRetriesExactlyOnce`, `TestDisconnectAfterResponseBeforeAckRetriesExactlyOnce`, `TestMaximumRequestAndIdleCachePruning` (`CommandLineControlServerTests.cpp:230-402,813-870`); `TestIndeterminateReplaysOnlyToSameServer`, `TestOverallDeadlineBoundsReplay` (`CommandClientTests.cpp:120-174`); `TestBeginCancelRace` (`ControlUiActionGateTests.cpp:49-67`). | Primitive coverage exists for deduplication and one mutation lock. `GAP`: no test asserts every mutating command is serialized through the production host while a late UI action is pending; add controller/handler integration coverage. |
+| P01-07 deadlines, cancellation, and late mutation reporting | Server options default to request 5 s, response 5 s, acknowledgement 1.5 s, startup retry 250 ms at `CommandLineControlServer.hpp:27-38`; protocol transfer checks stop event and absolute deadline at `CommandProtocol.hpp:227-277`; host forwards `stop_token`/deadline and classifies UI timeout as indeterminate at `ApplicationHost.cpp:56-82,1165-1210,1930-1970`. | `AUTOMATED`: `TestCommandProtocolTimeoutAndCancellation` (`ReconnectControllerTests.cpp:374-403`); `TestOverallDeadlineBoundsReplay` (`CommandClientTests.cpp:153-174`); `TestCancellationBeforeDispatch`, `TestTimeoutAfterDispatchStarted`, `TestBeginCancelRace` (`ControlUiActionGateTests.cpp:17-67`); `TestMalformedTimeoutOversizeAndRecovery` (`CommandLineControlServerTests.cpp:403-465`). | Covered for transport and UI-action gate. `MANUAL P01-Control-Late-Mutation-Indeterminate`: force timeout before and after dispatch, cancel a refresh/connect, then verify no unreported mutation and correct 7/9 outcome. Add handler integration tests with a deterministic clock/executor. |
+| P01-08 startup retry, rearm, graceful stop, and handle lifetime | `CommandLineControlServer::Start/TryStart/Stop` and retry timer at `CommandLineControlServer.cpp:247-420`; host starts/stops server at `ApplicationHost.cpp:694-706,351-352`; client retries four instances and launches the packaged app at `main.cpp:589-647,711-825`. | `AUTOMATED`: `TestStopLifecycleAndRearmRetry`, `TestStartStopHandleStability` (`CommandLineControlServerTests.cpp:466-612,777-812`); `TestLaunchAndComplete`, `TestRejectedEndpointMayLaunchTrustedApp`, `TestLaunchAndReplayBoundaries` (`CommandClientTests.cpp:108-233`). | Primitive lifecycle is covered. `MANUAL P01-Control-Startup-Shutdown`: start with occupied pipe slot(s), recover, invoke all command classes during shutdown, and verify no post-stop callback/response. Add a packaged app startup/shutdown test. |
+
+## P02 — adaptive resource residency
+
+The policy defaults are `BackgroundPressureToColdDelay=5 s`, `ColdToWarmDelay=45 s`,
+`WarmToHotDelay=20 s`, and `InteractionHotHold=10 s` in
+`AudioPlaybackConnector2/include/app/AdaptiveResourcePolicy.hpp:16-42`. The monitor
+polls every 5 s, uses 30 s constrained polling, and publishes a 30 s heartbeat from
+`ResourcePressureMonitor.hpp:18-27`. `ApplicationHost` treats pressure snapshots older
+than 75 s as stale (`src/app/ApplicationHost.cpp:47,775-825`), tracks constrained
+sequence authorization, schedules a Win32 timer with a DispatcherQueue fallback, and
+retries failed preload/release actions with bounded backoff (`:855-910`).
+
+| ID / required behavior | Legacy evidence | Existing automated evidence or named scenario | Status and required future automation |
+|---|---|---|---|
+| P02-01 Cold/Warm/Hot startup, transitions, configured delays, and actions | `AdaptiveResourcePolicy` state/input/decision types at `include/app/AdaptiveResourcePolicy.hpp:14-67`; host evaluation at `ApplicationHost.cpp:775-849`; Tray preload/release calls at `:814-815`. | `AUTOMATED`: `TestWarmupAndActions`, `TestImmediateMemoryPressureAndStagedRecovery`, `TestBackgroundPressureGraceAndHysteresis`, `TestNeutralMemoryMaintainsButNeverCreatesHotState` (`AdaptiveResourcePolicyTests.cpp:31-159`). | Policy timing/action behavior is covered with a fake clock. `GAP`: no host-to-Tray integration test verifies the same transitions with real resource state. |
+| P02-02 memory pressure, energy saver, fullscreen/presentation, visibility, pinning, and interaction hold | `ResourcePressureValues` states/probes at `include/app/ResourcePressureState.hpp:7-65`; host maps pressure and UI facts into policy input at `ApplicationHost.cpp:785-807`; Tray reports only `IsDevicePickerVisibleOrTransitioning()` and host hardcodes `.UiPinned = false`. | `AUTOMATED`: `TestBackgroundPressureGraceAndHysteresis`, `TestVisibleUiPinsAColdBackgroundDecision`, `TestInteractionTemporarilyOverridesCold`, `TestPreloadPermissionMustRemainStableForFullPromotionDelay` (`AdaptiveResourcePolicyTests.cpp:91-234`). `AUTOMATED`: `TestReducerPreservesIndependentSignals` (`ResourcePressureMonitorTests.cpp:62-91`). | Policy-level coverage exists. `GAP`: production host never supplies a true explicit pin fact; add a Tray/UI-fact integration test and preserve pin/interaction semantics before moving ownership. `MANUAL P02-Residency-Desktop-Pressure-Integration`: pressure, battery saver, fullscreen/presentation, picker visible/pinned/interaction, and release deferral. |
+| P02-03 freshness, sequence ordering, positive authorization, and clock rollback | Freshness/authorization helpers at `include/app/ResourcePressureState.hpp:57-65`; host rejects stale/out-of-order snapshots at `ApplicationHost.cpp:737-754,775-787`; policy resets temporal state on rollback. | `AUTOMATED`: `TestSnapshotFreshnessFailsClosed`, `TestPositiveAuthorizationAndAdaptivePollCadence`, `TestMonitorPublishesPeriodicLivenessHeartbeat` (`ResourcePressureMonitorTests.cpp:142-197,348-367`); `TestClockRollbackRestartsStabilityWindows` (`AdaptiveResourcePolicyTests.cpp:235-248`); `RunAdaptiveResourceDiagnosticsTests` (`AdaptiveResourceDiagnosticsTests.cpp:18-25`). | Helper/monitor/policy behavior is covered. `GAP`: no test sends out-of-order snapshots through `ApplicationHost::HandleResourcePressureSnapshot`; add a sequence/freshness integration test. |
+| P02-04 failed and partial probes, constrained cadence, and heartbeat/liveness | Probe/reducer definitions at `ResourcePressureState.hpp:27-65`; monitor lifecycle/probe scheduling at `src/app/ResourcePressureMonitor.cpp:24-305`. | `AUTOMATED`: `TestReducerHandlesMemoryTransitionsAndPartialFailures`, `TestFailedProbesRevokePositiveAuthorization`, `TestPartialMemoryProbeFailuresRemainFailClosed`, `TestIncompleteMemoryProbesPauseSignalWaits`, `TestPositiveAuthorizationAndAdaptivePollCadence` (`ResourcePressureMonitorTests.cpp:28-197`). | Covered at monitor/reducer level. `GAP`: no long-running packaged/desktop heartbeat observation or diagnostic export assertion. |
+| P02-05 release deferral and UI resource facts | `TrayController::ShowDevicePicker`, `TryHideDevicePicker`, `ReleaseDevicePicker`, and `ReleaseDevicePickerOnUIThread` at `src/services/TrayController.cpp:273-414,744-827`; host uses loaded/initialized facts at `ApplicationHost.cpp:825-845`. | `AUTOMATED`: `TestVisibleUiPinsAColdBackgroundDecision`, `TestInteractionTemporarilyOverridesCold` (`AdaptiveResourcePolicyTests.cpp:187-234`); `TestInventoryFreshnessAndInvalidation`, `TestLateInventoryCallbackAfterRelease` (`DevicePickerSnapshotTests.cpp:27-71`). | Policy and snapshot-cache pieces are covered. `MANUAL P02-Residency-Preload-Release-Lifecycle`: preload, open, interaction hold, close, deferred release, explicit release, reopen, and late callback. `GAP`: no actual XAML resource release test. |
+| P02-06 retry, scheduler fallback, supersession, and safe shutdown | `AdaptiveActionRetryBackoff` is used at `ApplicationHost.cpp:769,829-851`; adaptive schedule state/timer/fallback is `:855-910`; teardown stops monitor/timers at `:296-324`. | `AUTOMATED`: `TestAdaptiveActionRetryBackoffIsBoundedAndResettable`, `TestAdaptiveScheduleRejectsSupersededAndEarlyCallbacks` (`AdaptiveResourcePolicyTests.cpp:273-312`); `TestMonitorLifecycleAndLateCallbackBarrier`, `TestMonitorCanStopFromItsOwnCallback`, `TestMonitorCanBeDestroyedFromItsOwnCallback`, `TestExternalStopWaitsForSelfStoppedCallback`, `TestConcurrentStartAndStopRemainSafe`, `TestRepeatedLifecycleDoesNotLeakHandles` (`ResourcePressureMonitorTests.cpp:198-467`). | Timer/monitor primitives are covered. `GAP`: no host scheduling-failure test proves exactly one active fallback and no wakeup after teardown; add deterministic scheduler injection. |
+| P02-07 diagnostics and retained energy/pressure state | Status JSON includes adaptive residency, freshness, authorization, preload facts, pressure, activity, and energy at `ApplicationHost.cpp:1653-1688`; names are in `AdaptiveResourceDiagnostics.hpp:12-54`. | `AUTOMATED`: `RunAdaptiveResourceDiagnosticsTests` (`AdaptiveResourceDiagnosticsTests.cpp:18-25`). `MANUAL P02-Status-Diagnostics`: compare `status --json` before/after stale, constrained, recovery, and shutdown states. | `GAP`: no production status-schema snapshot test; add one without exposing mutable policy internals. |
+
+## P03 — Connecting animation invariant
+
+P03 is part of Phase 0 even though its timer currently lives in `ApplicationHost`.
+`RefreshTrayVisualState` starts a 75 ms timer only for `TrayIconState::Connecting` and
+kills it for Connected, Error, and Idle (`src/app/ApplicationHost.cpp:1248-1300`).
+`WM_TIMER` advances an eight-frame, four-size `TrayIcon` animation and kills the timer
+when the frame update fails (`src/app/ApplicationHost.cpp:2430-2434`; frames are
+declared at `include/ui/TrayIcon.hpp:53-70`). Teardown kills the animation timer
+(`ApplicationHost.cpp:351-359`).
+
+| ID / required behavior | Existing automated evidence or named scenario | Status and gap |
+|---|---|---|
+| P03-01 start only for active connect/reconnect work; prompt stop on Idle, Connected, Error, cancellation, and shutdown | `MANUAL P03-Tray-Connecting-Animation-Terminals`: begin connect and reconnect, observe progress; drive each terminal/cancel/shutdown path; assert no stale frame/wakeup after terminal state. | `GAP`: no TrayIcon/ApplicationHost animation test; add a fake timer/clock test proving one bounded owner and every terminal cleanup path. |
+| P03-02 eight frames, theme/DPI-correct icon selection, and no orphan timer after shell re-registration | `MANUAL P03-Tray-Connecting-Animation-Theme-Dpi`: light/dark at 100/125/150/200% DPI, Explorer restart/taskbar recreation, and state restoration. | `GAP`: no automated frame/timer/shell test; preserve the current eight-frame and four-size assets. |
+
+## P04/P05 — notification policy, image mapping, and actions
+
+`NotificationService` currently renders these six kinds:
+
+| Retained kind | Current image | Current action and arguments | Current renderer |
+|---|---|---|---|
+| App started | `ms-appx:///Images/ToastInfo.png` | None; silent; 7 s expiry | `NotificationService::ShowAppStarted` (`src/services/NotificationService.cpp:319-330`) |
+| Device connected | `ToastConnected.png` | `Reconnect`, action `reconnect`, `deviceId=id`; long sound; 1 min expiry | `ShowDeviceConnected` (`:332-345`) |
+| Device disconnected | `ToastWarning.png` | None; silent; 1 min expiry | `ShowDeviceDisconnected` (`:347-358`) |
+| Auto reconnect started | `ToastReconnect.png` | None; silent; 1 min expiry | `ShowAutoReconnect` (`:360-371`) |
+| Auto reconnect failed | `ToastError.png` | `Retry`, action `retry`, `deviceId=id`; looping alarm; 1 h expiry | `ShowAutoReconnectFailed` (`:373-385`) |
+| Update available | `ToastInfo.png` | localized update action, action `openUpdate`; silent; 6 h expiry | `ShowUpdateAvailable` (`:387-400`) |
+
+Every retained kind has an explicit mapping, but AppStarted and UpdateAvailable
+currently share `ToastInfo.png`; the P05 acceptance check must confirm that this shared
+asset is intentional or record a product decision. P05 does not authorize inventing a
+new image. `ToastXmlSanitization` protects XML escaping and invalid UTF-16 handling at
+`src/services/ToastXmlSanitizer.hpp` and `ReconnectControllerTests.cpp:425-443`.
+
+| ID / required behavior | Legacy policy evidence | Existing automated evidence or named scenario | Status and required future automation |
+|---|---|---|---|
+| P04-01 normal disconnect updates state/tooltip/CLI/diagnostics but never emits toast or balloon | `ApplicationHost::OnDeviceDisconnected` calls `ShowDeviceDisconnected` unconditionally when the notification service exists (`src/app/ApplicationHost.cpp:2321-2339`); state refresh is also scheduled. | `MANUAL P04-Normal-Disconnect-No-Notification`: disconnect a normally connected device with notifications enabled and inspect toast history, fallback-balloon history, tooltip, CLI status, and diagnostics. | `GAP` and current behavior conflict: the call site violates locked P04. Add a deterministic event-to-policy test before moving notification policy; do not infer G07 fallback approval. |
+| P05-01 AppStarted image and payload | Renderer mapping above. Startup call is `ApplicationHost.cpp:553-555`. | `MANUAL P05-Notification-Kind-Image-Action-Matrix` (AppStarted row): record XML image, title/body, sound, expiry, and absence of action. | `GAP`: no NotificationService mapping test; add normalized kind→image/action table assertions. |
+| P05-02 DeviceConnected image/action | `ShowDeviceConnected` at `NotificationService.cpp:332-345`; callback parsing is `:407-444`. | `MANUAL P05-Notification-Kind-Image-Action-Matrix` (Connected row): invoke reconnect action and verify the correct device only. | `GAP`: no image/action or invocation test; add action parsing and target routing tests. |
+| P05-03 DeviceDisconnected mapping retained for non-normal policy decisions | `ShowDeviceDisconnected` at `NotificationService.cpp:347-358`; normal event currently invokes it at `ApplicationHost.cpp:2321-2339`. | `MANUAL P05-Notification-Kind-Image-Action-Matrix` (Disconnected row), combined with `P04-Normal-Disconnect-No-Notification`. | `GAP`: map exists but policy is wrong for a normal disconnect; add a negative no-toast assertion and retain mapping only if a separately approved exceptional kind needs it. |
+| P05-04 AutoReconnect image/action | `ShowAutoReconnect` at `NotificationService.cpp:360-371`; trigger call at `ApplicationHost.cpp:2346-2357`. | `MANUAL P05-Notification-Kind-Image-Action-Matrix` (AutoReconnect row): assert `ToastReconnect.png`, no action, and redaction behavior. | `GAP`: no renderer/policy test. |
+| P05-05 AutoReconnectFailed image/action | `ShowAutoReconnectFailed` at `NotificationService.cpp:373-385`; trigger call at `ApplicationHost.cpp:2361-2378`. | `MANUAL P05-Notification-Kind-Image-Action-Matrix` (Failed row): assert `ToastError.png`, `retry`, and device target. | `GAP`: no renderer/policy/action test. |
+| P05-06 UpdateAvailable image/action | `ShowUpdateAvailable` at `NotificationService.cpp:387-400`; startup/update orchestration is `StartupUpdateCoordinator` and `ApplicationHost`. | `MANUAL P05-Notification-Kind-Image-Action-Matrix` (Update row): assert `ToastInfo.png`, trusted update action, no raw version/identity leak in privacy mode, and expiry. | `GAP`: no mapping test; G04 automatic/manual behavior remains gated and must not be changed here. |
+| P05-07 fallback, localization, privacy, and teardown | Toast initialization/teardown and callback lifetime are `NotificationService.cpp:49-180,258-317,407-444`; `ToastXmlSanitization` only covers XML. Changelog records the old balloon fallback removed; G07 is still unresolved. | `AUTOMATED`: `TestToastXmlSanitization` (`ReconnectControllerTests.cpp:425-443`). `MANUAL P05-Notification-Privacy-Localization-Teardown`: all eight languages, privacy mode, unavailable AppNotificationManager, callback during teardown, and action after teardown. | `GAP`: no image mapping, localization, privacy, fallback-decision, or teardown integration tests. Do not claim fallback is approved or required. |
+
+## P06 — Bluetooth operations, races, and lifecycle
+
+`DeviceManager` serializes mutable state under `wil::srwlock`, tracks operation tokens
+and epochs in `DeviceOperationCoordinator`, stores active connection/token state in
+`DeviceSessionStore`, and coordinates reconnect timers through `ReconnectController`.
+The high-risk paths are visible at `DeviceManager.cpp:337-706` (connect/reconnect),
+`:706-820` (bulk/policy), `:982-1210` (disconnect/close barriers), `:1211-1528`
+(WinRT connection setup), `:1544-1789` (operation/close-barrier cleanup),
+`:1829-2024` (watcher/callback/loss), and `:2024-2247` (retry attempts).
+
+| ID / required behavior | Existing automated evidence or named scenario | Status and required future automation |
+|---|---|---|
+| P06-01 watcher start/stop/restart, lifecycle coalescing, generation, and stale watcher callback | `AUTOMATED`: `TestStartCompletesToIdle`, `TestReentrantStopIsAppliedByCurrentExecutor`, `TestConcurrentPermanentStopWaitsForSettlement`, `TestDuplicateRequestsCoalesceOnlyWhileInFlight`, `TestStaleCompletionCannotReleaseNewerWork`, `TestConcurrentRequestStormUsesSingleExecutor` (`LatestServiceLifecycleStateTests.cpp:22-137`); device-specific watcher ownership is `DeviceManager.cpp:123-139,1829-1890`. | `MANUAL P06-Watcher-Restart-Stale-Callback`: start/stop/restart discovery, inject add/remove/inventory callbacks after stop/release, and assert no stale mutation. `GAP`: add a fake DeviceDiscoveryService integration test. |
+| P06-02 connect success/failure/cancel, duplicate/overlap, and stale completion | `AUTOMATED`: `TestDuplicateBeginDoesNotInvalidateOwner`, `TestTransitionAndStaleCompletion`, `TestFailureReportCanBeClaimedExactlyOnce`, `TestInvalidInputsAreNoOps`, `TestTokenExhaustionFailsClosed` (`DeviceOperationCoordinatorTests.cpp:17-113`); `TestCancellationBeforeDispatch`, `TestTimeoutAfterDispatchStarted` (`ControlUiActionGateTests.cpp:17-48`) cover analogous UI action gates only. | `MANUAL P06-Device-Connect-Overlap`: two devices, duplicate same-device connect, connect vs disconnect/reconnect overlap, cancellation before/after WinRT start, failure after stale callback. `GAP`: no fake AudioPlaybackConnection or DeviceManager integration test. |
+| P06-03 disconnect ordering, close-before-reconnect barrier, connection-token cleanup, and incoming state | Cleanup/barrier implementation is `DeviceManager.cpp:982-1210,1544-1789`; incoming enable/disable is `:307-335,495-559`. | `MANUAL P06-Disconnect-Close-Token`: power off/close a connected device, reconnect immediately, verify old StateChanged token is revoked before new connection and no zombie callback can close the new connection. `MANUAL P06-Incoming-Connection`: enable/disable incoming, discovered device, and cleanup restore. `GAP`: add deterministic close-barrier timeout and token-cleanup tests. |
+| P06-04 reconnect backoff, retry/exhaustion/recovery, timer claim/deferral/abort, and stale timer tokens | `AUTOMATED`: `TestFullBackoffSequence`, `TestSuccessAndStaleTokens`, `TestCancellationAndTimerCreationFailure`, `TestObservedConnectionInvalidatesAttempt`, `TestUnknownConnectionSuccessDoesNotCreateState`, `TestBlockedTimerDoesNotRemainPending`, `TestBusyTimerDeferralPreservesReconnect`, `TestAbortReleasesClaimedAttempt`, `TestAbortDoesNotMutateNewerTimer` (`ReconnectControllerTests.cpp:22-186`). | `AUTOMATED`: `TestReconnectPolicyDoesNotBecomeUserCancellation`, `TestReconnectPolicyDoesNotClearUserCancellation` (`ReconnectControllerTests.cpp:187-216`). `MANUAL P06-Reconnect-Loss-Retry-Recovery`: unexpected loss, retries through exhaustion, manual cancel, policy disable/enable, and successful recovery. `GAP`: no DeviceManager timer/WinRT integration test. |
+| P06-05 manual cancellation, global/per-device policy, bulk operations, and cascade ordering | `DeviceManager.cpp:706-820,1789-1828`; reconnect helper policy tests above; planner tests below. | `AUTOMATED`: `TestReconnectPolicyDoesNotBecomeUserCancellation`, `TestReconnectPolicyDoesNotClearUserCancellation`; `TestMostRecentlyConnectedPromotionIsIdempotent`, `TestMostRecentlyConnectedPromotionRemovesDuplicates`, `TestReconnectPlanHonorsAllSavedDevicePolicies`, `TestReconnectPlanHonorsPerDevicePolicyWithoutMruHistory`, `TestReconnectPlanRejectsInvalidAndExcessState` (`AutoReconnectPlannerTests.cpp:24-103`). `MANUAL P06-Bulk-Cascade`: disconnect-all/reconnect-all with pending timers and two connected devices; assert no victim is treated as an unexpected loss. | `GAP`: planner/controller tests do not prove DeviceManager cascade behavior; add a serialized multi-device fake. |
+| P06-06 incoming connection, startup connect, and saved policy application | Startup planner is `AutoReconnectPlanner`; DeviceManager incoming path is `DeviceManager.cpp:307-559`; host applies settings and starts watcher at `ApplicationHost.cpp:513-549`. | `MANUAL P06-Startup-Incoming`: launch with two saved startup devices, per-device/global policy, incoming enabled, and one unavailable device; assert order, bounded retries, and no duplicate session. `GAP`: no startup-to-DeviceManager integration test. |
+| P06-07 suspend/resume and reconnect-attempt accounting | `PowerTransitionCoordinator` invokes `SuspendForPowerTransition`/`ResumeAfterPowerTransition` at `src/app/PowerTransitionCoordinator.cpp:80-107`; DeviceManager suspends/clears connections at `DeviceManager.cpp:203-295`. | `AUTOMATED`: `TestResumeReconnectCountsOnlyActuallyStartedAttempts`, `TestResumeReconnectPreservesPendingTargetsAcrossSuspendCycles` (`AppWorkCoordinatorTests.cpp:459-499`). `MANUAL P06-Suspend-Resume`: sleep/resume during connect, connected, pending reconnect, and incoming enable; verify watcher restart and no lost target. | `GAP`: existing tests cover resume bookkeeping only, not WinRT close/reopen. |
+| P06-08 safe shutdown while busy, callback lifetime, and no resurrection | `ShutdownForProcessExit` cancels operations/timers, signals barriers, revokes tokens, clears sessions, and detaches connections at `DeviceManager.cpp:141-201`; host teardown order is `ApplicationHost.cpp:296-390`. | `AUTOMATED`: `TestConcurrentPermanentStopWaitsForSettlement`, `TestStaleCompletionCannotReleaseNewerWork` (`LatestServiceLifecycleStateTests.cpp:48-107`); `TestMonitorCanBeDestroyedFromItsOwnCallback` is analogous callback lifetime coverage. `MANUAL P06-Shutdown-Busy`: exit during connect/disconnect/reconnect/close barrier and late StateChanged/discovery callback; assert no crash, no new timer, and no session resurrection. | `GAP`: no DeviceManager shutdown integration test; add fake callback/lifetime harness. |
+
+## P07 — JSON settings compatibility, atomicity, and persistence races
+
+The persisted JSON schema is emitted by `Settings::Save` at
+`AudioPlaybackConnector2/src/core/Settings.cpp:312-418`:
+
+```text
+globalConnectOnStartup, globalReconnectOnConnectionLoss,
+allowIncomingConnections, startWithWindows, showNotifications,
+useSystemBackdropEffects, privacyModeEnabled, language,
+lastUpdateCheckUnixSeconds, lastNotifiedUpdateVersion,
+defaultDeviceMode, defaultDeviceId,
+settingsWindowBounds { x, y, width, height, dpi },
+devices [{ id, name, alias, connectOnStartup, reconnectOnConnectionLoss }],
+lastConnectedIds
+```
+
+Load retains the legacy `globalAutoReconnect` and per-device `autoReconnect` values
+(`Settings.cpp:199-203,255-262`), parses into locals before taking the settings lock,
+deduplicates IDs, bounds arrays and strings, and moves an unreadable file to a unique
+`.corrupt[.N].bak` path (`:108-144,146-311`). Save snapshots a revision, validates
+persistability, writes `AudioPlaybackConnector2.json.tmp`, calls `FlushFileBuffers`,
+then atomically replaces the destination with `MOVEFILE_REPLACE_EXISTING |
+MOVEFILE_WRITE_THROUGH` and removes the temp file on failure (`:312-430`). The limits
+are 4 MiB file size, 384 devices/IDs, 512 ID characters, 256 name characters, 128 alias
+and version characters, and DPI 48–960 (`include/core/SettingsLimits.hpp:11-28`).
+
+| ID / required behavior | Existing automated evidence or named scenario | Status and required future automation |
+|---|---|---|
+| P07-01 current/legacy JSON formats and field compatibility | Load/save evidence above; `SettingsData` is `include/core/SettingsData.hpp:7-44`. | `MANUAL P07-Settings-Compatibility-Formats`: load missing file, current schema, legacy global/per-device `autoReconnect`, omitted fields, unknown fields, old default mode, aliases, placement, and all supported language IDs; save and compare retained semantics. | `GAP`: no Settings::Load/Save integration test in CoreTests; add fixture-based schema compatibility tests. |
+| P07-02 malformed, partial, corrupt, oversized, invalid UTF-16, duplicate, and out-of-bounds data | `Settings.cpp:146-311`; limits at `SettingsLimits.hpp:31-67`; corrupt-file backup at `:108-144`. | `AUTOMATED`: `TestUtf16Validation`, `TestBoundedStrings`, `TestSafeTruncation`, `TestSupportedLanguages` (`SettingsLimitsTests.cpp:16-51`). `MANUAL P07-Settings-Corrupt-Recovery`: malformed JSON, truncated file, >4 MiB file, invalid number/string/surrogate, duplicate IDs, invalid bounds, and >384 entries; assert safe defaults, `.corrupt.bak`, and no data leak. | Primitive limit coverage exists; actual parser/backup behavior is untested. Add filesystem-fixture tests with a temporary path seam. |
+| P07-03 all mutations, validation, bounds, privacy/alias/default/last-device persistence | Mutations are routed through `SettingsController` and direct lock callers; data fields are in `SettingsData.hpp`; validation is `IsPersistable` at `Settings.cpp:17-46`. | `AUTOMATED`: `TestSettingsRevisionTracksOnlyCommittedMutations` (`AppWorkCoordinatorTests.cpp:500-515`); `TestPrivacyAndMissingSettings` (`TrayTooltipBuilderTests.cpp:34-44`) and `TestPrivacyAndSnapshotGeneration` (`DevicePickerSnapshotTests.cpp:108-143`) cover presentation only. `MANUAL P07-Settings-Mutation-Roundtrip`: mutate every setting, restart, and compare values including privacy, alias, default, last-connected, per-device policies, and placement. | `GAP`: no round-trip test through real persistence; add a complete mutation/round-trip fixture. |
+| P07-04 debounce, one writer, dirty revision, change during write, and no lost update | `DeferredSaveCoordinator` state machine at `include/app/DeferredSaveCoordinator.hpp:9-140`; `DeferredSettingsSaver` scheduling/retry at `src/app/DeferredSettingsSaver.cpp:17-180`. | `AUTOMATED`: `TestDeferredSaveCoalescesDirtyGenerations`, `TestDeferredSaveRetainsMutationsDuringAnAttempt`, `TestDeferredSavePersistsMutationMadeAfterSnapshot`, `TestDeferredSaveRequestCompletionRaceHasNoLostWakeup`, `TestDeferredSaveConcurrentRequestsStartExactlyOneWorker`, `TestDeferredSaveExternalFlushAcknowledgesOnlyItsGeneration`, `TestSettingsRevisionTracksOnlyCommittedMutations` (`AppWorkCoordinatorTests.cpp:26-209,210-298,441-515`). | Coordinator coverage is strong and deterministic. `GAP`: tests do not connect the coordinator to actual Settings::Save bytes; add a fake writer that changes the data at snapshot/write boundaries and assert the final file contains the newest revision. |
+| P07-05 write failure, bounded retry, scheduler fallback, temp cleanup, and atomic replace | `DeferredSettingsSaver::RunAttempt` retries 1 s exponential backoff capped at 5 min and falls back to synchronous flush at `DeferredSettingsSaver.cpp:121-178`; `Settings::Save` temp/flush/replace at `Settings.cpp:401-416`. | `AUTOMATED`: `TestDeferredSaveRetriesFailuresWithoutLosingDirtyState`, `TestDeferredSaveCanRecoverFromSchedulerFailure` (`AppWorkCoordinatorTests.cpp:90-156`). `MANUAL P07-Settings-Atomic-Write-Failure`: deny destination/temp access, interrupt write, fill/lock destination, inspect temp cleanup and old-file preservation; verify `FlushFileBuffers` precedes replace and retries are bounded. | `GAP`: no actual file failure or atomicity test; add an injectable filesystem/commit seam and a Windows integration test. |
+| P07-06 synchronous suspend/shutdown final flush and cancellation | Host calls `m_settingsSaver.FlushNow()` on suspend and `FlushNow(3)` during teardown at `ApplicationHost.cpp:985-1050,373-380`; saver cancellation waits timer callbacks at `DeferredSettingsSaver.cpp:72-96`. | `AUTOMATED`: `TestDeferredSaveExternalFlushAcknowledgesOnlyItsGeneration`, `TestDeferredSaveCancellationInvalidatesOutstandingWork` (`AppWorkCoordinatorTests.cpp:115-137,441-458`). `MANUAL P07-Settings-Suspend-Shutdown-Flush`: mutate immediately before suspend and exit while a delayed save is pending; restart and verify latest data is present or failure is visible. | `GAP`: no host suspend/shutdown/file integration test; add an end-to-end final-flush test. |
+
+## P08 — privacy, localization, accessibility, theme, DPI, and UI-thread facts
+
+P08 is not a separate migration slice, but its invariants constrain every matrix row.
+Privacy-aware immutable presentation is exercised by `DevicePickerSnapshot` and
+`TrayTooltipBuilder`; diagnostics redaction is in `DiagnosticsLogCollector`; all
+user-visible strings route through `StringResources` in the current implementation.
+
+| ID / required behavior | Existing automated evidence or named scenario | Status and gap |
+|---|---|---|
+| P08-01 privacy/redaction in tooltip, picker, diagnostics, CLI, and notifications | `AUTOMATED`: `TestPrivacyAndMissingSettings` (`TrayTooltipBuilderTests.cpp:34-44`); `TestPrivacyAndSnapshotGeneration` (`DevicePickerSnapshotTests.cpp:108-143`); `TestSensitiveValuesAreRedactedAndControlsNeutralized`, `TestCustomTemporaryDirectoryIsRedactedInsideLogLines` (`DiagnosticsLogCollectorTests.cpp:164-210`). | `MANUAL P08-Privacy-All-Presentations`: enable privacy mode and inspect tray, picker, status/list/default/alias CLI, diagnostics, notifications, and error paths; `GAP`: no production CLI/notification redaction test. |
+| P08-02 all eight language catalogs and localized actions/errors | Language IDs are bounded by `SettingsLimits.hpp:48-51`; localized lookup is `StringResources`. | `AUTOMATED`: `TestSupportedLanguages` only validates accepted identifiers. `MANUAL P08-Localization-Catalog-Matrix`: switch `system`, en, de, fr, es, ja, ko, zh_hans, zh_hant; exercise every tray, picker, settings, command, notification, and error action. `GAP`: no catalog-key parity or UI screenshot test. |
+| P08-03 accessibility, keyboard behavior, XAML UI thread, theme, and DPI | XAML and dispatcher marshaling are in `TrayController.cpp:273-414,537-618,744-827`; theme/reregister is `TrayController.cpp:490-526` and `ApplicationHost.cpp:2463-2466`. | `MANUAL P08-UI-Accessibility-Theme-Dpi`: keyboard navigation, screen reader names, focus, light/dark, 100/125/150/200% DPI, and non-UI-thread callbacks. `GAP`: no automated XAML/UI-thread test in CoreTests. |
+
+## P09 — tray interactions, actions, theme/DPI, and placement
+
+`TrayController::HandleTrayMessage` recognizes left select/up, double-click, context
+menu, and suppresses/debounces mouse events at `src/services/TrayController.cpp:537-618`:
+left click opens/toggles the picker; right/context click opens the menu; double-click
+hides an open picker and invokes the toggle callback; left/right down/move and balloon
+messages are ignored. Click debounce is 200 ms and double-click suppression is 450 ms;
+light-dismiss reopen suppression is 2 s (`:569-600, CreatePickerFlyout at :839-929`).
+The menu actions are Settings, Bluetooth settings, and Exit
+(`TrayController.cpp:40-88,233-271`); the picker exposes connect/disconnect/reconnect
+and bulk actions (`ui/DevicePickerView/DevicePickerView.xaml.cpp:93-105,775-795`).
+
+| ID / required behavior | Existing automated evidence or named scenario | Status and required future automation |
+|---|---|---|
+| P09-01 left click/select opens picker; repeated click toggles; light-dismiss suppression | `MANUAL P09-Tray-Left-Click-Picker-State-Machine`: left select/up, click while opening/open/closing, light dismiss over icon, and click again within/outside 2 s; assert one flyout generation per open and correct resource facts. | `GAP`: no TrayController/XAML interaction test; add a fake flyout state-machine test. |
+| P09-02 right/context click opens menu and Settings/Bluetooth/Exit actions | `MANUAL P09-Tray-Context-Menu-Actions`: context/right click, each menu item, menu close, and failure to show; assert callback exactly once and no action after teardown. | `GAP`: no automated shell/menu callback test. |
+| P09-03 double click toggles last/default device and suppresses the preceding single-click action | `ApplicationHost::ToggleLastConnectedDeviceFromTray` at `src/app/ApplicationHost.cpp:936-964`; `TrayController.cpp:580-586` records double-click and calls toggle. `MANUAL P09-Tray-Double-Click-Toggle`: connected/disconnected/default-missing/busy cases, two devices, and rapid click sequences. | `GAP`: no message-routing or toggle integration test; add deterministic tick/clock tests. |
+| P09-04 picker connect/disconnect/reconnect/bulk actions and discovery refresh | Picker callbacks at `DevicePickerView.xaml.cpp:775-795`; controller callback wiring at `TrayController.cpp:611-700`; snapshots at `DevicePickerSnapshot`. | `AUTOMATED`: `TestConsistentPresentationSnapshot`, `TestInventoryFreshnessAndInvalidation`, `TestLateInventoryCallbackAfterRelease` (`DevicePickerSnapshotTests.cpp:27-107`). `MANUAL P09-Picker-Action-Refresh`: discovery add/remove/change while open, each row action, bulk action, and stale callback. `GAP`: automated tests cover snapshots, not XAML intents/DeviceManager effects. |
+| P09-05 tooltip ordering, aliases, privacy, and fallback names | Tooltip builder at `include/core/TrayTooltipBuilder.hpp` and `src/core/TrayTooltipBuilder.cpp`. | `AUTOMATED`: `TestEmptyTooltip`, `TestNamePrecedenceAndFallbacks`, `TestPrivacyAndMissingSettings`, `TestConnectionOrderAndDuplicates` (`TrayTooltipBuilderTests.cpp:16-54`). | Covered for pure presentation; `GAP`: no shell tooltip update/reregister test. |
+| P09-06 Idle/Connecting/Connected/Error states, frame timing, theme, DPI, and Explorer/taskbar recreation | `TrayIcon` state/frame/rendering at `include/ui/TrayIcon.hpp:9-70` and `src/ui/TrayIcon.cpp:194-279`; host selects state/timer at `ApplicationHost.cpp:1248-1300`; taskbar-created handling at `ApplicationHost.cpp:2463-2466`. | `MANUAL P09-Tray-States-Theme-Dpi`: all states and eight Connecting frames in light/dark at 100/125/150/200% DPI, then Explorer restart/taskbar recreation; assert state/tooltip/icon re-register and no animation leak. | `GAP`: no icon rendering or shell integration test; P03 timer ownership remains in host until its migration. |
+| P09-07 settings-window placement and multi-monitor DPI | Placement calculation is `TrayController.cpp:945-963` and `ui/WindowPlacement`; persisted bounds schema is `Settings.cpp:357-371`. | `MANUAL P09-Placement-Dpi-MultiMonitor`: first launch, saved bounds at each DPI, monitor removal, off-screen bounds, and multi-monitor tray anchor. | `GAP`: no placement test; G06 remains a gate and current behavior must be preserved. |
+| P09-08 teardown and UI-thread-only XAML access | `TrayController::Teardown` marshals to the dispatcher and releases flyout/view/icon at `TrayController.cpp:111-200`; release guards UI thread at `:744-827`. | `MANUAL P09-Tray-Teardown-Thread`: teardown from UI/background thread during opening/closing/preload and callback after teardown. | `GAP`: no deterministic XAML lifetime test; add a dispatcher/flyout fake. |
+
+## Locked-decision checklist (P01–P10)
+
+| Decision | Characterized invariant | Current Phase 0 evidence | Open gap / gate |
+|---|---|---|---|
+| P01 | CLI/named pipes, schema, security, framing, concurrency, deadlines, cancellation, correlation, replay, startup, shutdown | Protocol/server/client unit/integration tests listed in P01 | CLI/host/packaging integration matrix remains. |
+| P02 | Adaptive Cold/Warm/Hot, delays, pressure, energy, fullscreen, UI facts, freshness, sequence, rollback, fallback, retry, heartbeat, diagnostics | Policy/reducer/monitor tests listed in P02 | Host/Tray integration and explicit pin fact remain. |
+| P03 | Connecting animation is visible progress, theme/DPI correct, bounded timer, all terminal cleanup | Source trace at host/TrayIcon; named manual scenarios | No deterministic animation/timer test; timer is still host-owned. |
+| P04 | Normal disconnect must never toast or balloon | Current event call site identified | Current call violates P04; policy test and fix required in its owning phase. |
+| P05 | Every retained notification kind has an image/action mapping | Six-kind source mapping table | No mapping test; AppStarted/Update share image; manual matrix required. |
+| P06 | Bluetooth ordering, serialized mutation, epochs, close barrier, token cleanup, incoming, retry, bulk, startup, suspend/resume, shutdown | Coordinator/reconnect/planner/lifecycle tests | No WinRT DeviceManager integration/race harness. |
+| P07 | JSON compatibility, validation, corrupt preservation, no lost update, temp/flush/atomic replace, retry, final flush | Limits and deferred-save coordinator tests; source trace | No real Settings::Load/Save filesystem or host flush test. |
+| P08 | Privacy/localization/accessibility/theme/DPI/UI thread | Pure tooltip/picker/diagnostic tests | CLI/notification/catalog/UI integration remains manual/gap. |
+| P09 | Tray clicks/actions/theme/DPI/placement and retained notification actions | Pure tooltip/snapshot tests; source trace | No shell/XAML interaction test. |
+| P10 | C++23 remains current until dedicated C++26 gate; x64/ARM64 evidence required | Four vcxproj `stdcpp23` declarations; lead-provided candidate evidence records Debug/Release outputs for x64/ARM64 and x64 CoreTests passes | ARM64 native CoreTests, manual/static-analysis/security/package-verification checks, and the dedicated C++26 gate remain unrun or unattempted; C++26 not approved. |
+
+## Required future automation before deleting legacy owners
+
+These are the cheapest deterministic seams indicated by the gaps above; they are
+characterization requirements, not permission to alter behavior:
+
+1. Add a CLI parser/output fixture that invokes every command/selector/flag and asserts
+   text, JSON, raw/privacy, and exit behavior independently of WinRT.
+2. Add a control integration fixture with a fake clock, scheduler, handler, and server
+   identity to exercise late mutation, replay/correlation, startup retry, and shutdown.
+3. Add a resource manager fixture with fake pressure snapshots, a sequence clock, a
+   scheduler, and a Tray resource fact sink. Include `UiPinned=true`, stale and
+   out-of-order snapshots, rollback, fallback scheduling, action failure, retry, and
+   heartbeat diagnostics.
+4. Add a normalized notification mapping/policy test for all six kinds, P04 normal
+   disconnect negative behavior, P08 redaction/localization, action arguments, and
+   teardown. Resolve G07 only by explicit approval.
+5. Add a fake AudioPlaybackConnection/DeviceDiscoveryService harness covering every
+   P06 row, including callback epochs, token revocation, close-barrier timeout,
+   incoming connections, multi-device cascade, suspend/resume, and busy shutdown.
+6. Add a Windows filesystem fixture for Settings::Load/Save that controls the path and
+   failure points, then asserts schema compatibility, corrupt backup, temp cleanup,
+   `FlushFileBuffers` ordering, atomic replace, retries, revisions, and final flush.
+7. Add pure TrayController/TrayIcon message and timer tests with an injected tick,
+   dispatcher, shell, DPI, and flyout seam; keep an explicit manual matrix for actual
+   Explorer/taskbar, accessibility, theme, and multi-monitor behavior.
+8. Complete the remaining Debug and Release x64/ARM64 test and package-verification
+   evidence (build/package outputs are recorded above), then run the P10 gate before
+   any C++26 language-mode change.
+
+## Locally run candidate evidence (lead-provided)
+
+The lead reports the following locally run evidence for source ref `c2dfd87`:
+
+| Check | Reported result |
+|---|---|
+| `msbuild AudioPlaybackConnector2.slnx -t:restore -p:RestorePackagesConfig=true` | Passed with 0 warnings and 0 errors. |
+| Solution Debug x64 invocation | Completed successfully, produced both x64 and ARM64 Debug outputs, and reported 0 warnings and 0 errors. |
+| x64 Debug CoreTests | Output: `All core tests passed`. |
+| Release x64 rebuild with `AppxBundle=Never` and package signing disabled | Exited 0 and produced an x64 MSIX. |
+| x64 Release CoreTests | Output: `All core tests passed`. |
+| Release ARM64 rebuild with `AppxBundle=Never` and package signing disabled | Exited 0 and produced an ARM64 MSIX plus cross-compiled CoreTests. |
+| ARM64 CoreTests execution | Not run on the x64 host. |
+
+This is candidate evidence supplied by the lead; this worker did not rerun those
+commands while writing the document. It does not establish that manual desktop,
+package-verification, clang-format, cppcheck, security, or ARM64 native test execution
+has passed. The dedicated C++26 toolchain gate was not attempted.
+
+## Validation record for this artifact
+
+Read-only inspection and evidence collection used `rg`, `Get-Content`, project-file
+inspection, and Git history/diff commands. The following checks were run for the
+documentation change:
+
+```text
+git diff --check
+```
+
+The product was not changed, so this slice did not rerun a product build, core test
+executable, clang-format, cppcheck, package, or manual desktop scenario. The
+lead-provided candidate evidence above records successful restore, Debug/Release
+builds and package outputs as listed, with x64 CoreTests passing and ARM64 native tests
+not executed on the x64 host. It does not claim that manual desktop, static-analysis,
+security, package-verification, or ARM64 native test execution has passed. The
+dedicated C++26 toolchain gate was not attempted. Phase 0 still requires the applicable
+checks and scenarios listed in `docs/architecture-rework/verification.md`.

@@ -462,6 +462,7 @@ int RunSettingsPersistenceTests();
 int RunDevicePickerSnapshotTests();
 int RunLatestStartupTaskRequestStateTests();
 int RunLatestServiceLifecycleStateTests();
+int RunLegacyAppUseCaseBridgeTests();
 int RunResourcePressureMonitorTests();
 int RunRuntimeApartmentTests();
 int RunSettingsLimitsTests();
@@ -507,6 +508,7 @@ int main() {
     g_failures += RunDevicePickerSnapshotTests();
     g_failures += RunLatestStartupTaskRequestStateTests();
     g_failures += RunLatestServiceLifecycleStateTests();
+    g_failures += RunLegacyAppUseCaseBridgeTests();
     g_failures += RunResourcePressureMonitorTests();
     g_failures += RunRuntimeApartmentTests();
     g_failures += RunSettingsLimitsTests();

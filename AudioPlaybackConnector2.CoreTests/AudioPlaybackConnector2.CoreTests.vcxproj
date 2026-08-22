@@ -98,6 +98,7 @@
     <ClCompile Include="src\DevicePickerSnapshotTests.cpp" />
     <ClCompile Include="src\LatestStartupTaskRequestStateTests.cpp" />
     <ClCompile Include="src\LatestServiceLifecycleStateTests.cpp" />
+    <ClCompile Include="src\LegacyAppUseCaseBridgeTests.cpp" />
     <ClCompile Include="src\ReconnectControllerTests.cpp" />
     <ClCompile Include="src\ResourcePressureMonitorTests.cpp" />
     <ClCompile Include="src\RuntimeApartmentTests.cpp" />
@@ -107,6 +108,9 @@
     <ClCompile Include="src\TrayTooltipBuilderTests.cpp" />
     <ClCompile Include="src\UpdateCoordinatorTests.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveResourcePolicy.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\LegacyAppUseCaseBridge.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AppController.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
@@ -140,6 +144,7 @@
   <ItemGroup>
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveResourceDiagnostics.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppController.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\LegacyAppUseCaseBridge.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppModels.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveResourcePolicy.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveActionRetryBackoff.hpp" />

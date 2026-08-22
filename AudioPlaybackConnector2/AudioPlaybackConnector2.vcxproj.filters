@@ -181,6 +181,9 @@
     <ClInclude Include="include\app\AppController.hpp">
       <Filter>include\app</Filter>
     </ClInclude>
+    <ClInclude Include="include\app\LegacyAppUseCaseBridge.hpp">
+      <Filter>include\app</Filter>
+    </ClInclude>
     <ClInclude Include="include\control\ControlCommandAdapter.hpp">
       <Filter>include\control</Filter>
     </ClInclude>

@@ -117,14 +117,18 @@ bool SettingsController::SetDeviceAlias(std::wstring const& deviceId,
     return result.DeviceExists;
 }
 
-void SettingsController::SetDefaultDeviceId(std::wstring const& deviceId) {
-    if (!m_settings) return;
+bool SettingsController::SetDefaultDeviceId(std::wstring const& deviceId) {
+    if (!m_settings) return false;
     const auto result = deviceId.empty() ? m_settings->ClearDefaultDevice() : m_settings->SetDefaultDevice(deviceId);
     if (WasApplied(result)) NotifyPresentationChanged();
+    return result.Status != SettingsMutationStatus::Rejected;
 }
 
-void SettingsController::ClearDefaultDevice() {
-    if (m_settings && WasApplied(m_settings->ClearDefaultDevice())) NotifyPresentationChanged();
+bool SettingsController::ClearDefaultDevice() {
+    if (!m_settings) return false;
+    const auto result = m_settings->ClearDefaultDevice();
+    if (WasApplied(result)) NotifyPresentationChanged();
+    return result.Status != SettingsMutationStatus::Rejected;
 }
 
 std::size_t SettingsController::ConnectedDeviceCount() const {

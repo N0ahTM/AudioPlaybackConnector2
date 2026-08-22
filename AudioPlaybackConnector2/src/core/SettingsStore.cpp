@@ -10,7 +10,9 @@
 #include <condition_variable>
 #include <deque>
 #include <atomic>
+#include <limits>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -198,6 +200,8 @@ public:
 } // namespace
 
 struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::Impl> {
+    static_assert(std::is_nothrow_move_assignable_v<SettingsData>);
+
     explicit Impl(std::filesystem::path directory, std::shared_ptr<SettingsStoreStorage> persistenceStorage)
         : persistenceDirectory(std::move(directory)), storage(std::move(persistenceStorage)) {
         if (!storage) storage = std::make_shared<FilesystemSettingsStoreStorage>();
@@ -206,6 +210,7 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
     std::mutex mutex;
     std::mutex publicationMutex;
     std::condition_variable publicationChanged;
+    std::condition_variable shutdownChanged;
     std::condition_variable changed;
     SettingsData data;
     std::uint64_t revision = 0;
@@ -223,6 +228,7 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
     std::deque<Publication> pendingPublications;
     bool publishing = false;
     bool callbackActive = false;
+    std::thread::id publisherThread;
     std::filesystem::path persistenceDirectory;
     std::shared_ptr<SettingsStoreStorage> storage;
     bool timerArmed = false;
@@ -230,6 +236,8 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
     bool writerActive = false;
     bool closing = false;
     bool shutdownRequested = false;
+    bool shutdownCoreComplete = false;
+    bool shutdownResult = false;
     bool discardRequested = false;
     bool synchronousFallback = false;
     bool workerStartKnown = false;
@@ -416,9 +424,14 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
         }
     }
 
-    void EnqueuePublicationLocked(SettingsSnapshot snapshot, std::vector<SnapshotCallback> callbacks) {
-        std::scoped_lock publicationLock(publicationMutex);
+    void EnqueuePublicationWithLockHeld(SettingsSnapshot snapshot, std::vector<SnapshotCallback> callbacks) {
         pendingPublications.push_back({std::move(snapshot), std::move(callbacks)});
+    }
+
+    void DeactivateSubscriptionsLocked() noexcept {
+        for (auto const& [_, entry] : subscriptions)
+            entry.IsActive->store(false, std::memory_order_release);
+        subscriptions.clear();
     }
 
     void DrainPublications() noexcept {
@@ -426,6 +439,7 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
             std::scoped_lock lock(publicationMutex);
             if (publishing) return;
             publishing = true;
+            publisherThread = std::this_thread::get_id();
         }
         while (true) {
             Publication publication;
@@ -433,6 +447,7 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
                 std::scoped_lock lock(publicationMutex);
                 if (pendingPublications.empty()) {
                     publishing = false;
+                    publisherThread = {};
                     publicationChanged.notify_all();
                     return;
                 }
@@ -462,6 +477,12 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
         }
     }
 
+    void WaitForPublicationDrain() noexcept {
+        std::unique_lock publicationLock(publicationMutex);
+        if (publishing && publisherThread == std::this_thread::get_id()) return;
+        publicationChanged.wait(publicationLock, [&] { return !publishing && !callbackActive; });
+    }
+
     template <typename Mutation> [[nodiscard]] SettingsMutationResult Commit(Mutation&& mutation) {
         std::vector<SnapshotCallback> callbacks;
         SettingsSnapshot snapshot;
@@ -470,18 +491,39 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
         {
             std::scoped_lock lock(mutex);
             if (closing || shutdownRequested) return {SettingsMutationStatus::Rejected, revision};
-            if (!mutation(data)) return {SettingsMutationStatus::Unchanged, revision};
-            ++revision;
-            committedRevision = revision;
+            if (revision == std::numeric_limits<std::uint64_t>::max())
+                return {SettingsMutationStatus::Rejected, revision};
+
+            // Keep the drainer from observing a queued publication until the no-throw live-state move below
+            // completes. The state lock is acquired first everywhere in this implementation, so this second
+            // lock cannot introduce a lock-order inversion with the drainer.
+            std::unique_lock publicationLock(publicationMutex, std::defer_lock);
+            if (!subscriptions.empty()) publicationLock.lock();
+
+            // Stage every operation that can allocate or throw against a private candidate. The live state,
+            // revision, timer, and publication queue are untouched until the candidate and callback list are
+            // complete. Enqueuing before the no-throw move commit prevents a subscriber publication from being
+            // lost if a later staging operation fails.
+            SettingsData candidate = data;
+            if (!mutation(candidate)) return {SettingsMutationStatus::Unchanged, revision};
+            committedRevision = revision + 1;
+            if (!subscriptions.empty()) {
+                snapshot = {candidate, committedRevision, committedRevision != persistedRevision};
+                callbacks.reserve(subscriptions.size());
+                for (auto const& [_, entry] : subscriptions) {
+                    callbacks.push_back([entry](SettingsSnapshot const& published) {
+                        if (entry.IsActive->load(std::memory_order_acquire)) entry.Callback(published);
+                    });
+                }
+                EnqueuePublicationWithLockHeld(std::move(snapshot), std::move(callbacks));
+            }
+
+            // SettingsData is statically required to have a no-throw move assignment. From this point on the
+            // commit consists only of no-throw state publication and the notification below is unconditional.
+            data = std::move(candidate);
+            revision = committedRevision;
             timerArmed = true;
             due = std::chrono::steady_clock::now() + c_debounceDelay;
-            snapshot = SnapshotLocked();
-            for (auto const& [_, entry] : subscriptions) {
-                callbacks.push_back([entry](SettingsSnapshot const& published) {
-                    if (entry.IsActive->load(std::memory_order_acquire)) entry.Callback(published);
-                });
-            }
-            EnqueuePublicationLocked(std::move(snapshot), std::move(callbacks));
             useSynchronousFallback = synchronousFallback;
         }
         changed.notify_all();
@@ -654,16 +696,23 @@ void SettingsStore::Load() {
     {
         std::scoped_lock lock(m_impl->mutex);
         if (m_impl->shutdownRequested || m_impl->closing || m_impl->revision != 0) return;
-        m_impl->data = std::move(loaded);
-        ++m_impl->revision;
-        m_impl->persistedRevision = m_impl->revision;
-        snapshot = m_impl->SnapshotLocked();
-        for (auto const& [_, entry] : m_impl->subscriptions) {
-            callbacks.push_back([entry](SettingsSnapshot const& published) {
-                if (entry.IsActive->load(std::memory_order_acquire)) entry.Callback(published);
-            });
+
+        std::unique_lock publicationLock(m_impl->publicationMutex, std::defer_lock);
+        if (!m_impl->subscriptions.empty()) publicationLock.lock();
+        if (!m_impl->subscriptions.empty()) {
+            snapshot = {loaded, 1, false};
+            callbacks.reserve(m_impl->subscriptions.size());
+            for (auto const& [_, entry] : m_impl->subscriptions) {
+                callbacks.push_back([entry](SettingsSnapshot const& published) {
+                    if (entry.IsActive->load(std::memory_order_acquire)) entry.Callback(published);
+                });
+            }
+            m_impl->EnqueuePublicationWithLockHeld(std::move(snapshot), std::move(callbacks));
         }
-        m_impl->EnqueuePublicationLocked(std::move(snapshot), std::move(callbacks));
+
+        m_impl->data = std::move(loaded);
+        m_impl->revision = 1;
+        m_impl->persistedRevision = 1;
     }
     m_impl->DrainPublications();
 }
@@ -711,6 +760,8 @@ SettingsMutationResult SettingsStore::SetSettingsWindowBounds(std::optional<Pers
     });
 }
 SettingsMutationResult SettingsStore::SetDeviceConnectOnStartup(std::wstring_view deviceId, bool enabled) {
+    if (deviceId.empty() || !apc::limits::IsBoundedUtf16(deviceId, apc::limits::c_maxDeviceIdCharacters))
+        return {SettingsMutationStatus::Rejected, Snapshot().Revision};
     return m_impl->Commit([=](auto& data) {
         auto* device = FindDevice(data, deviceId);
         if (!device) return false;
@@ -718,6 +769,8 @@ SettingsMutationResult SettingsStore::SetDeviceConnectOnStartup(std::wstring_vie
     });
 }
 SettingsMutationResult SettingsStore::SetDeviceReconnectOnConnectionLoss(std::wstring_view deviceId, bool enabled) {
+    if (deviceId.empty() || !apc::limits::IsBoundedUtf16(deviceId, apc::limits::c_maxDeviceIdCharacters))
+        return {SettingsMutationStatus::Rejected, Snapshot().Revision};
     return m_impl->Commit([=](auto& data) {
         auto* device = FindDevice(data, deviceId);
         if (!device) return false;
@@ -777,6 +830,8 @@ SettingsMutationResult SettingsStore::ClearDefaultDevice() {
     });
 }
 SettingsMutationResult SettingsStore::ForgetDevice(std::wstring_view deviceId) {
+    if (deviceId.empty() || !apc::limits::IsBoundedUtf16(deviceId, apc::limits::c_maxDeviceIdCharacters))
+        return {SettingsMutationStatus::Rejected, Snapshot().Revision};
     return m_impl->Commit([deviceId = std::wstring(deviceId)](auto& data) {
         const auto before = data.Devices.size() + data.LastConnectedIds.size();
         const auto defaultWasRemoved = data.DefaultDeviceId == deviceId;
@@ -799,6 +854,7 @@ RecordConnectedDeviceResult SettingsStore::RecordConnectedDevice(std::wstring_vi
     }
     result.Mutation =
         m_impl->Commit([&result, deviceId = std::wstring(deviceId), deviceName = std::wstring(deviceName)](auto& data) {
+            result.EffectiveReconnectOnConnectionLoss = data.GlobalReconnectOnConnectionLoss;
             auto* device = FindDevice(data, deviceId);
             if (!device) {
                 if (data.Devices.size() < apc::limits::c_maxPersistedDeviceCount) {
@@ -815,7 +871,7 @@ RecordConnectedDeviceResult SettingsStore::RecordConnectedDevice(std::wstring_vi
             if (device) {
                 result.ConnectOnStartup = device->ConnectOnStartup;
                 result.EffectiveReconnectOnConnectionLoss =
-                    data.GlobalReconnectOnConnectionLoss || device->ReconnectOnConnectionLoss;
+                    result.EffectiveReconnectOnConnectionLoss || device->ReconnectOnConnectionLoss;
             }
             const auto before = data.LastConnectedIds;
             std::erase(data.LastConnectedIds, deviceId);
@@ -844,21 +900,33 @@ bool SettingsStore::FlushNow(unsigned int maximumAttempts) noexcept {
 
 bool SettingsStore::Shutdown(SettingsShutdownMode mode, unsigned int maximumAttempts) noexcept {
     if (!m_impl) return true;
+    bool isShutdownExecutor = false;
+    bool shutdownResult = false;
     {
-        std::scoped_lock lock(m_impl->mutex);
-        if (m_impl->shutdownRequested || m_impl->closing) return true;
-        m_impl->closing = true;
-        m_impl->timerArmed = false;
+        std::unique_lock lock(m_impl->mutex);
+        if (m_impl->closing) {
+            m_impl->shutdownChanged.wait(lock, [&] { return m_impl->shutdownCoreComplete; });
+            shutdownResult = m_impl->shutdownResult;
+        } else {
+            isShutdownExecutor = true;
+            m_impl->closing = true;
+            m_impl->timerArmed = false;
+            m_impl->DeactivateSubscriptionsLocked();
+        }
     }
+
+    if (!isShutdownExecutor) {
+        m_impl->WaitForPublicationDrain();
+        return shutdownResult;
+    }
+
     m_impl->changed.notify_all();
-    const auto flushed = mode == SettingsShutdownMode::Flush ? FlushNow(maximumAttempts) : true;
+    shutdownResult = mode == SettingsShutdownMode::Flush ? FlushNow(maximumAttempts) : true;
     {
         std::scoped_lock lock(m_impl->mutex);
-        if (m_impl->shutdownRequested) return flushed;
         m_impl->shutdownRequested = true;
         m_impl->discardRequested = mode == SettingsShutdownMode::DiscardStartupFailure;
         m_impl->timerArmed = false;
-        m_impl->subscriptions.clear();
     }
     {
         std::scoped_lock publicationLock(m_impl->publicationMutex);
@@ -869,7 +937,12 @@ bool SettingsStore::Shutdown(SettingsShutdownMode mode, unsigned int maximumAtte
         m_impl->worker.request_stop();
         m_impl->worker.join();
     }
-    std::unique_lock publicationLock(m_impl->publicationMutex);
-    m_impl->publicationChanged.wait(publicationLock, [&] { return !m_impl->publishing && !m_impl->callbackActive; });
-    return flushed;
+    {
+        std::scoped_lock lock(m_impl->mutex);
+        m_impl->shutdownResult = shutdownResult;
+        m_impl->shutdownCoreComplete = true;
+    }
+    m_impl->shutdownChanged.notify_all();
+    m_impl->WaitForPublicationDrain();
+    return shutdownResult;
 }

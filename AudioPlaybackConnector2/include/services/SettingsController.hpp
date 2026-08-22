@@ -33,8 +33,8 @@ public:
     virtual void SetDeviceReconnectOnConnectionLoss(std::wstring const& deviceId, bool enabled) = 0;
     virtual bool
     SetDeviceAlias(std::wstring const& deviceId, std::wstring alias, std::wstring const& deviceName = {}) = 0;
-    virtual void SetDefaultDeviceId(std::wstring const& deviceId) = 0;
-    virtual void ClearDefaultDevice() = 0;
+    virtual bool SetDefaultDeviceId(std::wstring const& deviceId) = 0;
+    virtual bool ClearDefaultDevice() = 0;
     [[nodiscard]] virtual std::size_t ConnectedDeviceCount() const = 0;
     virtual void ForgetDevice(std::wstring const& deviceId) = 0;
 };
@@ -58,8 +58,8 @@ public:
     void SetDeviceConnectOnStartup(std::wstring const& deviceId, bool enabled) override;
     void SetDeviceReconnectOnConnectionLoss(std::wstring const& deviceId, bool enabled) override;
     bool SetDeviceAlias(std::wstring const& deviceId, std::wstring alias, std::wstring const& deviceName = {}) override;
-    void SetDefaultDeviceId(std::wstring const& deviceId) override;
-    void ClearDefaultDevice() override;
+    bool SetDefaultDeviceId(std::wstring const& deviceId) override;
+    bool ClearDefaultDevice() override;
     [[nodiscard]] std::size_t ConnectedDeviceCount() const override;
     void ForgetDevice(std::wstring const& deviceId) override;
 

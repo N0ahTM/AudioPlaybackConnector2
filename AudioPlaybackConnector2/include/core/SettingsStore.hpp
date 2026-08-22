@@ -53,8 +53,9 @@ public:
     virtual void PreserveCorrupt(std::filesystem::path const& path) noexcept = 0;
 };
 
-// Owns all mutable settings and its sole persistence worker. Public operations are thread-safe;
-// notifications run synchronously on the caller that committed the change, outside store locks.
+// Owns all mutable settings and its sole persistence worker. Public operations are thread-safe.
+// Subscriber callbacks are dispatched by a no-lock publication drain after commit; they may run on the
+// committing thread or an already-active publisher. Reentrant changes are queued and drained in revision order.
 class SettingsStore final {
 public:
     class Subscription final {
@@ -111,6 +112,8 @@ public:
 
     // A synchronous boundary for suspend and normal shutdown. It waits for the active attempt,
     // then writes the newest captured revision without ever overlapping the background worker.
+    // Shutdown has one executor; concurrent callers receive its stored core result and wait for publication
+    // drain unless they are the active publisher invoking shutdown from a callback.
     [[nodiscard]] bool FlushNow(unsigned int maximumAttempts = 1) noexcept;
     [[nodiscard]] bool Shutdown(SettingsShutdownMode mode, unsigned int maximumAttempts = 3) noexcept;
 

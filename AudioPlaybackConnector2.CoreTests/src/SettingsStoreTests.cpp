@@ -12,6 +12,7 @@
 #include <iostream>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -275,6 +276,56 @@ void TestNoOpAndTypedMutationResults() {
     static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
 }
 
+void TestDeviceIdValidationRejectsWithoutRevision() {
+    auto storage = std::make_shared<ControlledStorage>();
+    SettingsStore store({}, storage);
+    const auto initialRevision = store.Snapshot().Revision;
+    const std::vector<std::wstring> invalidIds{L"",
+                                               std::wstring(apc::limits::c_maxDeviceIdCharacters + 1, L'x'),
+                                               std::wstring(1, static_cast<wchar_t>(0xD800))};
+    for (auto const& id : invalidIds) {
+        const auto connect = store.SetDeviceConnectOnStartup(id, true);
+        Check(connect.Status == SettingsMutationStatus::Rejected && connect.Revision == initialRevision,
+              "invalid connect-on-startup IDs must be rejected without a revision");
+        const auto reconnect = store.SetDeviceReconnectOnConnectionLoss(id, true);
+        Check(reconnect.Status == SettingsMutationStatus::Rejected && reconnect.Revision == initialRevision,
+              "invalid reconnect IDs must be rejected without a revision");
+        const auto forget = store.ForgetDevice(id);
+        Check(forget.Status == SettingsMutationStatus::Rejected && forget.Revision == initialRevision,
+              "invalid forget IDs must be rejected without a revision");
+    }
+    Check(store.Snapshot().Revision == initialRevision, "rejected device IDs must not advance the store revision");
+    static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+}
+
+void TestRecordConnectedDeviceEffectiveReconnectPolicy() {
+    auto storage = std::make_shared<ControlledStorage>();
+    SettingsStore store({}, storage);
+    const auto first = store.RecordConnectedDevice(L"known", L"Known");
+    Check(first.AddedDevice && !first.EffectiveReconnectOnConnectionLoss,
+          "new devices must start with the global reconnect policy");
+    Check(store.SetDeviceReconnectOnConnectionLoss(L"known", true).IsApplied(),
+          "an existing per-device reconnect policy must apply");
+    const auto known = store.RecordConnectedDevice(L"known", L"Known");
+    Check(known.EffectiveReconnectOnConnectionLoss,
+          "recording a known device must OR its per-device policy with the global policy");
+
+    for (std::size_t index = 1; index < apc::limits::c_maxPersistedDeviceCount; ++index) {
+        const auto id = L"device-" + std::to_wstring(index);
+        const auto added = store.RecordConnectedDevice(id, L"Device");
+        Check(added.Mutation.Status == SettingsMutationStatus::Applied,
+              "the bounded device table must accept each unique device up to its limit");
+    }
+    Check(store.Snapshot().Data.Devices.size() == apc::limits::c_maxPersistedDeviceCount,
+          "the device table must reach its configured bound");
+    Check(store.SetGlobalReconnectOnConnectionLoss(true).IsApplied(),
+          "the global reconnect policy must apply before the overflow record");
+    const auto overflow = store.RecordConnectedDevice(L"overflow", L"Overflow");
+    Check(!overflow.AddedDevice && overflow.EffectiveReconnectOnConnectionLoss,
+          "an overflow device must still report the global effective reconnect policy");
+    static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+}
+
 void TestMutationDuringBlockedWriteAndFinalFlush() {
     auto storage = std::make_shared<ControlledStorage>();
     storage->BlockWrites();
@@ -305,6 +356,41 @@ void TestSubscriptionsAreOrderedAndReentrant() {
           "subscriptions must publish committed revisions in order and allow reentrancy");
     subscription.Reset();
     static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+}
+
+void TestSubscriberInitiatedShutdownDoesNotDeadlock() {
+    auto storage = std::make_shared<ControlledStorage>();
+    SettingsStore store({}, storage);
+    bool callbackReturned = false;
+    auto subscription = store.Subscribe([&](SettingsSnapshot const&) {
+        Check(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure),
+              "subscriber-initiated shutdown must complete and report its core result");
+        callbackReturned = true;
+    });
+    Check(store.SetPrivacyModeEnabled(true).IsApplied(), "the mutation driving subscriber shutdown must apply");
+    Check(callbackReturned, "subscriber-initiated shutdown must return control to the publisher");
+    Check(store.Shutdown(SettingsShutdownMode::Flush),
+          "shutdown after a subscriber-initiated shutdown must return the stored result");
+    subscription.Reset();
+}
+
+void TestConcurrentShutdownCallersShareCoreResult() {
+    auto storage = std::make_shared<ControlledStorage>();
+    storage->BlockWrites();
+    storage->m_failWrites = 2;
+    SettingsStore store({}, storage);
+    static_cast<void>(store.SetLanguage(L"de"));
+
+    bool firstResult = true;
+    bool secondResult = true;
+    std::jthread first([&] { firstResult = store.Shutdown(SettingsShutdownMode::Flush, 1); });
+    storage->WaitForWrite();
+    std::jthread second([&] { secondResult = store.Shutdown(SettingsShutdownMode::DiscardStartupFailure, 1); });
+    storage->ReleaseWrites();
+    first.join();
+    second.join();
+    Check(!firstResult && !secondResult,
+          "concurrent shutdown callers must wait for and return the executor's stored flush result");
 }
 
 void TestRetryAndDiscardShutdown() {
@@ -350,8 +436,12 @@ int RunSettingsStoreTests() {
     TestReplacementFailurePreservesOldBytesAndCleansTemporaryFile();
     TestOversizedInputIsPreserved();
     TestNoOpAndTypedMutationResults();
+    TestDeviceIdValidationRejectsWithoutRevision();
+    TestRecordConnectedDeviceEffectiveReconnectPolicy();
     TestMutationDuringBlockedWriteAndFinalFlush();
     TestSubscriptionsAreOrderedAndReentrant();
+    TestSubscriberInitiatedShutdownDoesNotDeadlock();
+    TestConcurrentShutdownCallersShareCoreResult();
     TestRetryAndDiscardShutdown();
     TestNormalShutdownFlushAndNoLateCallback();
     return g_failures;

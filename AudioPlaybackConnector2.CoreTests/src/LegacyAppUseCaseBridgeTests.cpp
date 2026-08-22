@@ -1,4 +1,5 @@
 #include <app/LegacyAppUseCaseBridge.hpp>
+#include <app/DeviceFactPublicationFence.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -22,6 +23,7 @@ using apc::app::AppOutcomeReason;
 using apc::app::AppResultCode;
 using apc::app::AppSnapshot;
 using apc::app::DeviceConnectionState;
+using apc::app::DeviceFactPublicationFence;
 using apc::app::DeviceSelector;
 using apc::app::DeviceSelectorKind;
 using apc::app::LegacyAppUseCaseBridge;
@@ -991,6 +993,92 @@ void TestAuthoritativeBusyFactSurvivesSnapshotNormalization() {
     Check(toggle.Code == AppResultCode::Busy, "tray toggle must reject a target with an authoritative busy fact");
 }
 
+void TestQueuedConnectedFactCannotResurrectClosedSnapshot() {
+    Harness harness;
+    harness.LiveDevices = {Device(L"target", L"Target")};
+    harness.AddSettingsDevice(harness.LiveDevices.front());
+    DeviceFactPublicationFence fence;
+
+    const auto queuedConnected = fence.RecordConnected(L"target");
+    const auto queuedDisconnected = fence.RecordDisconnected(L"target");
+    const auto queuedIdle = fence.RecordStatus(L"target", DeviceFactPublicationFence::Status::None);
+    const auto connectedFactSuperseded = !fence.IsCurrent(queuedConnected);
+
+    std::optional<AppEvent> connectedEvent;
+    if (fence.IsCurrent(queuedConnected)) {
+        connectedEvent = harness.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceConnected,
+                                                 L"target",
+                                                 DeviceConnectionState::Connected,
+                                                 AppResultCode::Success});
+    }
+    std::optional<AppEvent> disconnectedEvent;
+    if (fence.IsCurrent(queuedDisconnected)) {
+        disconnectedEvent = harness.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceDisconnected,
+                                                    L"target",
+                                                    DeviceConnectionState::Idle,
+                                                    AppResultCode::Success});
+    }
+    std::optional<AppEvent> idleEvent;
+    if (fence.IsCurrent(queuedIdle)) {
+        idleEvent = harness.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceStatusChanged,
+                                            L"target",
+                                            DeviceConnectionState::Idle,
+                                            AppResultCode::Success});
+    }
+
+    const auto snapshot = harness.Bridge.Snapshot();
+    Check(connectedFactSuperseded && !connectedEvent && disconnectedEvent && idleEvent &&
+              snapshot.Devices.size() == 1 && snapshot.Devices.front().State == DeviceConnectionState::Idle &&
+              !snapshot.Devices.front().IsConnected && !snapshot.Tray.HasBusyOperations,
+          "a queued connected fact superseded by close must not publish an event or resurrect the closed snapshot");
+}
+
+void TestQueuedStatusFactCannotOverwriteNewerStatus() {
+    Harness harness;
+    harness.LiveDevices = {Device(L"target", L"Target")};
+    harness.AddSettingsDevice(harness.LiveDevices.front());
+    DeviceFactPublicationFence fence;
+
+    const auto queuedConnected = fence.RecordConnected(L"target");
+    const auto queuedConnecting = fence.RecordStatus(L"target", DeviceFactPublicationFence::Status::Connecting);
+    const auto queuedFailure = fence.RecordStatus(L"target", DeviceFactPublicationFence::Status::Error);
+    const auto connectedFactSuperseded = !fence.IsCurrent(queuedConnected);
+
+    std::optional<AppEvent> connectingEvent;
+    if (fence.IsCurrent(queuedConnecting)) {
+        connectingEvent = harness.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceStatusChanged,
+                                                  L"target",
+                                                  DeviceConnectionState::Connecting,
+                                                  AppResultCode::Success});
+    }
+    std::optional<AppEvent> failureEvent;
+    if (fence.IsCurrent(queuedFailure)) {
+        failureEvent = harness.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceStatusChanged,
+                                               L"target",
+                                               DeviceConnectionState::Failed,
+                                               AppResultCode::OperationFailed});
+    }
+
+    const auto snapshot = harness.Bridge.Snapshot();
+    Check(connectedFactSuperseded && !connectingEvent && failureEvent && snapshot.Devices.size() == 1 &&
+              snapshot.Devices.front().State == DeviceConnectionState::Failed && !snapshot.Devices.front().IsBusy,
+          "a queued status fact superseded before UI drain must not publish or overwrite the newer typed state");
+}
+
+void TestDuplicateQueuedFactsRemainCurrentUntilTheStateChanges() {
+    DeviceFactPublicationFence fence;
+
+    const auto firstConnecting = fence.RecordStatus(L"target", DeviceFactPublicationFence::Status::Connecting);
+    const auto duplicateConnecting = fence.RecordStatus(L"target", DeviceFactPublicationFence::Status::Connecting);
+    const auto duplicatesCurrent = fence.IsCurrent(firstConnecting) && fence.IsCurrent(duplicateConnecting);
+    const auto connected = fence.RecordConnected(L"target");
+    const auto connectedStatus = fence.RecordStatus(L"target", DeviceFactPublicationFence::Status::Connected);
+
+    Check(duplicatesCurrent && !fence.IsCurrent(firstConnecting) && !fence.IsCurrent(duplicateConnecting) &&
+              fence.IsCurrent(connected) && fence.IsCurrent(connectedStatus),
+          "duplicate source facts and paired connected status must remain publishable while their state is current");
+}
+
 } // namespace
 
 int RunLegacyAppUseCaseBridgeTests() {
@@ -1015,5 +1103,8 @@ int RunLegacyAppUseCaseBridgeTests() {
     TestMissingMutationCallbacksFailClosed();
     TestExternalSnapshotIdPreservesP01LengthAndBoundedConversion();
     TestAuthoritativeBusyFactSurvivesSnapshotNormalization();
+    TestQueuedConnectedFactCannotResurrectClosedSnapshot();
+    TestQueuedStatusFactCannotOverwriteNewerStatus();
+    TestDuplicateQueuedFactsRemainCurrentUntilTheStateChanges();
     return g_failures;
 }

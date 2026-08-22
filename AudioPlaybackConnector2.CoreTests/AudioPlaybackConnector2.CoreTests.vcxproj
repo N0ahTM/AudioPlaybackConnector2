@@ -144,6 +144,7 @@
   <ItemGroup>
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveResourceDiagnostics.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppController.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\DeviceFactPublicationFence.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\LegacyAppUseCaseBridge.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppModels.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\SettingsWindowCommandExecutor.hpp" />

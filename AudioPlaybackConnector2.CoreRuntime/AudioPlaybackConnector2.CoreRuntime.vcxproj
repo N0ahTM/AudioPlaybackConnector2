@@ -82,6 +82,7 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveScheduleState.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AutoReconnectPlanner.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ControlUiActionGate.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\DeviceFactPublicationFence.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\DeviceEventRouter.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\LatestStartupTaskRequestState.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\PowerTransitionCoordinator.hpp" />

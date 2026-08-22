@@ -1627,6 +1627,10 @@ void ApplicationHost::SetupDeviceEvents() {
     DeviceEventRouter::Callbacks callbacks;
     callbacks.DeviceConnected = [weak](auto const& id) {
         if (auto self = weak.lock()) {
+            // The router rejects superseded queued events. Recheck the authoritative session at
+            // publication time too, because DeviceConnected carries a state overlay into the
+            // controller snapshot and must never revive a closed session.
+            if (!self->m_deviceManager || !self->m_deviceManager->IsDeviceConnected(id)) return;
             self->OnDeviceConnected(id);
             self->PublishDeviceFact({.Kind = Bridge::FactKind::DeviceConnected, .Id = std::wstring(id)});
         }

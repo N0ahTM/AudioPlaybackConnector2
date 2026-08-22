@@ -1,5 +1,6 @@
 #include <pch.h>
 
+#include <app/DeviceFactPublicationFence.hpp>
 #include <app/DeviceEventRouter.hpp>
 
 #include <core/DeviceManager.hpp>
@@ -8,6 +9,7 @@ struct DeviceEventRouter::State {
     std::atomic<bool> active = true;
     std::atomic<bool> deviceActivityDispatchPending = false;
     std::atomic<bool> deviceInventoryDispatchPending = false;
+    apc::app::DeviceFactPublicationFence deviceFactPublicationFence;
     UiDispatcher dispatcher;
     Callbacks callbacks;
 };
@@ -37,41 +39,82 @@ void DeviceEventRouter::Attach(std::shared_ptr<DeviceManager> deviceManager,
 
     auto state = m_state;
     m_deviceConnectedToken = m_deviceManager->DeviceConnected += [state](winrt::hstring id) {
-        static_cast<void>(Dispatch(state, [state, id = std::move(id)]() {
-            if (!state->active.load() || !state->callbacks.DeviceConnected) return;
+        const auto token = state->deviceFactPublicationFence.RecordConnected(id);
+        static_cast<void>(Dispatch(state, [state, id = std::move(id), token = std::move(token)]() {
+            if (!state->active.load() || !state->deviceFactPublicationFence.IsCurrent(token) ||
+                !state->callbacks.DeviceConnected) {
+                return;
+            }
             state->callbacks.DeviceConnected(id);
         }));
     };
     m_deviceDisconnectedToken = m_deviceManager->DeviceDisconnected += [state](winrt::hstring id) {
-        static_cast<void>(Dispatch(state, [state, id = std::move(id)]() {
-            if (!state->active.load() || !state->callbacks.DeviceDisconnected) return;
+        const auto token = state->deviceFactPublicationFence.RecordDisconnected(id);
+        static_cast<void>(Dispatch(state, [state, id = std::move(id), token = std::move(token)]() {
+            if (!state->active.load() || !state->deviceFactPublicationFence.IsCurrent(token) ||
+                !state->callbacks.DeviceDisconnected) {
+                return;
+            }
             state->callbacks.DeviceDisconnected(id);
         }));
     };
     m_connectionErrorToken = m_deviceManager->ConnectionError += [state](winrt::hstring id, winrt::hstring msg) {
-        static_cast<void>(Dispatch(state, [state, id = std::move(id), msg = std::move(msg)]() {
-            if (!state->active.load() || !state->callbacks.ConnectionError) return;
-            state->callbacks.ConnectionError(id, msg);
-        }));
+        const auto token =
+            state->deviceFactPublicationFence.RecordStatus(id, apc::app::DeviceFactPublicationFence::Status::Error);
+        static_cast<void>(
+            Dispatch(state, [state, id = std::move(id), msg = std::move(msg), token = std::move(token)]() {
+                if (!state->active.load() || !state->deviceFactPublicationFence.IsCurrent(token) ||
+                    !state->callbacks.ConnectionError) {
+                    return;
+                }
+                state->callbacks.ConnectionError(id, msg);
+            }));
     };
     m_autoReconnectTriggeredToken = m_deviceManager->AutoReconnectTriggered += [state](winrt::hstring id) {
-        static_cast<void>(Dispatch(state, [state, id = std::move(id)]() {
-            if (!state->active.load() || !state->callbacks.AutoReconnectTriggered) return;
+        const auto token = state->deviceFactPublicationFence.RecordStatus(
+            id, apc::app::DeviceFactPublicationFence::Status::WaitingForReconnect);
+        static_cast<void>(Dispatch(state, [state, id = std::move(id), token = std::move(token)]() {
+            if (!state->active.load() || !state->deviceFactPublicationFence.IsCurrent(token) ||
+                !state->callbacks.AutoReconnectTriggered) {
+                return;
+            }
             state->callbacks.AutoReconnectTriggered(id);
         }));
     };
     m_autoReconnectFailedToken = m_deviceManager->AutoReconnectFailed += [state](winrt::hstring id) {
-        static_cast<void>(Dispatch(state, [state, id = std::move(id)]() {
-            if (!state->active.load() || !state->callbacks.AutoReconnectFailed) return;
+        const auto token =
+            state->deviceFactPublicationFence.RecordStatus(id, apc::app::DeviceFactPublicationFence::Status::Error);
+        static_cast<void>(Dispatch(state, [state, id = std::move(id), token = std::move(token)]() {
+            if (!state->active.load() || !state->deviceFactPublicationFence.IsCurrent(token) ||
+                !state->callbacks.AutoReconnectFailed) {
+                return;
+            }
             state->callbacks.AutoReconnectFailed(id);
         }));
     };
     m_deviceStatusChangedToken = m_deviceManager->DeviceStatusChanged +=
         [state](auto id, auto status, auto, DeviceStatusKind statusKind) {
-            static_cast<void>(Dispatch(state, [state, id = std::move(id), status = std::move(status), statusKind]() {
-                if (!state->active.load() || !state->callbacks.DeviceStatusChanged) return;
-                state->callbacks.DeviceStatusChanged(id, status, statusKind);
-            }));
+            using FenceStatus = apc::app::DeviceFactPublicationFence::Status;
+            const auto fenceStatus = [&] {
+                switch (statusKind) {
+                    case DeviceStatusKind::None: return FenceStatus::None;
+                    case DeviceStatusKind::Ready: return FenceStatus::Ready;
+                    case DeviceStatusKind::Connecting: return FenceStatus::Connecting;
+                    case DeviceStatusKind::Reconnecting: return FenceStatus::Reconnecting;
+                    case DeviceStatusKind::Connected: return FenceStatus::Connected;
+                    case DeviceStatusKind::Error: return FenceStatus::Error;
+                }
+                return FenceStatus::None;
+            }();
+            const auto token = state->deviceFactPublicationFence.RecordStatus(id, fenceStatus);
+            static_cast<void>(Dispatch(
+                state, [state, id = std::move(id), status = std::move(status), statusKind, token = std::move(token)]() {
+                    if (!state->active.load() || !state->deviceFactPublicationFence.IsCurrent(token) ||
+                        !state->callbacks.DeviceStatusChanged) {
+                        return;
+                    }
+                    state->callbacks.DeviceStatusChanged(id, status, statusKind);
+                }));
         };
     m_deviceActivityChangedToken = m_deviceManager->DeviceActivityChanged += [state](auto id) {
         (void)id;

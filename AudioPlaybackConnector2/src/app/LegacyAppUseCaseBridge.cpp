@@ -48,6 +48,20 @@ bool IsBusyState(DeviceConnectionState state) noexcept {
 LegacyAppUseCaseBridge::LegacyAppUseCaseBridge(Operations operations, SettingsData settings)
     : m_operations(std::move(operations)), m_settings(std::move(settings)) {}
 
+LegacyAppUseCaseBridge::CallLease::CallLease(LegacyAppUseCaseBridge const& owner) noexcept : m_owner(owner) {
+    std::scoped_lock lock(m_owner.m_stateMutex);
+    if (!m_owner.m_running) return;
+    ++m_owner.m_activeCalls;
+    m_acquired = true;
+}
+
+LegacyAppUseCaseBridge::CallLease::~CallLease() {
+    if (!m_acquired) return;
+    std::scoped_lock lock(m_owner.m_stateMutex);
+    --m_owner.m_activeCalls;
+    if (m_owner.m_activeCalls == 0) m_owner.m_noActiveCalls.notify_all();
+}
+
 AppResult LegacyAppUseCaseBridge::Execute(AppCommand command, AppCommandContext context) noexcept {
     AppResult preflight;
     preflight.Command = command.Kind;
@@ -55,12 +69,8 @@ AppResult LegacyAppUseCaseBridge::Execute(AppCommand command, AppCommandContext 
         preflight.Code = AppResultCode::InvalidInput;
         return preflight;
     }
-    bool isRunning = true;
-    {
-        std::scoped_lock lock(m_stateMutex);
-        isRunning = m_running;
-    }
-    if (!isRunning) return MakeFailure(command.Kind, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
+    CallLease lease(*this);
+    if (!lease.Acquired()) return MakeFailure(command.Kind, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
     if (context.IsCancellationRequested()) {
         preflight.Code = AppResultCode::Cancelled;
         if (command.Kind == AppCommandKind::ReconnectAll) preflight.Reason = AppOutcomeReason::NotReady;
@@ -88,14 +98,13 @@ AppResult LegacyAppUseCaseBridge::Execute(AppCommand command, AppCommandContext 
 
 AppSnapshot LegacyAppUseCaseBridge::Snapshot() const noexcept {
     try {
-        {
+        CallLease lease(*this);
+        if (!lease.Acquired()) {
+            AppSnapshot unavailable;
             std::scoped_lock lock(m_stateMutex);
-            if (!m_running) {
-                AppSnapshot unavailable;
-                unavailable.Generation = m_generation;
-                unavailable.IsRunning = false;
-                return unavailable;
-            }
+            unavailable.Generation = m_generation;
+            unavailable.IsRunning = false;
+            return unavailable;
         }
         if (!SyncSettingsFromSource()) {
             AppSnapshot unavailable;
@@ -113,11 +122,13 @@ AppSnapshot LegacyAppUseCaseBridge::Snapshot() const noexcept {
 
 std::optional<AppEvent> LegacyAppUseCaseBridge::Observe(DeviceFact fact) noexcept {
     try {
+        CallLease lease(*this);
+        if (!lease.Acquired()) return std::nullopt;
         const bool requiresId =
             fact.Kind != FactKind::DeviceActivityChanged && fact.Kind != FactKind::DeviceInventoryChanged;
-        std::optional<apc::core::DeviceId> id;
+        std::optional<ExternalDeviceId> id;
         if (requiresId) {
-            id = TryDeviceId(fact.Id);
+            id = ExternalDeviceId::TryCreate(fact.Id);
             if (!id) return std::nullopt;
         }
 
@@ -172,13 +183,16 @@ std::optional<AppEvent> LegacyAppUseCaseBridge::Observe(DeviceFact fact) noexcep
 
 void LegacyAppUseCaseBridge::SetRunning(bool running) noexcept {
     try {
-        std::scoped_lock lock(m_stateMutex);
+        std::unique_lock lock(m_stateMutex);
         // Shutdown is monotonic.  A late composition callback must not make a
         // stopped bridge advertise a live app or accept another command.
         if (!m_running) return;
         if (running) return;
         m_running = running;
         AdvanceGeneration(m_generation);
+        // Do not retain the state lock while waiting: admitted commands may
+        // need it to finish their final state update after an external call.
+        m_noActiveCalls.wait(lock, [this] { return m_activeCalls == 0; });
     } catch (...) {
     }
 }

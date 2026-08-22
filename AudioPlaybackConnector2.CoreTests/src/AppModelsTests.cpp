@@ -174,6 +174,12 @@ void TestSnapshotsEventsAndCommandContextAreValueOnly() {
     Check(std::holds_alternative<apc::app::DeviceConnectedEvent>(connected) &&
               std::holds_alternative<apc::app::DeviceStatusChangedEvent>(status),
           "device facts must remain typed variants rather than stringly events");
+    const std::wstring longEventId(513, L'e');
+    const auto externalEventId = apc::app::ExternalDeviceId::TryCreate(longEventId);
+    AppEvent longConnected = apc::app::DeviceConnectedEvent{*externalEventId};
+    Check(externalEventId && std::get<apc::app::DeviceConnectedEvent>(longConnected).Id.View() == longEventId &&
+              !std::get<apc::app::DeviceConnectedEvent>(longConnected).Id.Bounded(),
+          "typed device events must use the P01 external identity rather than the persistence-bounded DeviceId");
     AppEvent activity = apc::app::DeviceActivityChangedEvent{};
     AppEvent inventory = apc::app::DeviceInventoryChangedEvent{};
     Check(std::holds_alternative<apc::app::DeviceActivityChangedEvent>(activity) &&

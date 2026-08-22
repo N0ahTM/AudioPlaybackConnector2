@@ -1,10 +1,14 @@
 #include <app/LegacyAppUseCaseBridge.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <string_view>
+#include <thread>
 #include <variant>
 #include <vector>
 
@@ -649,6 +653,91 @@ void TestShutdownIsMonotonicAndRejectsCallbacks() {
           "post-shutdown requests must not invoke settings, device, or mutation callbacks");
 }
 
+void TestShutdownClosesAdmissionBeforeTearingDownCallbacks() {
+    SettingsData settings;
+    std::mutex callbackMutex;
+    std::condition_variable callbackEntered;
+    std::condition_variable releaseCallback;
+    bool hasEnteredCallback = false;
+    bool canCompleteCallback = false;
+    int settingsReadCalls = 0;
+    int settingsMutationCalls = 0;
+    int settingsUiCalls = 0;
+    LegacyAppUseCaseBridge::Operations operations;
+    operations.ReadSettings = [&] {
+        ++settingsReadCalls;
+        return settings;
+    };
+    operations.ClearDefaultDevice = [&] {
+        std::unique_lock lock(callbackMutex);
+        hasEnteredCallback = true;
+        callbackEntered.notify_all();
+        releaseCallback.wait(lock, [&] { return canCompleteCallback; });
+        ++settingsMutationCalls;
+        return true;
+    };
+    operations.ShowSettings = [&](AppCommandContext const&) {
+        ++settingsUiCalls;
+        return LegacyAppUseCaseBridge::UiActionResult{OperationStatus::Succeeded, std::nullopt};
+    };
+    LegacyAppUseCaseBridge bridge(std::move(operations), settings);
+    AppResultCode commandResult = AppResultCode::InternalError;
+    std::thread commandThread([&] { commandResult = bridge.Execute(Command(AppCommandKind::ClearDefault)).Code; });
+
+    {
+        std::unique_lock lock(callbackMutex);
+        callbackEntered.wait(lock, [&] { return hasEnteredCallback; });
+    }
+
+    std::atomic_bool shutdownStarted = false;
+    std::atomic_bool shutdownReturned = false;
+    std::thread shutdownThread([&] {
+        shutdownStarted.store(true, std::memory_order_release);
+        bridge.SetRunning(false);
+        shutdownReturned.store(true, std::memory_order_release);
+    });
+    while (!shutdownStarted.load(std::memory_order_acquire))
+        std::this_thread::yield();
+    while (bridge.Snapshot().IsRunning)
+        std::this_thread::yield();
+    Check(!shutdownReturned.load(std::memory_order_acquire),
+          "shutdown must wait for an admitted callback before returning to host teardown");
+
+    {
+        std::scoped_lock lock(callbackMutex);
+        canCompleteCallback = true;
+    }
+    releaseCallback.notify_all();
+    commandThread.join();
+    shutdownThread.join();
+
+    Check(commandResult == AppResultCode::Success && settingsMutationCalls == 1,
+          "the admitted command must complete exactly once before shutdown returns");
+    const auto readsBeforeStoppedRequest = settingsReadCalls;
+    const auto stoppedMutation = bridge.Execute(Command(AppCommandKind::ClearDefault));
+    const auto stoppedUi = bridge.Execute(Command(AppCommandKind::ShowSettings));
+    Check(shutdownReturned.load(std::memory_order_acquire) && stoppedMutation.Code == AppResultCode::Unavailable &&
+              stoppedUi.Code == AppResultCode::Unavailable && settingsReadCalls == readsBeforeStoppedRequest &&
+              settingsMutationCalls == 1 && settingsUiCalls == 0,
+          "after shutdown returns no command may invoke a read, mutation, or UI callback");
+}
+
+void TestFactsAfterShutdownDoNotPublishOrChangeBridgeState() {
+    Harness harness;
+    harness.LiveDevices = {Device(L"target", L"Target")};
+    harness.AddSettingsDevice(harness.LiveDevices.front());
+    harness.Bridge.SetRunning(false);
+    const auto stoppedSnapshot = harness.Bridge.Snapshot();
+    const auto ignored = harness.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceStatusChanged,
+                                                 L"target",
+                                                 DeviceConnectionState::Connecting,
+                                                 AppResultCode::OperationFailed});
+    const auto afterIgnoredFact = harness.Bridge.Snapshot();
+    Check(!ignored && stoppedSnapshot.Generation == afterIgnoredFact.Generation && !afterIgnoredFact.IsRunning &&
+              afterIgnoredFact.Devices.empty(),
+          "facts arriving after shutdown must be rejected without publication or state/generation changes");
+}
+
 void TestTerminalFactsClearObservedBusyState() {
     Harness harness;
     harness.LiveDevices = {Device(L"target", L"Target")};
@@ -726,6 +815,17 @@ void TestExternalSnapshotIdPreservesP01LengthAndBoundedConversion() {
           "list/status snapshots must retain a valid P01 ID beyond the bounded persistence identity");
     Check(snapshot.Tray.ConnectedDevices.size() == 1 && snapshot.Tray.ConnectedDevices.front().Id.View() == longId,
           "connected tray snapshot entries must retain the same long external ID");
+    const auto event = harness.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceStatusChanged,
+                                               longId,
+                                               DeviceConnectionState::Connecting,
+                                               AppResultCode::OperationFailed});
+    Check(event && std::holds_alternative<apc::app::DeviceStatusChangedEvent>(*event) &&
+              std::get<apc::app::DeviceStatusChangedEvent>(*event).Id.View() == longId,
+          "per-device events must preserve a valid long P01 identity without coercing it to DeviceId");
+    const auto afterEventSnapshot = harness.Bridge.Snapshot();
+    Check(afterEventSnapshot.Devices.size() == 1 && afterEventSnapshot.Devices.front().Id.View() == longId &&
+              afterEventSnapshot.Devices.front().State == DeviceConnectionState::Connecting,
+          "long-ID event state must remain visible in an immutable snapshot");
 }
 
 void TestAuthoritativeBusyFactSurvivesSnapshotNormalization() {
@@ -760,6 +860,8 @@ int RunLegacyAppUseCaseBridgeTests() {
     TestObservedFactsNormalizeAndOverlayWithoutInjection();
     TestReadFailuresAndCommandReadScope();
     TestShutdownIsMonotonicAndRejectsCallbacks();
+    TestShutdownClosesAdmissionBeforeTearingDownCallbacks();
+    TestFactsAfterShutdownDoNotPublishOrChangeBridgeState();
     TestTerminalFactsClearObservedBusyState();
     TestMissingMutationCallbacksFailClosed();
     TestExternalSnapshotIdPreservesP01LengthAndBoundedConversion();

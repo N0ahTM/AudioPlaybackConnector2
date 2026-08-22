@@ -381,17 +381,20 @@ struct AppCommandContext {
 };
 
 struct DeviceConnectedEvent {
-    apc::core::DeviceId Id;
+    // Device events originate at the P01 transport/device boundary. They
+    // must retain a valid external identity even when it cannot be persisted
+    // in the smaller P07 DeviceId field.
+    ExternalDeviceId Id;
     friend bool operator==(DeviceConnectedEvent const&, DeviceConnectedEvent const&) = default;
 };
 
 struct DeviceDisconnectedEvent {
-    apc::core::DeviceId Id;
+    ExternalDeviceId Id;
     friend bool operator==(DeviceDisconnectedEvent const&, DeviceDisconnectedEvent const&) = default;
 };
 
 struct DeviceConnectionErrorEvent {
-    apc::core::DeviceId Id;
+    ExternalDeviceId Id;
     // The legacy free-form message is deliberately normalized away here.
     // Presentation chooses localized text from this actionable category.
     AppResultCode Code = AppResultCode::OperationFailed;
@@ -399,7 +402,7 @@ struct DeviceConnectionErrorEvent {
 };
 
 struct DeviceStatusChangedEvent {
-    apc::core::DeviceId Id;
+    ExternalDeviceId Id;
     // The legacy presentation status string is deliberately normalized to
     // this stable state; localized text is not part of a fact event.
     DeviceConnectionState State = DeviceConnectionState::Idle;
@@ -417,12 +420,12 @@ struct DeviceInventoryChangedEvent {
 };
 
 struct AutoReconnectTriggeredEvent {
-    apc::core::DeviceId Id;
+    ExternalDeviceId Id;
     friend bool operator==(AutoReconnectTriggeredEvent const&, AutoReconnectTriggeredEvent const&) = default;
 };
 
 struct AutoReconnectFailedEvent {
-    apc::core::DeviceId Id;
+    ExternalDeviceId Id;
     friend bool operator==(AutoReconnectFailedEvent const&, AutoReconnectFailedEvent const&) = default;
 };
 

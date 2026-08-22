@@ -4,6 +4,8 @@
 #include <core/SettingsData.hpp>
 
 #include <chrono>
+#include <cstddef>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -155,6 +157,24 @@ public:
     void SetRunning(bool running) noexcept;
 
 private:
+    // Every public entry point acquires this lease before it can touch an
+    // operation callback or bridge state. SetRunning(false) closes admission
+    // and waits for outstanding leases without holding m_stateMutex, so host
+    // teardown cannot race a late callback or fact publication.
+    class CallLease final {
+    public:
+        explicit CallLease(LegacyAppUseCaseBridge const& owner) noexcept;
+        CallLease(CallLease const&) = delete;
+        CallLease& operator=(CallLease const&) = delete;
+        ~CallLease();
+
+        [[nodiscard]] bool Acquired() const noexcept { return m_acquired; }
+
+    private:
+        LegacyAppUseCaseBridge const& m_owner;
+        bool m_acquired = false;
+    };
+
     struct Resolution {
         AppResultCode Code = AppResultCode::Success;
         AppOutcomeReason Reason = AppOutcomeReason::None;
@@ -218,10 +238,12 @@ private:
 
     Operations m_operations;
     mutable std::mutex m_stateMutex;
+    mutable std::condition_variable m_noActiveCalls;
     mutable SettingsData m_settings;
     mutable std::unordered_map<std::wstring, DeviceRecord> m_observedStates;
     std::uint64_t m_generation = 0;
     std::uint64_t m_pickerGeneration = 0;
+    mutable std::size_t m_activeCalls = 0;
     bool m_running = true;
 };
 

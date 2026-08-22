@@ -447,6 +447,7 @@ int RunAdaptiveResourceDiagnosticsTests();
 int RunAdaptiveResourcePolicyTests();
 int RunAppControllerTests();
 int RunAppModelsTests();
+int RunControlCommandAdapterTests();
 int RunAppWorkCoordinatorTests();
 int RunAutoReconnectPlannerTests();
 int RunCommandClientTests();
@@ -491,6 +492,7 @@ int main() {
     g_failures += RunAdaptiveResourcePolicyTests();
     g_failures += RunAppControllerTests();
     g_failures += RunAppModelsTests();
+    g_failures += RunControlCommandAdapterTests();
     g_failures += RunAppWorkCoordinatorTests();
     g_failures += RunAutoReconnectPlannerTests();
     g_failures += RunCommandClientTests();

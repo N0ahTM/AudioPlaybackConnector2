@@ -8,6 +8,7 @@
 #include <optional>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -82,8 +83,10 @@ private:
     DeviceSelector(DeviceSelectorKind kind, Value value) noexcept : m_kind(kind), m_value(std::move(value)) {}
 
     [[nodiscard]] static bool IsValidCommandText(std::wstring_view value) noexcept {
-        return !value.empty() && value.size() <= c_maxAppCommandTextCharacters && !value.contains(L'\0') &&
-               apc::limits::IsValidUtf16(value);
+        // CommandProtocol::IsRequestValid deliberately accepts any bounded
+        // UTF-16 code units other than NUL. Keep that compatibility at the
+        // typed boundary; persistence or presentation may normalize later.
+        return !value.empty() && value.size() <= c_maxAppCommandTextCharacters && !value.contains(L'\0');
     }
 
     [[nodiscard]] static bool IsQueryKind(DeviceSelectorKind kind) noexcept {
@@ -130,7 +133,7 @@ struct AppCommand {
         const bool hasTarget = Target.has_value();
         const bool hasAlias = !Alias.empty();
         const bool aliasIsValid = hasAlias && Alias.size() <= c_maxAppCommandTextCharacters && !Alias.contains(L'\r') &&
-                                  !Alias.contains(L'\n') && !Alias.contains(L'\0') && apc::limits::IsValidUtf16(Alias);
+                                  !Alias.contains(L'\n') && !Alias.contains(L'\0');
 
         switch (Kind) {
             case AppCommandKind::SetAlias: return hasTarget && IsExplicitTarget(*Target) && aliasIsValid;
@@ -184,6 +187,40 @@ enum class AppResultCode {
     InternalError
 };
 
+// A result reason is stable application vocabulary. Presentation adapters map
+// it to localized text while the controller remains independent of transport
+// and resource lookup.
+enum class AppOutcomeReason {
+    None,
+    AlreadyConnected,
+    AlreadyDisconnected,
+    ConnectSucceeded,
+    ConnectFailed,
+    DisconnectSucceeded,
+    DisconnectFailed,
+    ReconnectSucceeded,
+    ReconnectFailed,
+    ShowOpened,
+    SettingsOpened,
+    DefaultSet,
+    DefaultCleared,
+    AliasSet,
+    AliasSetFailed,
+    AliasCleared,
+    AliasClearFailed,
+    DisconnectAllSucceeded,
+    ReconnectAllSucceeded,
+    NotReady,
+    TargetRequired,
+    TargetNotFound,
+    TargetAmbiguous,
+    DefaultTargetMissing,
+    LastTargetMissing,
+    InvalidAliasPayload,
+    Unsupported,
+    InternalError
+};
+
 // Snapshot values own all strings and containers. The controller publishes
 // copies; they do not expose service locks, XAML objects, or transport state.
 struct DeviceSnapshot {
@@ -203,6 +240,21 @@ struct DeviceSnapshot {
     friend bool operator==(DeviceSnapshot const&, DeviceSnapshot const&) = default;
 };
 
+// A resolved control target may be an external identifier that is valid for
+// P01 but intentionally too large for the bounded persistence DeviceId type.
+// It therefore remains a plain, transport-neutral value object.
+struct AppTargetSnapshot {
+    std::wstring Id;
+    std::wstring Name;
+    std::wstring Alias;
+    std::wstring DisplayName;
+    bool Exists = false;
+    bool IsConnected = false;
+    bool IsKnown = false;
+
+    friend bool operator==(AppTargetSnapshot const&, AppTargetSnapshot const&) = default;
+};
+
 enum class DefaultDeviceMode { LastConnected, SpecificDevice };
 
 struct DefaultDeviceSnapshot {
@@ -220,6 +272,7 @@ struct DefaultDeviceSnapshot {
 
 struct TraySnapshot {
     std::uint64_t Generation = 0;
+    std::uint64_t DevicePickerOpenedGeneration = 0;
     std::vector<DeviceSnapshot> ConnectedDevices;
     bool HasBusyOperations = false;
 
@@ -234,6 +287,34 @@ struct AppSnapshot {
     std::vector<apc::core::DeviceId> LastConnectedDeviceIds;
     std::optional<DefaultDeviceSnapshot> DefaultDevice;
     TraySnapshot Tray;
+    struct ResourceStatusSnapshot {
+        enum class Residency { Cold, Warm, Hot };
+        enum class MemoryPressure { Unknown, Low, Neutral, High };
+        enum class UserActivity {
+            Unknown,
+            Available,
+            NotPresent,
+            Busy,
+            Fullscreen,
+            Presentation,
+            QuietTime,
+            ImmersiveApp
+        };
+
+        bool Evaluated = false;
+        Residency ForegroundResidency = Residency::Warm;
+        Residency BackgroundResidency = Residency::Warm;
+        bool SnapshotFresh = false;
+        bool PositiveAuthorizationCurrent = false;
+        bool PreloadAllowed = false;
+        bool UiResourcesLoaded = false;
+        bool UiResourcesInitialized = false;
+        MemoryPressure Memory = MemoryPressure::Unknown;
+        UserActivity Activity = UserActivity::Unknown;
+        std::optional<bool> EnergySaver;
+
+        friend bool operator==(ResourceStatusSnapshot const&, ResourceStatusSnapshot const&) = default;
+    } AdaptiveResources;
 
     friend bool operator==(AppSnapshot const&, AppSnapshot const&) = default;
 };
@@ -245,6 +326,12 @@ struct AppResult {
     std::vector<DeviceSnapshot> Devices;
     std::optional<DefaultDeviceSnapshot> DefaultDevice;
     std::optional<TraySnapshot> Tray;
+    AppOutcomeReason Reason = AppOutcomeReason::None;
+    std::wstring Alias;
+    std::optional<AppSnapshot> Snapshot;
+    std::optional<AppTargetSnapshot> Target;
+    std::wstring RequestedTarget;
+    std::optional<bool> PrivacyModeEnabled;
 
     [[nodiscard]] bool Succeeded() const noexcept { return Code == AppResultCode::Success; }
     friend bool operator==(AppResult const&, AppResult const&) = default;
@@ -254,8 +341,11 @@ struct AppCommandContext {
     using Clock = std::chrono::steady_clock;
     using TimePoint = Clock::time_point;
 
+    enum class CompletionMode { WaitForCompletion, Detached };
+
     std::stop_token StopToken;
     TimePoint Deadline = TimePoint::max();
+    CompletionMode Completion = CompletionMode::WaitForCompletion;
 
     [[nodiscard]] bool IsCancellationRequested() const noexcept { return StopToken.stop_requested(); }
     [[nodiscard]] bool IsExpired(TimePoint now) const noexcept {

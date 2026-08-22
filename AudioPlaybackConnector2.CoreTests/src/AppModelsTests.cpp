@@ -71,6 +71,10 @@ void TestSelectorNormalizationAndContracts() {
     Check(!DeviceSelector::ByQuery(apc::app::DeviceSelectorKind::Name,
                                    std::wstring(apc::app::c_maxAppCommandTextCharacters + 1, L'x')),
           "a selector query must respect the P01 payload bound");
+    auto invalidUtf16Query =
+        DeviceSelector::ByQuery(apc::app::DeviceSelectorKind::Name, std::wstring(1, static_cast<wchar_t>(0xD800)));
+    Check(invalidUtf16Query.has_value(),
+          "selector grammar must retain bounded invalid UTF-16 accepted by the existing wire validator");
 
     auto longExternalId = DeviceSelector::ById(std::wstring(513, L'x'));
     Check(longExternalId && longExternalId->IdText().size() == 513,
@@ -104,7 +108,8 @@ void TestCommandContractsAndNormalizedResults() {
         AppCommandKind::SetAlias, exact, std::wstring(apc::app::c_maxAppCommandTextCharacters + 1, L'x')};
     Check(!oversizedAlias.IsWellFormed(), "alias set must reject text beyond the P01 payload bound");
     AppCommand invalidAliasUtf16{AppCommandKind::SetAlias, exact, std::wstring(1, static_cast<wchar_t>(0xD800))};
-    Check(!invalidAliasUtf16.IsWellFormed(), "alias set must reject invalid UTF-16");
+    Check(invalidAliasUtf16.IsWellFormed(),
+          "command grammar must retain bounded invalid UTF-16 accepted by the existing wire validator");
 
     AppCommand invalidAlias{AppCommandKind::SetAlias, exact, L"line\nwrapped"};
     Check(!invalidAlias.IsWellFormed(), "alias set must reject line breaks before persistence or transport");

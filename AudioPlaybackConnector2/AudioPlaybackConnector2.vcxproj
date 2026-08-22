@@ -174,6 +174,7 @@
     <ClInclude Include="include\services\UpdateCoordinator.hpp" />
     <ClInclude Include="include\services\SettingsController.hpp" />
     <ClInclude Include="include\control\ControlTargetMatcher.hpp" />
+    <ClInclude Include="include\control\ControlCommandAdapter.hpp" />
     <ClInclude Include="include\services\StartupTaskController.hpp" />
     <ClInclude Include="include\services\CommandLineControlServer.hpp" />
     <ClInclude Include="include\services\ToastContentBuilder.hpp" />

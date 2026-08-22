@@ -82,6 +82,7 @@
     <ClCompile Include="src\AdaptiveResourceDiagnosticsTests.cpp" />
     <ClCompile Include="src\AdaptiveResourcePolicyTests.cpp" />
     <ClCompile Include="src\AppControllerTests.cpp" />
+    <ClCompile Include="src\ControlCommandAdapterTests.cpp" />
     <ClCompile Include="src\AppModelsTests.cpp" />
     <ClCompile Include="src\AppWorkCoordinatorTests.cpp" />
     <ClCompile Include="src\AutoReconnectPlannerTests.cpp" />
@@ -107,6 +108,9 @@
     <ClCompile Include="src\UpdateCoordinatorTests.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveResourcePolicy.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AppController.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\control\ControlCommandAdapter.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveActionRetryBackoff.cpp" />

@@ -29,9 +29,6 @@
     <ClCompile Include="src\app\ApplicationHostVisualRefreshRetry.cpp">
       <Filter>src\app</Filter>
     </ClCompile>
-    <ClCompile Include="src\app\DeferredSettingsSaver.cpp">
-      <Filter>src\app</Filter>
-    </ClCompile>
     <ClCompile Include="src\app\AdaptiveResourcePolicy.cpp">
       <Filter>src\app</Filter>
     </ClCompile>
@@ -69,9 +66,6 @@
       <Filter>src\core</Filter>
     </ClCompile>
     <ClCompile Include="src\core\ThemeHelper.cpp">
-      <Filter>src\core</Filter>
-    </ClCompile>
-    <ClCompile Include="src\core\Settings.cpp">
       <Filter>src\core</Filter>
     </ClCompile>
     <ClCompile Include="src\core\AudioConnectionService.cpp">
@@ -187,9 +181,6 @@
     <ClInclude Include="include\control\ControlCommandAdapter.hpp">
       <Filter>include\control</Filter>
     </ClInclude>
-    <ClInclude Include="include\app\DeferredSettingsSaver.hpp">
-      <Filter>include\app</Filter>
-    </ClInclude>
     <ClInclude Include="include\app\AdaptiveResourcePolicy.hpp">
       <Filter>include\app</Filter>
     </ClInclude>
@@ -250,7 +241,7 @@
     <ClInclude Include="include\core\LatestServiceLifecycleState.hpp">
       <Filter>include\core</Filter>
     </ClInclude>
-    <ClInclude Include="include\core\Settings.hpp">
+    <ClInclude Include="include\core\SettingsStore.hpp">
       <Filter>include\core</Filter>
     </ClInclude>
     <ClInclude Include="include\core\SettingsData.hpp">

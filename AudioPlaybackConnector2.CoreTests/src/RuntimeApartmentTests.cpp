@@ -50,7 +50,7 @@ void TestFreshWorkerCanActivateWindowsRuntimeClass() {
 
     Check(ready.load(), "a fresh worker thread must initialize a usable Windows Runtime apartment");
     Check(SUCCEEDED(activationResult.load()),
-          "a RuntimeApartment worker must activate the same Windows.Data.Json class used by Settings::Save");
+          "a RuntimeApartment worker must activate the same Windows.Data.Json class used by SettingsStore");
 }
 
 } // namespace

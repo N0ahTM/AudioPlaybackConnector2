@@ -108,7 +108,7 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceSessionStore.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceTrayPresentation.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\ReconnectController.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\core\Settings.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsStore.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsData.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsLimits.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\StringResources.hpp" />
@@ -152,7 +152,7 @@
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceSessionStore.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\ReconnectController.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\TrayTooltipBuilder.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
-    <ClCompile Include="..\AudioPlaybackConnector2\src\core\Settings.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\SettingsStore.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\StringResources.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\CommandLineControlServer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\SettingsController.cpp" />

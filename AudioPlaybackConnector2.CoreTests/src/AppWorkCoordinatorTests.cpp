@@ -1,11 +1,8 @@
-#include <app/DeferredSaveCoordinator.hpp>
 #include <app/ResumeReconnectAttemptState.hpp>
 #include <app/UiRefreshCoalescer.hpp>
-#include <core/Settings.hpp>
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <barrier>
 #include <cstdint>
 #include <iostream>
@@ -21,279 +18,6 @@ void Check(bool condition, std::string_view message) {
     if (condition) return;
     ++g_failures;
     std::cerr << "FAILED: " << message << '\n';
-}
-
-void TestDeferredSaveCoalescesDirtyGenerations() {
-    DeferredSaveCoordinator coordinator;
-    Check(coordinator.Generation() == 0, "a new deferred-save coordinator must start at generation zero");
-    Check(!coordinator.WorkerActive(), "a new deferred-save coordinator must not report an active worker");
-
-    auto first = coordinator.MarkDirty();
-    Check(first.Generation == 1, "the first dirty request must advance the generation");
-    Check(first.WorkerToStart.has_value(), "the first dirty request must start one worker");
-    Check(coordinator.WorkerActive(), "starting a worker must make the worker observable as active");
-
-    auto second = coordinator.MarkDirty();
-    Check(second.Generation == 2, "a coalesced dirty request must still advance the generation");
-    Check(!second.WorkerToStart, "a coalesced dirty request must not start a duplicate worker");
-
-    const auto worker = *first.WorkerToStart;
-    auto wrongWorker = worker;
-    ++wrongWorker.Value;
-    Check(!coordinator.BeginAttempt(wrongWorker), "a stale worker token must not begin a save attempt");
-
-    auto attempt = coordinator.BeginAttempt(worker);
-    Check(attempt.has_value(), "the active worker must be able to begin its save attempt");
-    Check(attempt && attempt->Generation == second.Generation,
-          "an attempt must capture the newest coalesced generation");
-    Check(!coordinator.BeginAttempt(worker), "one worker must never run two concurrent save attempts");
-
-    if (attempt) {
-        auto wrongAttempt = *attempt;
-        ++wrongAttempt.Generation;
-        Check(coordinator.CompleteAttempt(wrongAttempt, true) == DeferredSaveCoordinator::Completion::Stale,
-              "a completion for the wrong generation must be rejected without consuming the real attempt");
-        Check(coordinator.CompleteAttempt(*attempt, true) == DeferredSaveCoordinator::Completion::Stop,
-              "a successful attempt for the newest generation must stop the worker");
-        Check(coordinator.CompleteAttempt(*attempt, true) == DeferredSaveCoordinator::Completion::Stale,
-              "a duplicate completion must be stale");
-    }
-    Check(!coordinator.WorkerActive(), "a clean successful save must leave no active worker");
-}
-
-void TestDeferredSaveRetainsMutationsDuringAnAttempt() {
-    DeferredSaveCoordinator coordinator;
-    auto initial = coordinator.MarkDirty();
-    const auto worker = *initial.WorkerToStart;
-    auto firstAttempt = coordinator.BeginAttempt(worker);
-    Check(firstAttempt.has_value(), "the initial deferred-save attempt must start");
-
-    auto concurrentMutation = coordinator.MarkDirty();
-    Check(!concurrentMutation.WorkerToStart,
-          "a mutation during an attempt must remain assigned to the existing worker");
-    if (firstAttempt) {
-        Check(coordinator.CompleteAttempt(*firstAttempt, true) ==
-                  DeferredSaveCoordinator::Completion::ContinueAfterDebounce,
-              "a mutation during an attempt must force a follow-up save");
-    }
-    Check(coordinator.WorkerActive(), "the worker must remain active while a newer generation is dirty");
-
-    auto secondAttempt = coordinator.BeginAttempt(worker);
-    Check(secondAttempt && secondAttempt->Generation == concurrentMutation.Generation,
-          "the follow-up attempt must capture the generation created during the first attempt");
-    if (secondAttempt) {
-        Check(coordinator.CompleteAttempt(*secondAttempt, true) == DeferredSaveCoordinator::Completion::Stop,
-              "the follow-up attempt must stop after persisting all changes");
-    }
-}
-
-void TestDeferredSaveRetriesFailuresWithoutLosingDirtyState() {
-    DeferredSaveCoordinator coordinator;
-    auto request = coordinator.MarkDirty();
-    const auto worker = *request.WorkerToStart;
-    auto failedAttempt = coordinator.BeginAttempt(worker);
-    Check(failedAttempt.has_value(), "the failed-save test must begin an attempt");
-
-    if (failedAttempt) {
-        Check(coordinator.CompleteAttempt(*failedAttempt, false) ==
-                  DeferredSaveCoordinator::Completion::RetryWithBackoff,
-              "a failed save must request a bounded retry");
-        Check(coordinator.CompleteAttempt(*failedAttempt, true) == DeferredSaveCoordinator::Completion::Stale,
-              "a failed attempt must be consumed exactly once");
-    }
-    Check(coordinator.WorkerActive(), "a failed save must retain its worker and dirty state");
-
-    auto retry = coordinator.BeginAttempt(worker);
-    Check(retry && retry->Generation == request.Generation,
-          "a retry without a new mutation must retry the same generation");
-    if (retry) {
-        Check(coordinator.CompleteAttempt(*retry, true) == DeferredSaveCoordinator::Completion::Stop,
-              "a successful retry must cleanly stop the worker");
-    }
-}
-
-void TestDeferredSaveCancellationInvalidatesOutstandingWork() {
-    DeferredSaveCoordinator coordinator;
-    auto request = coordinator.MarkDirty();
-    const auto worker = *request.WorkerToStart;
-    auto attempt = coordinator.BeginAttempt(worker);
-    Check(attempt.has_value(), "the cancellation test must begin an attempt");
-
-    coordinator.Cancel();
-    Check(!coordinator.WorkerActive(), "cancellation must clear the active worker");
-    if (attempt) {
-        Check(coordinator.CompleteAttempt(*attempt, true) == DeferredSaveCoordinator::Completion::Stale,
-              "completion after cancellation must be stale");
-    }
-    Check(!coordinator.BeginAttempt(worker), "a cancelled worker must not begin another attempt");
-
-    const auto generationBeforeRejectedRequest = coordinator.Generation();
-    auto rejected = coordinator.MarkDirty();
-    Check(rejected.Generation == generationBeforeRejectedRequest && !rejected.WorkerToStart,
-          "a stopped coordinator must reject new dirty work without changing generations");
-    coordinator.Cancel();
-    Check(!coordinator.WorkerActive(), "cancellation must be idempotent");
-}
-
-void TestDeferredSaveCanRecoverFromSchedulerFailure() {
-    DeferredSaveCoordinator coordinator;
-    auto request = coordinator.MarkDirty();
-    const auto worker = *request.WorkerToStart;
-    auto attempt = coordinator.BeginAttempt(worker);
-    Check(attempt.has_value(), "the scheduler-failure test must begin an attempt");
-    Check(coordinator.AbandonWorker(worker), "the current worker must be abandonable after scheduling failure");
-    Check(!coordinator.WorkerActive(), "abandoning an unschedulable worker must release ownership");
-    if (attempt) {
-        Check(coordinator.CompleteAttempt(*attempt, true) == DeferredSaveCoordinator::Completion::Stale,
-              "an abandoned worker completion must be stale");
-    }
-
-    auto replacement = coordinator.MarkDirty();
-    Check(replacement.WorkerToStart.has_value(), "a later mutation must be able to start a replacement worker");
-    Check(replacement.WorkerToStart != request.WorkerToStart,
-          "a replacement worker must use a distinct token from the abandoned worker");
-}
-
-void TestDeferredSavePersistsMutationMadeAfterSnapshot() {
-    DeferredSaveCoordinator coordinator;
-    std::atomic<int> liveValue{1};
-    std::atomic<int> persistedValue{0};
-    std::barrier snapshotCaptured{2};
-    std::barrier mutationRecorded{2};
-
-    auto request = coordinator.MarkDirty();
-    const auto worker = *request.WorkerToStart;
-    DeferredSaveCoordinator::Completion firstCompletion = DeferredSaveCoordinator::Completion::Stale;
-    DeferredSaveCoordinator::Completion secondCompletion = DeferredSaveCoordinator::Completion::Stale;
-    bool firstAttemptStarted = false;
-    bool secondAttemptStarted = false;
-    bool mutationStartedDuplicateWorker = true;
-
-    std::jthread saveThread([&]() {
-        auto firstAttempt = coordinator.BeginAttempt(worker);
-        firstAttemptStarted = firstAttempt.has_value();
-        const int firstSnapshot = liveValue.load();
-        snapshotCaptured.arrive_and_wait();
-        mutationRecorded.arrive_and_wait();
-
-        persistedValue.store(firstSnapshot);
-        if (!firstAttempt) return;
-        firstCompletion = coordinator.CompleteAttempt(*firstAttempt, true);
-        if (firstCompletion != DeferredSaveCoordinator::Completion::ContinueAfterDebounce) return;
-
-        auto secondAttempt = coordinator.BeginAttempt(worker);
-        secondAttemptStarted = secondAttempt.has_value();
-        if (!secondAttempt) return;
-        persistedValue.store(liveValue.load());
-        secondCompletion = coordinator.CompleteAttempt(*secondAttempt, true);
-    });
-    std::jthread mutationThread([&]() {
-        snapshotCaptured.arrive_and_wait();
-        liveValue.store(2);
-        auto mutation = coordinator.MarkDirty();
-        mutationStartedDuplicateWorker = mutation.WorkerToStart.has_value();
-        mutationRecorded.arrive_and_wait();
-    });
-    saveThread.join();
-    mutationThread.join();
-
-    Check(firstAttemptStarted, "the deterministic snapshot race must begin its first attempt");
-    Check(!mutationStartedDuplicateWorker, "a post-snapshot mutation must reuse the active worker");
-    Check(firstCompletion == DeferredSaveCoordinator::Completion::ContinueAfterDebounce,
-          "a post-snapshot mutation must not be acknowledged by the older save");
-    Check(secondAttemptStarted, "a post-snapshot mutation must receive a second attempt");
-    Check(secondCompletion == DeferredSaveCoordinator::Completion::Stop,
-          "the second race attempt must stop after persisting the new value");
-    Check(persistedValue.load() == 2, "the deterministic snapshot race must persist the newest value");
-}
-
-void TestDeferredSaveRequestCompletionRaceHasNoLostWakeup() {
-    constexpr std::size_t c_iterations = 128;
-    for (std::size_t iteration = 0; iteration < c_iterations; ++iteration) {
-        DeferredSaveCoordinator coordinator;
-        auto initial = coordinator.MarkDirty();
-        const auto initialWorker = *initial.WorkerToStart;
-        auto attempt = coordinator.BeginAttempt(initialWorker);
-        Check(attempt.has_value(), "each request/completion race must begin an attempt");
-        if (!attempt) continue;
-
-        std::barrier raceStart{2};
-        DeferredSaveCoordinator::Completion completion = DeferredSaveCoordinator::Completion::Stale;
-        DeferredSaveCoordinator::RequestResult request;
-        std::jthread completionThread([&]() {
-            raceStart.arrive_and_wait();
-            completion = coordinator.CompleteAttempt(*attempt, true);
-        });
-        std::jthread requestThread([&]() {
-            raceStart.arrive_and_wait();
-            request = coordinator.MarkDirty();
-        });
-        completionThread.join();
-        requestThread.join();
-
-        const bool requestWon =
-            completion == DeferredSaveCoordinator::Completion::ContinueAfterDebounce && !request.WorkerToStart;
-        const bool completionWon =
-            completion == DeferredSaveCoordinator::Completion::Stop && request.WorkerToStart.has_value();
-        Check(requestWon || completionWon,
-              "a request racing a completion must either continue the old worker or start exactly one new worker");
-        Check(coordinator.WorkerActive(), "a raced dirty request must always leave a worker active");
-
-        const auto currentWorker = request.WorkerToStart.value_or(initialWorker);
-        auto finalAttempt = coordinator.BeginAttempt(currentWorker);
-        Check(finalAttempt && finalAttempt->Generation == request.Generation,
-              "the surviving worker must own the raced dirty generation");
-        if (finalAttempt) {
-            Check(coordinator.CompleteAttempt(*finalAttempt, true) == DeferredSaveCoordinator::Completion::Stop,
-                  "the surviving worker must be able to finish the raced request");
-        }
-    }
-}
-
-void TestDeferredSaveConcurrentRequestsStartExactlyOneWorker() {
-    constexpr std::size_t c_threadCount = 32;
-    DeferredSaveCoordinator coordinator;
-    std::barrier start{c_threadCount};
-    std::array<DeferredSaveCoordinator::RequestResult, c_threadCount> results{};
-    std::vector<std::jthread> threads;
-    threads.reserve(c_threadCount);
-    for (std::size_t index = 0; index < c_threadCount; ++index) {
-        threads.emplace_back([&, index]() {
-            start.arrive_and_wait();
-            results[index] = coordinator.MarkDirty();
-        });
-    }
-    threads.clear();
-
-    std::size_t workersStarted = 0;
-    std::optional<DeferredSaveCoordinator::WorkerToken> worker;
-    std::vector<std::uint64_t> generations;
-    generations.reserve(c_threadCount);
-    for (auto const& result : results) {
-        generations.push_back(result.Generation);
-        if (result.WorkerToStart) {
-            ++workersStarted;
-            worker = result.WorkerToStart;
-        }
-    }
-    std::ranges::sort(generations);
-    bool generationsAreComplete = generations.size() == c_threadCount;
-    for (std::size_t index = 0; index < generations.size(); ++index) {
-        generationsAreComplete = generationsAreComplete && generations[index] == index + 1;
-    }
-
-    Check(workersStarted == 1, "concurrent dirty requests must start exactly one worker");
-    Check(generationsAreComplete, "concurrent dirty requests must receive distinct serialized generations");
-    Check(coordinator.Generation() == c_threadCount, "all concurrent dirty requests must be recorded");
-    if (worker) {
-        auto attempt = coordinator.BeginAttempt(*worker);
-        Check(attempt && attempt->Generation == c_threadCount,
-              "the single concurrent-request worker must capture the newest generation");
-        if (attempt) {
-            Check(coordinator.CompleteAttempt(*attempt, true) == DeferredSaveCoordinator::Completion::Stop,
-                  "the single concurrent-request worker must finish all coalesced work");
-        }
-    }
 }
 
 void TestUiRefreshCoalescesFlagsAndDrainsExactlyOnce() {
@@ -438,24 +162,6 @@ void TestUiRefreshAbandonRetainsDirtyFlagsForANewRequest() {
     Check(!coalescer.CompleteDrain(), "the recovered abandoned schedule must drain cleanly");
 }
 
-void TestDeferredSaveExternalFlushAcknowledgesOnlyItsGeneration() {
-    DeferredSaveCoordinator coordinator;
-    auto initial = coordinator.MarkDirty();
-    Check(initial.WorkerToStart.has_value(), "external-flush test must start a worker");
-
-    auto staleToken = coordinator.BeginExternalSave();
-    static_cast<void>(coordinator.MarkDirty());
-    Check(!coordinator.CompleteExternalSave(staleToken, true),
-          "an external flush must not acknowledge a mutation from a newer generation");
-    Check(coordinator.WorkerActive(), "a stale external flush must leave the active worker intact");
-
-    auto currentToken = coordinator.BeginExternalSave();
-    Check(coordinator.CompleteExternalSave(currentToken, true),
-          "a clean external flush must acknowledge its current generation");
-    Check(!coordinator.WorkerActive(), "an acknowledged external flush must retire the old worker");
-    Check(!coordinator.CompleteExternalSave(currentToken, false), "a failed external flush must never be acknowledged");
-}
-
 void TestResumeReconnectCountsOnlyActuallyStartedAttempts() {
     ResumeReconnectAttemptState state;
     state.BeginCycle({L"alpha", L"beta", L"alpha", L""});
@@ -497,33 +203,9 @@ void TestResumeReconnectPreservesPendingTargetsAcrossSuspendCycles() {
     Check(state.Empty(), "clearing resume state must remove all pending targets");
 }
 
-void TestSettingsRevisionTracksOnlyCommittedMutations() {
-    Settings settings;
-    Check(!settings.HasUnsavedChanges(), "new settings must start clean");
-    {
-        auto locked = settings.LockExclusiveData();
-        static_cast<void>(locked->ShowNotifications);
-    }
-    Check(!settings.HasUnsavedChanges(), "a no-op exclusive settings access must remain clean");
-    {
-        auto locked = settings.LockExclusiveData();
-        locked.Mutate().ShowNotifications = !locked->ShowNotifications;
-    }
-    Check(settings.HasUnsavedChanges(), "an actual settings mutation must advance the revision");
-}
-
 } // namespace
 
 int RunAppWorkCoordinatorTests() {
-    TestDeferredSaveCoalescesDirtyGenerations();
-    TestDeferredSaveRetainsMutationsDuringAnAttempt();
-    TestDeferredSaveRetriesFailuresWithoutLosingDirtyState();
-    TestDeferredSaveCancellationInvalidatesOutstandingWork();
-    TestDeferredSaveCanRecoverFromSchedulerFailure();
-    TestDeferredSavePersistsMutationMadeAfterSnapshot();
-    TestDeferredSaveRequestCompletionRaceHasNoLostWakeup();
-    TestDeferredSaveConcurrentRequestsStartExactlyOneWorker();
-    TestDeferredSaveExternalFlushAcknowledgesOnlyItsGeneration();
     TestUiRefreshCoalescesFlagsAndDrainsExactlyOnce();
     TestUiRefreshRetainsRequestsMadeDuringDrain();
     TestUiRefreshRequestCompletionRaceHasNoLostWakeup();
@@ -534,7 +216,6 @@ int RunAppWorkCoordinatorTests() {
     TestUiRefreshAbandonRetainsDirtyFlagsForANewRequest();
     TestResumeReconnectCountsOnlyActuallyStartedAttempts();
     TestResumeReconnectPreservesPendingTargetsAcrossSuspendCycles();
-    TestSettingsRevisionTracksOnlyCommittedMutations();
     return g_failures;
 }
 

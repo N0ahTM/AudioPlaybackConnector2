@@ -478,8 +478,9 @@ void TestRequestStopCancelsLeasedBridgeWorkBeforeBridgeDrain() {
     std::atomic_bool releaseForFailedTest = false;
     std::atomic_int mutations = 0;
     std::atomic_int settingsUiCalls = 0;
+    const SettingsSnapshot settingsSnapshot{settings, 1, false};
     LegacyAppUseCaseBridge::Operations operations;
-    operations.ReadSettings = [&] { return settings; };
+    operations.ReadSettings = [&] { return settingsSnapshot; };
     operations.ReadConnectedDevices = [] {
         return std::vector<LegacyAppUseCaseBridge::DeviceRecord>{
             {L"device-id", L"Device", {}, apc::app::DeviceConnectionState::Idle, false, true, false}};
@@ -502,7 +503,7 @@ void TestRequestStopCancelsLeasedBridgeWorkBeforeBridgeDrain() {
         ++settingsUiCalls;
         return LegacyAppUseCaseBridge::UiActionResult{LegacyAppUseCaseBridge::OperationStatus::Succeeded, std::nullopt};
     };
-    LegacyAppUseCaseBridge bridge(std::move(operations), settings);
+    LegacyAppUseCaseBridge bridge(std::move(operations));
 
     CommandLineControlServer server(std::move(options));
     server.Start([&](apc::control::Request const& request, std::stop_token stopToken, std::uint64_t) {

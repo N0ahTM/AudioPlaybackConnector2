@@ -4,7 +4,7 @@
 #include <SettingsWindow.g.cpp>
 #endif
 
-#include <core/Settings.hpp>
+#include <core/SettingsData.hpp>
 #include <core/SettingsLimits.hpp>
 #include <core/StringResources.hpp>
 #include <services/UpdateCoordinator.hpp>

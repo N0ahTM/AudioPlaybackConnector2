@@ -458,7 +458,7 @@ int RunDeviceOperationCoordinatorTests();
 int RunDiagnosticsLogCollectorTests();
 int RunEventTests();
 int RunSettingsDiagnosticsReportBuilderTests();
-int RunSettingsPersistenceTests();
+int RunSettingsStoreTests();
 int RunDevicePickerSnapshotTests();
 int RunLatestStartupTaskRequestStateTests();
 int RunLatestServiceLifecycleStateTests();
@@ -504,7 +504,7 @@ int main() {
     g_failures += RunDiagnosticsLogCollectorTests();
     g_failures += RunEventTests();
     g_failures += RunSettingsDiagnosticsReportBuilderTests();
-    g_failures += RunSettingsPersistenceTests();
+    g_failures += RunSettingsStoreTests();
     g_failures += RunDevicePickerSnapshotTests();
     g_failures += RunLatestStartupTaskRequestStateTests();
     g_failures += RunLatestServiceLifecycleStateTests();

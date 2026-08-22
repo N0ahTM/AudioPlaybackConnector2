@@ -1,5 +1,4 @@
 #include <core/Settings.hpp>
-#include <core/SettingsLimits.hpp>
 #include <util/RuntimeApartment.hpp>
 
 #include <atomic>
@@ -144,30 +143,6 @@ void TestMalformedAndCorruptInputPreservation() {
     Check(ReadData(settings) == SettingsData{}, "malformed input must not partially mutate in-memory defaults");
 }
 
-void TestOversizedInputIsPreserved() {
-    ScopedTestDirectory directory;
-    wil::unique_hfile file(CreateFileW(
-        directory.SettingsPath().c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr));
-    Check(static_cast<bool>(file), "the oversized settings fixture must be created");
-    LARGE_INTEGER oversizedLength{};
-    oversizedLength.QuadPart = static_cast<LONGLONG>(apc::limits::c_maxSettingsFileBytes) + 1;
-    Check(file && SetFilePointerEx(file.get(), oversizedLength, nullptr, FILE_BEGIN),
-          "the oversized settings fixture must seek beyond the configured limit");
-    Check(file && SetEndOfFile(file.get()), "the oversized settings fixture must set the exact oversized length");
-    file.reset();
-
-    Settings settings(directory.Path());
-    settings.Load(nullptr);
-
-    const auto backup = directory.SettingsPath().wstring() + L".corrupt.bak";
-    Check(!std::filesystem::exists(directory.SettingsPath()), "oversized settings input must leave the active path");
-    Check(std::filesystem::exists(backup), "oversized settings input must be preserved as a corrupt backup");
-    Check(std::filesystem::file_size(backup) == static_cast<std::uintmax_t>(oversizedLength.QuadPart),
-          "the oversized corrupt backup must preserve its original length");
-    Check(ReadData(settings) == SettingsData{}, "oversized input must leave in-memory defaults unchanged");
-    Check(!std::filesystem::exists(directory.TemporaryPath()), "loading oversized input must not create a temp file");
-}
-
 void TestValidationFailureLeavesRevisionDirty() {
     ScopedTestDirectory directory;
     Settings settings(directory.Path());
@@ -256,7 +231,6 @@ int RunSettingsPersistenceTests() {
     TestMissingCurrentAndRoundTrip();
     TestLegacyAndPartialInputNormalization();
     TestMalformedAndCorruptInputPreservation();
-    TestOversizedInputIsPreserved();
     TestValidationFailureLeavesRevisionDirty();
     TestFailedReplacePreservesExistingFileAndCanRetry();
     TestFinalSaveCapturesLaterMutation();

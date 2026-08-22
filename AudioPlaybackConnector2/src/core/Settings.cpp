@@ -5,9 +5,6 @@
 #include <util/Logger.hpp>
 #include <util/Util.hpp>
 
-#include <cstring>
-#include <exception>
-
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Helpers ///////////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
@@ -15,16 +12,6 @@
 namespace {
 std::wstring BoundedString(winrt::hstring const& value, std::size_t limit) {
     return apc::limits::TruncateUtf16(std::wstring_view(value), limit);
-}
-
-std::wstring BoundedExceptionMessage(std::exception const& exception) noexcept {
-    constexpr std::size_t c_maxExceptionMessageBytes = 4096;
-    try {
-        auto const* message = exception.what();
-        return util::Utf8ToUtf16(std::string_view(message, strnlen_s(message, c_maxExceptionMessageBytes)));
-    } catch (...) {
-        return L"<unavailable>";
-    }
 }
 
 bool IsPersistable(SettingsData const& data) {
@@ -145,7 +132,7 @@ void BackupUnreadableSettingsFile(std::filesystem::path const& path) noexcept {
             DebugTrace(L"[Settings] ERROR: failed to move corrupt settings file: {0}", path.wstring());
         }
     } catch (std::exception const& ex) {
-        DebugTrace(L"[Settings] ERROR: failed to backup corrupt settings file: {0}", BoundedExceptionMessage(ex));
+        DebugTrace(L"[Settings] ERROR: failed to backup corrupt settings file: {0}", util::Utf8ToUtf16(ex.what()));
     } catch (...) {
         DebugTrace(L"[Settings] ERROR: failed to backup corrupt settings file");
     }
@@ -314,7 +301,7 @@ void Settings::Load(HINSTANCE hInst) {
         DebugTrace(L"[Settings] Load ERROR (hresult): {0}", ex.message());
         BackupUnreadableSettingsFile(path);
     } catch (std::exception const& ex) {
-        DebugTrace(L"[Settings] Load ERROR (std): {0}", BoundedExceptionMessage(ex));
+        DebugTrace(L"[Settings] Load ERROR (std): {0}", util::Utf8ToUtf16(ex.what()));
         BackupUnreadableSettingsFile(path);
     } catch (...) {
         DebugTrace(L"[Settings] Load ERROR: Unknown exception");
@@ -432,7 +419,7 @@ bool Settings::Save(HINSTANCE hInst) {
     } catch (winrt::hresult_error const& ex) {
         DebugTrace(L"[Settings] Save ERROR (hresult): {0}", ex.message());
     } catch (std::exception const& ex) {
-        DebugTrace(L"[Settings] Save ERROR (std): {0}", BoundedExceptionMessage(ex));
+        DebugTrace(L"[Settings] Save ERROR (std): {0}", util::Utf8ToUtf16(ex.what()));
     } catch (...) {
         DebugTrace(L"[Settings] Save ERROR: Unknown exception");
     }

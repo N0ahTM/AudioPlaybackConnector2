@@ -54,6 +54,10 @@ public:
     CommandLineControlServer& operator=(CommandLineControlServer const&) = delete;
 
     void Start(Handler handler) noexcept;
+    // Closes admission and requests cancellation without waiting for a handler
+    // that may be waiting for the UI thread. Stop() remains responsible for
+    // draining callbacks and releasing the pipe resources.
+    void RequestStop() noexcept;
     void Stop() noexcept;
     [[nodiscard]] bool IsRunning() const noexcept { return m_running.load(); }
 
@@ -75,6 +79,7 @@ private:
     bool TryStart() noexcept;
     bool EnsureControlCallbacksLocked() noexcept;
     void ScheduleStartRetryLocked() noexcept;
+    void RequestStopLocked() noexcept;
     void Trace(std::wstring_view message) const noexcept;
 
     bool ArmConnection(PipeInstance& instance) noexcept;
@@ -113,6 +118,7 @@ private:
     bool m_desiredRunning = false;
     bool m_starting = false;
     bool m_stopping = false;
+    bool m_stopRequested = false;
     std::stop_source m_stopSource;
     Handler m_handler;
     std::vector<std::unique_ptr<PipeInstance>> m_instances;

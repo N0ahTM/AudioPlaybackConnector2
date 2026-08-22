@@ -238,6 +238,10 @@ void ApplicationHost::Start() {
 
 bool ApplicationHost::PerformTeardown(bool saveSettings) noexcept {
     if (m_exiting.exchange(true)) return m_teardownWindowCloseSucceeded.load();
+    // Request pipe-handler cancellation before waiting for bridge leases. A
+    // handler may be waiting for this UI thread to process show/settings work;
+    // Stop() still drains the server after the bridge has rejected new work.
+    m_commandLineControlServer.RequestStop();
     if (m_appBridge) {
         m_appBridge->SetRunning(false);
     }

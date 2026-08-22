@@ -74,6 +74,7 @@
   <ItemGroup>
     <ClInclude Include="include\pch.h" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveResourcePolicy.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppController.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppModels.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveActionRetryBackoff.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveScheduleState.hpp" />
@@ -126,6 +127,7 @@
   <ItemGroup>
     <ClCompile Include="src\pch.cpp"><PrecompiledHeader>Create</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveResourcePolicy.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\AppController.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveActionRetryBackoff.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveScheduleState.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AutoReconnectPlanner.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>

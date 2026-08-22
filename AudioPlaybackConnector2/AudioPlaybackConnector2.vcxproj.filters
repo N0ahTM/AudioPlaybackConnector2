@@ -178,6 +178,9 @@
     <ClInclude Include="include\app\ApplicationHost.hpp">
       <Filter>include\app</Filter>
     </ClInclude>
+    <ClInclude Include="include\app\AppController.hpp">
+      <Filter>include\app</Filter>
+    </ClInclude>
     <ClInclude Include="include\app\DeferredSettingsSaver.hpp">
       <Filter>include\app</Filter>
     </ClInclude>

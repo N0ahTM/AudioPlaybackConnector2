@@ -122,6 +122,7 @@
   <ItemGroup>
     <ClInclude Include="include\pch.h" />
     <ClInclude Include="include\app\ApplicationHost.hpp" />
+    <ClInclude Include="include\app\AppController.hpp" />
     <ClInclude Include="include\app\AppModels.hpp" />
     <ClInclude Include="include\app\DeferredSettingsSaver.hpp" />
     <ClInclude Include="include\app\AdaptiveActionRetryBackoff.hpp" />

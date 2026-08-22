@@ -62,6 +62,10 @@ struct Harness {
     std::vector<DeviceRecord> LiveDevices;
     std::vector<DeviceRecord> RefreshDevices;
     std::function<SettingsData()> ReadSettings;
+    bool SettingsReadFails = false;
+    bool DevicesReadFails = false;
+    int SettingsReadCalls = 0;
+    int DeviceReadCalls = 0;
     int RefreshCalls = 0;
     int ConnectCalls = 0;
     int ConnectDetachedCalls = 0;
@@ -90,13 +94,21 @@ struct Harness {
     LegacyAppUseCaseBridge Bridge;
 
     Harness()
-        : SourceSettings(), LiveDevices(), RefreshDevices(), ReadSettings([this] { return SourceSettings; }),
+        : SourceSettings(), LiveDevices(), RefreshDevices(), ReadSettings([this] {
+              ++SettingsReadCalls;
+              if (SettingsReadFails) throw 1;
+              return SourceSettings;
+          }),
           Bridge(MakeOperations(), SourceSettings) {}
 
     LegacyAppUseCaseBridge::Operations MakeOperations() {
         LegacyAppUseCaseBridge::Operations operations;
         operations.ReadSettings = ReadSettings;
-        operations.ReadConnectedDevices = [this] { return LiveDevices; };
+        operations.ReadConnectedDevices = [this] {
+            ++DeviceReadCalls;
+            if (DevicesReadFails) throw 1;
+            return LiveDevices;
+        };
         operations.Refresh = [this](AppCommandContext const& context) {
             ++RefreshCalls;
             LastRefreshDeadline = context.Deadline;
@@ -581,6 +593,158 @@ void TestObservedFactsNormalizeAndOverlayWithoutInjection() {
           "empty legacy activity and inventory facts must preserve typed event kinds");
 }
 
+void TestReadFailuresAndCommandReadScope() {
+    Harness harness;
+    harness.LiveDevices = {Device(L"target", L"Target")};
+    harness.AddSettingsDevice(harness.LiveDevices.front());
+    harness.PickerResponse = {OperationStatus::Succeeded, 4};
+    harness.SettingsResponse = {OperationStatus::Succeeded, std::nullopt};
+
+    harness.SettingsReadFails = true;
+    const auto settingsFailure = harness.Bridge.Execute(Command(AppCommandKind::ClearDefault));
+    Check(settingsFailure.Code == AppResultCode::InternalError,
+          "settings read failures must not fall back to stale settings for a command");
+    Check(!harness.Bridge.Snapshot().IsRunning, "settings read failures must fail closed in snapshots");
+
+    harness.SettingsReadFails = false;
+    harness.DevicesReadFails = true;
+    const auto beforeDeviceReads = harness.DeviceReadCalls;
+    const auto picker = harness.Bridge.Execute(Command(AppCommandKind::ShowDevicePicker));
+    const auto settings = harness.Bridge.Execute(Command(AppCommandKind::ShowSettings));
+    const auto clearDefault = harness.Bridge.Execute(Command(AppCommandKind::ClearDefault));
+    const auto disconnectAll = harness.Bridge.Execute(Command(AppCommandKind::DisconnectAll));
+    Check(picker.Code == AppResultCode::Success && settings.Code == AppResultCode::Success &&
+              clearDefault.Code == AppResultCode::Success && disconnectAll.Code == AppResultCode::Success &&
+              harness.DeviceReadCalls == beforeDeviceReads,
+          "UI, clear-default, and disconnect-all commands must not enumerate devices unnecessarily");
+
+    const auto listFailure = harness.Bridge.Execute(Command(AppCommandKind::ListDevices));
+    Check(listFailure.Code == AppResultCode::InternalError,
+          "required device read failures must propagate instead of returning an empty successful list");
+    Check(!harness.Bridge.Snapshot().IsRunning, "device read failures must fail closed in snapshots");
+}
+
+void TestShutdownIsMonotonicAndRejectsCallbacks() {
+    Harness harness;
+    harness.LiveDevices = {Device(L"target", L"Target")};
+    harness.AddSettingsDevice(harness.LiveDevices.front());
+    harness.Bridge.SetRunning(false);
+    const auto settingsReads = harness.SettingsReadCalls;
+    const auto deviceReads = harness.DeviceReadCalls;
+    const auto connectCalls = harness.ConnectCalls;
+
+    const auto stoppedSnapshot = harness.Bridge.Snapshot();
+    const auto status = harness.Bridge.Execute(Command(AppCommandKind::Status));
+    const auto connect = harness.Bridge.Execute(Command(AppCommandKind::Connect, IdSelector(L"target")));
+    harness.Bridge.SetRunning(true);
+    const auto revivedSnapshot = harness.Bridge.Snapshot();
+
+    Check(!stoppedSnapshot.IsRunning && !revivedSnapshot.IsRunning,
+          "a stopped bridge must remain unavailable even when the legacy Running callback would return true");
+    Check(status.Code == AppResultCode::Unavailable && status.Reason == AppOutcomeReason::NotReady &&
+              connect.Code == AppResultCode::Unavailable && connect.Reason == AppOutcomeReason::NotReady,
+          "post-shutdown reads and mutations must fail closed with not-ready semantics");
+    Check(harness.SettingsReadCalls == settingsReads && harness.DeviceReadCalls == deviceReads &&
+              harness.ConnectCalls == connectCalls,
+          "post-shutdown requests must not invoke settings, device, or mutation callbacks");
+}
+
+void TestTerminalFactsClearObservedBusyState() {
+    Harness harness;
+    harness.LiveDevices = {Device(L"target", L"Target")};
+    harness.AddSettingsDevice(harness.LiveDevices.front());
+
+    (void)harness.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::AutoReconnectTriggered,
+                                  L"target",
+                                  DeviceConnectionState::Idle,
+                                  AppResultCode::OperationFailed});
+    auto waiting = harness.Bridge.Snapshot();
+    Check(waiting.Devices.front().State == DeviceConnectionState::WaitingForReconnect && waiting.Devices.front().IsBusy,
+          "an auto-reconnect trigger must expose a busy waiting state");
+
+    (void)harness.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceStatusChanged,
+                                  L"target",
+                                  DeviceConnectionState::Failed,
+                                  AppResultCode::OperationFailed});
+    auto failedStatus = harness.Bridge.Snapshot();
+    Check(failedStatus.Devices.front().State == DeviceConnectionState::Failed && !failedStatus.Devices.front().IsBusy,
+          "a terminal failed status must clear the observed waiting/busy state");
+
+    (void)harness.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::AutoReconnectTriggered,
+                                  L"target",
+                                  DeviceConnectionState::Idle,
+                                  AppResultCode::OperationFailed});
+    (void)harness.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::ConnectionError,
+                                  L"target",
+                                  DeviceConnectionState::Idle,
+                                  AppResultCode::OperationFailed});
+    auto failedError = harness.Bridge.Snapshot();
+    Check(failedError.Devices.front().State == DeviceConnectionState::Failed && !failedError.Devices.front().IsBusy,
+          "a connection error must clear a prior reconnect wait instead of leaving the tray busy");
+
+    (void)harness.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::AutoReconnectTriggered,
+                                  L"target",
+                                  DeviceConnectionState::Idle,
+                                  AppResultCode::OperationFailed});
+    (void)harness.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::AutoReconnectFailed,
+                                  L"target",
+                                  DeviceConnectionState::Idle,
+                                  AppResultCode::OperationFailed});
+    auto failedReconnect = harness.Bridge.Snapshot();
+    Check(failedReconnect.Devices.front().State == DeviceConnectionState::Failed &&
+              !failedReconnect.Devices.front().IsBusy,
+          "auto-reconnect failure must clear any observed retry/busy state");
+}
+
+void TestMissingMutationCallbacksFailClosed() {
+    SettingsData settings;
+    settings.Devices.push_back(DeviceSettings{L"target", L"Target", {}, false, false});
+    LegacyAppUseCaseBridge::Operations operations;
+    operations.ReadSettings = [&settings] { return settings; };
+    operations.ReadConnectedDevices = [] { return std::vector<DeviceRecord>{Device(L"target", L"Target")}; };
+    LegacyAppUseCaseBridge bridge(std::move(operations), settings);
+    const auto target = IdSelector(L"target");
+
+    const auto setDefault = bridge.Execute(Command(AppCommandKind::SetDefault, target));
+    const auto clearDefault = bridge.Execute(Command(AppCommandKind::ClearDefault));
+    const auto setAlias = bridge.Execute(Command(AppCommandKind::SetAlias, target, L"Alias"));
+    const auto disconnectAll = bridge.Execute(Command(AppCommandKind::DisconnectAll));
+    Check(setDefault.Code == AppResultCode::Unavailable && setDefault.Reason == AppOutcomeReason::NotReady &&
+              clearDefault.Code == AppResultCode::Unavailable && clearDefault.Reason == AppOutcomeReason::NotReady &&
+              setAlias.Code == AppResultCode::Unavailable && setAlias.Reason == AppOutcomeReason::NotReady &&
+              disconnectAll.Code == AppResultCode::Unavailable && disconnectAll.Reason == AppOutcomeReason::NotReady,
+          "missing mutation callbacks must fail closed instead of reporting local success");
+}
+
+void TestExternalSnapshotIdPreservesP01LengthAndBoundedConversion() {
+    Harness harness;
+    const std::wstring longId(513, L'x');
+    harness.LiveDevices = {Device(longId, L"Long device", {}, true)};
+    const auto snapshot = harness.Bridge.Snapshot();
+    Check(snapshot.Devices.size() == 1 && snapshot.Devices.front().Id.View() == longId &&
+              !snapshot.Devices.front().Id.Bounded(),
+          "list/status snapshots must retain a valid P01 ID beyond the bounded persistence identity");
+    Check(snapshot.Tray.ConnectedDevices.size() == 1 && snapshot.Tray.ConnectedDevices.front().Id.View() == longId,
+          "connected tray snapshot entries must retain the same long external ID");
+}
+
+void TestAuthoritativeBusyFactSurvivesSnapshotNormalization() {
+    Harness harness;
+    harness.LiveDevices = {Device(L"target", L"Target", {}, true, true, true)};
+    harness.AddSettingsDevice(harness.LiveDevices.front());
+    harness.SourceSettings.DefaultDevice = ::DefaultDeviceMode::SpecificDevice;
+    harness.SourceSettings.DefaultDeviceId = L"target";
+    harness.GlobalBusy = true;
+    const auto snapshot = harness.Bridge.Snapshot();
+    AppCommandContext detached;
+    detached.Completion = AppCommandContext::CompletionMode::Detached;
+    const auto toggle =
+        harness.Bridge.Execute(Command(AppCommandKind::ToggleLast, DeviceSelector::Default()), detached);
+    Check(snapshot.Devices.front().IsBusy && snapshot.Tray.HasBusyOperations,
+          "authoritative busy facts must survive snapshot state normalization");
+    Check(toggle.Code == AppResultCode::Busy, "tray toggle must reject a target with an authoritative busy fact");
+}
+
 } // namespace
 
 int RunLegacyAppUseCaseBridgeTests() {
@@ -594,5 +758,11 @@ int RunLegacyAppUseCaseBridgeTests() {
     TestSettingsMutationsAndFailures();
     TestSnapshotPrivacyResourcePickerAndStableGeneration();
     TestObservedFactsNormalizeAndOverlayWithoutInjection();
+    TestReadFailuresAndCommandReadScope();
+    TestShutdownIsMonotonicAndRejectsCallbacks();
+    TestTerminalFactsClearObservedBusyState();
+    TestMissingMutationCallbacksFailClosed();
+    TestExternalSnapshotIdPreservesP01LengthAndBoundedConversion();
+    TestAuthoritativeBusyFactSurvivesSnapshotNormalization();
     return g_failures;
 }

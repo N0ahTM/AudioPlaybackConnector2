@@ -16,6 +16,8 @@ namespace {
 using DeviceRecord = LegacyAppUseCaseBridge::DeviceRecord;
 using OperationStatus = LegacyAppUseCaseBridge::OperationStatus;
 
+struct BridgeReadFailure final {};
+
 std::wstring LowerInvariant(std::wstring_view value) {
     std::wstring lowered;
     lowered.reserve(value.size());
@@ -36,6 +38,11 @@ bool IsTerminal(OperationStatus status) noexcept {
            status == OperationStatus::Indeterminate;
 }
 
+bool IsBusyState(DeviceConnectionState state) noexcept {
+    return state == DeviceConnectionState::Connecting || state == DeviceConnectionState::Disconnecting ||
+           state == DeviceConnectionState::WaitingForReconnect;
+}
+
 } // namespace
 
 LegacyAppUseCaseBridge::LegacyAppUseCaseBridge(Operations operations, SettingsData settings)
@@ -48,6 +55,12 @@ AppResult LegacyAppUseCaseBridge::Execute(AppCommand command, AppCommandContext 
         preflight.Code = AppResultCode::InvalidInput;
         return preflight;
     }
+    bool isRunning = true;
+    {
+        std::scoped_lock lock(m_stateMutex);
+        isRunning = m_running;
+    }
+    if (!isRunning) return MakeFailure(command.Kind, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
     if (context.IsCancellationRequested()) {
         preflight.Code = AppResultCode::Cancelled;
         if (command.Kind == AppCommandKind::ReconnectAll) preflight.Reason = AppOutcomeReason::NotReady;
@@ -60,7 +73,9 @@ AppResult LegacyAppUseCaseBridge::Execute(AppCommand command, AppCommandContext 
     }
 
     try {
-        SyncSettingsFromSource();
+        if (!SyncSettingsFromSource()) {
+            return MakeFailure(command.Kind, AppResultCode::InternalError, AppOutcomeReason::InternalError);
+        }
         auto result = ExecuteCommand(command, context);
         result.Command = command.Kind;
         return result;
@@ -73,33 +88,22 @@ AppResult LegacyAppUseCaseBridge::Execute(AppCommand command, AppCommandContext 
 
 AppSnapshot LegacyAppUseCaseBridge::Snapshot() const noexcept {
     try {
-        SyncSettingsFromSource();
-        auto devices = BuildDevicesWithoutRefresh();
-        SettingsData settings;
-        std::uint64_t generation = 0;
-        std::uint64_t pickerGeneration = 0;
-        bool running = true;
         {
             std::scoped_lock lock(m_stateMutex);
-            settings = m_settings;
-            generation = m_generation;
-            pickerGeneration = m_pickerGeneration;
-            running = m_running;
-        }
-        if (m_operations.Running) {
-            try {
-                running = m_operations.Running();
-            } catch (...) {
-                running = false;
+            if (!m_running) {
+                AppSnapshot unavailable;
+                unavailable.Generation = m_generation;
+                unavailable.IsRunning = false;
+                return unavailable;
             }
         }
-        if (m_operations.PickerOpenedGeneration) {
-            try {
-                pickerGeneration = std::max(pickerGeneration, m_operations.PickerOpenedGeneration());
-            } catch (...) {
-            }
+        if (!SyncSettingsFromSource()) {
+            AppSnapshot unavailable;
+            unavailable.IsRunning = false;
+            return unavailable;
         }
-        return BuildSnapshot(std::move(devices), std::move(settings), generation, pickerGeneration, running);
+        auto devices = BuildDevicesWithoutRefresh();
+        return SnapshotFromDevices(std::move(devices));
     } catch (...) {
         AppSnapshot unavailable;
         unavailable.IsRunning = false;
@@ -131,8 +135,13 @@ std::optional<AppEvent> LegacyAppUseCaseBridge::Observe(DeviceFact fact) noexcep
                                                          fact.State,
                                                          fact.State == DeviceConnectionState::Connected,
                                                          true,
-                                                         fact.State != DeviceConnectionState::Idle &&
-                                                             fact.State != DeviceConnectionState::Connected};
+                                                         IsBusyState(fact.State)};
+            } else if (fact.Kind == FactKind::ConnectionError || fact.Kind == FactKind::AutoReconnectFailed) {
+                m_observedStates[fact.Id] =
+                    DeviceRecord{fact.Id, {}, {}, DeviceConnectionState::Failed, false, true, false};
+            } else if (fact.Kind == FactKind::AutoReconnectTriggered) {
+                m_observedStates[fact.Id] =
+                    DeviceRecord{fact.Id, {}, {}, DeviceConnectionState::WaitingForReconnect, false, true, true};
             }
         }
 
@@ -164,7 +173,10 @@ std::optional<AppEvent> LegacyAppUseCaseBridge::Observe(DeviceFact fact) noexcep
 void LegacyAppUseCaseBridge::SetRunning(bool running) noexcept {
     try {
         std::scoped_lock lock(m_stateMutex);
-        if (m_running == running) return;
+        // Shutdown is monotonic.  A late composition callback must not make a
+        // stopped bridge advertise a live app or accept another command.
+        if (!m_running) return;
+        if (running) return;
         m_running = running;
         AdvanceGeneration(m_generation);
     } catch (...) {
@@ -177,7 +189,29 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
         if (!command.Target) return false;
         return IsRefreshNeeded(command.Kind, command.Target->Kind());
     }();
-    auto devices = requiresRefresh ? BuildDevices(true, context) : BuildDevicesWithoutRefresh();
+    const auto requiresDevices = [&]() noexcept {
+        switch (command.Kind) {
+            case AppCommandKind::ListDevices:
+            case AppCommandKind::Status:
+            case AppCommandKind::ShowDefault:
+            case AppCommandKind::ListAliases:
+            case AppCommandKind::SetDefault:
+            case AppCommandKind::SetAlias:
+            case AppCommandKind::ClearAlias:
+            case AppCommandKind::Connect:
+            case AppCommandKind::Disconnect:
+            case AppCommandKind::Reconnect:
+            case AppCommandKind::ToggleLast:
+            case AppCommandKind::ReconnectAll: return true;
+            case AppCommandKind::ShowDevicePicker:
+            case AppCommandKind::ShowSettings:
+            case AppCommandKind::ClearDefault:
+            case AppCommandKind::DisconnectAll: return false;
+        }
+        return false;
+    }();
+    std::vector<DeviceRecord> devices;
+    if (requiresDevices) devices = requiresRefresh ? BuildDevices(true, context) : BuildDevicesWithoutRefresh();
 
     switch (command.Kind) {
         case AppCommandKind::ShowDevicePicker:
@@ -235,12 +269,12 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
             for (auto const& device : devices) {
                 if (auto snapshot = ToSnapshot(device)) result.Devices.push_back(std::move(*snapshot));
             }
-            result.Snapshot = Snapshot();
+            result.Snapshot = SnapshotFromDevices(devices);
             result.PrivacyModeEnabled = result.Snapshot->PrivacyModeEnabled;
             return result;
         }
         case AppCommandKind::ShowDefault: {
-            auto snapshot = Snapshot();
+            auto snapshot = SnapshotFromDevices(devices);
             AppResult result;
             result.Code = AppResultCode::Success;
             result.Command = command.Kind;
@@ -259,8 +293,11 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
                     command.Kind, resolution, AppResultCode::NotFound, AppOutcomeReason::TargetNotFound);
             }
 
-            bool accepted = true;
-            if (m_operations.SetDefaultDevice) accepted = m_operations.SetDefaultDevice(resolution.Target.Id);
+            if (!m_operations.SetDefaultDevice) {
+                return MakeTargetResult(
+                    command.Kind, resolution, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
+            }
+            const bool accepted = m_operations.SetDefaultDevice(resolution.Target.Id);
             if (!accepted) {
                 return MakeTargetResult(
                     command.Kind, resolution, AppResultCode::OperationFailed, AppOutcomeReason::InternalError);
@@ -283,8 +320,10 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
             return result;
         }
         case AppCommandKind::ClearDefault: {
-            bool accepted = true;
-            if (m_operations.ClearDefaultDevice) accepted = m_operations.ClearDefaultDevice();
+            if (!m_operations.ClearDefaultDevice) {
+                return MakeFailure(command.Kind, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
+            }
+            const bool accepted = m_operations.ClearDefaultDevice();
             if (!accepted) {
                 return MakeFailure(command.Kind, AppResultCode::OperationFailed, AppOutcomeReason::InternalError);
             }
@@ -323,10 +362,11 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
                                         command.Kind == AppCommandKind::SetAlias ? AppOutcomeReason::AliasSetFailed
                                                                                  : AppOutcomeReason::AliasClearFailed);
             }
-            bool accepted = true;
-            if (m_operations.SetDeviceAlias) {
-                accepted = m_operations.SetDeviceAlias(resolution.Target.Id, alias, resolution.Target.Name);
+            if (!m_operations.SetDeviceAlias) {
+                return MakeTargetResult(
+                    command.Kind, resolution, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
             }
+            const bool accepted = m_operations.SetDeviceAlias(resolution.Target.Id, alias, resolution.Target.Name);
             if (!accepted) {
                 return MakeTargetResult(command.Kind,
                                         resolution,
@@ -372,7 +412,10 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
         case AppCommandKind::Reconnect: return ExecuteTargetOperation(command, context, devices);
         case AppCommandKind::ToggleLast: return ExecuteToggle(command, context, devices);
         case AppCommandKind::DisconnectAll: {
-            if (m_operations.DisconnectAll) m_operations.DisconnectAll();
+            if (!m_operations.DisconnectAll) {
+                return MakeFailure(command.Kind, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
+            }
+            m_operations.DisconnectAll();
             {
                 std::scoped_lock lock(m_stateMutex);
                 AdvanceGeneration(m_generation);
@@ -713,7 +756,6 @@ LegacyAppUseCaseBridge::Resolution LegacyAppUseCaseBridge::Resolve(DeviceSelecto
 
 std::vector<LegacyAppUseCaseBridge::DeviceRecord>
 LegacyAppUseCaseBridge::BuildDevices(bool refresh, AppCommandContext const& context) {
-    SyncSettingsFromSource();
     SettingsData settings;
     {
         std::scoped_lock lock(m_stateMutex);
@@ -741,7 +783,6 @@ LegacyAppUseCaseBridge::BuildDevices(bool refresh, AppCommandContext const& cont
 }
 
 std::vector<LegacyAppUseCaseBridge::DeviceRecord> LegacyAppUseCaseBridge::BuildDevicesWithoutRefresh() const {
-    SyncSettingsFromSource();
     SettingsData settings;
     {
         std::scoped_lock lock(m_stateMutex);
@@ -750,22 +791,24 @@ std::vector<LegacyAppUseCaseBridge::DeviceRecord> LegacyAppUseCaseBridge::BuildD
     return MergeDevices({}, ReadConnectedDevices(), std::move(settings));
 }
 
-void LegacyAppUseCaseBridge::SyncSettingsFromSource() const noexcept {
-    if (!m_operations.ReadSettings) return;
+bool LegacyAppUseCaseBridge::SyncSettingsFromSource() const noexcept {
+    if (!m_operations.ReadSettings) return true;
     try {
         auto settings = m_operations.ReadSettings();
         std::scoped_lock lock(m_stateMutex);
         m_settings = std::move(settings);
+        return true;
     } catch (...) {
+        return false;
     }
 }
 
-std::vector<LegacyAppUseCaseBridge::DeviceRecord> LegacyAppUseCaseBridge::ReadConnectedDevices() const noexcept {
+std::vector<LegacyAppUseCaseBridge::DeviceRecord> LegacyAppUseCaseBridge::ReadConnectedDevices() const {
     if (!m_operations.ReadConnectedDevices) return {};
     try {
         return m_operations.ReadConnectedDevices();
     } catch (...) {
-        return {};
+        throw BridgeReadFailure{};
     }
 }
 
@@ -874,6 +917,53 @@ AppSnapshot LegacyAppUseCaseBridge::BuildSnapshot(std::vector<DeviceRecord> devi
     return snapshot;
 }
 
+AppSnapshot LegacyAppUseCaseBridge::SnapshotFromDevices(std::vector<DeviceRecord> devices) const noexcept {
+    try {
+        SettingsData settings;
+        std::uint64_t generation = 0;
+        std::uint64_t pickerGeneration = 0;
+        bool isRunning = false;
+        {
+            std::scoped_lock lock(m_stateMutex);
+            settings = m_settings;
+            generation = m_generation;
+            pickerGeneration = m_pickerGeneration;
+            isRunning = m_running;
+        }
+        if (!isRunning) {
+            AppSnapshot unavailable;
+            unavailable.Generation = generation;
+            unavailable.IsRunning = false;
+            return unavailable;
+        }
+
+        if (m_operations.Running) {
+            try {
+                isRunning = m_operations.Running();
+            } catch (...) {
+                isRunning = false;
+            }
+        }
+        if (m_operations.PickerOpenedGeneration) {
+            try {
+                pickerGeneration = std::max(pickerGeneration, m_operations.PickerOpenedGeneration());
+            } catch (...) {
+            }
+        }
+
+        {
+            std::scoped_lock lock(m_stateMutex);
+            if (!m_running) isRunning = false;
+            generation = m_generation;
+        }
+        return BuildSnapshot(std::move(devices), std::move(settings), generation, pickerGeneration, isRunning);
+    } catch (...) {
+        AppSnapshot unavailable;
+        unavailable.IsRunning = false;
+        return unavailable;
+    }
+}
+
 AppResult LegacyAppUseCaseBridge::MakeFailure(AppCommandKind command,
                                               AppResultCode code,
                                               AppOutcomeReason reason,
@@ -898,16 +988,16 @@ AppResult LegacyAppUseCaseBridge::MakeTargetResult(AppCommandKind command,
 }
 
 std::optional<DeviceSnapshot> LegacyAppUseCaseBridge::ToSnapshot(DeviceRecord const& record) const {
-    auto id = TryDeviceId(record.Id);
+    auto id = ExternalDeviceId::TryCreate(record.Id);
     if (!id) return std::nullopt;
-    return DeviceSnapshot{*id,
+    return DeviceSnapshot{std::move(*id),
                           record.Name,
                           record.Alias,
                           DeviceLabel(record),
                           record.State,
                           record.IsKnown,
                           record.IsConnected,
-                          record.IsBusy};
+                          record.IsBusy || IsBusyState(record.State)};
 }
 
 std::optional<AppTargetSnapshot> LegacyAppUseCaseBridge::ToTarget(DeviceRecord const& record) const {
@@ -996,7 +1086,7 @@ void LegacyAppUseCaseBridge::ApplyObservedStates(std::vector<DeviceRecord>& devi
         current->State = state.State;
         current->IsConnected = state.IsConnected;
         current->IsKnown = current->IsKnown || state.IsKnown;
-        current->IsBusy = current->IsBusy || state.IsBusy;
+        if (IsBusyState(state.State)) current->IsBusy = true;
     }
 }
 

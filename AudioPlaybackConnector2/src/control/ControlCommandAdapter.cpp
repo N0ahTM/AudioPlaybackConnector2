@@ -651,7 +651,8 @@ Response FormatQuery(Request const& request,
                 }
             } else if (!snapshot.LastConnectedDeviceIds.empty()) {
                 const auto id = snapshot.LastConnectedDeviceIds.front();
-                auto found = std::ranges::find_if(devices, [&id](auto const& device) { return device.Id == id; });
+                auto found =
+                    std::ranges::find_if(devices, [&id](auto const& device) { return device.Id.View() == id.View(); });
                 if (found != devices.end()) {
                     target = *found;
                 } else {

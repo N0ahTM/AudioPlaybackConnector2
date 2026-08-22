@@ -175,8 +175,9 @@ private:
 
     [[nodiscard]] std::vector<DeviceRecord> BuildDevices(bool refresh, AppCommandContext const& context);
     [[nodiscard]] std::vector<DeviceRecord> BuildDevicesWithoutRefresh() const;
-    void SyncSettingsFromSource() const noexcept;
-    [[nodiscard]] std::vector<DeviceRecord> ReadConnectedDevices() const noexcept;
+    [[nodiscard]] bool SyncSettingsFromSource() const noexcept;
+    [[nodiscard]] std::vector<DeviceRecord> ReadConnectedDevices() const;
+    [[nodiscard]] AppSnapshot SnapshotFromDevices(std::vector<DeviceRecord> devices) const noexcept;
     [[nodiscard]] std::vector<DeviceRecord>
     MergeDevices(std::vector<DeviceRecord> refreshed, std::vector<DeviceRecord> connected, SettingsData settings) const;
     [[nodiscard]] AppSnapshot BuildSnapshot(std::vector<DeviceRecord> devices,

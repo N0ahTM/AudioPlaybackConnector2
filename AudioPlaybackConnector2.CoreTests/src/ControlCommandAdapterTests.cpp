@@ -542,6 +542,29 @@ void TestResultExitMappingAndGoldenTextJsonPrivacy() {
           "the raw flag must retain unredacted list text despite privacy mode");
 }
 
+void TestLongSnapshotIdsRemainWireVisibleAndRedactable() {
+    Harness harness;
+    const std::wstring longId(513, L'x');
+    const auto externalId = apc::app::ExternalDeviceId::TryCreate(longId);
+    Check(externalId.has_value(), "the long-ID adapter fixture must satisfy the P01 snapshot bound");
+    if (!externalId) return;
+
+    harness.Snapshot.Devices.push_back(
+        {*externalId, L"Long device", {}, L"Long device", DeviceConnectionState::Connected, true, true, false});
+    harness.Snapshot.Tray.ConnectedDevices.push_back(harness.Snapshot.Devices.back());
+    const auto visible = harness.Adapter.Handle(
+        MakeRequest(CommandType::List, TargetKind::None, {}, CommandFlagJson), {}, apc::control::DeadlineAfter(1000));
+    Check(visible.Payload.find(longId) != std::wstring::npos,
+          "list JSON must preserve a connected external ID beyond the persistence bound");
+
+    harness.Snapshot.PrivacyModeEnabled = true;
+    const auto privateStatus = harness.Adapter.Handle(
+        MakeRequest(CommandType::Status, TargetKind::None, {}, CommandFlagJson), {}, apc::control::DeadlineAfter(1000));
+    Check(privateStatus.Payload.find(L"\"id\":\"<value>\"") != std::wstring::npos &&
+              privateStatus.Payload.find(longId) == std::wstring::npos,
+          "status JSON must redact the same long external ID in privacy mode");
+}
+
 } // namespace
 
 int RunControlCommandAdapterTests() {
@@ -550,5 +573,6 @@ int RunControlCommandAdapterTests() {
     TestUiAndCliTypedParityAndContextPropagation();
     TestMutationBusyAndNonmutationConcurrency();
     TestResultExitMappingAndGoldenTextJsonPrivacy();
+    TestLongSnapshotIdsRemainWireVisibleAndRedactable();
     return g_failures;
 }

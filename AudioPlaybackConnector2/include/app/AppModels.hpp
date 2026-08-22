@@ -21,6 +21,33 @@ inline constexpr std::size_t c_maxAppCommandTextCharacters = 64u * 1024u / sizeo
 
 enum class DeviceConnectionState { Idle, Connecting, Connected, Disconnecting, WaitingForReconnect, Failed };
 
+// A snapshot identity is bounded by the P01 command payload, not by the
+// smaller P07 persistence field.  DeviceId remains the validated persistence
+// value; this type keeps a valid external identity lossless while offering a
+// bounded conversion for callers that need to address settings/MRU state.
+class ExternalDeviceId {
+public:
+    [[nodiscard]] static std::optional<ExternalDeviceId> TryCreate(std::wstring_view value) {
+        if (value.empty() || value.size() > c_maxAppCommandTextCharacters || value.contains(L'\0')) {
+            return std::nullopt;
+        }
+        return ExternalDeviceId(std::wstring(value));
+    }
+
+    ExternalDeviceId(apc::core::DeviceId const& value) : m_value(value.View()) {}
+
+    [[nodiscard]] std::wstring_view View() const noexcept { return m_value; }
+    [[nodiscard]] std::wstring ToString() const { return m_value; }
+    [[nodiscard]] std::optional<apc::core::DeviceId> Bounded() const { return apc::core::DeviceId::TryCreate(m_value); }
+
+    friend bool operator==(ExternalDeviceId const&, ExternalDeviceId const&) = default;
+
+private:
+    explicit ExternalDeviceId(std::wstring value) noexcept : m_value(std::move(value)) {}
+
+    std::wstring m_value;
+};
+
 // Selectors are either exact external ID text, a non-empty matching query, or
 // one of the two stateful selectors. Id() yields a validated internal ID when
 // the text also satisfies the P07 identity bound; IdText() preserves all valid
@@ -226,7 +253,7 @@ enum class AppOutcomeReason {
 struct DeviceSnapshot {
     // Name is retained for trusted matching and settings decisions. External
     // presentation uses DisplayName and the AppSnapshot privacy flag.
-    apc::core::DeviceId Id;
+    ExternalDeviceId Id;
     std::wstring Name;
     std::wstring Alias;
     std::wstring DisplayName;

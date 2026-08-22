@@ -187,6 +187,16 @@ void TestSnapshotsEventsAndCommandContextAreValueOnly() {
           "a command deadline must expire at its exact boundary");
 }
 
+void TestExternalSnapshotIdRetainsProtocolLengthWithoutWeakeningDeviceId() {
+    const std::wstring longId(513, L'x');
+    const auto external = apc::app::ExternalDeviceId::TryCreate(longId);
+    Check(external && external->View() == longId && !external->Bounded(),
+          "external snapshot IDs must retain valid P01 text while exposing no invalid persistence identity");
+    const auto bounded = apc::core::DeviceId::TryCreate(L"device-a");
+    Check(bounded && apc::app::ExternalDeviceId{*bounded}.Bounded() == bounded,
+          "external snapshot IDs must round-trip bounded DeviceId values");
+}
+
 } // namespace
 
 int RunAppModelsTests() {
@@ -194,5 +204,6 @@ int RunAppModelsTests() {
     TestSelectorNormalizationAndContracts();
     TestCommandContractsAndNormalizedResults();
     TestSnapshotsEventsAndCommandContextAreValueOnly();
+    TestExternalSnapshotIdRetainsProtocolLengthWithoutWeakeningDeviceId();
     return g_failures;
 }

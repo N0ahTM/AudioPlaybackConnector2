@@ -67,6 +67,9 @@ public:
         Subscription(Subscription&& other) noexcept;
         Subscription& operator=(Subscription&& other) noexcept;
 
+        // After this returns, another thread cannot enter this subscription's callback and any callback
+        // already running on another thread has completed. A callback may reset itself; that case disables
+        // future delivery but cannot wait for its own stack frame to return.
         void Reset() noexcept;
 
     private:

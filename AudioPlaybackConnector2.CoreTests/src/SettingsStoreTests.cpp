@@ -5,12 +5,15 @@
 #include <wil/resource.h>
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <fstream>
 #include <format>
 #include <iterator>
 #include <iostream>
+#include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -27,22 +30,48 @@ void Check(bool condition, char const* message) {
 class ControlledStorage final : public SettingsStoreStorage {
 public:
     std::optional<std::string> Read(std::filesystem::path const&) override {
-        std::scoped_lock lock(m_mutex);
+        bool waitedForReadRelease = false;
+        const auto finish = wil::scope_exit([&] {
+            std::scoped_lock lock(m_operationMutex);
+            if (waitedForReadRelease) --m_blockedReads;
+            --m_activeStorageOperations;
+        });
+        {
+            std::unique_lock lock(m_operationMutex);
+            ++m_reads;
+            ++m_activeStorageOperations;
+            m_maxConcurrentStorageOperations = std::max(m_maxConcurrentStorageOperations, m_activeStorageOperations);
+            m_readStarted.notify_all();
+            waitedForReadRelease = m_blockReads;
+            if (waitedForReadRelease) ++m_blockedReads;
+            m_allowRead.wait(lock, [&] { return !m_blockReads; });
+        }
+        std::scoped_lock lock(m_dataMutex);
         return m_input;
     }
 
     bool WriteAtomically(std::filesystem::path const&, std::string_view bytes) override {
-        std::unique_lock lock(m_mutex);
-        ++m_activeWriters;
-        m_maxActiveWriters = std::max(m_maxActiveWriters, m_activeWriters);
-        const auto finish = wil::scope_exit([&] { --m_activeWriters; });
-        ++m_writes;
-        m_writeStarted.notify_all();
-        m_allowWrite.wait(lock, [&] { return !m_blockWrites; });
-        if (m_failWrites != 0) {
-            --m_failWrites;
-            return false;
+        const auto finish = wil::scope_exit([&] {
+            std::scoped_lock lock(m_operationMutex);
+            --m_activeWriters;
+            --m_activeStorageOperations;
+        });
+        {
+            std::unique_lock lock(m_operationMutex);
+            ++m_activeWriters;
+            ++m_activeStorageOperations;
+            m_maxActiveWriters = std::max(m_maxActiveWriters, m_activeWriters);
+            m_maxConcurrentStorageOperations = std::max(m_maxConcurrentStorageOperations, m_activeStorageOperations);
+            if (m_blockedReads != 0) m_writeEnteredWhileReadBlocked = true;
+            ++m_writes;
+            m_writeStarted.notify_all();
+            m_allowWrite.wait(lock, [&] { return !m_blockWrites; });
+            if (m_failWrites != 0) {
+                --m_failWrites;
+                return false;
+            }
         }
+        std::scoped_lock lock(m_dataMutex);
         m_output.assign(bytes);
         return true;
     }
@@ -50,50 +79,127 @@ public:
     void PreserveCorrupt(std::filesystem::path const&) noexcept override { ++m_corruptPreservations; }
 
     void SetInput(std::optional<std::string> input) {
-        std::scoped_lock lock(m_mutex);
+        std::scoped_lock lock(m_dataMutex);
         m_input = std::move(input);
     }
 
     void BlockWrites() {
-        std::scoped_lock lock(m_mutex);
+        std::scoped_lock lock(m_operationMutex);
         m_blockWrites = true;
+    }
+
+    void BlockReads() {
+        std::scoped_lock lock(m_operationMutex);
+        m_blockReads = true;
     }
 
     void ReleaseWrites() {
         {
-            std::scoped_lock lock(m_mutex);
+            std::scoped_lock lock(m_operationMutex);
             m_blockWrites = false;
         }
         m_allowWrite.notify_all();
     }
 
+    void ReleaseReads() {
+        {
+            std::scoped_lock lock(m_operationMutex);
+            m_blockReads = false;
+        }
+        m_allowRead.notify_all();
+    }
+
     void WaitForWrite() {
-        std::unique_lock lock(m_mutex);
+        std::unique_lock lock(m_operationMutex);
         m_writeStarted.wait(lock, [&] { return m_writes != 0; });
     }
 
+    void WaitForWrites(unsigned int count) {
+        std::unique_lock lock(m_operationMutex);
+        m_writeStarted.wait(lock, [&] { return m_writes >= count; });
+    }
+
+    void WaitForRead() {
+        std::unique_lock lock(m_operationMutex);
+        m_readStarted.wait(lock, [&] { return m_reads != 0; });
+    }
+
     [[nodiscard]] std::string Output() const {
-        std::scoped_lock lock(m_mutex);
+        std::scoped_lock lock(m_dataMutex);
         return m_output;
     }
 
     unsigned int m_failWrites = 0;
     std::atomic_uint32_t m_corruptPreservations = 0;
     [[nodiscard]] unsigned int MaxActiveWriters() const {
-        std::scoped_lock lock(m_mutex);
+        std::scoped_lock lock(m_operationMutex);
         return m_maxActiveWriters;
     }
 
+    [[nodiscard]] unsigned int ReadCount() const {
+        std::scoped_lock lock(m_operationMutex);
+        return m_reads;
+    }
+
+    [[nodiscard]] unsigned int MaxConcurrentStorageOperations() const {
+        std::scoped_lock lock(m_operationMutex);
+        return m_maxConcurrentStorageOperations;
+    }
+
+    [[nodiscard]] bool DidWriteEnterWhileReadBlocked() const {
+        std::scoped_lock lock(m_operationMutex);
+        return m_writeEnteredWhileReadBlocked;
+    }
+
 private:
-    mutable std::mutex m_mutex;
+    mutable std::mutex m_operationMutex;
+    mutable std::mutex m_dataMutex;
     std::condition_variable m_writeStarted;
     std::condition_variable m_allowWrite;
+    std::condition_variable m_readStarted;
+    std::condition_variable m_allowRead;
     std::optional<std::string> m_input;
     std::string m_output;
     unsigned int m_writes = 0;
+    unsigned int m_reads = 0;
     unsigned int m_activeWriters = 0;
+    unsigned int m_activeStorageOperations = 0;
+    unsigned int m_blockedReads = 0;
     unsigned int m_maxActiveWriters = 0;
+    unsigned int m_maxConcurrentStorageOperations = 0;
     bool m_blockWrites = false;
+    bool m_blockReads = false;
+    bool m_writeEnteredWhileReadBlocked = false;
+};
+
+class CallbackGate final {
+public:
+    void EnterAndWait() {
+        std::unique_lock lock(m_mutex);
+        m_entered = true;
+        m_enteredChanged.notify_all();
+        m_releaseChanged.wait(lock, [&] { return m_released; });
+    }
+
+    void WaitForEntry() {
+        std::unique_lock lock(m_mutex);
+        m_enteredChanged.wait(lock, [&] { return m_entered; });
+    }
+
+    void Release() {
+        {
+            std::scoped_lock lock(m_mutex);
+            m_released = true;
+        }
+        m_releaseChanged.notify_all();
+    }
+
+private:
+    std::mutex m_mutex;
+    std::condition_variable m_enteredChanged;
+    std::condition_variable m_releaseChanged;
+    bool m_entered = false;
+    bool m_released = false;
 };
 
 class ScopedTestDirectory final {
@@ -201,6 +307,41 @@ void TestValidationAndLoadNormalizationMatrix() {
     Check(unchanged.DeviceExists && unchanged.Mutation.Status == SettingsMutationStatus::Unchanged,
           "an unchanged known device must remain distinguishable from an unknown device");
     static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+}
+
+void TestLegacyWindowDpiLoadCompatibility() {
+    struct DpiCase {
+        std::string Json;
+        std::optional<std::uint32_t> ExpectedDpi;
+    };
+
+    const std::vector<DpiCase> cases{
+        {R"({"settingsWindowBounds":{"width":320,"height":240,"dpi":-1}})", USER_DEFAULT_SCREEN_DPI},
+        {R"({"settingsWindowBounds":{"width":320,"height":240,"dpi":0}})", USER_DEFAULT_SCREEN_DPI},
+        {R"({"settingsWindowBounds":{"width":320,"height":240}})", USER_DEFAULT_SCREEN_DPI},
+        {std::format(R"({{"settingsWindowBounds":{{"width":320,"height":240,"dpi":{}}}}})", USER_DEFAULT_SCREEN_DPI),
+         USER_DEFAULT_SCREEN_DPI},
+        {R"({"settingsWindowBounds":{"width":320,"height":240,"dpi":144}})", 144},
+        {std::format(R"({{"settingsWindowBounds":{{"width":320,"height":240,"dpi":{}}}}})",
+                     apc::limits::c_minWindowDpi - 1),
+         std::nullopt},
+        {std::format(R"({{"settingsWindowBounds":{{"width":320,"height":240,"dpi":{}}}}})",
+                     apc::limits::c_maxWindowDpi + 1),
+         std::nullopt},
+    };
+
+    for (auto const& test : cases) {
+        auto storage = std::make_shared<ControlledStorage>();
+        storage->SetInput(test.Json);
+        SettingsStore store({}, storage);
+        store.Load();
+        const auto bounds = store.Snapshot().Data.SettingsWindowBounds;
+        Check(bounds.has_value() == test.ExpectedDpi.has_value(), "legacy DPI compatibility must retain valid bounds");
+        if (bounds && test.ExpectedDpi)
+            Check(bounds->Dpi == *test.ExpectedDpi,
+                  "legacy nonpositive DPI must normalize before persisted-bound validation");
+        static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+    }
 }
 
 void TestProductionCorruptPreservationAndAtomicWrite() {
@@ -343,6 +484,183 @@ void TestMutationDuringBlockedWriteAndFinalFlush() {
     static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
 }
 
+void TestLoadAdmissionFencesMutationAndFlush() {
+    auto storage = std::make_shared<ControlledStorage>();
+    storage->SetInput(R"({"language":"fr","privacyModeEnabled":false})");
+    storage->BlockReads();
+    SettingsStore store({}, storage);
+    std::jthread loading([&] { store.Load(); });
+    storage->WaitForRead();
+
+    SettingsMutationResult mutation;
+    bool flushed = false;
+    std::jthread mutating([&] { mutation = store.SetPrivacyModeEnabled(true); });
+    std::jthread flushing([&] { flushed = store.FlushNow(2); });
+    storage->ReleaseReads();
+    loading.join();
+    mutating.join();
+    flushing.join();
+
+    const auto snapshot = store.Snapshot();
+    Check(mutation.IsApplied() && snapshot.Data.Language == L"fr" && snapshot.Data.PrivacyModeEnabled,
+          "an admitted load must normalize before a concurrent mutation is committed");
+    Check(flushed && storage->MaxConcurrentStorageOperations() == 1,
+          "load and synchronous flush must serialize storage access");
+    Check(!storage->DidWriteEnterWhileReadBlocked(),
+          "a synchronous write must not enter the storage boundary while the admitted read is blocked");
+    static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+}
+
+void TestShutdownWaitsForAdmittedLoad() {
+    auto storage = std::make_shared<ControlledStorage>();
+    storage->SetInput(R"({"language":"ko"})");
+    storage->BlockReads();
+    SettingsStore store({}, storage);
+    std::jthread loading([&] { store.Load(); });
+    storage->WaitForRead();
+
+    bool shutdownResult = false;
+    std::jthread shuttingDown([&] { shutdownResult = store.Shutdown(SettingsShutdownMode::Flush, 2); });
+    storage->ReleaseReads();
+    loading.join();
+    shuttingDown.join();
+
+    Check(shutdownResult && store.Snapshot().Data.Language == L"ko",
+          "shutdown must retain an admitted load before completing its final flush boundary");
+    Check(storage->MaxConcurrentStorageOperations() == 1,
+          "shutdown must not overlap its persistence boundary with an admitted read");
+}
+
+void TestShutdownClosesAdmissionBeforeAdmittedLoadCompletes() {
+    auto storage = std::make_shared<ControlledStorage>();
+    storage->SetInput(R"({"language":"fr"})");
+    storage->BlockReads();
+    SettingsStore store({}, storage);
+    std::jthread loading([&] { store.Load(); });
+    storage->WaitForRead();
+
+    bool shutdownResult = false;
+    SettingsMutationResult postShutdownMutation;
+    std::mutex mutationMutex;
+    std::condition_variable mutationChanged;
+    bool mutationStarted = false;
+    bool mutationFinished = false;
+    // The mutation begins while Load owns admission. It cannot pass that fence before shutdown closes the
+    // store, regardless of which waiter receives the state mutex first after the read completes.
+    std::jthread mutating([&] {
+        {
+            std::scoped_lock lock(mutationMutex);
+            mutationStarted = true;
+        }
+        mutationChanged.notify_all();
+        postShutdownMutation = store.SetPrivacyModeEnabled(false);
+        {
+            std::scoped_lock lock(mutationMutex);
+            mutationFinished = true;
+        }
+        mutationChanged.notify_all();
+    });
+    {
+        std::unique_lock lock(mutationMutex);
+        mutationChanged.wait(lock, [&] { return mutationStarted; });
+    }
+    std::jthread shuttingDown([&] { shutdownResult = store.Shutdown(SettingsShutdownMode::Flush, 2); });
+    bool mutationRejectedBeforeReadRelease = false;
+    {
+        std::unique_lock lock(mutationMutex);
+        mutationRejectedBeforeReadRelease =
+            mutationChanged.wait_for(lock, std::chrono::seconds(5), [&] { return mutationFinished; });
+    }
+    storage->ReleaseReads();
+    loading.join();
+    mutating.join();
+    shuttingDown.join();
+
+    std::atomic_uint32_t lateCallbackCount = 0;
+    auto lateSubscription = store.Subscribe([&](SettingsSnapshot const&) { ++lateCallbackCount; });
+    static_cast<void>(store.SetLanguage(L"de"));
+    lateSubscription.Reset();
+    Check(mutationRejectedBeforeReadRelease && shutdownResult &&
+              postShutdownMutation.Status == SettingsMutationStatus::Rejected,
+          "shutdown must promptly reject a mutation waiting behind an admitted blocked Load");
+    Check(store.Snapshot().Data.Language == L"fr" && lateCallbackCount == 0,
+          "an admitted load must publish state without callbacks after shutdown closes admission");
+    Check(!storage->DidWriteEnterWhileReadBlocked(),
+          "shutdown's final flush must not enter storage while the admitted read remains blocked");
+}
+
+void TestMutationBeforeLoadSkipsStorageRead() {
+    auto storage = std::make_shared<ControlledStorage>();
+    storage->SetInput(R"({"language":"fr"})");
+    SettingsStore store({}, storage);
+    Check(store.SetLanguage(L"de").IsApplied(), "runtime mutation must commit before a first load attempt");
+    store.Load();
+    Check(storage->ReadCount() == 0 && store.Snapshot().Data.Language == L"de",
+          "a mutation before Load must make the later load a no-op without storage I/O");
+    Check(store.FlushNow(2), "the runtime-owned revision must remain persistable after a skipped load");
+    Check(storage->MaxConcurrentStorageOperations() == 1, "a skipped load must not race the writer with a file read");
+    static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+}
+
+void TestAutomaticDebounceAndRetry() {
+    auto storage = std::make_shared<ControlledStorage>();
+    storage->m_failWrites = 1;
+    SettingsStore store({}, storage);
+    Check(store.SetLanguage(L"fr").IsApplied(), "automatic persistence must begin from a committed mutation");
+    storage->WaitForWrites(2);
+    Check(storage->Output().find("\"language\":\"fr\"") != std::string::npos,
+          "the worker must retry the failed debounced write without a caller-driven flush");
+    Check(storage->MaxActiveWriters() == 1, "automatic retry must retain one writer at a time");
+    static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+}
+
+void TestPersistedMutationRoundTrip() {
+    auto storage = std::make_shared<ControlledStorage>();
+    SettingsStore writer({}, storage);
+    Check(writer.SetGlobalConnectOnStartup(true).IsApplied(), "global startup policy must persist");
+    Check(writer.SetGlobalReconnectOnConnectionLoss(true).IsApplied(), "global reconnect policy must persist");
+    Check(writer.SetAllowIncomingConnections(true).IsApplied(), "incoming policy must persist");
+    Check(writer.SetStartWithWindows(true).IsApplied(), "startup registration preference must persist");
+    Check(writer.SetShowNotifications(false).IsApplied(), "notification preference must persist");
+    Check(writer.SetUseSystemBackdropEffects(false).IsApplied(), "backdrop preference must persist");
+    Check(writer.SetLanguage(L"de").IsApplied(), "language must persist");
+    Check(writer.SetPrivacyModeEnabled(true).IsApplied(), "privacy preference must persist");
+    Check(writer.SetSettingsWindowBounds(PersistedWindowBounds{1, 2, 320, 240, 144}).IsApplied(),
+          "validated window bounds must persist");
+    Check(writer.RecordConnectedDevice(L"primary", L"Primary").AddedDevice, "recorded device data must persist");
+    Check(writer.SetDeviceConnectOnStartup(L"primary", false).IsApplied(),
+          "per-device startup policy mutation must persist");
+    Check(writer.SetDeviceReconnectOnConnectionLoss(L"primary", false).IsApplied(),
+          "per-device reconnect policy mutation must persist");
+    Check(writer.SetDeviceAlias(L"primary", L"Desk").Mutation.IsApplied(), "device alias mutation must persist");
+    Check(writer.RecordConnectedDevice(L"removed", L"Removed").AddedDevice,
+          "a second device must exercise forget-device persistence");
+    Check(writer.ForgetDevice(L"removed").IsApplied(), "forget-device mutation must persist its removal");
+    Check(writer.SetDefaultDevice(L"primary").IsApplied(), "default-device mutation must persist");
+    Check(writer.ClearDefaultDevice().IsApplied(), "clear-default mutation must persist");
+    Check(writer.SetDefaultDevice(L"primary").IsApplied(), "default-device reset must persist");
+    Check(writer.RecordUpdateCheckMetadata(42, std::wstring(L"2.0")).IsApplied(),
+          "update metadata mutation must persist");
+    Check(writer.FlushNow(2), "all persisted mutation fields must serialize in one snapshot");
+    storage->SetInput(storage->Output());
+    static_cast<void>(writer.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+
+    SettingsStore reader({}, storage);
+    reader.Load();
+    const auto& data = reader.Snapshot().Data;
+    Check(data.GlobalConnectOnStartup && data.GlobalReconnectOnConnectionLoss && data.AllowIncomingConnections &&
+              data.StartWithWindows && !data.ShowNotifications && !data.UseSystemBackdropEffects &&
+              data.Language == L"de" && data.PrivacyModeEnabled && data.LastUpdateCheckUnixSeconds == 42 &&
+              data.LastNotifiedUpdateVersion == L"2.0" &&
+              data.SettingsWindowBounds == PersistedWindowBounds{1, 2, 320, 240, 144} &&
+              data.DefaultDevice == DefaultDeviceMode::SpecificDevice && data.DefaultDeviceId == L"primary" &&
+              data.Devices ==
+                  std::vector<DeviceSettings>{DeviceSettings{L"primary", L"Primary", L"Desk", false, false}} &&
+              data.LastConnectedIds == std::vector<std::wstring>{L"primary"},
+          "every serialized settings field must round-trip through a fresh store");
+    static_cast<void>(reader.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+}
+
 void TestSubscriptionsAreOrderedAndReentrant() {
     auto storage = std::make_shared<ControlledStorage>();
     SettingsStore store({}, storage);
@@ -356,6 +674,71 @@ void TestSubscriptionsAreOrderedAndReentrant() {
           "subscriptions must publish committed revisions in order and allow reentrancy");
     subscription.Reset();
     static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+}
+
+void TestResetFencesBlockedCallback() {
+    auto storage = std::make_shared<ControlledStorage>();
+    SettingsStore store({}, storage);
+    CallbackGate callbackGate;
+    std::atomic_bool callbackCompleted = false;
+    std::atomic_uint32_t callbackCount = 0;
+    auto subscription = store.Subscribe([&](SettingsSnapshot const&) {
+        callbackGate.EnterAndWait();
+        callbackCompleted = true;
+        ++callbackCount;
+    });
+
+    std::jthread mutating([&] { static_cast<void>(store.SetPrivacyModeEnabled(true)); });
+    callbackGate.WaitForEntry();
+    std::atomic_bool resetReturnedAfterCallback = false;
+    std::jthread resetting([&] {
+        subscription.Reset();
+        resetReturnedAfterCallback = callbackCompleted.load();
+    });
+    callbackGate.Release();
+    mutating.join();
+    resetting.join();
+
+    Check(resetReturnedAfterCallback,
+          "Reset must wait for a callback admitted before its deactivation fence before returning");
+    static_cast<void>(store.SetLanguage(L"fr"));
+    Check(callbackCount == 1, "a reset subscription must remain inactive for later queued publications");
+    static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+}
+
+void TestSelfResetSuppressesQueuedCallback() {
+    auto storage = std::make_shared<ControlledStorage>();
+    SettingsStore store({}, storage);
+    std::vector<std::uint64_t> revisions;
+    std::optional<SettingsStore::Subscription> subscription;
+    subscription.emplace(store.Subscribe([&](SettingsSnapshot const& snapshot) {
+        revisions.push_back(snapshot.Revision);
+        if (snapshot.Revision != 1) return;
+        Check(store.SetLanguage(L"fr").IsApplied(), "reentrant mutation must enqueue a later publication");
+        subscription->Reset();
+    }));
+    Check(store.SetPrivacyModeEnabled(true).IsApplied(), "initial callback-driving mutation must apply");
+    Check(revisions == std::vector<std::uint64_t>{1},
+          "self-reset must not deadlock and must suppress the callback already queued by reentrancy");
+    static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+}
+
+void TestCallbackCanDestroyStoreDuringPublicationDrain() {
+    auto storage = std::make_shared<ControlledStorage>();
+    auto store = std::make_unique<SettingsStore>(std::filesystem::path{}, storage);
+    std::optional<SettingsStore::Subscription> subscription;
+    bool callbackReturned = false;
+    subscription.emplace(store->Subscribe([&](SettingsSnapshot const&) {
+        subscription->Reset();
+        store.reset();
+        callbackReturned = true;
+    }));
+    auto* rawStore = store.get();
+    Check(rawStore->SetPrivacyModeEnabled(true).IsApplied(),
+          "callback-driven destruction must leave commit completion valid");
+    Check(!store && callbackReturned,
+          "publication draining must retain the implementation until callback-driven destruction returns");
+    subscription.reset();
 }
 
 void TestSubscriberInitiatedShutdownDoesNotDeadlock() {
@@ -432,6 +815,7 @@ int RunSettingsStoreTests() {
     TestCurrentLegacyPartialAndMalformed();
     TestMissingEmptyAndCurrentRoundTrip();
     TestValidationAndLoadNormalizationMatrix();
+    TestLegacyWindowDpiLoadCompatibility();
     TestProductionCorruptPreservationAndAtomicWrite();
     TestReplacementFailurePreservesOldBytesAndCleansTemporaryFile();
     TestOversizedInputIsPreserved();
@@ -439,7 +823,16 @@ int RunSettingsStoreTests() {
     TestDeviceIdValidationRejectsWithoutRevision();
     TestRecordConnectedDeviceEffectiveReconnectPolicy();
     TestMutationDuringBlockedWriteAndFinalFlush();
+    TestLoadAdmissionFencesMutationAndFlush();
+    TestShutdownWaitsForAdmittedLoad();
+    TestShutdownClosesAdmissionBeforeAdmittedLoadCompletes();
+    TestMutationBeforeLoadSkipsStorageRead();
+    TestAutomaticDebounceAndRetry();
+    TestPersistedMutationRoundTrip();
     TestSubscriptionsAreOrderedAndReentrant();
+    TestResetFencesBlockedCallback();
+    TestSelfResetSuppressesQueuedCallback();
+    TestCallbackCanDestroyStoreDuringPublicationDrain();
     TestSubscriberInitiatedShutdownDoesNotDeadlock();
     TestConcurrentShutdownCallersShareCoreResult();
     TestRetryAndDiscardShutdown();

@@ -9,7 +9,6 @@
 
 #include <condition_variable>
 #include <deque>
-#include <atomic>
 #include <limits>
 #include <thread>
 #include <type_traits>
@@ -216,18 +215,58 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
     std::uint64_t revision = 0;
     std::uint64_t persistedRevision = 0;
     std::uint64_t nextSubscriptionId = 0;
-    struct SubscriptionEntry {
+    struct SubscriptionState {
+        explicit SubscriptionState(SnapshotCallback callback) : Callback(std::move(callback)) {}
+
+        bool TryBeginCallback() noexcept {
+            std::scoped_lock lock(Mutex);
+            if (!IsActive) return false;
+            IsExecuting = true;
+            ExecutingThread = std::this_thread::get_id();
+            return true;
+        }
+
+        void Deactivate() noexcept {
+            std::scoped_lock lock(Mutex);
+            IsActive = false;
+        }
+
+        void CompleteCallback() noexcept {
+            {
+                std::scoped_lock lock(Mutex);
+                IsExecuting = false;
+                ExecutingThread = {};
+            }
+            Drained.notify_all();
+        }
+
+        void DeactivateAndWait() noexcept {
+            std::unique_lock lock(Mutex);
+            IsActive = false;
+            // A callback cannot wait for itself to return. Its inactive state still fences every later
+            // publication; CompleteCallback releases concurrent Reset or shutdown callers.
+            if (IsExecuting && ExecutingThread == std::this_thread::get_id()) return;
+            Drained.wait(lock, [&] { return !IsExecuting; });
+        }
+
         SnapshotCallback Callback;
-        std::shared_ptr<std::atomic_bool> IsActive;
+        std::mutex Mutex;
+        std::condition_variable Drained;
+        bool IsActive = true;
+        bool IsExecuting = false;
+        std::thread::id ExecutingThread;
+    };
+    using SubscriptionStatePtr = std::shared_ptr<SubscriptionState>;
+    struct SubscriptionEntry {
+        SubscriptionStatePtr State;
     };
     std::unordered_map<std::uint64_t, SubscriptionEntry> subscriptions;
     struct Publication {
         SettingsSnapshot Snapshot;
-        std::vector<SnapshotCallback> Callbacks;
+        std::vector<SubscriptionStatePtr> Subscriptions;
     };
     std::deque<Publication> pendingPublications;
     bool publishing = false;
-    bool callbackActive = false;
     std::thread::id publisherThread;
     std::filesystem::path persistenceDirectory;
     std::shared_ptr<SettingsStoreStorage> storage;
@@ -242,10 +281,19 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
     bool synchronousFallback = false;
     bool workerStartKnown = false;
     bool loadClaimed = false;
+    bool loadActive = false;
     unsigned int failures = 0;
     std::jthread worker;
 
     [[nodiscard]] SettingsSnapshot SnapshotLocked() const { return {data, revision, revision != persistedRevision}; }
+
+    void CompleteLoadWithoutCommit() noexcept {
+        {
+            std::scoped_lock lock(mutex);
+            loadActive = false;
+        }
+        changed.notify_all();
+    }
 
     [[nodiscard]] std::filesystem::path Path() const {
         if (!persistenceDirectory.empty()) return persistenceDirectory / L"AudioPlaybackConnector2.json";
@@ -375,7 +423,7 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
                 std::unique_lock lock(mutex);
                 timerArmed = false;
                 changed.notify_all();
-                changed.wait(lock, [&] { return !writerActive; });
+                changed.wait(lock, [&] { return !writerActive && !loadActive; });
                 if (discardRequested || revision == persistedRevision) return true;
                 writerActive = true;
                 snapshot = data;
@@ -403,11 +451,12 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
         workerStartKnown = true;
         changed.notify_all();
         while (!stopToken.stop_requested()) {
-            changed.wait(lock, [&] { return stopToken.stop_requested() || shutdownRequested || timerArmed; });
+            changed.wait(
+                lock, [&] { return stopToken.stop_requested() || shutdownRequested || (timerArmed && !loadActive); });
             if (stopToken.stop_requested() || shutdownRequested) return;
             const auto scheduled = due;
             if (changed.wait_until(lock, scheduled, [&] {
-                    return stopToken.stop_requested() || shutdownRequested || due != scheduled;
+                    return stopToken.stop_requested() || shutdownRequested || due != scheduled || loadActive;
                 }))
                 continue;
             SettingsData snapshot;
@@ -424,17 +473,21 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
         }
     }
 
-    void EnqueuePublicationWithLockHeld(SettingsSnapshot snapshot, std::vector<SnapshotCallback> callbacks) {
-        pendingPublications.push_back({std::move(snapshot), std::move(callbacks)});
+    void EnqueuePublicationWithLockHeld(SettingsSnapshot snapshot, std::vector<SubscriptionStatePtr> subscriptions) {
+        pendingPublications.push_back({std::move(snapshot), std::move(subscriptions)});
     }
 
     void DeactivateSubscriptionsLocked() noexcept {
         for (auto const& [_, entry] : subscriptions)
-            entry.IsActive->store(false, std::memory_order_release);
+            entry.State->Deactivate();
         subscriptions.clear();
     }
 
     void DrainPublications() noexcept {
+        // A callback may destroy the public SettingsStore. Hold the implementation through the complete
+        // no-lock drain so returning from that callback never resumes into a destroyed Impl.
+        const auto lifetime = shared_from_this();
+        static_cast<void>(lifetime);
         {
             std::scoped_lock lock(publicationMutex);
             if (publishing) return;
@@ -454,25 +507,14 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
                 publication = std::move(pendingPublications.front());
                 pendingPublications.pop_front();
             }
-            for (auto const& callback : publication.Callbacks) {
-                {
-                    std::scoped_lock stateLock(mutex);
-                    if (closing) break;
-                }
-                {
-                    std::scoped_lock publicationLock(publicationMutex);
-                    callbackActive = true;
-                }
+            for (auto const& subscription : publication.Subscriptions) {
+                if (!subscription->TryBeginCallback()) continue;
                 try {
-                    callback(publication.Snapshot);
+                    subscription->Callback(publication.Snapshot);
                 } catch (...) {
                     DebugTrace(L"[SettingsStore] subscriber threw");
                 }
-                {
-                    std::scoped_lock publicationLock(publicationMutex);
-                    callbackActive = false;
-                }
-                publicationChanged.notify_all();
+                subscription->CompleteCallback();
             }
         }
     }
@@ -480,23 +522,28 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
     void WaitForPublicationDrain() noexcept {
         std::unique_lock publicationLock(publicationMutex);
         if (publishing && publisherThread == std::this_thread::get_id()) return;
-        publicationChanged.wait(publicationLock, [&] { return !publishing && !callbackActive; });
+        publicationChanged.wait(publicationLock, [&] { return !publishing; });
     }
 
     template <typename Mutation> [[nodiscard]] SettingsMutationResult Commit(Mutation&& mutation) {
-        std::vector<SnapshotCallback> callbacks;
+        // Callbacks may destroy SettingsStore while DrainPublications runs. Keep the implementation alive
+        // through the synchronous-fallback write that follows the drain as well.
+        const auto lifetime = shared_from_this();
+        static_cast<void>(lifetime);
+        std::vector<SubscriptionStatePtr> subscriptionsToNotify;
         SettingsSnapshot snapshot;
         std::uint64_t committedRevision = 0;
         bool useSynchronousFallback = false;
         {
-            std::scoped_lock lock(mutex);
+            std::unique_lock lock(mutex);
+            changed.wait(lock, [&] { return closing || shutdownRequested || !loadActive; });
             if (closing || shutdownRequested) return {SettingsMutationStatus::Rejected, revision};
             if (revision == std::numeric_limits<std::uint64_t>::max())
                 return {SettingsMutationStatus::Rejected, revision};
 
             // Keep the drainer from observing a queued publication until the no-throw live-state move below
-            // completes. The state lock is acquired first everywhere in this implementation, so this second
-            // lock cannot introduce a lock-order inversion with the drainer.
+            // completes. Store code takes mutex before publicationMutex whenever it needs both; publication
+            // draining and subscriber callbacks never hold either lock while invoking external code.
             std::unique_lock publicationLock(publicationMutex, std::defer_lock);
             if (!subscriptions.empty()) publicationLock.lock();
 
@@ -509,13 +556,11 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
             committedRevision = revision + 1;
             if (!subscriptions.empty()) {
                 snapshot = {candidate, committedRevision, committedRevision != persistedRevision};
-                callbacks.reserve(subscriptions.size());
+                subscriptionsToNotify.reserve(subscriptions.size());
                 for (auto const& [_, entry] : subscriptions) {
-                    callbacks.push_back([entry](SettingsSnapshot const& published) {
-                        if (entry.IsActive->load(std::memory_order_acquire)) entry.Callback(published);
-                    });
+                    subscriptionsToNotify.push_back(entry.State);
                 }
-                EnqueuePublicationWithLockHeld(std::move(snapshot), std::move(callbacks));
+                EnqueuePublicationWithLockHeld(std::move(snapshot), std::move(subscriptionsToNotify));
             }
 
             // SettingsData is statically required to have a no-throw move assignment. From this point on the
@@ -590,11 +635,11 @@ SettingsStore::Subscription SettingsStore::Subscribe(SnapshotCallback callback) 
     std::scoped_lock lock(m_impl->mutex);
     if (m_impl->shutdownRequested || m_impl->closing) return {};
     const auto identifier = ++m_impl->nextSubscriptionId;
-    auto active = std::make_shared<std::atomic_bool>(true);
-    m_impl->subscriptions.emplace(identifier, Impl::SubscriptionEntry{std::move(callback), active});
+    auto state = std::make_shared<Impl::SubscriptionState>(std::move(callback));
+    m_impl->subscriptions.emplace(identifier, Impl::SubscriptionEntry{state});
     std::weak_ptr weak = m_impl;
-    return Subscription([weak, active, identifier] {
-        active->store(false, std::memory_order_release);
+    return Subscription([weak, state, identifier] {
+        state->DeactivateAndWait();
         if (auto impl = weak.lock()) {
             std::scoped_lock lock(impl->mutex);
             impl->subscriptions.erase(identifier);
@@ -603,16 +648,26 @@ SettingsStore::Subscription SettingsStore::Subscribe(SnapshotCallback callback) 
 }
 
 void SettingsStore::Load() {
+    const auto lifetime = m_impl;
+    static_cast<void>(lifetime);
     SettingsData loaded;
     {
         std::scoped_lock lock(m_impl->mutex);
         if (m_impl->loadClaimed || m_impl->closing || m_impl->shutdownRequested) return;
         m_impl->loadClaimed = true;
+        // Runtime changes own the state once they have committed. A later Load must not race the writer or
+        // replace those changes with an older file snapshot.
+        if (m_impl->revision != 0) return;
+        m_impl->loadActive = true;
     }
-    const auto path = m_impl->Path();
+    std::filesystem::path path;
     try {
+        path = m_impl->Path();
         const auto bytes = m_impl->storage->Read(path);
-        if (!bytes || bytes->empty()) return;
+        if (!bytes || bytes->empty()) {
+            m_impl->CompleteLoadWithoutCommit();
+            return;
+        }
         const auto json = winrt::Windows::Data::Json::JsonObject::Parse(winrt::to_hstring(*bytes));
         const auto legacyGlobal = GetOptionalBoolean(json, L"globalAutoReconnect", false);
         loaded.GlobalConnectOnStartup = GetOptionalBoolean(json, L"globalConnectOnStartup", legacyGlobal);
@@ -636,12 +691,13 @@ void SettingsStore::Load() {
             loaded.DefaultDeviceId.clear();
         }
         if (auto boundsJson = GetOptionalObject(json, L"settingsWindowBounds")) {
+            const auto persistedDpi = GetOptionalInt32(boundsJson, L"dpi", USER_DEFAULT_SCREEN_DPI);
             PersistedWindowBounds bounds{
                 GetOptionalInt32(boundsJson, L"x", 0),
                 GetOptionalInt32(boundsJson, L"y", 0),
                 GetOptionalInt32(boundsJson, L"width", 0),
                 GetOptionalInt32(boundsJson, L"height", 0),
-                static_cast<std::uint32_t>(GetOptionalInt32(boundsJson, L"dpi", USER_DEFAULT_SCREEN_DPI))};
+                static_cast<std::uint32_t>(persistedDpi > 0 ? persistedDpi : USER_DEFAULT_SCREEN_DPI)};
             if (bounds.Width > 0 && bounds.Height > 0 && bounds.Dpi >= apc::limits::c_minWindowDpi &&
                 bounds.Dpi <= apc::limits::c_maxWindowDpi)
                 loaded.SettingsWindowBounds = bounds;
@@ -685,34 +741,46 @@ void SettingsStore::Load() {
     } catch (std::exception const& exception) {
         DebugTrace(L"[SettingsStore] load failed: {0}", util::Utf8ToUtf16(exception.what()));
         m_impl->storage->PreserveCorrupt(path);
+        m_impl->CompleteLoadWithoutCommit();
         return;
     } catch (...) {
         DebugTrace(L"[SettingsStore] load failed");
         m_impl->storage->PreserveCorrupt(path);
+        m_impl->CompleteLoadWithoutCommit();
         return;
     }
-    std::vector<SnapshotCallback> callbacks;
+    std::vector<Impl::SubscriptionStatePtr> subscriptionsToNotify;
     SettingsSnapshot snapshot;
-    {
-        std::scoped_lock lock(m_impl->mutex);
-        if (m_impl->shutdownRequested || m_impl->closing || m_impl->revision != 0) return;
-
-        std::unique_lock publicationLock(m_impl->publicationMutex, std::defer_lock);
-        if (!m_impl->subscriptions.empty()) publicationLock.lock();
-        if (!m_impl->subscriptions.empty()) {
-            snapshot = {loaded, 1, false};
-            callbacks.reserve(m_impl->subscriptions.size());
-            for (auto const& [_, entry] : m_impl->subscriptions) {
-                callbacks.push_back([entry](SettingsSnapshot const& published) {
-                    if (entry.IsActive->load(std::memory_order_acquire)) entry.Callback(published);
-                });
+    try {
+        {
+            std::scoped_lock lock(m_impl->mutex);
+            if (m_impl->shutdownRequested || m_impl->revision != 0) {
+                m_impl->loadActive = false;
+                m_impl->changed.notify_all();
+                return;
             }
-            m_impl->EnqueuePublicationWithLockHeld(std::move(snapshot), std::move(callbacks));
-        }
 
-        m_impl->data = std::move(loaded);
-        m_impl->revision = 1;
-        m_impl->persistedRevision = 1;
+            std::unique_lock publicationLock(m_impl->publicationMutex, std::defer_lock);
+            const auto shouldPublish = !m_impl->closing && !m_impl->subscriptions.empty();
+            if (shouldPublish) publicationLock.lock();
+            if (shouldPublish) {
+                snapshot = {loaded, 1, false};
+                subscriptionsToNotify.reserve(m_impl->subscriptions.size());
+                for (auto const& [_, entry] : m_impl->subscriptions) {
+                    subscriptionsToNotify.push_back(entry.State);
+                }
+                m_impl->EnqueuePublicationWithLockHeld(std::move(snapshot), std::move(subscriptionsToNotify));
+            }
+
+            m_impl->data = std::move(loaded);
+            m_impl->revision = 1;
+            m_impl->persistedRevision = 1;
+            m_impl->loadActive = false;
+        }
+        m_impl->changed.notify_all();
+    } catch (...) {
+        m_impl->CompleteLoadWithoutCommit();
+        throw;
     }
     m_impl->DrainPublications();
 }
@@ -899,50 +967,57 @@ bool SettingsStore::FlushNow(unsigned int maximumAttempts) noexcept {
 }
 
 bool SettingsStore::Shutdown(SettingsShutdownMode mode, unsigned int maximumAttempts) noexcept {
-    if (!m_impl) return true;
+    const auto impl = m_impl;
+    if (!impl) return true;
     bool isShutdownExecutor = false;
     bool shutdownResult = false;
     {
-        std::unique_lock lock(m_impl->mutex);
-        if (m_impl->closing) {
-            m_impl->shutdownChanged.wait(lock, [&] { return m_impl->shutdownCoreComplete; });
-            shutdownResult = m_impl->shutdownResult;
+        std::unique_lock lock(impl->mutex);
+        if (impl->closing) {
+            impl->shutdownChanged.wait(lock, [&] { return impl->shutdownCoreComplete; });
+            shutdownResult = impl->shutdownResult;
         } else {
             isShutdownExecutor = true;
-            m_impl->closing = true;
-            m_impl->timerArmed = false;
-            m_impl->DeactivateSubscriptionsLocked();
+            impl->closing = true;
+            impl->timerArmed = false;
+            impl->DeactivateSubscriptionsLocked();
         }
     }
 
     if (!isShutdownExecutor) {
-        m_impl->WaitForPublicationDrain();
+        impl->WaitForPublicationDrain();
         return shutdownResult;
     }
 
-    m_impl->changed.notify_all();
-    shutdownResult = mode == SettingsShutdownMode::Flush ? FlushNow(maximumAttempts) : true;
+    impl->changed.notify_all();
     {
-        std::scoped_lock lock(m_impl->mutex);
-        m_impl->shutdownRequested = true;
-        m_impl->discardRequested = mode == SettingsShutdownMode::DiscardStartupFailure;
-        m_impl->timerArmed = false;
+        std::unique_lock lock(impl->mutex);
+        // Close admission first, then let an already-admitted read publish its state without callbacks. This
+        // gives the final flush the loaded snapshot while rejecting post-shutdown mutations and subscriptions.
+        impl->changed.wait(lock, [&] { return !impl->loadActive; });
     }
+    shutdownResult = mode == SettingsShutdownMode::Flush ? impl->FlushSynchronously(maximumAttempts) : true;
     {
-        std::scoped_lock publicationLock(m_impl->publicationMutex);
-        m_impl->pendingPublications.clear();
-    }
-    m_impl->changed.notify_all();
-    if (m_impl->worker.joinable()) {
-        m_impl->worker.request_stop();
-        m_impl->worker.join();
+        std::scoped_lock lock(impl->mutex);
+        impl->shutdownRequested = true;
+        impl->discardRequested = mode == SettingsShutdownMode::DiscardStartupFailure;
+        impl->timerArmed = false;
     }
     {
-        std::scoped_lock lock(m_impl->mutex);
-        m_impl->shutdownResult = shutdownResult;
-        m_impl->shutdownCoreComplete = true;
+        std::scoped_lock publicationLock(impl->publicationMutex);
+        impl->pendingPublications.clear();
     }
-    m_impl->shutdownChanged.notify_all();
-    m_impl->WaitForPublicationDrain();
+    impl->changed.notify_all();
+    if (impl->worker.joinable()) {
+        impl->worker.request_stop();
+        impl->worker.join();
+    }
+    {
+        std::scoped_lock lock(impl->mutex);
+        impl->shutdownResult = shutdownResult;
+        impl->shutdownCoreComplete = true;
+    }
+    impl->shutdownChanged.notify_all();
+    impl->WaitForPublicationDrain();
     return shutdownResult;
 }

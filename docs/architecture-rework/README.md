@@ -36,9 +36,12 @@ The current baseline has approximately 25,000 lines across 138 hand-written C++/
 ## Documents
 
 - [Target architecture](target-architecture.md)
+- [Coding guidelines](coding-guidelines.md)
 - [Feature scope and decisions](feature-scope-and-decisions.md)
 - [Migration plan](migration-plan.md)
 - [Verification plan](verification-plan.md)
+- [Performance baseline (2026-08-22)](performance-baseline-2026-08-22.md)
+- [Reproducible baseline measurement script](measure-performance-baseline.ps1)
 
 ## Definition of success
 

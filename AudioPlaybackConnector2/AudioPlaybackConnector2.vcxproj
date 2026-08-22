@@ -139,6 +139,7 @@
     <ClInclude Include="include\app\PowerTransitionCoordinator.hpp" />
     <ClInclude Include="include\app\ResumeReconnectAttemptState.hpp" />
     <ClInclude Include="include\app\SettingsWindowPresenter.hpp" />
+    <ClInclude Include="include\app\SettingsWindowCommandExecutor.hpp" />
     <ClInclude Include="include\app\SingleInstanceGuard.hpp" />
     <ClInclude Include="include\app\StartupUpdateCoordinator.hpp" />
     <ClInclude Include="include\app\LatestStartupTaskRequestState.hpp" />

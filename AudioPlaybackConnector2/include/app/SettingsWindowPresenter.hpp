@@ -1,5 +1,7 @@
 #pragma once
 
+#include <app/SettingsWindowCommandExecutor.hpp>
+
 #include <functional>
 #include <memory>
 
@@ -22,6 +24,7 @@ public:
     ~SettingsWindowPresenter();
 
     [[nodiscard]] bool Show(std::shared_ptr<ISettingsController> settingsController,
+                            apc::app::SettingsWindowCommandExecutor::ExecuteCallback executeAppCommand,
                             std::shared_ptr<StartupTaskCoordinator> startupTaskCoordinator,
                             std::shared_ptr<TrayController> trayController,
                             std::shared_ptr<UpdateCoordinator> updateCoordinator,

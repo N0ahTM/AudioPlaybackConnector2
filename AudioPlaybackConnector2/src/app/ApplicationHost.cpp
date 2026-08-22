@@ -1714,7 +1714,21 @@ bool ApplicationHost::ShowSettingsWindow() {
     DebugTrace(L"[App] ShowSettingsWindow()");
     auto weak = weak_from_this();
     return m_settingsWindowPresenter.Show(
-        m_settingsController, m_startupTaskCoordinator, m_trayController, m_updateCoordinator, [weak]() {
+        m_settingsController,
+        [weak](apc::app::AppCommand command) {
+            if (auto self = weak.lock(); self && !self->m_exiting.load() && self->m_appController) {
+                return self->m_appController->Execute(std::move(command));
+            }
+            apc::app::AppResult result;
+            result.Code = apc::app::AppResultCode::Unavailable;
+            result.Command = command.Kind;
+            result.Reason = apc::app::AppOutcomeReason::NotReady;
+            return result;
+        },
+        m_startupTaskCoordinator,
+        m_trayController,
+        m_updateCoordinator,
+        [weak]() {
             auto self = weak.lock();
             if (self) self->m_settingsSaver.RequestSave();
         });

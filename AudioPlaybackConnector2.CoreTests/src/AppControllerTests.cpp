@@ -1,4 +1,5 @@
 #include <app/AppController.hpp>
+#include <app/SettingsWindowCommandExecutor.hpp>
 
 #include <chrono>
 #include <iostream>
@@ -22,6 +23,7 @@ using apc::app::AppResultCode;
 using apc::app::AppSnapshot;
 using apc::app::DeviceConnectedEvent;
 using apc::app::DeviceSelector;
+using apc::app::SettingsWindowCommandExecutor;
 
 int g_failures = 0;
 
@@ -161,6 +163,52 @@ void TestEventOrderingAndReentrantUnsubscribe() {
           "subscription tokens must expose active ownership until reset or scope exit");
 }
 
+void TestSettingsWindowCommandsUseSharedExecutor() {
+    std::vector<AppCommand> executed;
+    const auto longDeviceId = std::wstring(513, L'd');
+    SettingsWindowCommandExecutor executor([&](AppCommand command) {
+        const auto kind = command.Kind;
+        executed.push_back(command);
+        AppResult result;
+        result.Code = kind == AppCommandKind::SetAlias ? AppResultCode::OperationFailed : AppResultCode::Success;
+        result.Command = kind;
+        return result;
+    });
+
+    const auto clearDefault = executor.ClearDefault();
+    const auto setDefault = executor.SetDefault(longDeviceId);
+    const auto setAlias = executor.SetAlias(longDeviceId, L"Office");
+    const auto clearAlias = executor.ClearAlias(longDeviceId);
+    const auto emptyAlias = executor.SetAlias(longDeviceId, {});
+
+    Check(clearDefault.Code == AppResultCode::Success && clearDefault.Command == AppCommandKind::ClearDefault,
+          "settings clear-default must return the shared executor result");
+    Check(setDefault.Code == AppResultCode::Success && setDefault.Command == AppCommandKind::SetDefault,
+          "settings set-default must return the shared executor result");
+    Check(setAlias.Code == AppResultCode::OperationFailed && setAlias.Command == AppCommandKind::SetAlias,
+          "settings alias failure must remain observable at the UI boundary");
+    Check(clearAlias.Code == AppResultCode::Success && clearAlias.Command == AppCommandKind::ClearAlias,
+          "settings clear-alias must return the shared executor result");
+    Check(emptyAlias.Code == AppResultCode::Success && emptyAlias.Command == AppCommandKind::ClearAlias,
+          "an empty settings alias must use the clear-alias command");
+    Check(executed.size() == 5, "each settings action must invoke the one shared executor exactly once");
+    if (executed.size() != 5) return;
+
+    Check(executed[0].Kind == AppCommandKind::ClearDefault && !executed[0].Target,
+          "clear-default must carry no target");
+    Check(executed[1].Kind == AppCommandKind::SetDefault && executed[1].Target &&
+              executed[1].Target->IdText() == longDeviceId,
+          "set-default must preserve the complete external device ID");
+    Check(executed[2].Kind == AppCommandKind::SetAlias && executed[2].Target &&
+              executed[2].Target->IdText() == longDeviceId && executed[2].Alias == L"Office",
+          "set-alias must preserve its typed target and alias");
+    Check(executed[3].Kind == AppCommandKind::ClearAlias && executed[3].Target &&
+              executed[3].Target->IdText() == longDeviceId && executed[3].Alias.empty(),
+          "clear-alias must carry an explicit typed target and no alias payload");
+    Check(executed[4].Kind == AppCommandKind::ClearAlias,
+          "empty alias submission must dispatch clear-alias instead of duplicating settings logic");
+}
+
 } // namespace
 
 int RunAppControllerTests() {
@@ -169,5 +217,6 @@ int RunAppControllerTests() {
     TestExecutorExceptionsBecomeInternalErrors();
     TestSnapshotIsReturnedByValue();
     TestEventOrderingAndReentrantUnsubscribe();
+    TestSettingsWindowCommandsUseSharedExecutor();
     return g_failures;
 }

@@ -1,12 +1,15 @@
 #pragma once
 
 #include <SettingsWindow.g.h>
+#include <app/SettingsWindowCommandExecutor.hpp>
 #include <app/StartupTaskCoordinator.hpp>
 #include <services/SettingsController.hpp>
 #include <services/UpdateService.hpp>
 #include <ui/SettingsDiagnosticsReport.hpp>
 #include <ui/SettingsViewModel.hpp>
 #include <ui/WindowPlacement.hpp>
+
+#include <optional>
 
 class UpdateCoordinator;
 
@@ -49,6 +52,7 @@ struct SettingsWindow : SettingsWindowT<SettingsWindow> {
     void LanguageComboBox_SelectionChanged(winrt::Windows::Foundation::IInspectable const& sender,
                                            winrt::Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const& e);
     void SetSettingsController(std::shared_ptr<ISettingsController> controller);
+    void SetAppCommandExecutor(apc::app::SettingsWindowCommandExecutor::ExecuteCallback executor);
     void SetStartupTaskCoordinator(std::shared_ptr<StartupTaskCoordinator> coordinator);
     void SetInitialSettingsSnapshot(SettingsData snapshot);
     void SetUpdateCoordinator(std::shared_ptr<UpdateCoordinator> coordinator);
@@ -116,6 +120,7 @@ private:
     std::uint64_t m_diagnosticsCopyRequestId = 0;
     bool m_diagnosticsCopyInProgress = false;
     std::shared_ptr<ISettingsController> m_settingsController;
+    std::optional<apc::app::SettingsWindowCommandExecutor> m_appCommandExecutor;
     std::shared_ptr<StartupTaskCoordinator> m_startupTaskCoordinator;
     StartupTaskCoordinator::HandlerToken m_startupTaskHandlerToken = 0;
     std::shared_ptr<UpdateCoordinator> m_updateCoordinator;

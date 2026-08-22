@@ -43,6 +43,7 @@ SettingsWindowPresenter::~SettingsWindowPresenter() {
 /*------------------------------------------------------------------------------------------------------------*/
 
 bool SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settingsController,
+                                   apc::app::SettingsWindowCommandExecutor::ExecuteCallback executeAppCommand,
                                    std::shared_ptr<StartupTaskCoordinator> startupTaskCoordinator,
                                    std::shared_ptr<TrayController> trayController,
                                    std::shared_ptr<UpdateCoordinator> updateCoordinator,
@@ -108,6 +109,7 @@ bool SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settings
 
         auto impl = candidate->Window.as<winrt::AudioPlaybackConnector2::implementation::SettingsWindow>();
         impl->SetSettingsController(std::move(settingsController));
+        impl->SetAppCommandExecutor(std::move(executeAppCommand));
         impl->SetStartupTaskCoordinator(std::move(startupTaskCoordinator));
         if (initialSettings) impl->SetInitialSettingsSnapshot(std::move(*initialSettings));
         impl->SetUpdateCoordinator(std::move(updateCoordinator));

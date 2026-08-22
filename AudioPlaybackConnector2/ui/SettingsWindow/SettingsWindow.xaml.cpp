@@ -518,9 +518,10 @@ void SettingsWindow::ResetWindowPlacementButton_Click(IInspectable const&, Route
 }
 
 void SettingsWindow::DefaultLastConnectedButton_Click(IInspectable const&, RoutedEventArgs const&) {
-    if (auto controller = m_settingsController) {
-        controller->ClearDefaultDevice();
-    }
+    auto result = m_appCommandExecutor ? m_appCommandExecutor->ClearDefault()
+                                       : apc::app::AppResult{apc::app::AppResultCode::Unavailable,
+                                                             apc::app::AppCommandKind::ClearDefault};
+    static_cast<void>(result);
     RequestDeviceListRebuild();
 }
 
@@ -1011,12 +1012,14 @@ void SettingsWindow::CommitAlias(std::wstring const& deviceId, TextBox const& te
     auto previousAlias = std::wstring(winrt::unbox_value_or<winrt::hstring>(textBox.Tag(), L""));
     if (alias == previousAlias) return;
 
-    if (auto settingsController = m_settingsController) {
-        if (!settingsController->SetDeviceAlias(deviceId, alias)) {
-            ShowDiagnosticsInfo(
-                InfoBarSeverity::Error, _("Settings_ActionFailed_Title"), _("Settings_ActionFailed_Message"));
-            return;
-        }
+    auto result = m_appCommandExecutor ? m_appCommandExecutor->SetAlias(deviceId, alias)
+                                       : apc::app::AppResult{apc::app::AppResultCode::Unavailable,
+                                                             alias.empty() ? apc::app::AppCommandKind::ClearAlias
+                                                                           : apc::app::AppCommandKind::SetAlias};
+    if (!result.Succeeded()) {
+        ShowDiagnosticsInfo(
+            InfoBarSeverity::Error, _("Settings_ActionFailed_Title"), _("Settings_ActionFailed_Message"));
+        return;
     }
     textBox.Tag(winrt::box_value(winrt::hstring(alias)));
     m_aliasSavedDeviceId = deviceId;
@@ -1468,9 +1471,10 @@ void SettingsWindow::RebuildDeviceList(bool force) {
         defaultBtn.IsEnabled(!dev.IsDefaultDevice);
         defaultBtn.Click([id = dev.Id, weak](auto, auto) {
             if (auto self = weak.get()) {
-                if (auto settingsController = self->m_settingsController) {
-                    settingsController->SetDefaultDeviceId(id);
-                }
+                auto result = self->m_appCommandExecutor ? self->m_appCommandExecutor->SetDefault(id)
+                                                         : apc::app::AppResult{apc::app::AppResultCode::Unavailable,
+                                                                               apc::app::AppCommandKind::SetDefault};
+                static_cast<void>(result);
                 self->RequestDeviceListRebuild();
             }
         });
@@ -1486,9 +1490,10 @@ void SettingsWindow::RebuildDeviceList(bool force) {
         clearAliasBtn.IsEnabled(!dev.Alias.empty());
         clearAliasBtn.Click([id = dev.Id, weak](auto, auto) {
             if (auto self = weak.get()) {
-                if (auto settingsController = self->m_settingsController) {
-                    settingsController->SetDeviceAlias(id, L"");
-                }
+                auto result = self->m_appCommandExecutor ? self->m_appCommandExecutor->ClearAlias(id)
+                                                         : apc::app::AppResult{apc::app::AppResultCode::Unavailable,
+                                                                               apc::app::AppCommandKind::ClearAlias};
+                static_cast<void>(result);
                 self->m_aliasSavedDeviceId = id;
                 auto requestId = ++self->m_aliasSavedRequestId;
                 self->RequestDeviceListRebuild();
@@ -1598,6 +1603,10 @@ void SettingsWindow::RebuildDeviceList(bool force) {
 
 void SettingsWindow::SetSettingsController(std::shared_ptr<ISettingsController> controller) {
     m_settingsController = std::move(controller);
+}
+
+void SettingsWindow::SetAppCommandExecutor(apc::app::SettingsWindowCommandExecutor::ExecuteCallback executor) {
+    m_appCommandExecutor.emplace(std::move(executor));
 }
 
 void SettingsWindow::SetStartupTaskCoordinator(std::shared_ptr<StartupTaskCoordinator> coordinator) {

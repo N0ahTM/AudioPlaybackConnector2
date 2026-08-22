@@ -117,7 +117,7 @@ DevicePickerView::DevicePickerView() {
 /*------------------------------------------------------------------------------------------------------------*/
 
 void DevicePickerView::Initialize(std::shared_ptr<DeviceManager> manager,
-                                  std::shared_ptr<Settings> settings,
+                                  std::shared_ptr<SettingsStore> settingsStore,
                                   std::function<void()> onClose,
                                   std::function<void(winrt::hstring)> onDeviceSelected,
                                   std::function<void(winrt::hstring)> onDeviceDisconnect,
@@ -127,9 +127,9 @@ void DevicePickerView::Initialize(std::shared_ptr<DeviceManager> manager,
     m_preparedForRelease.store(false);
     m_presentationActive.store(false, std::memory_order_release);
     m_deviceManager = manager;
-    m_settings = settings;
+    m_settingsStore = settingsStore;
     m_viewModel.SetDeviceManager(manager);
-    m_viewModel.SetSettings(settings);
+    m_viewModel.SetSettingsStore(settingsStore);
     m_onClose = std::move(onClose);
     m_onDeviceSelected = std::move(onDeviceSelected);
     m_onDeviceDisconnect = std::move(onDeviceDisconnect);
@@ -371,7 +371,7 @@ void DevicePickerView::PrepareForRelease() noexcept {
     m_onDisconnectAll = nullptr;
     m_onReconnectAll = nullptr;
     m_deviceManager.reset();
-    m_settings.reset();
+    m_settingsStore.reset();
     m_pendingDeviceActions.clear();
     m_pendingGlobalAction = false;
     m_renderedSnapshotGeneration = 0;

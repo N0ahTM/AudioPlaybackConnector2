@@ -3,7 +3,7 @@
 #include <ui/DevicePickerViewModel.hpp>
 
 #include <core/DeviceManager.hpp>
-#include <core/Settings.hpp>
+#include <core/SettingsStore.hpp>
 #include <core/StringResources.hpp>
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -14,8 +14,8 @@ void DevicePickerViewModel::SetDeviceManager(std::weak_ptr<DeviceManager> manage
     m_manager = std::move(manager);
 }
 
-void DevicePickerViewModel::SetSettings(std::weak_ptr<Settings> settings) {
-    m_settings = std::move(settings);
+void DevicePickerViewModel::SetSettingsStore(std::weak_ptr<SettingsStore> settingsStore) {
+    m_settingsStore = std::move(settingsStore);
 }
 
 void DevicePickerViewModel::SetDevices(winrt::Windows::Devices::Enumeration::DeviceInformationCollection const& devices,
@@ -80,11 +80,11 @@ apc::device_picker::DevicePickerSnapshot const& DevicePickerViewModel::RefreshSn
 
     std::vector<apc::device_picker::DevicePresentationSetting> presentationSettings;
     bool privacyModeEnabled = false;
-    if (auto settings = m_settings.lock()) {
-        auto locked = settings->LockSharedData();
-        privacyModeEnabled = locked->PrivacyModeEnabled;
-        presentationSettings.reserve(locked->Devices.size());
-        for (auto const& device : locked->Devices) {
+    if (auto settingsStore = m_settingsStore.lock()) {
+        const auto snapshot = settingsStore->Snapshot();
+        privacyModeEnabled = snapshot.Data.PrivacyModeEnabled;
+        presentationSettings.reserve(snapshot.Data.Devices.size());
+        for (auto const& device : snapshot.Data.Devices) {
             presentationSettings.push_back({
                 .Id = device.Id,
                 .Name = device.Name,

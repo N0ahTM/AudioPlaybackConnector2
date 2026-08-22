@@ -5,7 +5,7 @@
 #include <optional>
 
 class DeviceManager;
-class Settings;
+class SettingsStore;
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Device Picker View Model //////////////////////////////////////////////////////////////////////////*/
@@ -20,7 +20,7 @@ public:
     /*------------------------------------------------------------------------------------------------------------*/
 
     void SetDeviceManager(std::weak_ptr<DeviceManager> manager);
-    void SetSettings(std::weak_ptr<Settings> settings);
+    void SetSettingsStore(std::weak_ptr<SettingsStore> settingsStore);
     void SetDevices(winrt::Windows::Devices::Enumeration::DeviceInformationCollection const& devices,
                     TimePoint refreshedAt = apc::device_picker::DevicePickerSnapshotCache::Clock::now());
     [[nodiscard]] bool SynchronizeInventoryFromManager(
@@ -41,7 +41,7 @@ private:
     /*------------------------------------------------------------------------------------------------------------*/
 
     std::weak_ptr<DeviceManager> m_manager;
-    std::weak_ptr<Settings> m_settings;
+    std::weak_ptr<SettingsStore> m_settingsStore;
     apc::device_picker::DevicePickerSnapshotCache m_cache;
     std::optional<std::uint64_t> m_sourceInventoryGeneration;
     bool m_sourceEnumerationComplete = false;

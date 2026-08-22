@@ -14,7 +14,7 @@
 #include <string_view>
 
 class DeviceManager;
-class Settings;
+class SettingsStore;
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Tray Controller ///////////////////////////////////////////////////////////////////////////////////*/
@@ -48,7 +48,7 @@ public:
 
     void Initialize(HWND hwnd, winrt::Microsoft::UI::Xaml::Window mainWindow);
     void SetDeviceManager(std::shared_ptr<DeviceManager> deviceManager);
-    void SetSettings(std::shared_ptr<Settings> settings);
+    void SetSettingsStore(std::shared_ptr<SettingsStore> settingsStore);
     void PreloadDevicePicker() noexcept;
     void ReleaseDevicePicker() noexcept;
     void Teardown() noexcept;
@@ -116,7 +116,7 @@ private:
     HWND m_hwnd = nullptr;
     winrt::Microsoft::UI::Xaml::Window m_mainWindow{nullptr};
     std::shared_ptr<DeviceManager> m_deviceManager;
-    std::shared_ptr<Settings> m_settings;
+    std::shared_ptr<SettingsStore> m_settingsStore;
 
     std::unique_ptr<TrayIcon> m_trayIcon;
     std::unique_ptr<TrayContextMenu> m_contextMenu;

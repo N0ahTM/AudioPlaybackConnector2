@@ -1,6 +1,6 @@
 #include <pch.h>
 #include <services/TrayController.hpp>
-#include <core/Settings.hpp>
+#include <core/SettingsStore.hpp>
 #include <core/TrayTooltipBuilder.hpp>
 #include <core/DeviceManager.hpp>
 #include <core/StringResources.hpp>
@@ -82,11 +82,11 @@ void TrayController::SetDeviceManager(std::shared_ptr<DeviceManager> deviceManag
     m_deviceManager = std::move(deviceManager);
 }
 
-void TrayController::SetSettings(std::shared_ptr<Settings> settings) {
-    m_settings = std::move(settings);
-    if (m_settings) {
-        auto locked = m_settings->LockSharedData();
-        SetSystemBackdropEffectsEnabled(locked->UseSystemBackdropEffects);
+void TrayController::SetSettingsStore(std::shared_ptr<SettingsStore> settingsStore) {
+    m_settingsStore = std::move(settingsStore);
+    if (m_settingsStore) {
+        const auto snapshot = m_settingsStore->Snapshot();
+        SetSystemBackdropEffectsEnabled(snapshot.Data.UseSystemBackdropEffects);
     }
 }
 
@@ -429,17 +429,14 @@ void TrayController::UpdateTooltipFromConnections(std::vector<DeviceTrayPresenta
     if (!m_trayIcon) return;
     auto const appName = std::wstring(_("AppName"));
     auto const redactedDeviceName = std::wstring(_("Privacy_RedactedDevice"));
-    if (!m_settings) {
+    if (!m_settingsStore) {
         m_trayIcon->SetTooltip(apc::tray::BuildTooltip(appName, redactedDeviceName, connected, {}, false));
         return;
     }
 
-    std::wstring tooltip;
-    {
-        auto locked = m_settings->LockSharedData();
-        tooltip = apc::tray::BuildTooltip(
-            appName, redactedDeviceName, connected, locked->Devices, locked->PrivacyModeEnabled);
-    }
+    const auto snapshot = m_settingsStore->Snapshot();
+    const auto tooltip = apc::tray::BuildTooltip(
+        appName, redactedDeviceName, connected, snapshot.Data.Devices, snapshot.Data.PrivacyModeEnabled);
     m_trayIcon->SetTooltip(tooltip);
 }
 
@@ -642,7 +639,7 @@ bool TrayController::EnsureDevicePickerViewCreated() noexcept {
         auto weak = weak_from_this();
         impl->Initialize(
             m_deviceManager,
-            m_settings,
+            m_settingsStore,
             [weak]() {
                 auto self = weak.lock();
                 if (self && !self->m_isTearingDown.load()) self->TryHideDevicePicker();

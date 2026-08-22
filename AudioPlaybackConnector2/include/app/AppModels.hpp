@@ -214,6 +214,13 @@ enum class AppResultCode {
     InternalError
 };
 
+// AppController reports whether a result was produced before or after the
+// application executor was entered.  Transport adapters need this distinction
+// for cancellation and deadline results: a pre-dispatch result is definite,
+// while a result after dispatch may describe work whose final state is
+// unknown.
+enum class AppDispatchPhase { NotStarted, Started };
+
 // A result reason is stable application vocabulary. Presentation adapters map
 // it to localized text while the controller remains independent of transport
 // and resource lookup.
@@ -359,6 +366,7 @@ struct AppResult {
     std::optional<AppTargetSnapshot> Target;
     std::wstring RequestedTarget;
     std::optional<bool> PrivacyModeEnabled;
+    AppDispatchPhase DispatchPhase = AppDispatchPhase::NotStarted;
 
     [[nodiscard]] bool Succeeded() const noexcept { return Code == AppResultCode::Success; }
     friend bool operator==(AppResult const&, AppResult const&) = default;

@@ -231,8 +231,8 @@ bool IsQuery(AppCommandKind command) noexcept {
     }
 }
 
-ExitCode ToExitCode(AppResultCode code) noexcept {
-    switch (code) {
+ExitCode ToExitCode(AppResult const& result) noexcept {
+    switch (result.Code) {
         case AppResultCode::Success: return ExitCode::Success;
         case AppResultCode::InvalidInput: return ExitCode::InvalidRequest;
         case AppResultCode::NotFound: return ExitCode::NotFound;
@@ -242,10 +242,17 @@ ExitCode ToExitCode(AppResultCode code) noexcept {
         case AppResultCode::Busy: return ExitCode::Busy;
         case AppResultCode::Cancelled:
         case AppResultCode::TimedOut:
+            return result.DispatchPhase == apc::app::AppDispatchPhase::NotStarted ? ExitCode::Unavailable
+                                                                                  : ExitCode::Indeterminate;
         case AppResultCode::Indeterminate:
         case AppResultCode::InternalError: return ExitCode::Indeterminate;
     }
     return ExitCode::Indeterminate;
+}
+
+bool IsPreDispatchTermination(AppResult const& result) noexcept {
+    return result.DispatchPhase == apc::app::AppDispatchPhase::NotStarted &&
+           (result.Code == AppResultCode::Cancelled || result.Code == AppResultCode::TimedOut);
 }
 
 std::wstring LowerInvariant(std::wstring_view value) {
@@ -559,7 +566,7 @@ Response FormatQuery(Request const& request,
                      ControlCommandAdapter::Localize const& localize,
                      bool redact,
                      bool wantsJson) {
-    const auto code = ToExitCode(result.Code);
+    const auto code = ToExitCode(result);
     if (result.Code != AppResultCode::Success) {
         if (result.Code == AppResultCode::InternalError) return {code, {}, request.CorrelationId};
         return MessageResponse(
@@ -718,7 +725,7 @@ Response FormatOperation(Request const& request,
                          ControlCommandAdapter::Localize const& localize,
                          bool redact,
                          bool wantsJson) {
-    const auto code = ToExitCode(result.Code);
+    const auto code = ToExitCode(result);
     if (result.Code == AppResultCode::InternalError) return {code, {}, request.CorrelationId};
     const auto hasResolvedTarget = [&]() noexcept { return result.Device || (result.Target && result.Target->Exists); };
     const auto isResolutionFailure = [&]() noexcept {
@@ -813,15 +820,18 @@ Response ControlCommandAdapter::Handle(Request const& request,
         const bool wantsRaw = (request.Flags & CommandFlagRaw) != 0;
 
         // Keep the transport's pre-dispatch cancellation and deadline
-        // precedence.  Running-state validation is deferred until the typed
-        // command is known: a snapshot also enumerates devices, while show,
-        // settings, default-clear, and disconnect-all do not need that read
-        // to execute.
-        if (stopToken.stop_requested() || apc::control::RemainingWait(deadline) == 0) {
-            return MessageResponse(
-                request, ExitCode::Unavailable, Resource(m_options.LocalizeResource, "Command_NotReady"), wantsJson);
-        }
+        // precedence for malformed requests.  Valid commands are allowed to
+        // reach AppController so its result records whether the executor was
+        // entered; this closes the race between this adapter and controller
+        // preflight without inferring certainty from timing in the adapter.
+        const bool preDispatchTermination = stopToken.stop_requested() || apc::control::RemainingWait(deadline) == 0;
         if (!IsRequestValidForAdapter(request)) {
+            if (preDispatchTermination) {
+                return MessageResponse(request,
+                                       ExitCode::Unavailable,
+                                       Resource(m_options.LocalizeResource, "Command_NotReady"),
+                                       wantsJson);
+            }
             return MessageResponse(request,
                                    ExitCode::InvalidRequest,
                                    Resource(m_options.LocalizeResource, "Command_Unsupported"),
@@ -830,6 +840,12 @@ Response ControlCommandAdapter::Handle(Request const& request,
 
         const auto translation = Translate(request);
         if (!translation.Command) {
+            if (preDispatchTermination) {
+                return MessageResponse(request,
+                                       ExitCode::Unavailable,
+                                       Resource(m_options.LocalizeResource, "Command_NotReady"),
+                                       wantsJson);
+            }
             const auto code = translation.Failure == AppOutcomeReason::InvalidAliasPayload ? ExitCode::InvalidRequest
                                                                                            : ExitCode::InvalidRequest;
             AppResult invalid;
@@ -841,7 +857,7 @@ Response ControlCommandAdapter::Handle(Request const& request,
         }
 
         std::optional<AppSnapshot> snapshot;
-        if (IsQuery(translation.Command->Kind)) {
+        if (!preDispatchTermination && IsQuery(translation.Command->Kind)) {
             // Queries require an inventory-backed presentation snapshot.  A
             // failed read therefore remains fail-closed and must not dispatch
             // a query against partial state.
@@ -855,13 +871,17 @@ Response ControlCommandAdapter::Handle(Request const& request,
         }
 
         std::unique_lock mutationLock(m_mutationMutex, std::defer_lock);
-        if (IsMutating(request.Command) && !mutationLock.try_lock()) {
+        if (!preDispatchTermination && IsMutating(request.Command) && !mutationLock.try_lock()) {
             return MessageResponse(
                 request, ExitCode::Busy, Resource(m_options.LocalizeResource, "Command_Busy"), wantsJson);
         }
 
         auto context = MakeContext(stopToken, deadline);
         auto result = m_controller.Execute(*translation.Command, context);
+        if (IsPreDispatchTermination(result)) {
+            return MessageResponse(
+                request, ExitCode::Unavailable, Resource(m_options.LocalizeResource, "Command_NotReady"), wantsJson);
+        }
         if (IsQuery(translation.Command->Kind)) {
             auto currentSnapshot = result.Snapshot ? *result.Snapshot : std::move(*snapshot);
             if (!currentSnapshot.IsRunning) {

@@ -64,11 +64,13 @@ AppResult AppController::Execute(AppCommand command, AppCommandContext context) 
     try {
         result = m_executor(command, context);
         result.Command = command.Kind;
+        result.DispatchPhase = AppDispatchPhase::Started;
         return result;
     } catch (...) {
         result = {};
         result.Code = AppResultCode::InternalError;
         result.Command = command.Kind;
+        result.DispatchPhase = AppDispatchPhase::Started;
         return result;
     }
 }

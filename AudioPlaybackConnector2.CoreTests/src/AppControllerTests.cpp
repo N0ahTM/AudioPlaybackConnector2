@@ -15,6 +15,7 @@ using apc::app::AppCommand;
 using apc::app::AppCommandContext;
 using apc::app::AppCommandKind;
 using apc::app::AppController;
+using apc::app::AppDispatchPhase;
 using apc::app::AppEvent;
 using apc::app::AppResult;
 using apc::app::AppResultCode;
@@ -53,6 +54,8 @@ void TestUiAndCliEquivalentCommandsUseOneExecutor() {
     Check(uiResult == cliResult, "UI and CLI adapters must receive equivalent normalized results");
     Check(uiResult.Code == AppResultCode::Success && uiResult.Command == AppCommandKind::Connect,
           "a valid command must delegate and retain its command kind");
+    Check(uiResult.DispatchPhase == AppDispatchPhase::Started && cliResult.DispatchPhase == AppDispatchPhase::Started,
+          "delegated results must record that the application executor was entered");
     Check(executed.size() == 2 && executed[0] == command && executed[1] == command,
           "equivalent UI and CLI intents must use the same typed executor");
 }
@@ -85,6 +88,9 @@ void TestMalformedCancelledAndExpiredCommandsShortCircuit() {
           "cancelled commands must normalize to cancellation before delegation");
     Check(expiredResult.Code == AppResultCode::TimedOut,
           "expired commands must normalize to timeout before delegation");
+    Check(cancelledResult.DispatchPhase == AppDispatchPhase::NotStarted &&
+              expiredResult.DispatchPhase == AppDispatchPhase::NotStarted,
+          "pre-dispatch cancellation and deadline results must record that the executor was not entered");
     Check(calls == 0, "malformed, cancelled, and expired commands must not invoke the executor");
 }
 
@@ -98,6 +104,8 @@ void TestExecutorExceptionsBecomeInternalErrors() {
     Check(result.Code == AppResultCode::InternalError,
           "an executor exception must be contained as an internal error result");
     Check(result.Command == AppCommandKind::Connect, "an exception result must retain the command that was attempted");
+    Check(result.DispatchPhase == AppDispatchPhase::Started,
+          "an executor exception must still record that dispatch began");
 }
 
 void TestSnapshotIsReturnedByValue() {

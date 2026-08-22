@@ -358,6 +358,45 @@ void TestUiAndCliTypedParityAndContextPropagation() {
           "an expired absolute control deadline must stop before mutation dispatch");
 }
 
+void TestControllerPreDispatchTerminationIsUnavailableForUiCommands() {
+    const std::vector<CommandType> commands{CommandType::Show, CommandType::Settings};
+    for (const auto command : commands) {
+        Harness cancelled;
+        std::stop_source stop;
+        stop.request_stop();
+        const auto cancelledResponse = cancelled.Adapter.Handle(MakeRequest(command), stop.get_token(), 0);
+        Check(cancelledResponse.Code == ExitCode::Unavailable,
+              "controller pre-dispatch cancellation must preserve exit 7 for show and settings");
+        Check(cancelled.Commands.empty() && cancelled.Contexts.empty(),
+              "controller pre-dispatch cancellation must not enter the executor");
+
+        Harness expired;
+        const auto expiredResponse = expired.Adapter.Handle(MakeRequest(command), {}, GetTickCount64());
+        Check(expiredResponse.Code == ExitCode::Unavailable,
+              "controller pre-dispatch deadline must preserve exit 7 for show and settings");
+        Check(expired.Commands.empty() && expired.Contexts.empty(),
+              "controller pre-dispatch deadline must not enter the executor");
+    }
+}
+
+void TestControllerPostDispatchTerminationRemainsIndeterminate() {
+    const std::vector<std::pair<CommandType, AppResultCode>> cases{
+        {CommandType::Show, AppResultCode::Cancelled},
+        {CommandType::Show, AppResultCode::TimedOut},
+        {CommandType::Settings, AppResultCode::Cancelled},
+        {CommandType::Settings, AppResultCode::TimedOut},
+    };
+    for (const auto& [command, resultCode] : cases) {
+        Harness harness;
+        harness.Result.Code = resultCode;
+        const auto response = harness.Adapter.Handle(MakeRequest(command), {}, apc::control::DeadlineAfter(1000));
+        Check(response.Code == ExitCode::Indeterminate,
+              "cancellation or deadline after controller dispatch must preserve exit 9");
+        Check(harness.Commands.size() == 1 && harness.Contexts.size() == 1,
+              "post-dispatch termination must prove the executor was entered");
+    }
+}
+
 void TestMutationBusyAndNonmutationConcurrency() {
     std::mutex mutex;
     std::condition_variable changed;
@@ -641,6 +680,8 @@ int RunControlCommandAdapterTests() {
     TestNonDeviceCommandsDoNotRequireInventorySnapshot();
     TestInventoryCommandsFailClosedOnSnapshotReadFailure();
     TestUiAndCliTypedParityAndContextPropagation();
+    TestControllerPreDispatchTerminationIsUnavailableForUiCommands();
+    TestControllerPostDispatchTerminationRemainsIndeterminate();
     TestMutationBusyAndNonmutationConcurrency();
     TestResultExitMappingAndGoldenTextJsonPrivacy();
     TestLongSnapshotIdsRemainWireVisibleAndRedactable();

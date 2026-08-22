@@ -1,8 +1,8 @@
 # Phase 0 characterization matrix
 
-Status: characterization evidence for the legacy implementation at the pre-artifact
-candidate ref `c2dfd87c2b9344b8651e616143d385a8d42b2220` (2026-08-22). This document
-does not change product or test code and does not declare Phase 0 complete by itself.
+Status: characterization evidence for the legacy implementation at final candidate
+ref `8d079d5e1217363f7d41d55b5826ade974fc984b` (2026-08-22). This document does not
+change product or test code and does not declare Phase 0 complete by itself.
 
 The matrix records what is implemented, what an existing test proves, and what still
 needs a named manual scenario or future deterministic automation. A primitive unit test
@@ -23,25 +23,31 @@ integration path.
 
 ## Baseline and language facts
 
-The source and test roots are equivalent to the existing performance-baseline source
-commit `d2a4587831e8d7155a2fe8b331a38f07d0b4c428` at the characterization candidate:
+The performance baseline was measured at source commit
+`d2a4587831e8d7155a2fe8b331a38f07d0b4c428`. The current candidate
+`8d079d5e1217363f7d41d55b5826ade974fc984b` is no longer source/test-equivalent to
+that baseline: its focused Settings persistence characterization changes are:
 
 ```text
-git diff --name-status d2a4587831e8d7155a2fe8b331a38f07d0b4c428 HEAD --
-  AudioPlaybackConnector2 AudioPlaybackConnector2.CoreTests
-  AudioPlaybackConnector2.Control AudioPlaybackConnector2.CoreRuntime scripts
+M AudioPlaybackConnector2.CoreTests/AudioPlaybackConnector2.CoreTests.vcxproj
+M AudioPlaybackConnector2.CoreTests/src/ReconnectControllerTests.cpp
+A AudioPlaybackConnector2.CoreTests/src/SettingsPersistenceTests.cpp
+M AudioPlaybackConnector2/include/core/Settings.hpp
+M AudioPlaybackConnector2/src/core/Settings.cpp
 ```
 
-produced no paths. The current commit `c2dfd87...` adds architecture-rework guidance
-and agent configuration above that product baseline; it does not alter the legacy
-product/test sources being characterized. The repository contains
+The earlier `c2dfd87...` candidate added architecture-rework guidance and agent
+configuration only. Commit `b295c6c...` adds the focused production/test changes above;
+the PCH compatibility fix developed as `764205d...` and integrated as `8d079d5...`
+keeps the persisted schema and default application-data path unchanged. The repository
+contains
 `performance-baseline-2026-08-22.md`; this slice did not rerun its measurements. The
 existing baseline evidence is x64 Release-only, so it must not be read as Debug or
 ARM64 performance evidence. Separately, the lead-provided candidate evidence below
 records successful Debug and Release build/package outputs for x64 and ARM64, plus
-passing x64 CoreTests. Those build artifacts do not imply that ARM64 native execution
-or the remaining manual, static-analysis, security, and package-verification gates
-were run.
+passing x64 CoreTests. Those build artifacts do not imply that ARM64 native execution,
+manual desktop scenarios, security review, or package-verification gates were run;
+the final explicit clang-format and cppcheck passes are recorded below.
 
 All four native project files explicitly set `<LanguageStandard>stdcpp23</LanguageStandard>`:
 
@@ -54,8 +60,8 @@ The accurate language baseline is therefore C++23 (`stdcpp23`), with v143 projec
 there is no C++26 claim. P10 remains gated on the dedicated C++26 x64/ARM64 toolchain,
 packaging, and CI validation; that gate has not been attempted. The candidate evidence
 below records Debug and Release build/package outputs for both supported architectures,
-but ARM64 native CoreTests, manual/static-analysis/security/package-verification checks,
-and the C++26 gate remain unrun or unattempted.
+but ARM64 native CoreTests, manual desktop scenarios, security/package-verification
+checks, and the C++26 gate remain unrun or unattempted.
 
 ## Legacy owner map used by this matrix
 
@@ -66,7 +72,7 @@ and the C++26 gate remain unrun or unattempted.
 | P03/P09 tray | `TrayController` owns flyout/menu and direct UI/device/settings references; `TrayIcon` owns frames and rendering; `ApplicationHost` owns the connecting timer at `include/app/ApplicationHost.hpp:154-176` and `src/app/ApplicationHost.cpp:1248-1300,2430-2434`. | Connecting animation, click suppression, theme/DPI, and shell re-registration are high-risk UI behavior. |
 | P05/P04 notifications | `NotificationService` renders six retained kinds at `src/services/NotificationService.cpp:319-400`; `ApplicationHost` chooses policy and calls it at `src/app/ApplicationHost.cpp:2309-2378`. | Normal disconnect currently calls `ShowDeviceDisconnected`, which conflicts with locked P04. G07 fallback remains unresolved. |
 | P06 devices | `DeviceManager` owns sessions, operation epochs, close barriers, discovery, incoming state, reconnect scheduling, and power/shutdown at `include/core/DeviceManager.hpp:26-230` and `src/core/DeviceManager.cpp:123-2260`; helpers are `DeviceOperationCoordinator`, `DeviceSessionStore`, `DeviceDiscoveryService`, and `ReconnectController`. | WinRT callbacks, connection tokens, close-before-reconnect, and stale completion protection are not covered by an end-to-end fake. |
-| P07 settings | `Settings` owns mutable data and exposed locks at `include/core/Settings.hpp:77-117`; JSON load/save is `src/core/Settings.cpp:146-430`; debounce/retry/final flush is split between `DeferredSettingsSaver` and `DeferredSaveCoordinator`. | File atomicity and no-lost-update behavior span real files and mutable revisions; current tests mostly cover the coordinator in isolation. |
+| P07 settings | `Settings` owns mutable data and exposed locks at `include/core/Settings.hpp:77-121`; JSON load/save is `src/core/Settings.cpp:159-439`; debounce/retry/final flush is split between `DeferredSettingsSaver` and `DeferredSaveCoordinator`. Commit `b295c6c...` adds a scoped persistence-directory seam and direct file characterization; `8d079d5...` restores the normal PCH/CoreRuntime include boundary. | Direct temp-file coverage now exercises round-trip, corrupt/oversized preservation, validation, replacement failure, retry, and a later final save; host lifecycle and concurrent real-write behavior remain gaps. |
 
 ## P01 — CLI, named pipe, and control compatibility
 
@@ -179,7 +185,7 @@ The high-risk paths are visible at `DeviceManager.cpp:337-706` (connect/reconnec
 ## P07 — JSON settings compatibility, atomicity, and persistence races
 
 The persisted JSON schema is emitted by `Settings::Save` at
-`AudioPlaybackConnector2/src/core/Settings.cpp:312-418`:
+`AudioPlaybackConnector2/src/core/Settings.cpp:325-431`:
 
 ```text
 globalConnectOnStartup, globalReconnectOnConnectionLoss,
@@ -193,23 +199,41 @@ lastConnectedIds
 ```
 
 Load retains the legacy `globalAutoReconnect` and per-device `autoReconnect` values
-(`Settings.cpp:199-203,255-262`), parses into locals before taking the settings lock,
+(`Settings.cpp:212-215,274-277`), parses into locals before taking the settings lock,
 deduplicates IDs, bounds arrays and strings, and moves an unreadable file to a unique
-`.corrupt[.N].bak` path (`:108-144,146-311`). Save snapshots a revision, validates
+`.corrupt[.N].bak` path (`:129-152,159-323`). Save snapshots a revision, validates
 persistability, writes `AudioPlaybackConnector2.json.tmp`, calls `FlushFileBuffers`,
 then atomically replaces the destination with `MOVEFILE_REPLACE_EXISTING |
-MOVEFILE_WRITE_THROUGH` and removes the temp file on failure (`:312-430`). The limits
+MOVEFILE_WRITE_THROUGH` and removes the temp file on failure (`:325-439`). The limits
 are 4 MiB file size, 384 devices/IDs, 512 ID characters, 256 name characters, 128 alias
 and version characters, and DPI 48–960 (`include/core/SettingsLimits.hpp:11-28`).
 
+Commit `b295c6c...` adds a constructor-injected persistence directory
+(`include/core/Settings.hpp:83-84,120`) so direct Windows file tests can use a scoped
+temporary directory while the empty default still resolves the normal application-data
+path (`Settings.cpp:446-447`). The PCH compatibility fix developed as `764205d...` and
+integrated as `8d079d5...` makes `Settings.cpp` include `<pch.h>` unconditionally
+(`Settings.cpp:1`) while the CoreRuntime project provides the unconditional `pch.h`
+PCH (`AudioPlaybackConnector2.CoreRuntime.vcxproj:47-49`); the CoreTests Settings
+compilation resolves the CoreRuntime include/res directories
+(`AudioPlaybackConnector2.CoreTests.vcxproj:125-126`).
+`BoundedExceptionMessage` caps `std::exception::what()` at 4096 bytes and returns
+`<unavailable>` if conversion fails (`Settings.cpp:20-28`); all three Settings
+`std::exception` recovery logs use it (`Settings.cpp:148,317,435`). This is a narrow
+log-safety fix for oversized exception text; it does not approve G01 or replace the
+existing logger pipeline. The CoreTests project includes the new source and
+`RunSettingsPersistenceTests` is registered in the test runner
+(`AudioPlaybackConnector2.CoreTests.vcxproj:94`, `ReconnectControllerTests.cpp:458,500`).
+No supplied test directly asserts the emitted log-line byte bound.
+
 | ID / required behavior | Existing automated evidence or named scenario | Status and required future automation |
 |---|---|---|
-| P07-01 current/legacy JSON formats and field compatibility | Load/save evidence above; `SettingsData` is `include/core/SettingsData.hpp:7-44`. | `MANUAL P07-Settings-Compatibility-Formats`: load missing file, current schema, legacy global/per-device `autoReconnect`, omitted fields, unknown fields, old default mode, aliases, placement, and all supported language IDs; save and compare retained semantics. | `GAP`: no Settings::Load/Save integration test in CoreTests; add fixture-based schema compatibility tests. |
-| P07-02 malformed, partial, corrupt, oversized, invalid UTF-16, duplicate, and out-of-bounds data | `Settings.cpp:146-311`; limits at `SettingsLimits.hpp:31-67`; corrupt-file backup at `:108-144`. | `AUTOMATED`: `TestUtf16Validation`, `TestBoundedStrings`, `TestSafeTruncation`, `TestSupportedLanguages` (`SettingsLimitsTests.cpp:16-51`). `MANUAL P07-Settings-Corrupt-Recovery`: malformed JSON, truncated file, >4 MiB file, invalid number/string/surrogate, duplicate IDs, invalid bounds, and >384 entries; assert safe defaults, `.corrupt.bak`, and no data leak. | Primitive limit coverage exists; actual parser/backup behavior is untested. Add filesystem-fixture tests with a temporary path seam. |
-| P07-03 all mutations, validation, bounds, privacy/alias/default/last-device persistence | Mutations are routed through `SettingsController` and direct lock callers; data fields are in `SettingsData.hpp`; validation is `IsPersistable` at `Settings.cpp:17-46`. | `AUTOMATED`: `TestSettingsRevisionTracksOnlyCommittedMutations` (`AppWorkCoordinatorTests.cpp:500-515`); `TestPrivacyAndMissingSettings` (`TrayTooltipBuilderTests.cpp:34-44`) and `TestPrivacyAndSnapshotGeneration` (`DevicePickerSnapshotTests.cpp:108-143`) cover presentation only. `MANUAL P07-Settings-Mutation-Roundtrip`: mutate every setting, restart, and compare values including privacy, alias, default, last-connected, per-device policies, and placement. | `GAP`: no round-trip test through real persistence; add a complete mutation/round-trip fixture. |
-| P07-04 debounce, one writer, dirty revision, change during write, and no lost update | `DeferredSaveCoordinator` state machine at `include/app/DeferredSaveCoordinator.hpp:9-140`; `DeferredSettingsSaver` scheduling/retry at `src/app/DeferredSettingsSaver.cpp:17-180`. | `AUTOMATED`: `TestDeferredSaveCoalescesDirtyGenerations`, `TestDeferredSaveRetainsMutationsDuringAnAttempt`, `TestDeferredSavePersistsMutationMadeAfterSnapshot`, `TestDeferredSaveRequestCompletionRaceHasNoLostWakeup`, `TestDeferredSaveConcurrentRequestsStartExactlyOneWorker`, `TestDeferredSaveExternalFlushAcknowledgesOnlyItsGeneration`, `TestSettingsRevisionTracksOnlyCommittedMutations` (`AppWorkCoordinatorTests.cpp:26-209,210-298,441-515`). | Coordinator coverage is strong and deterministic. `GAP`: tests do not connect the coordinator to actual Settings::Save bytes; add a fake writer that changes the data at snapshot/write boundaries and assert the final file contains the newest revision. |
-| P07-05 write failure, bounded retry, scheduler fallback, temp cleanup, and atomic replace | `DeferredSettingsSaver::RunAttempt` retries 1 s exponential backoff capped at 5 min and falls back to synchronous flush at `DeferredSettingsSaver.cpp:121-178`; `Settings::Save` temp/flush/replace at `Settings.cpp:401-416`. | `AUTOMATED`: `TestDeferredSaveRetriesFailuresWithoutLosingDirtyState`, `TestDeferredSaveCanRecoverFromSchedulerFailure` (`AppWorkCoordinatorTests.cpp:90-156`). `MANUAL P07-Settings-Atomic-Write-Failure`: deny destination/temp access, interrupt write, fill/lock destination, inspect temp cleanup and old-file preservation; verify `FlushFileBuffers` precedes replace and retries are bounded. | `GAP`: no actual file failure or atomicity test; add an injectable filesystem/commit seam and a Windows integration test. |
-| P07-06 synchronous suspend/shutdown final flush and cancellation | Host calls `m_settingsSaver.FlushNow()` on suspend and `FlushNow(3)` during teardown at `ApplicationHost.cpp:985-1050,373-380`; saver cancellation waits timer callbacks at `DeferredSettingsSaver.cpp:72-96`. | `AUTOMATED`: `TestDeferredSaveExternalFlushAcknowledgesOnlyItsGeneration`, `TestDeferredSaveCancellationInvalidatesOutstandingWork` (`AppWorkCoordinatorTests.cpp:115-137,441-458`). `MANUAL P07-Settings-Suspend-Shutdown-Flush`: mutate immediately before suspend and exit while a delayed save is pending; restart and verify latest data is present or failure is visible. | `GAP`: no host suspend/shutdown/file integration test; add an end-to-end final-flush test. |
+| P07-01 current/legacy JSON formats and field compatibility | Load/save evidence above; `SettingsData` is `include/core/SettingsData.hpp:7-44`. | `AUTOMATED`: `TestMissingCurrentAndRoundTrip` covers missing-file defaults, current-schema save/load, clean revisions, temp cleanup, and every populated persisted field; `TestLegacyAndPartialInputNormalization` covers legacy global/per-device `autoReconnect`, unsupported language, partial bounds, duplicate/invalid device entries, and recent-ID normalization (`SettingsPersistenceTests.cpp:83-129`). The final x64 Debug/Release CoreTests runs below include these registered tests. `MANUAL P07-Settings-Compatibility-Formats`: unknown/omitted fields, old default mode, aliases, placement, all supported language IDs, and upgrade from a shipped file. | Direct temp-path parser/round-trip coverage now exists. `GAP`: no production ApplicationData/package-upgrade or UI/controller round-trip; unknown-field and full legacy-file matrix remain manual. |
+| P07-02 malformed, partial, corrupt, oversized, invalid UTF-16, duplicate, and out-of-bounds data | `Settings.cpp:159-323`; limits at `SettingsLimits.hpp:31-67`; corrupt-file backup at `:129-152`. | `AUTOMATED`: `TestMalformedAndCorruptInputPreservation` preserves malformed bytes in `.corrupt.bak` and leaves defaults; `TestOversizedInputIsPreserved` creates a file one byte over the 4 MiB limit, checks backup length/defaults/no temp; `TestLegacyAndPartialInputNormalization` checks invalid types, duplicate IDs, and invalid entries (`SettingsPersistenceTests.cpp:104-169`). Existing primitive checks are `TestUtf16Validation`, `TestBoundedStrings`, `TestSafeTruncation`, `TestSupportedLanguages` (`SettingsLimitsTests.cpp:16-51`). The final x64 Debug/Release CoreTests runs include these registered tests. | Parser/backup coverage now exists for malformed, oversized, duplicate, and invalid-type input. `GAP`: invalid UTF-16/surrogate and every array/string/DPI bound are not all exercised through the parser; add those cases and unique `.corrupt.N.bak` collision coverage. |
+| P07-03 all mutations, validation, bounds, privacy/alias/default/last-device persistence | Mutations are routed through `SettingsController` and direct lock callers; data fields are in `SettingsData.hpp`; validation is `IsPersistable` at `Settings.cpp:30-47`. | `AUTOMATED`: `TestMissingCurrentAndRoundTrip` mutates and round-trips privacy, alias, default, last-connected, per-device policies, placement, language, update fields, and global flags (`SettingsPersistenceTests.cpp:83-103`). `TestValidationFailureLeavesRevisionDirty` rejects an invalid language, preserves dirty state/no files, then saves the corrected revision (`:171-189`). Existing revision/presentation tests remain `TestSettingsRevisionTracksOnlyCommittedMutations`, `TestPrivacyAndMissingSettings`, and `TestPrivacyAndSnapshotGeneration`. The final x64 Debug/Release CoreTests results include the registered persistence suite. | Real direct persistence coverage now exists. `GAP`: no SettingsController/UI/CLI end-to-end round-trip, no exhaustive invalid bounds matrix, and no restart/package migration scenario. |
+| P07-04 debounce, one writer, dirty revision, change during write, and no lost update | `DeferredSaveCoordinator` state machine at `include/app/DeferredSaveCoordinator.hpp:9-140`; `DeferredSettingsSaver` scheduling/retry at `src/app/DeferredSettingsSaver.cpp:17-180`. | `AUTOMATED`: `TestDeferredSaveCoalescesDirtyGenerations`, `TestDeferredSaveRetainsMutationsDuringAnAttempt`, `TestDeferredSavePersistsMutationMadeAfterSnapshot`, `TestDeferredSaveRequestCompletionRaceHasNoLostWakeup`, `TestDeferredSaveConcurrentRequestsStartExactlyOneWorker`, `TestDeferredSaveExternalFlushAcknowledgesOnlyItsGeneration`, `TestSettingsRevisionTracksOnlyCommittedMutations` (`AppWorkCoordinatorTests.cpp:26-209,210-298,441-515`); direct-file `TestFinalSaveCapturesLaterMutation` verifies a later revision remains dirty and is present after a second synchronous save (`SettingsPersistenceTests.cpp:227-249`). The final x64 Debug/Release CoreTests runs include these tests. | Coordinator coverage is strong and deterministic, and sequential final-save persistence is now characterized. `GAP`: no test changes data during an in-progress real `Settings::Save` or connects the deferred coordinator to file bytes; add a writer-boundary fixture and assert newest revision wins. |
+| P07-05 write failure, bounded retry, scheduler fallback, temp cleanup, and atomic replace | `DeferredSettingsSaver::RunAttempt` retries 1 s exponential backoff capped at 5 min and falls back to synchronous flush at `DeferredSettingsSaver.cpp:121-178`; `Settings::Save` temp/flush/replace at `Settings.cpp:325-439`. | `AUTOMATED`: `TestValidationFailureLeavesRevisionDirty` covers rejected data/no files; `TestFailedReplacePreservesExistingFileAndCanRetry` locks the destination, asserts failure/old-file preservation/temp cleanup, unlocks, retries, and reloads the new value (`SettingsPersistenceTests.cpp:171-225`). Existing coordinator checks are `TestDeferredSaveRetriesFailuresWithoutLosingDirtyState` and `TestDeferredSaveCanRecoverFromSchedulerFailure` (`AppWorkCoordinatorTests.cpp:90-156`). The final x64 Debug/Release CoreTests runs include these tests. `MANUAL P07-Settings-Atomic-Write-Failure`: deny destination/temp access, interrupt write, fill/lock destination, inspect cleanup and old-file preservation; verify `FlushFileBuffers` precedes replace and retries are bounded. | Direct validation/replacement failure and retry coverage now exists. `GAP`: no injected `FlushFileBuffers` ordering/failure check, filesystem fault matrix, or host-level bounded-retry observation. |
+| P07-06 synchronous suspend/shutdown final flush and cancellation | Host calls `m_settingsSaver.FlushNow()` on suspend and `FlushNow(3)` during teardown at `ApplicationHost.cpp:985-1050,373-380`; saver cancellation waits timer callbacks at `DeferredSettingsSaver.cpp:72-96`. | `AUTOMATED`: `TestDeferredSaveExternalFlushAcknowledgesOnlyItsGeneration`, `TestDeferredSaveCancellationInvalidatesOutstandingWork` (`AppWorkCoordinatorTests.cpp:115-137,441-458`); added `TestFinalSaveCapturesLaterMutation` covers a direct synchronous final-save sequence (`SettingsPersistenceTests.cpp:227-249`). `MANUAL P07-Settings-Suspend-Shutdown-Flush`: mutate immediately before suspend and exit while a delayed save is pending; restart and verify latest data is present or failure is visible. | Direct final-save behavior is characterized, but host lifecycle is not. `GAP`: no suspend/shutdown/Settings::Save file integration test, cancellation while real I/O is active, or failure visibility check. |
 
 ## P08 — privacy, localization, accessibility, theme, DPI, and UI-thread facts
 
@@ -244,7 +268,7 @@ and bulk actions (`ui/DevicePickerView/DevicePickerView.xaml.cpp:93-105,775-795`
 | P09-04 picker connect/disconnect/reconnect/bulk actions and discovery refresh | Picker callbacks at `DevicePickerView.xaml.cpp:775-795`; controller callback wiring at `TrayController.cpp:611-700`; snapshots at `DevicePickerSnapshot`. | `AUTOMATED`: `TestConsistentPresentationSnapshot`, `TestInventoryFreshnessAndInvalidation`, `TestLateInventoryCallbackAfterRelease` (`DevicePickerSnapshotTests.cpp:27-107`). `MANUAL P09-Picker-Action-Refresh`: discovery add/remove/change while open, each row action, bulk action, and stale callback. `GAP`: automated tests cover snapshots, not XAML intents/DeviceManager effects. |
 | P09-05 tooltip ordering, aliases, privacy, and fallback names | Tooltip builder at `include/core/TrayTooltipBuilder.hpp` and `src/core/TrayTooltipBuilder.cpp`. | `AUTOMATED`: `TestEmptyTooltip`, `TestNamePrecedenceAndFallbacks`, `TestPrivacyAndMissingSettings`, `TestConnectionOrderAndDuplicates` (`TrayTooltipBuilderTests.cpp:16-54`). | Covered for pure presentation; `GAP`: no shell tooltip update/reregister test. |
 | P09-06 Idle/Connecting/Connected/Error states, frame timing, theme, DPI, and Explorer/taskbar recreation | `TrayIcon` state/frame/rendering at `include/ui/TrayIcon.hpp:9-70` and `src/ui/TrayIcon.cpp:194-279`; host selects state/timer at `ApplicationHost.cpp:1248-1300`; taskbar-created handling at `ApplicationHost.cpp:2463-2466`. | `MANUAL P09-Tray-States-Theme-Dpi`: all states and eight Connecting frames in light/dark at 100/125/150/200% DPI, then Explorer restart/taskbar recreation; assert state/tooltip/icon re-register and no animation leak. | `GAP`: no icon rendering or shell integration test; P03 timer ownership remains in host until its migration. |
-| P09-07 settings-window placement and multi-monitor DPI | Placement calculation is `TrayController.cpp:945-963` and `ui/WindowPlacement`; persisted bounds schema is `Settings.cpp:357-371`. | `MANUAL P09-Placement-Dpi-MultiMonitor`: first launch, saved bounds at each DPI, monitor removal, off-screen bounds, and multi-monitor tray anchor. | `GAP`: no placement test; G06 remains a gate and current behavior must be preserved. |
+| P09-07 settings-window placement and multi-monitor DPI | Placement calculation is `TrayController.cpp:945-963` and `ui/WindowPlacement`; persisted bounds schema is `Settings.cpp:369-383`. | `MANUAL P09-Placement-Dpi-MultiMonitor`: first launch, saved bounds at each DPI, monitor removal, off-screen bounds, and multi-monitor tray anchor. | `GAP`: no placement test; G06 remains a gate and current behavior must be preserved. |
 | P09-08 teardown and UI-thread-only XAML access | `TrayController::Teardown` marshals to the dispatcher and releases flyout/view/icon at `TrayController.cpp:111-200`; release guards UI thread at `:744-827`. | `MANUAL P09-Tray-Teardown-Thread`: teardown from UI/background thread during opening/closing/preload and callback after teardown. | `GAP`: no deterministic XAML lifetime test; add a dispatcher/flyout fake. |
 
 ## Locked-decision checklist (P01–P10)
@@ -257,10 +281,10 @@ and bulk actions (`ui/DevicePickerView/DevicePickerView.xaml.cpp:93-105,775-795`
 | P04 | Normal disconnect must never toast or balloon | Current event call site identified | Current call violates P04; policy test and fix required in its owning phase. |
 | P05 | Every retained notification kind has an image/action mapping | Six-kind source mapping table | No mapping test; AppStarted/Update share image; manual matrix required. |
 | P06 | Bluetooth ordering, serialized mutation, epochs, close barrier, token cleanup, incoming, retry, bulk, startup, suspend/resume, shutdown | Coordinator/reconnect/planner/lifecycle tests | No WinRT DeviceManager integration/race harness. |
-| P07 | JSON compatibility, validation, corrupt preservation, no lost update, temp/flush/atomic replace, retry, final flush | Limits and deferred-save coordinator tests; source trace | No real Settings::Load/Save filesystem or host flush test. |
+| P07 | JSON compatibility, validation, corrupt preservation, no lost update, temp/flush/atomic replace, retry, final flush | Added `SettingsPersistenceTests`: current/legacy round-trip, malformed/oversized preservation, validation/retry, replacement failure, and later final-save coverage; the final x64 Debug/Release suites passed; existing limits/deferred-save tests and source trace | ARM64/host execution evidence is separate; no concurrent real-write, flush-order instrumentation, suspend/shutdown, package-upgrade, or full parser-bound matrix. |
 | P08 | Privacy/localization/accessibility/theme/DPI/UI thread | Pure tooltip/picker/diagnostic tests | CLI/notification/catalog/UI integration remains manual/gap. |
 | P09 | Tray clicks/actions/theme/DPI/placement and retained notification actions | Pure tooltip/snapshot tests; source trace | No shell/XAML interaction test. |
-| P10 | C++23 remains current until dedicated C++26 gate; x64/ARM64 evidence required | Four vcxproj `stdcpp23` declarations; lead-provided candidate evidence records Debug/Release outputs for x64/ARM64 and x64 CoreTests passes | ARM64 native CoreTests, manual/static-analysis/security/package-verification checks, and the dedicated C++26 gate remain unrun or unattempted; C++26 not approved. |
+| P10 | C++23 remains current until dedicated C++26 gate; x64/ARM64 evidence required | Four vcxproj `stdcpp23` declarations; final candidate evidence records Debug/Release outputs for x64/ARM64, x64 CoreTests passes, clang-format, and explicit cppcheck passes | ARM64 native CoreTests, manual desktop/security/package-verification checks, and the dedicated C++26 gate remain unrun or unattempted; C++26 not approved. |
 
 ## Required future automation before deleting legacy owners
 
@@ -281,34 +305,41 @@ characterization requirements, not permission to alter behavior:
 5. Add a fake AudioPlaybackConnection/DeviceDiscoveryService harness covering every
    P06 row, including callback epochs, token revocation, close-barrier timeout,
    incoming connections, multi-device cascade, suspend/resume, and busy shutdown.
-6. Add a Windows filesystem fixture for Settings::Load/Save that controls the path and
-   failure points, then asserts schema compatibility, corrupt backup, temp cleanup,
-   `FlushFileBuffers` ordering, atomic replace, retries, revisions, and final flush.
+6. Extend `SettingsPersistenceTests` with parser-boundary UTF-16/count/string/DPI cases,
+   backup-name collision handling, a writer-boundary mutation fixture, injected
+   `FlushFileBuffers`/atomic-failure ordering, and host suspend/shutdown final-flush
+   coverage; retain the current direct-file cases as the baseline.
 7. Add pure TrayController/TrayIcon message and timer tests with an injected tick,
    dispatcher, shell, DPI, and flyout seam; keep an explicit manual matrix for actual
    Explorer/taskbar, accessibility, theme, and multi-monitor behavior.
-8. Complete the remaining Debug and Release x64/ARM64 test and package-verification
-   evidence (build/package outputs are recorded above), then run the P10 gate before
-   any C++26 language-mode change.
+8. Complete ARM64 native test and package-verification evidence (the final x64
+   Debug/Release suites and both architecture build/package outputs are recorded
+   above), then run the P10 gate before any C++26 language-mode change.
 
-## Locally run candidate evidence (lead-provided)
+## Locally run candidate evidence (root-provided)
 
-The lead reports the following locally run evidence for source ref `c2dfd87`:
+Root reports the following locally run evidence for final candidate ref
+`8d079d5e1217363f7d41d55b5826ade974fc984b`:
 
 | Check | Reported result |
 |---|---|
-| `msbuild AudioPlaybackConnector2.slnx -t:restore -p:RestorePackagesConfig=true` | Passed with 0 warnings and 0 errors. |
-| Solution Debug x64 invocation | Completed successfully, produced both x64 and ARM64 Debug outputs, and reported 0 warnings and 0 errors. |
-| x64 Debug CoreTests | Output: `All core tests passed`. |
-| Release x64 rebuild with `AppxBundle=Never` and package signing disabled | Exited 0 and produced an x64 MSIX. |
-| x64 Release CoreTests | Output: `All core tests passed`. |
-| Release ARM64 rebuild with `AppxBundle=Never` and package signing disabled | Exited 0 and produced an ARM64 MSIX plus cross-compiled CoreTests. |
-| ARM64 CoreTests execution | Not run on the x64 host. |
+| `msbuild AudioPlaybackConnector2.slnx -t:restore -p:RestorePackagesConfig=true /v:minimal /m:1` | Exit 0. |
+| `msbuild AudioPlaybackConnector2.slnx /p:Configuration=Debug /p:Platform=x64 /v:minimal /m:1` | Exit 0; CoreRuntime boundary verification passed; the solution configuration produced x64 and ARM64 Debug app/package/control/core-tests artifacts. |
+| x64 Debug CoreTests | Exit 0; output `All core tests passed`. This suite includes the registered `SettingsPersistenceTests`. |
+| x64 Release rebuild with `AppxBundle=Never`, `AppxBundlePlatforms=x64`, and signing disabled | Exit 0; app, MSIX, and CoreTests built. |
+| x64 Release CoreTests | Exit 0; output `All core tests passed`. |
+| ARM64 Release rebuild with `AppxBundle=Never`, `AppxBundlePlatforms=ARM64`, and signing disabled | Exit 0; app, MSIX, and cross-compiled CoreTests built. |
+| ARM64 CoreTests execution | Not executed on the x64 host. |
+| clang-format 19.1.3 over all product `.cpp`/`.hpp` files with the required dry-run/error check | Exit 0. |
+| `C:\Program Files\Cppcheck\cppcheck.exe` 2.20.0 with warning/performance/portability, `--std=c++20`, and `--platform=win64` over product `src` | Exit 0. The unrelated PATH Strawberry cppcheck 2.14 executable is broken; it is not the recorded check. |
+| `git diff --check c2dfd87..HEAD` and repository status | Root reported clean. |
 
-This is candidate evidence supplied by the lead; this worker did not rerun those
-commands while writing the document. It does not establish that manual desktop,
-package-verification, clang-format, cppcheck, security, or ARM64 native test execution
-has passed. The dedicated C++26 toolchain gate was not attempted.
+This evidence is supplied by root for the final integrated candidate. It establishes
+the x64 Debug/Release build and CoreTests results, both architecture build/package
+outputs, the CoreRuntime boundary check, and the explicit clang-format/cppcheck passes.
+It does not establish ARM64 native test execution, manual desktop scenarios, security
+review, package-verification scenarios, or a performance rerun. The dedicated C++26
+toolchain gate was not attempted.
 
 ## Validation record for this artifact
 
@@ -320,11 +351,11 @@ documentation change:
 git diff --check
 ```
 
-The product was not changed, so this slice did not rerun a product build, core test
-executable, clang-format, cppcheck, package, or manual desktop scenario. The
-lead-provided candidate evidence above records successful restore, Debug/Release
-builds and package outputs as listed, with x64 CoreTests passing and ARM64 native tests
-not executed on the x64 host. It does not claim that manual desktop, static-analysis,
-security, package-verification, or ARM64 native test execution has passed. The
-dedicated C++26 toolchain gate was not attempted. Phase 0 still requires the applicable
-checks and scenarios listed in `docs/architecture-rework/verification.md`.
+The final root-provided evidence above includes the registered persistence tests in
+the passing x64 Debug and Release CoreTests runs. This documentation update itself
+did not rerun product commands; its validation is the diff check recorded above and
+the final status check after amendment. Manual desktop scenarios, ARM64 native tests,
+security review, package-verification scenarios, and performance rerun remain
+unprovided/unrun. The dedicated C++26 toolchain gate was not attempted. Phase 0 still
+requires the applicable checks and scenarios listed in
+`docs/architecture-rework/verification.md`.

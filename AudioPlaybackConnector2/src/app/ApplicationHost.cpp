@@ -39,6 +39,15 @@ constexpr auto c_mainWindowLoadedTimeout = std::chrono::seconds{15};
 using Bridge = apc::app::LegacyAppUseCaseBridge;
 using OperationStatus = Bridge::OperationStatus;
 
+OperationStatus ToUiActionStatus(ControlUiActionGate::Result result) noexcept {
+    switch (result) {
+        case ControlUiActionGate::Result::Succeeded: return OperationStatus::Succeeded;
+        case ControlUiActionGate::Result::Failed: return OperationStatus::Failed;
+        case ControlUiActionGate::Result::Indeterminate: return OperationStatus::Indeterminate;
+    }
+    return OperationStatus::Failed;
+}
+
 apc::app::DeviceConnectionState ToAppDeviceState(DeviceStatusKind status) noexcept {
     switch (status) {
         case DeviceStatusKind::Ready:
@@ -817,24 +826,23 @@ void ApplicationHost::InitializeAppController() {
             },
             context);
         if (uiResult != ControlUiActionResult::Succeeded) {
-            if (context.IsCancellationRequested()) {
-                result.Status = OperationStatus::Cancelled;
-            } else if (context.IsExpired(apc::app::AppCommandContext::Clock::now())) {
-                result.Status = OperationStatus::TimedOut;
-            } else {
-                result.Status = uiResult == ControlUiActionResult::Indeterminate ? OperationStatus::Indeterminate
-                                                                                 : OperationStatus::Failed;
-            }
+            // The gate records whether the dispatcher crossed TryBegin. A
+            // canceled or expired context alone cannot distinguish an action
+            // that never ran from one that may have already mutated the UI.
+            result.Status = ToUiActionStatus(uiResult);
             return result;
         }
 
         while (!wasVisible && tray->DevicePickerOpenedGeneration() == openedGeneration) {
             if (context.IsCancellationRequested()) {
-                result.Status = OperationStatus::Cancelled;
+                // ShowDevicePicker has already begun. The caller cannot know
+                // whether the UI transition will publish its generation after
+                // this return, so a definite cancellation would be unsafe.
+                result.Status = OperationStatus::Indeterminate;
                 return result;
             }
             if (context.IsExpired(apc::app::AppCommandContext::Clock::now())) {
-                result.Status = OperationStatus::TimedOut;
+                result.Status = OperationStatus::Indeterminate;
                 return result;
             }
             Sleep(1);
@@ -853,16 +861,9 @@ void ApplicationHost::InitializeAppController() {
                 return self && self->ShowSettingsWindow();
             },
             context);
-        if (uiResult == ControlUiActionResult::Succeeded) {
-            result.Status = OperationStatus::Succeeded;
-        } else if (context.IsCancellationRequested()) {
-            result.Status = OperationStatus::Cancelled;
-        } else if (context.IsExpired(apc::app::AppCommandContext::Clock::now())) {
-            result.Status = OperationStatus::TimedOut;
-        } else {
-            result.Status = uiResult == ControlUiActionResult::Indeterminate ? OperationStatus::Indeterminate
-                                                                             : OperationStatus::Failed;
-        }
+        // Preserve the gate's pre-dispatch versus in-flight distinction. The
+        // context state is not sufficient once the UI callback may have run.
+        result.Status = ToUiActionStatus(uiResult);
         return result;
     };
     operations.ResourceStatus = [weak]() {

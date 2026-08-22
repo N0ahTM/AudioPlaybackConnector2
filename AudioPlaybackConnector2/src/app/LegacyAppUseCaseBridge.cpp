@@ -45,8 +45,7 @@ bool IsBusyState(DeviceConnectionState state) noexcept {
 
 } // namespace
 
-LegacyAppUseCaseBridge::LegacyAppUseCaseBridge(Operations operations, SettingsData settings)
-    : m_operations(std::move(operations)), m_settings(std::move(settings)) {}
+LegacyAppUseCaseBridge::LegacyAppUseCaseBridge(Operations operations) : m_operations(std::move(operations)) {}
 
 LegacyAppUseCaseBridge::CallLease::CallLease(LegacyAppUseCaseBridge const& owner) noexcept : m_owner(owner) {
     std::scoped_lock lock(m_owner.m_stateMutex);
@@ -83,10 +82,11 @@ AppResult LegacyAppUseCaseBridge::Execute(AppCommand command, AppCommandContext 
     }
 
     try {
-        if (!SyncSettingsFromSource()) {
+        const auto settings = ReadSettings();
+        if (!settings) {
             return MakeFailure(command.Kind, AppResultCode::InternalError, AppOutcomeReason::InternalError);
         }
-        auto result = ExecuteCommand(command, context);
+        auto result = ExecuteCommand(command, context, settings->Data);
         result.Command = command.Kind;
         return result;
     } catch (...) {
@@ -106,13 +106,14 @@ AppSnapshot LegacyAppUseCaseBridge::Snapshot() const noexcept {
             unavailable.IsRunning = false;
             return unavailable;
         }
-        if (!SyncSettingsFromSource()) {
+        const auto settings = ReadSettings();
+        if (!settings) {
             AppSnapshot unavailable;
             unavailable.IsRunning = false;
             return unavailable;
         }
-        auto devices = BuildDevicesWithoutRefresh();
-        return SnapshotFromDevices(std::move(devices));
+        auto devices = BuildDevicesWithoutRefresh(settings->Data);
+        return SnapshotFromDevices(std::move(devices), settings->Data);
     } catch (...) {
         AppSnapshot unavailable;
         unavailable.IsRunning = false;
@@ -197,7 +198,9 @@ void LegacyAppUseCaseBridge::SetRunning(bool running) noexcept {
     }
 }
 
-AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppCommandContext const& context) {
+AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command,
+                                                 AppCommandContext const& context,
+                                                 SettingsData const& settings) {
     const auto requiresRefresh = [&]() noexcept {
         if (command.Kind == AppCommandKind::ListDevices) return true;
         if (!command.Target) return false;
@@ -225,7 +228,9 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
         return false;
     }();
     std::vector<DeviceRecord> devices;
-    if (requiresDevices) devices = requiresRefresh ? BuildDevices(true, context) : BuildDevicesWithoutRefresh();
+    if (requiresDevices) {
+        devices = requiresRefresh ? BuildDevices(true, context, settings) : BuildDevicesWithoutRefresh(settings);
+    }
 
     switch (command.Kind) {
         case AppCommandKind::ShowDevicePicker:
@@ -234,13 +239,13 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
             if (command.Kind == AppCommandKind::ShowDevicePicker) {
                 if (m_operations.ShowDevicePicker) {
                     if (const auto code = MutationAdmissionFailure(context)) {
-                        return MakeFailure(command.Kind, *code, AppOutcomeReason::NotReady);
+                        return MakeFailure(command.Kind, *code, AppOutcomeReason::NotReady, settings);
                     }
                     actionResult = m_operations.ShowDevicePicker(command.PickerOpenMode, context);
                 }
             } else if (m_operations.ShowSettings) {
                 if (const auto code = MutationAdmissionFailure(context)) {
-                    return MakeFailure(command.Kind, *code, AppOutcomeReason::NotReady);
+                    return MakeFailure(command.Kind, *code, AppOutcomeReason::NotReady, settings);
                 }
                 actionResult = m_operations.ShowSettings(context);
             }
@@ -249,7 +254,7 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
                                   : actionResult.Status == OperationStatus::TimedOut      ? AppResultCode::TimedOut
                                   : actionResult.Status == OperationStatus::Indeterminate ? AppResultCode::Indeterminate
                                                                                           : AppResultCode::Unavailable;
-                return MakeFailure(command.Kind, code, AppOutcomeReason::NotReady);
+                return MakeFailure(command.Kind, code, AppOutcomeReason::NotReady, settings);
             }
 
             if (command.Kind == AppCommandKind::ShowDevicePicker) {
@@ -279,7 +284,7 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
             result.Command = command.Kind;
             result.Reason = command.Kind == AppCommandKind::ShowDevicePicker ? AppOutcomeReason::ShowOpened
                                                                              : AppOutcomeReason::SettingsOpened;
-            result.PrivacyModeEnabled = PrivacyMode();
+            result.PrivacyModeEnabled = PrivacyMode(settings);
             return result;
         }
         case AppCommandKind::ListDevices:
@@ -291,12 +296,12 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
             for (auto const& device : devices) {
                 if (auto snapshot = ToSnapshot(device)) result.Devices.push_back(std::move(*snapshot));
             }
-            result.Snapshot = SnapshotFromDevices(devices);
+            result.Snapshot = SnapshotFromDevices(devices, settings);
             result.PrivacyModeEnabled = result.Snapshot->PrivacyModeEnabled;
             return result;
         }
         case AppCommandKind::ShowDefault: {
-            auto snapshot = SnapshotFromDevices(devices);
+            auto snapshot = SnapshotFromDevices(devices, settings);
             AppResult result;
             result.Code = AppResultCode::Success;
             result.Command = command.Kind;
@@ -306,148 +311,138 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
             return result;
         }
         case AppCommandKind::SetDefault: {
-            auto resolution = Resolve(*command.Target, devices);
+            auto resolution = Resolve(*command.Target, devices, settings);
             if (resolution.Code != AppResultCode::Success) {
-                return MakeTargetResult(command.Kind, resolution, resolution.Code, resolution.Reason);
+                return MakeTargetResult(command.Kind, resolution, settings, resolution.Code, resolution.Reason);
             }
             if (!resolution.HasTarget || !resolution.Target.Exists) {
                 return MakeTargetResult(
-                    command.Kind, resolution, AppResultCode::NotFound, AppOutcomeReason::TargetNotFound);
+                    command.Kind, resolution, settings, AppResultCode::NotFound, AppOutcomeReason::TargetNotFound);
             }
 
             if (!m_operations.SetDefaultDevice) {
                 return MakeTargetResult(
-                    command.Kind, resolution, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
+                    command.Kind, resolution, settings, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
             }
             if (const auto code = MutationAdmissionFailure(context)) {
-                return MakeTargetResult(command.Kind, resolution, *code, AppOutcomeReason::None);
+                return MakeTargetResult(command.Kind, resolution, settings, *code, AppOutcomeReason::None);
             }
             const bool accepted = m_operations.SetDefaultDevice(resolution.Target.Id);
             if (!accepted) {
+                return MakeTargetResult(command.Kind,
+                                        resolution,
+                                        settings,
+                                        AppResultCode::OperationFailed,
+                                        AppOutcomeReason::InternalError);
+            }
+            const auto committedSettings = ReadSettings();
+            if (!committedSettings) {
                 return MakeTargetResult(
-                    command.Kind, resolution, AppResultCode::OperationFailed, AppOutcomeReason::InternalError);
+                    command.Kind, resolution, settings, AppResultCode::InternalError, AppOutcomeReason::InternalError);
             }
-            bool changed = false;
-            {
-                std::scoped_lock lock(m_stateMutex);
-                changed = m_settings.DefaultDevice != ::DefaultDeviceMode::SpecificDevice ||
-                          m_settings.DefaultDeviceId != resolution.Target.Id;
-                if (changed) {
-                    m_settings.DefaultDevice = ::DefaultDeviceMode::SpecificDevice;
-                    m_settings.DefaultDeviceId = resolution.Target.Id;
-                    AdvanceGeneration(m_generation);
-                }
-            }
-            auto result =
-                MakeTargetResult(command.Kind, resolution, AppResultCode::Success, AppOutcomeReason::DefaultSet);
-            result.DefaultDevice = Snapshot().DefaultDevice;
-            (void)changed;
+            auto committedSnapshot = SnapshotFromDevices(devices, committedSettings->Data);
+            auto result = MakeTargetResult(command.Kind,
+                                           resolution,
+                                           committedSettings->Data,
+                                           AppResultCode::Success,
+                                           AppOutcomeReason::DefaultSet);
+            result.DefaultDevice = committedSnapshot.DefaultDevice;
             return result;
         }
         case AppCommandKind::ClearDefault: {
             if (!m_operations.ClearDefaultDevice) {
-                return MakeFailure(command.Kind, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
+                return MakeFailure(command.Kind, AppResultCode::Unavailable, AppOutcomeReason::NotReady, settings);
             }
             if (const auto code = MutationAdmissionFailure(context)) {
-                return MakeFailure(command.Kind, *code, AppOutcomeReason::None);
+                return MakeFailure(command.Kind, *code, AppOutcomeReason::None, settings);
             }
             const bool accepted = m_operations.ClearDefaultDevice();
             if (!accepted) {
-                return MakeFailure(command.Kind, AppResultCode::OperationFailed, AppOutcomeReason::InternalError);
+                return MakeFailure(
+                    command.Kind, AppResultCode::OperationFailed, AppOutcomeReason::InternalError, settings);
             }
-            {
-                std::scoped_lock lock(m_stateMutex);
-                if (m_settings.DefaultDevice != ::DefaultDeviceMode::LastConnected ||
-                    !m_settings.DefaultDeviceId.empty()) {
-                    m_settings.DefaultDevice = ::DefaultDeviceMode::LastConnected;
-                    m_settings.DefaultDeviceId.clear();
-                    AdvanceGeneration(m_generation);
-                }
+            const auto committedSettings = ReadSettings();
+            if (!committedSettings) {
+                return MakeFailure(
+                    command.Kind, AppResultCode::InternalError, AppOutcomeReason::InternalError, settings);
             }
+            auto committedSnapshot = SnapshotFromDevices({}, committedSettings->Data);
             AppResult result;
             result.Code = AppResultCode::Success;
             result.Command = command.Kind;
             result.Reason = AppOutcomeReason::DefaultCleared;
-            result.PrivacyModeEnabled = PrivacyMode();
+            result.DefaultDevice = committedSnapshot.DefaultDevice;
+            result.PrivacyModeEnabled = PrivacyMode(committedSettings->Data);
             return result;
         }
         case AppCommandKind::SetAlias:
         case AppCommandKind::ClearAlias: {
-            auto resolution = Resolve(*command.Target, devices);
+            auto resolution = Resolve(*command.Target, devices, settings);
             if (resolution.Code != AppResultCode::Success) {
-                return MakeTargetResult(command.Kind, resolution, resolution.Code, resolution.Reason);
+                return MakeTargetResult(command.Kind, resolution, settings, resolution.Code, resolution.Reason);
             }
             if (!resolution.HasTarget || !resolution.Target.Exists) {
                 return MakeTargetResult(
-                    command.Kind, resolution, AppResultCode::NotFound, AppOutcomeReason::TargetNotFound);
+                    command.Kind, resolution, settings, AppResultCode::NotFound, AppOutcomeReason::TargetNotFound);
             }
 
             const auto alias = command.Kind == AppCommandKind::SetAlias ? command.Alias : std::wstring{};
             if (!apc::limits::IsBoundedUtf16(alias, apc::limits::c_maxDeviceAliasCharacters)) {
                 return MakeTargetResult(command.Kind,
                                         resolution,
+                                        settings,
                                         AppResultCode::OperationFailed,
                                         command.Kind == AppCommandKind::SetAlias ? AppOutcomeReason::AliasSetFailed
                                                                                  : AppOutcomeReason::AliasClearFailed);
             }
             if (!m_operations.SetDeviceAlias) {
                 return MakeTargetResult(
-                    command.Kind, resolution, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
+                    command.Kind, resolution, settings, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
             }
             if (const auto code = MutationAdmissionFailure(context)) {
-                return MakeTargetResult(command.Kind, resolution, *code, AppOutcomeReason::None);
+                return MakeTargetResult(command.Kind, resolution, settings, *code, AppOutcomeReason::None);
             }
             const bool accepted = m_operations.SetDeviceAlias(resolution.Target.Id, alias, resolution.Target.Name);
             if (!accepted) {
                 return MakeTargetResult(command.Kind,
                                         resolution,
+                                        settings,
                                         AppResultCode::OperationFailed,
                                         command.Kind == AppCommandKind::SetAlias ? AppOutcomeReason::AliasSetFailed
                                                                                  : AppOutcomeReason::AliasClearFailed);
             }
 
-            bool changed = false;
-            {
-                std::scoped_lock lock(m_stateMutex);
-                auto existing = std::ranges::find(m_settings.Devices, resolution.Target.Id, &DeviceSettings::Id);
-                if (existing == m_settings.Devices.end()) {
-                    if (!alias.empty() && m_settings.Devices.size() < apc::limits::c_maxPersistedDeviceCount) {
-                        m_settings.Devices.push_back(
-                            DeviceSettings{.Id = resolution.Target.Id,
-                                           .Name = resolution.Target.Name,
-                                           .Alias = alias,
-                                           .ConnectOnStartup = m_settings.GlobalConnectOnStartup,
-                                           .ReconnectOnConnectionLoss = m_settings.GlobalReconnectOnConnectionLoss});
-                        changed = true;
-                    }
-                } else if (existing->Alias != alias) {
-                    existing->Alias = alias;
-                    changed = true;
-                }
-                if (changed) AdvanceGeneration(m_generation);
+            const auto committedSettings = ReadSettings();
+            if (!committedSettings) {
+                return MakeTargetResult(
+                    command.Kind, resolution, settings, AppResultCode::InternalError, AppOutcomeReason::InternalError);
             }
-
-            auto refreshedDevices = BuildDevicesWithoutRefresh();
+            auto refreshedDevices = BuildDevicesWithoutRefresh(committedSettings->Data);
             auto result = MakeTargetResult(command.Kind,
                                            resolution,
+                                           committedSettings->Data,
                                            AppResultCode::Success,
                                            command.Kind == AppCommandKind::SetAlias ? AppOutcomeReason::AliasSet
                                                                                     : AppOutcomeReason::AliasCleared);
-            result.Alias = alias;
+            const auto committedDevice =
+                std::ranges::find_if(committedSettings->Data.Devices, [&resolution](auto const& device) {
+                    return EqualsIgnoreCase(device.Id, resolution.Target.Id);
+                });
+            result.Alias =
+                committedDevice == committedSettings->Data.Devices.end() ? std::wstring{} : committedDevice->Alias;
             result.Device = PostOperationDevice(resolution.Target.Id, refreshedDevices);
-            (void)changed;
             return result;
         }
         case AppCommandKind::Connect:
         case AppCommandKind::Disconnect:
-        case AppCommandKind::Reconnect: return ExecuteTargetOperation(command, context, devices);
-        case AppCommandKind::ToggleLast: return ExecuteToggle(command, context, devices);
+        case AppCommandKind::Reconnect: return ExecuteTargetOperation(command, context, devices, settings);
+        case AppCommandKind::ToggleLast: return ExecuteToggle(command, context, devices, settings);
         case AppCommandKind::DisconnectAll: {
             if (!m_operations.DisconnectAll) {
-                return MakeFailure(command.Kind, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
+                return MakeFailure(command.Kind, AppResultCode::Unavailable, AppOutcomeReason::NotReady, settings);
             }
             if (const auto code = MutationAdmissionFailure(context)) {
-                return MakeFailure(command.Kind, *code, AppOutcomeReason::None);
+                return MakeFailure(command.Kind, *code, AppOutcomeReason::None, settings);
             }
             m_operations.DisconnectAll();
             {
@@ -458,16 +453,16 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
             result.Code = AppResultCode::Success;
             result.Command = command.Kind;
             result.Reason = AppOutcomeReason::DisconnectAllSucceeded;
-            result.PrivacyModeEnabled = PrivacyMode();
+            result.PrivacyModeEnabled = PrivacyMode(settings);
             return result;
         }
         case AppCommandKind::ReconnectAll: {
             if (context.Completion == AppCommandContext::CompletionMode::Detached) {
                 if (!m_operations.ReconnectAllDetached) {
-                    return MakeFailure(command.Kind, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
+                    return MakeFailure(command.Kind, AppResultCode::Unavailable, AppOutcomeReason::NotReady, settings);
                 }
                 if (const auto code = MutationAdmissionFailure(context)) {
-                    return MakeFailure(command.Kind, *code, AppOutcomeReason::None);
+                    return MakeFailure(command.Kind, *code, AppOutcomeReason::None, settings);
                 }
                 m_operations.ReconnectAllDetached();
                 {
@@ -478,7 +473,7 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
                 result.Code = AppResultCode::Success;
                 result.Command = command.Kind;
                 result.Reason = AppOutcomeReason::ReconnectAllSucceeded;
-                result.PrivacyModeEnabled = PrivacyMode();
+                result.PrivacyModeEnabled = PrivacyMode(settings);
                 return result;
             }
 
@@ -486,17 +481,18 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
                 if (!device.IsConnected || device.Id.empty()) continue;
                 auto selector = DeviceSelector::ById(device.Id);
                 if (!selector) continue;
-                auto resolution = Resolve(*selector, devices);
+                auto resolution = Resolve(*selector, devices, settings);
                 if (const auto code = MutationAdmissionFailure(context)) {
                     return MakeTargetResult(command.Kind,
                                             resolution,
+                                            settings,
                                             *code,
                                             *code == AppResultCode::Cancelled ? AppOutcomeReason::NotReady
                                                                               : AppOutcomeReason::ReconnectFailed);
                 }
                 if (!m_operations.Reconnect) {
                     return MakeTargetResult(
-                        command.Kind, resolution, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
+                        command.Kind, resolution, settings, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
                 }
                 const auto operation = m_operations.Reconnect(device.Id, context);
                 if (!IsSuccess(operation.Status)) {
@@ -505,13 +501,16 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
                     const auto reason = operation.Status == OperationStatus::Cancelled
                                             ? AppOutcomeReason::NotReady
                                             : AppOutcomeReason::ReconnectFailed;
-                    return MakeTargetResult(command.Kind, resolution, code, reason);
+                    return MakeTargetResult(command.Kind, resolution, settings, code, reason);
                 }
-                auto after = BuildDevicesWithoutRefresh();
+                auto after = BuildDevicesWithoutRefresh(settings);
                 auto current = FindById(after, device.Id);
                 if (!current || !current->IsConnected) {
-                    return MakeTargetResult(
-                        command.Kind, resolution, AppResultCode::OperationFailed, AppOutcomeReason::ReconnectFailed);
+                    return MakeTargetResult(command.Kind,
+                                            resolution,
+                                            settings,
+                                            AppResultCode::OperationFailed,
+                                            AppOutcomeReason::ReconnectFailed);
                 }
             }
             {
@@ -522,52 +521,55 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
             result.Code = AppResultCode::Success;
             result.Command = command.Kind;
             result.Reason = AppOutcomeReason::ReconnectAllSucceeded;
-            result.PrivacyModeEnabled = PrivacyMode();
+            result.PrivacyModeEnabled = PrivacyMode(settings);
             return result;
         }
     }
 
-    return MakeFailure(command.Kind, AppResultCode::InvalidInput, AppOutcomeReason::Unsupported);
+    return MakeFailure(command.Kind, AppResultCode::InvalidInput, AppOutcomeReason::Unsupported, settings);
 }
 
 AppResult LegacyAppUseCaseBridge::ExecuteTargetOperation(AppCommand const& command,
                                                          AppCommandContext const& context,
-                                                         std::vector<DeviceRecord> const& devices) {
-    auto resolution = Resolve(*command.Target, devices);
+                                                         std::vector<DeviceRecord> const& devices,
+                                                         SettingsData const& settings) {
+    auto resolution = Resolve(*command.Target, devices, settings);
     if (resolution.Code != AppResultCode::Success) {
-        return MakeTargetResult(command.Kind, resolution, resolution.Code, resolution.Reason);
+        return MakeTargetResult(command.Kind, resolution, settings, resolution.Code, resolution.Reason);
     }
 
     const auto id = resolution.Target.Id;
     if (command.Kind == AppCommandKind::Connect && resolution.Target.IsConnected) {
-        return MakeTargetResult(command.Kind, resolution, AppResultCode::Success, AppOutcomeReason::AlreadyConnected);
+        return MakeTargetResult(
+            command.Kind, resolution, settings, AppResultCode::Success, AppOutcomeReason::AlreadyConnected);
     }
     if (command.Kind == AppCommandKind::Disconnect && !resolution.Target.IsConnected) {
         return MakeTargetResult(
-            command.Kind, resolution, AppResultCode::Success, AppOutcomeReason::AlreadyDisconnected);
+            command.Kind, resolution, settings, AppResultCode::Success, AppOutcomeReason::AlreadyDisconnected);
     }
 
     const bool detached = context.Completion == AppCommandContext::CompletionMode::Detached;
     if (command.Kind == AppCommandKind::Disconnect) {
         if (!m_operations.Disconnect) {
-            return MakeTargetResult(command.Kind, resolution, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
+            return MakeTargetResult(
+                command.Kind, resolution, settings, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
         }
         if (const auto code = MutationAdmissionFailure(context)) {
-            return MakeTargetResult(command.Kind, resolution, *code, AppOutcomeReason::None);
+            return MakeTargetResult(command.Kind, resolution, settings, *code, AppOutcomeReason::None);
         }
         m_operations.Disconnect(id);
-        auto after = BuildDevicesWithoutRefresh();
+        auto after = BuildDevicesWithoutRefresh(settings);
         auto current = FindById(after, id);
         if (current && current->IsConnected) {
             return MakeTargetResult(
-                command.Kind, resolution, AppResultCode::OperationFailed, AppOutcomeReason::DisconnectFailed);
+                command.Kind, resolution, settings, AppResultCode::OperationFailed, AppOutcomeReason::DisconnectFailed);
         }
         {
             std::scoped_lock lock(m_stateMutex);
             AdvanceGeneration(m_generation);
         }
-        auto result =
-            MakeTargetResult(command.Kind, resolution, AppResultCode::Success, AppOutcomeReason::DisconnectSucceeded);
+        auto result = MakeTargetResult(
+            command.Kind, resolution, settings, AppResultCode::Success, AppOutcomeReason::DisconnectSucceeded);
         result.Device = PostOperationDevice(id, after);
         return result;
     }
@@ -576,10 +578,11 @@ AppResult LegacyAppUseCaseBridge::ExecuteTargetOperation(AppCommand const& comma
         const auto operation =
             command.Kind == AppCommandKind::Connect ? m_operations.ConnectDetached : m_operations.ReconnectDetached;
         if (!operation) {
-            return MakeTargetResult(command.Kind, resolution, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
+            return MakeTargetResult(
+                command.Kind, resolution, settings, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
         }
         if (const auto code = MutationAdmissionFailure(context)) {
-            return MakeTargetResult(command.Kind, resolution, *code, AppOutcomeReason::None);
+            return MakeTargetResult(command.Kind, resolution, settings, *code, AppOutcomeReason::None);
         }
         operation(id);
         {
@@ -588,6 +591,7 @@ AppResult LegacyAppUseCaseBridge::ExecuteTargetOperation(AppCommand const& comma
         }
         return MakeTargetResult(command.Kind,
                                 resolution,
+                                settings,
                                 AppResultCode::Success,
                                 command.Kind == AppCommandKind::Connect ? AppOutcomeReason::ConnectSucceeded
                                                                         : AppOutcomeReason::ReconnectSucceeded);
@@ -595,23 +599,24 @@ AppResult LegacyAppUseCaseBridge::ExecuteTargetOperation(AppCommand const& comma
 
     const auto operation = command.Kind == AppCommandKind::Connect ? m_operations.Connect : m_operations.Reconnect;
     if (!operation) {
-        return MakeTargetResult(command.Kind, resolution, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
+        return MakeTargetResult(
+            command.Kind, resolution, settings, AppResultCode::Unavailable, AppOutcomeReason::NotReady);
     }
     if (const auto code = MutationAdmissionFailure(context)) {
-        return MakeTargetResult(command.Kind, resolution, *code, AppOutcomeReason::None);
+        return MakeTargetResult(command.Kind, resolution, settings, *code, AppOutcomeReason::None);
     }
     const auto operationResult = operation(id, context);
     if (!IsSuccess(operationResult.Status)) {
         const auto code = operationResult.Status == OperationStatus::Failed ? AppResultCode::Indeterminate
                                                                             : ToResultCode(operationResult.Status);
-        return MakeTargetResult(command.Kind, resolution, code, AppOutcomeReason::None);
+        return MakeTargetResult(command.Kind, resolution, settings, code, AppOutcomeReason::None);
     }
 
-    auto after = BuildDevicesWithoutRefresh();
+    auto after = BuildDevicesWithoutRefresh(settings);
     auto current = FindById(after, id);
     if (!current || !current->IsConnected) {
         return MakeTargetResult(
-            command.Kind, resolution, AppResultCode::OperationFailed, OperationReason(command.Kind));
+            command.Kind, resolution, settings, AppResultCode::OperationFailed, OperationReason(command.Kind));
     }
 
     {
@@ -620,6 +625,7 @@ AppResult LegacyAppUseCaseBridge::ExecuteTargetOperation(AppCommand const& comma
     }
     auto result = MakeTargetResult(command.Kind,
                                    resolution,
+                                   settings,
                                    AppResultCode::Success,
                                    command.Kind == AppCommandKind::Connect ? AppOutcomeReason::ConnectSucceeded
                                                                            : AppOutcomeReason::ReconnectSucceeded);
@@ -629,10 +635,11 @@ AppResult LegacyAppUseCaseBridge::ExecuteTargetOperation(AppCommand const& comma
 
 AppResult LegacyAppUseCaseBridge::ExecuteToggle(AppCommand const& command,
                                                 AppCommandContext const& context,
-                                                std::vector<DeviceRecord> const& devices) {
-    auto resolution = Resolve(*command.Target, devices);
+                                                std::vector<DeviceRecord> const& devices,
+                                                SettingsData const& settings) {
+    auto resolution = Resolve(*command.Target, devices, settings);
     if (resolution.Code != AppResultCode::Success) {
-        return MakeTargetResult(command.Kind, resolution, resolution.Code, resolution.Reason);
+        return MakeTargetResult(command.Kind, resolution, settings, resolution.Code, resolution.Reason);
     }
     if (context.Completion == AppCommandContext::CompletionMode::Detached) {
         bool globalBusy = false;
@@ -644,19 +651,20 @@ AppResult LegacyAppUseCaseBridge::ExecuteToggle(AppCommand const& command,
         const bool deviceBusy = m_operations.DeviceBusy ? m_operations.DeviceBusy(resolution.Target.Id)
                                                         : (resolution.Device && resolution.Device->IsBusy);
         if (globalBusy || deviceBusy) {
-            return MakeTargetResult(command.Kind, resolution, AppResultCode::Busy, AppOutcomeReason::None);
+            return MakeTargetResult(command.Kind, resolution, settings, AppResultCode::Busy, AppOutcomeReason::None);
         }
     }
 
     AppCommand operationCommand{
         resolution.Target.IsConnected ? AppCommandKind::Disconnect : AppCommandKind::Connect, command.Target, {}};
-    auto result = ExecuteTargetOperation(operationCommand, context, devices);
+    auto result = ExecuteTargetOperation(operationCommand, context, devices, settings);
     result.Command = command.Kind;
     return result;
 }
 
 LegacyAppUseCaseBridge::Resolution LegacyAppUseCaseBridge::Resolve(DeviceSelector const& selector,
-                                                                   std::vector<DeviceRecord> const& devices) const {
+                                                                   std::vector<DeviceRecord> const& devices,
+                                                                   SettingsData const& settings) const {
     Resolution result;
     const auto makeResolved = [&](DeviceRecord const& device) {
         result.HasTarget = true;
@@ -696,12 +704,6 @@ LegacyAppUseCaseBridge::Resolution LegacyAppUseCaseBridge::Resolve(DeviceSelecto
             makeUnknown(id);
         }
         return result;
-    }
-
-    SettingsData settings;
-    {
-        std::scoped_lock lock(m_stateMutex);
-        settings = m_settings;
     }
 
     if (selector.Kind() == DeviceSelectorKind::Default || selector.Kind() == DeviceSelectorKind::Last) {
@@ -800,13 +802,7 @@ LegacyAppUseCaseBridge::Resolution LegacyAppUseCaseBridge::Resolve(DeviceSelecto
 }
 
 std::vector<LegacyAppUseCaseBridge::DeviceRecord>
-LegacyAppUseCaseBridge::BuildDevices(bool refresh, AppCommandContext const& context) {
-    SettingsData settings;
-    {
-        std::scoped_lock lock(m_stateMutex);
-        settings = m_settings;
-    }
-
+LegacyAppUseCaseBridge::BuildDevices(bool refresh, AppCommandContext const& context, SettingsData const& settings) {
     auto connected = ReadConnectedDevices();
     std::vector<DeviceRecord> refreshed;
     if (refresh && m_operations.Refresh) {
@@ -824,27 +820,32 @@ LegacyAppUseCaseBridge::BuildDevices(bool refresh, AppCommandContext const& cont
             refreshed = refreshResult.Devices;
         }
     }
-    return MergeDevices(std::move(refreshed), std::move(connected), std::move(settings));
+    return MergeDevices(std::move(refreshed), std::move(connected), settings);
 }
 
-std::vector<LegacyAppUseCaseBridge::DeviceRecord> LegacyAppUseCaseBridge::BuildDevicesWithoutRefresh() const {
-    SettingsData settings;
-    {
-        std::scoped_lock lock(m_stateMutex);
-        settings = m_settings;
-    }
-    return MergeDevices({}, ReadConnectedDevices(), std::move(settings));
+std::vector<LegacyAppUseCaseBridge::DeviceRecord>
+LegacyAppUseCaseBridge::BuildDevicesWithoutRefresh(SettingsData const& settings) const {
+    return MergeDevices({}, ReadConnectedDevices(), settings);
 }
 
-bool LegacyAppUseCaseBridge::SyncSettingsFromSource() const noexcept {
-    if (!m_operations.ReadSettings) return true;
+std::optional<SettingsSnapshot> LegacyAppUseCaseBridge::ReadSettings() const noexcept {
+    if (!m_operations.ReadSettings) return std::nullopt;
     try {
-        auto settings = m_operations.ReadSettings();
-        std::scoped_lock lock(m_stateMutex);
-        m_settings = std::move(settings);
-        return true;
+        auto snapshot = m_operations.ReadSettings();
+        // Only the Store revision crosses into bridge state. SettingsData
+        // remains a caller-local value and is never cached here.
+        {
+            std::scoped_lock lock(m_stateMutex);
+            if (!m_lastSettingsRevision) {
+                m_lastSettingsRevision = snapshot.Revision;
+            } else if (snapshot.Revision > *m_lastSettingsRevision) {
+                m_lastSettingsRevision = snapshot.Revision;
+                AdvanceGeneration(m_generation);
+            }
+        }
+        return snapshot;
     } catch (...) {
-        return false;
+        return std::nullopt;
     }
 }
 
@@ -858,7 +859,7 @@ std::vector<LegacyAppUseCaseBridge::DeviceRecord> LegacyAppUseCaseBridge::ReadCo
 }
 
 std::vector<LegacyAppUseCaseBridge::DeviceRecord> LegacyAppUseCaseBridge::MergeDevices(
-    std::vector<DeviceRecord> refreshed, std::vector<DeviceRecord> connected, SettingsData settings) const {
+    std::vector<DeviceRecord> refreshed, std::vector<DeviceRecord> connected, SettingsData const& settings) const {
     std::unordered_map<std::wstring, std::size_t> indexes;
     std::vector<DeviceRecord> merged;
     const auto upsert = [&](DeviceRecord device) {
@@ -900,7 +901,7 @@ std::vector<LegacyAppUseCaseBridge::DeviceRecord> LegacyAppUseCaseBridge::MergeD
 }
 
 AppSnapshot LegacyAppUseCaseBridge::BuildSnapshot(std::vector<DeviceRecord> devices,
-                                                  SettingsData settings,
+                                                  SettingsData const& settings,
                                                   std::uint64_t generation,
                                                   std::uint64_t pickerGeneration,
                                                   bool isRunning) const noexcept {
@@ -964,15 +965,14 @@ AppSnapshot LegacyAppUseCaseBridge::BuildSnapshot(std::vector<DeviceRecord> devi
     return snapshot;
 }
 
-AppSnapshot LegacyAppUseCaseBridge::SnapshotFromDevices(std::vector<DeviceRecord> devices) const noexcept {
+AppSnapshot LegacyAppUseCaseBridge::SnapshotFromDevices(std::vector<DeviceRecord> devices,
+                                                        SettingsData const& settings) const noexcept {
     try {
-        SettingsData settings;
         std::uint64_t generation = 0;
         std::uint64_t pickerGeneration = 0;
         bool isRunning = false;
         {
             std::scoped_lock lock(m_stateMutex);
-            settings = m_settings;
             generation = m_generation;
             pickerGeneration = m_pickerGeneration;
             isRunning = m_running;
@@ -1003,7 +1003,7 @@ AppSnapshot LegacyAppUseCaseBridge::SnapshotFromDevices(std::vector<DeviceRecord
             if (!m_running) isRunning = false;
             generation = m_generation;
         }
-        return BuildSnapshot(std::move(devices), std::move(settings), generation, pickerGeneration, isRunning);
+        return BuildSnapshot(std::move(devices), settings, generation, pickerGeneration, isRunning);
     } catch (...) {
         AppSnapshot unavailable;
         unavailable.IsRunning = false;
@@ -1020,15 +1020,25 @@ AppResult LegacyAppUseCaseBridge::MakeFailure(AppCommandKind command,
     result.Command = command;
     result.Reason = reason;
     result.RequestedTarget = std::move(requestedTarget);
-    result.PrivacyModeEnabled = PrivacyMode();
+    return result;
+}
+
+AppResult LegacyAppUseCaseBridge::MakeFailure(AppCommandKind command,
+                                              AppResultCode code,
+                                              AppOutcomeReason reason,
+                                              SettingsData const& settings,
+                                              std::wstring requestedTarget) const {
+    auto result = MakeFailure(command, code, reason, std::move(requestedTarget));
+    result.PrivacyModeEnabled = PrivacyMode(settings);
     return result;
 }
 
 AppResult LegacyAppUseCaseBridge::MakeTargetResult(AppCommandKind command,
                                                    Resolution const& resolution,
+                                                   SettingsData const& settings,
                                                    AppResultCode code,
                                                    AppOutcomeReason reason) const {
-    auto result = MakeFailure(command, code, reason, resolution.RequestedTarget);
+    auto result = MakeFailure(command, code, reason, settings, resolution.RequestedTarget);
     if (resolution.HasTarget) result.Target = resolution.Target;
     if (resolution.Device) result.Device = ToSnapshot(*resolution.Device);
     return result;
@@ -1187,13 +1197,8 @@ void LegacyAppUseCaseBridge::AdvanceGeneration(std::uint64_t& generation) noexce
     if (generation != std::numeric_limits<std::uint64_t>::max()) ++generation;
 }
 
-bool LegacyAppUseCaseBridge::PrivacyMode() const noexcept {
-    try {
-        std::scoped_lock lock(m_stateMutex);
-        return m_settings.PrivacyModeEnabled;
-    } catch (...) {
-        return false;
-    }
+bool LegacyAppUseCaseBridge::PrivacyMode(SettingsData const& settings) const noexcept {
+    return settings.PrivacyModeEnabled;
 }
 
 } // namespace apc::app

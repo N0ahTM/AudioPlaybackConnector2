@@ -3,6 +3,7 @@
 #include <ui/TrayPrimaryActivation.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -69,7 +70,8 @@ struct Harness {
     SettingsData SourceSettings;
     std::vector<DeviceRecord> LiveDevices;
     std::vector<DeviceRecord> RefreshDevices;
-    std::function<SettingsData()> ReadSettings;
+    std::function<SettingsSnapshot()> ReadSettings;
+    std::uint64_t SettingsRevision = 0;
     bool SettingsReadFails = false;
     bool DevicesReadFails = false;
     int SettingsReadCalls = 0;
@@ -107,9 +109,9 @@ struct Harness {
         : SourceSettings(), LiveDevices(), RefreshDevices(), ReadSettings([this] {
               ++SettingsReadCalls;
               if (SettingsReadFails) throw 1;
-              return SourceSettings;
+              return SettingsSnapshot{SourceSettings, SettingsRevision, false};
           }),
-          Bridge(MakeOperations(), SourceSettings) {}
+          Bridge(MakeOperations()) {}
 
     LegacyAppUseCaseBridge::Operations MakeOperations() {
         LegacyAppUseCaseBridge::Operations operations;
@@ -199,6 +201,7 @@ struct Harness {
             if (!SetDefaultAccepted) return false;
             SourceSettings.DefaultDevice = ::DefaultDeviceMode::SpecificDevice;
             SourceSettings.DefaultDeviceId = id;
+            ++SettingsRevision;
             return true;
         };
         operations.ClearDefaultDevice = [this] {
@@ -206,6 +209,7 @@ struct Harness {
             if (!ClearDefaultAccepted) return false;
             SourceSettings.DefaultDevice = ::DefaultDeviceMode::LastConnected;
             SourceSettings.DefaultDeviceId.clear();
+            ++SettingsRevision;
             return true;
         };
         operations.SetDeviceAlias = [this](std::wstring_view id, std::wstring_view alias, std::wstring_view) {
@@ -215,6 +219,7 @@ struct Harness {
                 std::ranges::find_if(SourceSettings.Devices, [id](auto const& device) { return device.Id == id; });
             if (found == SourceSettings.Devices.end()) return false;
             found->Alias = alias;
+            ++SettingsRevision;
             return true;
         };
         operations.ShowDevicePicker = [this](DevicePickerOpenMode openMode, AppCommandContext const&) {
@@ -323,6 +328,7 @@ void TestRefreshCapAndCurrentInputFallback() {
 
 void TestMutationAdmissionRejectsCancellationAfterRefreshFallback() {
     SettingsData settings;
+    std::uint64_t settingsRevision = 0;
     const auto liveDevice = Device(L"device-id", L"Headphones", L"Desk");
     settings.Devices.push_back(DeviceSettings{liveDevice.Id, liveDevice.Name, liveDevice.Alias, false, false});
     std::mutex refreshMutex;
@@ -333,7 +339,7 @@ void TestMutationAdmissionRejectsCancellationAfterRefreshFallback() {
     std::atomic<int> aliasMutations = 0;
 
     LegacyAppUseCaseBridge::Operations operations;
-    operations.ReadSettings = [&] { return settings; };
+    operations.ReadSettings = [&] { return SettingsSnapshot{settings, settingsRevision, false}; };
     operations.ReadConnectedDevices = [&] { return std::vector<DeviceRecord>{liveDevice}; };
     operations.Refresh = [&](AppCommandContext const&) {
         {
@@ -347,13 +353,15 @@ void TestMutationAdmissionRejectsCancellationAfterRefreshFallback() {
     };
     operations.SetDefaultDevice = [&](std::wstring_view) {
         ++defaultMutations;
+        ++settingsRevision;
         return true;
     };
     operations.SetDeviceAlias = [&](std::wstring_view, std::wstring_view, std::wstring_view) {
         ++aliasMutations;
+        ++settingsRevision;
         return true;
     };
-    LegacyAppUseCaseBridge bridge(std::move(operations), settings);
+    LegacyAppUseCaseBridge bridge(std::move(operations));
 
     const auto runCancelledMutation = [&](AppCommand command,
                                           AppResultCode expectedCode,
@@ -400,6 +408,7 @@ void TestMutationAdmissionRejectsCancellationAfterRefreshFallback() {
 
 void TestMutationAdmissionRejectsDeadlineAfterRefreshFallback() {
     SettingsData settings;
+    std::uint64_t settingsRevision = 0;
     const auto liveDevice = Device(L"device-id", L"Headphones", L"Desk");
     settings.Devices.push_back(DeviceSettings{liveDevice.Id, liveDevice.Name, liveDevice.Alias, false, false});
     std::mutex refreshMutex;
@@ -408,7 +417,7 @@ void TestMutationAdmissionRejectsDeadlineAfterRefreshFallback() {
     std::atomic<int> aliasMutations = 0;
 
     LegacyAppUseCaseBridge::Operations operations;
-    operations.ReadSettings = [&] { return settings; };
+    operations.ReadSettings = [&] { return SettingsSnapshot{settings, settingsRevision, false}; };
     operations.ReadConnectedDevices = [&] { return std::vector<DeviceRecord>{liveDevice}; };
     operations.Refresh = [&](AppCommandContext const& context) {
         {
@@ -423,9 +432,10 @@ void TestMutationAdmissionRejectsDeadlineAfterRefreshFallback() {
     };
     operations.SetDeviceAlias = [&](std::wstring_view, std::wstring_view, std::wstring_view) {
         ++aliasMutations;
+        ++settingsRevision;
         return true;
     };
-    LegacyAppUseCaseBridge bridge(std::move(operations), settings);
+    LegacyAppUseCaseBridge bridge(std::move(operations));
     const auto automaticTarget = DeviceSelector::ByQuery(DeviceSelectorKind::Auto, L"Headphones");
     AppCommandContext context;
     context.Deadline = AppCommandContext::Clock::now() + std::chrono::milliseconds(100);
@@ -440,6 +450,7 @@ void TestMutationAdmissionRejectsDeadlineAfterRefreshFallback() {
 
 void TestMutationAdmissionRejectsLateCancellationWithoutRefresh() {
     SettingsData settings;
+    std::uint64_t settingsRevision = 0;
     settings.DefaultDevice = ::DefaultDeviceMode::SpecificDevice;
     settings.DefaultDeviceId = L"device-id";
     std::stop_source stop;
@@ -447,13 +458,14 @@ void TestMutationAdmissionRejectsLateCancellationWithoutRefresh() {
     LegacyAppUseCaseBridge::Operations operations;
     operations.ReadSettings = [&] {
         stop.request_stop();
-        return settings;
+        return SettingsSnapshot{settings, settingsRevision, false};
     };
     operations.ClearDefaultDevice = [&] {
         ++clearDefaultMutations;
+        ++settingsRevision;
         return true;
     };
-    LegacyAppUseCaseBridge bridge(std::move(operations), settings);
+    LegacyAppUseCaseBridge bridge(std::move(operations));
     AppCommandContext context;
     context.StopToken = stop.get_token();
     const auto result = bridge.Execute(Command(AppCommandKind::ClearDefault), context);
@@ -629,13 +641,14 @@ void TestSettingsMutationsAndFailures() {
 
     auto setDefault = harness.Bridge.Execute(Command(AppCommandKind::SetDefault, target));
     Check(setDefault.Code == AppResultCode::Success && setDefault.Reason == AppOutcomeReason::DefaultSet &&
-              harness.SetDefaultCalls == 1,
-          "set-default must call the injected setter and return its typed outcome");
+              harness.SetDefaultCalls == 1 && setDefault.DefaultDevice && setDefault.DefaultDevice->Id &&
+              setDefault.DefaultDevice->Id->View() == L"target",
+          "set-default must call the injected setter and immediately return committed settings");
     auto defaultSnapshot = harness.Bridge.Snapshot();
     Check(defaultSnapshot.DefaultDevice &&
               defaultSnapshot.DefaultDevice->Mode == apc::app::DefaultDeviceMode::SpecificDevice &&
               defaultSnapshot.DefaultDevice->Id && defaultSnapshot.DefaultDevice->Id->View() == L"target",
-          "set-default must update the bridge-owned settings snapshot");
+          "set-default must expose the committed Store settings snapshot");
 
     harness.SetDefaultAccepted = false;
     auto defaultFailure = harness.Bridge.Execute(Command(AppCommandKind::SetDefault, target));
@@ -663,8 +676,9 @@ void TestSettingsMutationsAndFailures() {
 
     auto clearDefault = harness.Bridge.Execute(Command(AppCommandKind::ClearDefault));
     Check(clearDefault.Code == AppResultCode::Success && clearDefault.Reason == AppOutcomeReason::DefaultCleared &&
-              harness.ClearDefaultCalls == 1,
-          "clear-default must call the injected setter");
+              harness.ClearDefaultCalls == 1 && clearDefault.DefaultDevice &&
+              clearDefault.DefaultDevice->Mode == apc::app::DefaultDeviceMode::LastConnected,
+          "clear-default must call the injected setter and immediately return committed settings");
 
     const std::wstring longId(513, L'z');
     harness.LiveDevices.push_back(Device(longId, L"Long External ID"));
@@ -673,6 +687,80 @@ void TestSettingsMutationsAndFailures() {
     Check(longDefault.Code == AppResultCode::Success && harness.SetDefaultCalls == 3 &&
               harness.SourceSettings.DefaultDeviceId == longId,
           "set-default must pass a resolved live external ID beyond the persistence DeviceId bound to the setter");
+}
+
+void TestSettingsRevisionFenceAdvancesGenerationOnce() {
+    Harness harness;
+    const auto initial = harness.Bridge.Snapshot();
+
+    harness.SourceSettings.PrivacyModeEnabled = true;
+    ++harness.SettingsRevision;
+    const auto changed = harness.Bridge.Snapshot();
+    const auto repeated = harness.Bridge.Snapshot();
+
+    Check(!initial.PrivacyModeEnabled && changed.PrivacyModeEnabled && changed.Generation == initial.Generation + 1 &&
+              repeated.Generation == changed.Generation,
+          "an external Store revision must refresh snapshot content and advance generation exactly once");
+}
+
+void TestSettingsRevisionFenceIgnoresStaleReads() {
+    SettingsData settings;
+    const std::array<std::uint64_t, 4> revisions{2, 1, 2, 3};
+    std::size_t nextRevision = 0;
+
+    LegacyAppUseCaseBridge::Operations operations;
+    operations.ReadSettings = [&] {
+        const auto revision = revisions[nextRevision++];
+        return SettingsSnapshot{settings, revision, false};
+    };
+    operations.ReadConnectedDevices = [] { return std::vector<DeviceRecord>{}; };
+
+    LegacyAppUseCaseBridge bridge(std::move(operations));
+    const auto baseline = bridge.Snapshot();
+    const auto stale = bridge.Snapshot();
+    const auto repeated = bridge.Snapshot();
+    const auto newer = bridge.Snapshot();
+
+    Check(baseline.Generation == 0 && stale.Generation == 0 && repeated.Generation == 0 && newer.Generation == 1,
+          "stale or equal Store revisions must not regress or repeatedly advance bridge generation");
+}
+
+void TestMutationResultsUseCommittedSettings() {
+    SettingsData settings;
+    std::uint64_t settingsRevision = 0;
+    settings.Devices.push_back(DeviceSettings{L"target", L"Target", L"Before", false, false});
+
+    LegacyAppUseCaseBridge::Operations operations;
+    operations.ReadSettings = [&settings, &settingsRevision] {
+        return SettingsSnapshot{settings, settingsRevision, false};
+    };
+    operations.ReadConnectedDevices = [] { return std::vector<DeviceRecord>{Device(L"target", L"Target")}; };
+    operations.SetDefaultDevice = [&settings, &settingsRevision](std::wstring_view) {
+        settings.DefaultDevice = ::DefaultDeviceMode::SpecificDevice;
+        settings.DefaultDeviceId = L"committed-default";
+        ++settingsRevision;
+        return true;
+    };
+    operations.SetDeviceAlias = [&settings,
+                                 &settingsRevision](std::wstring_view id, std::wstring_view, std::wstring_view) {
+        auto device = std::ranges::find(settings.Devices, id, &DeviceSettings::Id);
+        if (device == settings.Devices.end()) return false;
+        device->Alias = L"Committed Alias";
+        ++settingsRevision;
+        return true;
+    };
+
+    LegacyAppUseCaseBridge bridge(std::move(operations));
+    const auto target = IdSelector(L"target");
+    const auto defaultResult = bridge.Execute(Command(AppCommandKind::SetDefault, target));
+    Check(defaultResult.DefaultDevice && defaultResult.DefaultDevice->Id &&
+              defaultResult.DefaultDevice->Id->View() == L"committed-default",
+          "set-default results must be built from the reread committed settings value");
+
+    const auto aliasResult = bridge.Execute(Command(AppCommandKind::SetAlias, target, L"Requested Alias"));
+    Check(aliasResult.Alias == L"Committed Alias" && aliasResult.Device &&
+              aliasResult.Device->Alias == L"Committed Alias",
+          "alias results must expose the reread committed alias instead of the pre-commit request");
 }
 
 void TestSnapshotPrivacyResourcePickerAndStableGeneration() {
@@ -807,6 +895,16 @@ void TestReadFailuresAndCommandReadScope() {
     Check(!harness.Bridge.Snapshot().IsRunning, "device read failures must fail closed in snapshots");
 }
 
+void TestSettingsReadCallbackIsRequired() {
+    LegacyAppUseCaseBridge::Operations operations;
+    LegacyAppUseCaseBridge bridge(std::move(operations));
+
+    const auto result = bridge.Execute(Command(AppCommandKind::Status));
+    const auto snapshot = bridge.Snapshot();
+    Check(result.Code == AppResultCode::InternalError && !snapshot.IsRunning,
+          "commands and snapshots must fail closed when the required settings callback is absent");
+}
+
 void TestShutdownIsMonotonicAndRejectsCallbacks() {
     Harness harness;
     harness.LiveDevices = {Device(L"target", L"Target")};
@@ -840,12 +938,13 @@ void TestShutdownClosesAdmissionBeforeTearingDownCallbacks() {
     bool hasEnteredCallback = false;
     bool canCompleteCallback = false;
     int settingsReadCalls = 0;
+    std::uint64_t settingsRevision = 0;
     int settingsMutationCalls = 0;
     int settingsUiCalls = 0;
     LegacyAppUseCaseBridge::Operations operations;
     operations.ReadSettings = [&] {
         ++settingsReadCalls;
-        return settings;
+        return SettingsSnapshot{settings, settingsRevision, false};
     };
     operations.ClearDefaultDevice = [&] {
         std::unique_lock lock(callbackMutex);
@@ -853,13 +952,14 @@ void TestShutdownClosesAdmissionBeforeTearingDownCallbacks() {
         callbackEntered.notify_all();
         releaseCallback.wait(lock, [&] { return canCompleteCallback; });
         ++settingsMutationCalls;
+        ++settingsRevision;
         return true;
     };
     operations.ShowSettings = [&](AppCommandContext const&) {
         ++settingsUiCalls;
         return LegacyAppUseCaseBridge::UiActionResult{OperationStatus::Succeeded, std::nullopt};
     };
-    LegacyAppUseCaseBridge bridge(std::move(operations), settings);
+    LegacyAppUseCaseBridge bridge(std::move(operations));
     AppResultCode commandResult = AppResultCode::InternalError;
     std::thread commandThread([&] { commandResult = bridge.Execute(Command(AppCommandKind::ClearDefault)).Code; });
 
@@ -965,11 +1065,14 @@ void TestTerminalFactsClearObservedBusyState() {
 
 void TestMissingMutationCallbacksFailClosed() {
     SettingsData settings;
+    std::uint64_t settingsRevision = 0;
     settings.Devices.push_back(DeviceSettings{L"target", L"Target", {}, false, false});
     LegacyAppUseCaseBridge::Operations operations;
-    operations.ReadSettings = [&settings] { return settings; };
+    operations.ReadSettings = [&settings, &settingsRevision] {
+        return SettingsSnapshot{settings, settingsRevision, false};
+    };
     operations.ReadConnectedDevices = [] { return std::vector<DeviceRecord>{Device(L"target", L"Target")}; };
-    LegacyAppUseCaseBridge bridge(std::move(operations), settings);
+    LegacyAppUseCaseBridge bridge(std::move(operations));
     const auto target = IdSelector(L"target");
 
     const auto setDefault = bridge.Execute(Command(AppCommandKind::SetDefault, target));
@@ -1206,10 +1309,14 @@ int RunLegacyAppUseCaseBridgeTests() {
     TestReconnectAllAndSynchronousDisconnectAll();
     TestReconnectAllStopsOnFirstPartialFailure();
     TestSettingsMutationsAndFailures();
+    TestSettingsRevisionFenceAdvancesGenerationOnce();
+    TestSettingsRevisionFenceIgnoresStaleReads();
+    TestMutationResultsUseCommittedSettings();
     TestSnapshotPrivacyResourcePickerAndStableGeneration();
     TestPickerOpenModePreservesTrayToggleAndControlEnsureOpen();
     TestObservedFactsNormalizeAndOverlayWithoutInjection();
     TestReadFailuresAndCommandReadScope();
+    TestSettingsReadCallbackIsRequired();
     TestShutdownIsMonotonicAndRejectsCallbacks();
     TestShutdownClosesAdmissionBeforeTearingDownCallbacks();
     TestFactsAfterShutdownDoNotPublishOrChangeBridgeState();

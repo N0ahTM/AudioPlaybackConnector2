@@ -1,7 +1,7 @@
 #pragma once
 
 #include <app/AppModels.hpp>
-#include <core/SettingsData.hpp>
+#include <core/SettingsStore.hpp>
 
 #include <chrono>
 #include <cstddef>
@@ -87,8 +87,9 @@ public:
         using IsDeviceBusy = std::function<bool(std::wstring_view deviceId)>;
 
         // Settings are read through this value callback before every command
-        // and snapshot. The bridge never acquires a Settings lock itself.
-        std::function<SettingsData()> ReadSettings;
+        // and snapshot. The Store revision is the freshness fence; the
+        // bridge never acquires a Settings lock itself.
+        std::function<SettingsSnapshot()> ReadSettings;
         ReadDevices ReadConnectedDevices;
         RefreshDevices Refresh;
 
@@ -138,7 +139,7 @@ public:
         AppResultCode ErrorCode = AppResultCode::OperationFailed;
     };
 
-    explicit LegacyAppUseCaseBridge(Operations operations, SettingsData settings = {});
+    explicit LegacyAppUseCaseBridge(Operations operations);
 
     LegacyAppUseCaseBridge(LegacyAppUseCaseBridge const&) = delete;
     LegacyAppUseCaseBridge& operator=(LegacyAppUseCaseBridge const&) = delete;
@@ -186,24 +187,32 @@ private:
         bool HasTarget = false;
     };
 
-    [[nodiscard]] AppResult ExecuteCommand(AppCommand const& command, AppCommandContext const& context);
+    [[nodiscard]] AppResult
+    ExecuteCommand(AppCommand const& command, AppCommandContext const& context, SettingsData const& settings);
     [[nodiscard]] AppResult ExecuteTargetOperation(AppCommand const& command,
                                                    AppCommandContext const& context,
-                                                   std::vector<DeviceRecord> const& devices);
+                                                   std::vector<DeviceRecord> const& devices,
+                                                   SettingsData const& settings);
     [[nodiscard]] AppResult ExecuteToggle(AppCommand const& command,
                                           AppCommandContext const& context,
-                                          std::vector<DeviceRecord> const& devices);
-    [[nodiscard]] Resolution Resolve(DeviceSelector const& selector, std::vector<DeviceRecord> const& devices) const;
+                                          std::vector<DeviceRecord> const& devices,
+                                          SettingsData const& settings);
+    [[nodiscard]] Resolution Resolve(DeviceSelector const& selector,
+                                     std::vector<DeviceRecord> const& devices,
+                                     SettingsData const& settings) const;
 
-    [[nodiscard]] std::vector<DeviceRecord> BuildDevices(bool refresh, AppCommandContext const& context);
-    [[nodiscard]] std::vector<DeviceRecord> BuildDevicesWithoutRefresh() const;
-    [[nodiscard]] bool SyncSettingsFromSource() const noexcept;
-    [[nodiscard]] std::vector<DeviceRecord> ReadConnectedDevices() const;
-    [[nodiscard]] AppSnapshot SnapshotFromDevices(std::vector<DeviceRecord> devices) const noexcept;
     [[nodiscard]] std::vector<DeviceRecord>
-    MergeDevices(std::vector<DeviceRecord> refreshed, std::vector<DeviceRecord> connected, SettingsData settings) const;
+    BuildDevices(bool refresh, AppCommandContext const& context, SettingsData const& settings);
+    [[nodiscard]] std::vector<DeviceRecord> BuildDevicesWithoutRefresh(SettingsData const& settings) const;
+    [[nodiscard]] std::optional<SettingsSnapshot> ReadSettings() const noexcept;
+    [[nodiscard]] std::vector<DeviceRecord> ReadConnectedDevices() const;
+    [[nodiscard]] AppSnapshot SnapshotFromDevices(std::vector<DeviceRecord> devices,
+                                                  SettingsData const& settings) const noexcept;
+    [[nodiscard]] std::vector<DeviceRecord> MergeDevices(std::vector<DeviceRecord> refreshed,
+                                                         std::vector<DeviceRecord> connected,
+                                                         SettingsData const& settings) const;
     [[nodiscard]] AppSnapshot BuildSnapshot(std::vector<DeviceRecord> devices,
-                                            SettingsData settings,
+                                            SettingsData const& settings,
                                             std::uint64_t generation,
                                             std::uint64_t pickerGeneration,
                                             bool isRunning) const noexcept;
@@ -212,8 +221,14 @@ private:
                                         AppResultCode code,
                                         AppOutcomeReason reason,
                                         std::wstring requestedTarget = {}) const;
+    [[nodiscard]] AppResult MakeFailure(AppCommandKind command,
+                                        AppResultCode code,
+                                        AppOutcomeReason reason,
+                                        SettingsData const& settings,
+                                        std::wstring requestedTarget = {}) const;
     [[nodiscard]] AppResult MakeTargetResult(AppCommandKind command,
                                              Resolution const& resolution,
+                                             SettingsData const& settings,
                                              AppResultCode code,
                                              AppOutcomeReason reason) const;
     [[nodiscard]] std::optional<DeviceSnapshot> ToSnapshot(DeviceRecord const& record) const;
@@ -243,13 +258,13 @@ private:
     static void AdvanceGeneration(std::uint64_t& generation) noexcept;
     void ApplyObservedStates(std::vector<DeviceRecord>& devices,
                              std::vector<DeviceRecord> const& connectedDevices) const;
-    [[nodiscard]] bool PrivacyMode() const noexcept;
+    [[nodiscard]] bool PrivacyMode(SettingsData const& settings) const noexcept;
 
     Operations m_operations;
     mutable std::mutex m_stateMutex;
     mutable std::condition_variable m_noActiveCalls;
-    mutable SettingsData m_settings;
     mutable std::unordered_map<std::wstring, DeviceRecord> m_observedStates;
+    mutable std::optional<std::uint64_t> m_lastSettingsRevision;
     std::uint64_t m_generation = 0;
     std::uint64_t m_pickerGeneration = 0;
     mutable std::size_t m_activeCalls = 0;

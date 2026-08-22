@@ -74,7 +74,7 @@ private:
     void ApplySystemBackdropEffects(bool enabled) noexcept;
     void RevealAtTarget(HWND hwnd);
     void QueuePlacementSave();
-    void SavePlacementNow() noexcept;
+    void CommitPlacementNow() noexcept;
     void StopPlacementSaveTimer() noexcept;
     bool StoreCurrentPlacement();
     void ResetWindowPlacement();

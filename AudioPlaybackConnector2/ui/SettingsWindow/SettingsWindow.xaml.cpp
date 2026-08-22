@@ -395,7 +395,7 @@ void SettingsWindow::QueuePlacementSave() {
             m_placementSaveTimer.IsRepeating(false);
             auto weak = get_weak();
             m_placementSaveTimer.Tick([weak](auto const&, auto const&) noexcept {
-                if (auto self = weak.get()) self->SavePlacementNow();
+                if (auto self = weak.get()) self->CommitPlacementNow();
             });
         }
 
@@ -430,16 +430,15 @@ void SettingsWindow::ApplySystemBackdropEffects(bool enabled) noexcept try {
     util::DebugTraceUnknownException(L"[SettingsWindow] failed to apply backdrop setting");
 }
 
-void SettingsWindow::SavePlacementNow() noexcept {
+void SettingsWindow::CommitPlacementNow() noexcept {
     try {
         if (!StoreCurrentPlacement()) return;
-        if (auto controller = m_settingsController) controller->Save();
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] SavePlacementNow failed", ex);
+        util::DebugTraceException(L"[SettingsWindow] CommitPlacementNow failed", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] SavePlacementNow failed", ex);
+        util::DebugTraceException(L"[SettingsWindow] CommitPlacementNow failed", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[SettingsWindow] SavePlacementNow failed");
+        util::DebugTraceUnknownException(L"[SettingsWindow] CommitPlacementNow failed");
     }
 }
 
@@ -633,9 +632,7 @@ void SettingsWindow::ResetWindowPlacement() {
     m_capturePlacementChanges = false;
 
     if (auto controller = m_settingsController) {
-        if (controller->ClearSettingsWindowBounds()) {
-            controller->Save();
-        }
+        static_cast<void>(controller->ClearSettingsWindowBounds());
     }
 
     ApplyAdaptiveLayout();

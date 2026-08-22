@@ -2,7 +2,6 @@
 
 #include <app/SettingsWindowCommandExecutor.hpp>
 
-#include <functional>
 #include <memory>
 
 class ISettingsController;
@@ -27,10 +26,9 @@ public:
                             apc::app::SettingsWindowCommandExecutor::ExecuteCallback executeAppCommand,
                             std::shared_ptr<StartupTaskCoordinator> startupTaskCoordinator,
                             std::shared_ptr<TrayController> trayController,
-                            std::shared_ptr<UpdateCoordinator> updateCoordinator,
-                            std::function<void()> saveSettings);
+                            std::shared_ptr<UpdateCoordinator> updateCoordinator);
     void RefreshKnownDevicesIfOpen() noexcept;
-    [[nodiscard]] bool Close(bool saveOnClose = true) noexcept;
+    [[nodiscard]] bool Close() noexcept;
 
 private:
     /*------------------------------------------------------------------------------------------------------------*/
@@ -41,8 +39,7 @@ private:
     struct WindowState;
 
     static bool CloseWindow(std::shared_ptr<PresenterState> const& owner,
-                            std::shared_ptr<WindowState> const& state,
-                            bool saveOnClose) noexcept;
+                            std::shared_ptr<WindowState> const& state) noexcept;
     static void HandleWindowClosed(std::shared_ptr<PresenterState> const& owner,
                                    std::shared_ptr<WindowState> const& state,
                                    winrt::Microsoft::UI::Xaml::Window const& closedWindow) noexcept;

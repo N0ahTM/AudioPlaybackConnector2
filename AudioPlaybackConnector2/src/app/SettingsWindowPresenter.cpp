@@ -11,7 +11,6 @@
 struct SettingsWindowPresenter::WindowState {
     winrt::Microsoft::UI::Xaml::Window Window{nullptr};
     winrt::event_token ClosedToken{};
-    std::function<void()> SaveSettings;
     bool ClosedTokenRegistered = false;
     bool Closing = false;
     bool Closed = false;
@@ -33,7 +32,7 @@ SettingsWindowPresenter::~SettingsWindowPresenter() {
     if (!owner || !owner->Current) return;
 
     auto state = owner->Current;
-    if (!CloseWindow(owner, state, false)) {
+    if (!CloseWindow(owner, state)) {
         AbandonWindow(owner, state);
     }
 }
@@ -46,8 +45,7 @@ bool SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settings
                                    apc::app::SettingsWindowCommandExecutor::ExecuteCallback executeAppCommand,
                                    std::shared_ptr<StartupTaskCoordinator> startupTaskCoordinator,
                                    std::shared_ptr<TrayController> trayController,
-                                   std::shared_ptr<UpdateCoordinator> updateCoordinator,
-                                   std::function<void()> saveSettings) {
+                                   std::shared_ptr<UpdateCoordinator> updateCoordinator) {
     DebugTrace(L"[SettingsWindowPresenter] Show()");
     auto owner = m_state;
     if (!owner) return false;
@@ -78,7 +76,7 @@ bool SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settings
             }
 
             DebugTrace(L"[SettingsWindowPresenter] Closing stale SettingsWindow before replacement");
-            if (!CloseWindow(owner, current, true)) {
+            if (!CloseWindow(owner, current)) {
                 DebugTrace(L"[SettingsWindowPresenter] ERROR: stale SettingsWindow could not be closed");
                 return false;
             }
@@ -89,7 +87,6 @@ bool SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settings
     try {
         candidate = std::make_shared<WindowState>();
         candidate->Window = winrt::AudioPlaybackConnector2::SettingsWindow();
-        candidate->SaveSettings = std::move(saveSettings);
         owner->Current = candidate;
 
         auto defaultPlacement =
@@ -149,7 +146,7 @@ bool SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settings
         if (impl->InitializationStatus() ==
             winrt::AudioPlaybackConnector2::implementation::SettingsWindow::InitializationState::Failed) {
             DebugTrace(L"[SettingsWindowPresenter] SettingsWindow initialization did not complete");
-            static_cast<void>(CloseWindow(owner, candidate, false));
+            static_cast<void>(CloseWindow(owner, candidate));
             return false;
         }
         candidate->Activated = true;
@@ -164,16 +161,16 @@ bool SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settings
         util::DebugTraceUnknownException(L"[SettingsWindowPresenter] Failed to create SettingsWindow");
     }
 
-    if (candidate && !CloseWindow(owner, candidate, false)) {
+    if (candidate && !CloseWindow(owner, candidate)) {
         DebugTrace(L"[SettingsWindowPresenter] ERROR: failed SettingsWindow rollback could not close its window");
     }
     return false;
 }
 
-bool SettingsWindowPresenter::Close(bool saveOnClose) noexcept {
+bool SettingsWindowPresenter::Close() noexcept {
     auto owner = m_state;
     if (!owner || !owner->Current) return true;
-    return CloseWindow(owner, owner->Current, saveOnClose);
+    return CloseWindow(owner, owner->Current);
 }
 
 void SettingsWindowPresenter::RefreshKnownDevicesIfOpen() noexcept {
@@ -198,15 +195,13 @@ void SettingsWindowPresenter::RefreshKnownDevicesIfOpen() noexcept {
 /*------------------------------------------------------------------------------------------------------------*/
 
 bool SettingsWindowPresenter::CloseWindow(std::shared_ptr<PresenterState> const& owner,
-                                          std::shared_ptr<WindowState> const& state,
-                                          bool saveOnClose) noexcept {
+                                          std::shared_ptr<WindowState> const& state) noexcept {
     if (!state || state->Closed || !state->Window) {
         if (owner && owner->Current == state) owner->Current.reset();
         return true;
     }
     if (state->Closing) return false;
 
-    if (!saveOnClose) state->SaveSettings = nullptr;
     auto window = state->Window;
     state->Closing = true;
     try {
@@ -238,28 +233,8 @@ void SettingsWindowPresenter::HandleWindowClosed(std::shared_ptr<PresenterState>
     state->Closed = true;
     state->Closing = false;
     RevokeWindowClosedHandler(state);
-    bool initialized = false;
-    try {
-        auto impl = closedWindow.as<winrt::AudioPlaybackConnector2::implementation::SettingsWindow>();
-        initialized = impl->InitializationStatus() ==
-                      winrt::AudioPlaybackConnector2::implementation::SettingsWindow::InitializationState::Succeeded;
-    } catch (...) {
-        util::DebugTraceUnknownException(L"[SettingsWindowPresenter] failed to inspect closed window initialization");
-    }
     state->Window = nullptr;
-    auto saveSettings = std::exchange(state->SaveSettings, nullptr);
     if (owner && owner->Current == state) owner->Current.reset();
-
-    if (!saveSettings || !initialized) return;
-    try {
-        saveSettings();
-    } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[SettingsWindowPresenter] ERROR: failed to save settings on close", ex);
-    } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[SettingsWindowPresenter] ERROR: failed to save settings on close", ex);
-    } catch (...) {
-        util::DebugTraceUnknownException(L"[SettingsWindowPresenter] ERROR: failed to save settings on close");
-    }
 }
 
 void SettingsWindowPresenter::RevokeWindowClosedHandler(std::shared_ptr<WindowState> const& state) noexcept {
@@ -281,7 +256,6 @@ void SettingsWindowPresenter::RevokeWindowClosedHandler(std::shared_ptr<WindowSt
 void SettingsWindowPresenter::AbandonWindow(std::shared_ptr<PresenterState> const& owner,
                                             std::shared_ptr<WindowState> const& state) noexcept {
     if (!state) return;
-    state->SaveSettings = nullptr;
     state->Closed = true;
     state->Closing = false;
     RevokeWindowClosedHandler(state);

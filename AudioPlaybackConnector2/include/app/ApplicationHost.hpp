@@ -4,7 +4,6 @@
 #include <app/AdaptiveResourceDiagnostics.hpp>
 #include <app/AppController.hpp>
 #include <app/ControlUiActionGate.hpp>
-#include <app/DeferredSettingsSaver.hpp>
 #include <app/DeviceEventRouter.hpp>
 #include <app/LegacyAppUseCaseBridge.hpp>
 #include <app/PowerTransitionCoordinator.hpp>
@@ -13,6 +12,8 @@
 #include <app/SingleInstanceGuard.hpp>
 #include <app/StartupTaskCoordinator.hpp>
 #include <app/UiRefreshCoalescer.hpp>
+
+#include <core/SettingsStore.hpp>
 
 #include <services/CommandLineControlServer.hpp>
 #include <services/NotificationService.hpp>
@@ -32,7 +33,6 @@
 #include <string_view>
 
 class DeviceManager;
-class Settings;
 class UpdateCoordinator;
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -102,7 +102,7 @@ private:
     [[nodiscard]] bool ShowSettingsWindow();
     void ExitApplication() noexcept;
     [[nodiscard]] bool CloseMainWindow(std::wstring_view reason) noexcept;
-    [[nodiscard]] bool PerformTeardown(bool saveSettings) noexcept;
+    [[nodiscard]] bool PerformTeardown(SettingsShutdownMode settingsShutdownMode) noexcept;
     [[nodiscard]] bool RunOnUIThread(std::function<void()> work) noexcept;
     [[nodiscard]] bool QueueUiFallbackWork(std::function<void()> work) noexcept;
     void DrainUiFallbackWork() noexcept;
@@ -138,7 +138,7 @@ private:
     winrt::event_token m_mainWindowLoadedToken{};
     HWND m_hwnd = nullptr;
 
-    std::shared_ptr<::Settings> m_settings;
+    std::shared_ptr<SettingsStore> m_settingsStore;
     std::shared_ptr<::DeviceManager> m_deviceManager;
     std::shared_ptr<ISettingsController> m_settingsController;
     std::shared_ptr<StartupTaskCoordinator> m_startupTaskCoordinator;
@@ -188,7 +188,6 @@ private:
     std::atomic<bool> m_started = false;
     std::atomic<bool> m_teardownWindowCloseSucceeded = true;
     bool m_windowSubclassInstalled = false;
-    DeferredSettingsSaver m_settingsSaver{m_exiting};
     UiRefreshCoalescer m_deviceVisualRefreshCoalescer;
     unsigned int m_deviceVisualRefreshConsecutiveFailures = 0;
     std::mutex m_deviceVisualRefreshRetryTimerMutex;

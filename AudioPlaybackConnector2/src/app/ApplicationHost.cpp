@@ -6,8 +6,8 @@
 #include <app/AutoReconnectPlanner.hpp>
 #include <app/StartupUpdateCoordinator.hpp>
 #include <core/DeviceManager.hpp>
-#include <core/Settings.hpp>
 #include <core/SettingsLimits.hpp>
+#include <core/SettingsStore.hpp>
 #include <core/StringResources.hpp>
 #include <core/ThemeHelper.hpp>
 #include <services/UpdateCoordinator.hpp>
@@ -20,6 +20,7 @@
 #include <util/Util.hpp>
 
 #include <limits>
+#include <stdexcept>
 #include <utility>
 
 using namespace winrt;
@@ -236,7 +237,7 @@ void ApplicationHost::Start() {
     }
 }
 
-bool ApplicationHost::PerformTeardown(bool saveSettings) noexcept {
+bool ApplicationHost::PerformTeardown(SettingsShutdownMode settingsShutdownMode) noexcept {
     if (m_exiting.exchange(true)) return m_teardownWindowCloseSucceeded.load();
     // Request pipe-handler cancellation before waiting for bridge leases. A
     // handler may be waiting for this UI thread to process show/settings work;
@@ -265,7 +266,6 @@ bool ApplicationHost::PerformTeardown(bool saveSettings) noexcept {
     }
     static_cast<void>(m_adaptiveScheduleState.Supersede());
     m_deviceVisualRefreshCoalescer.Cancel();
-    m_settingsSaver.Cancel();
     CancelNativeDeviceVisualRefreshRetry();
     {
         std::scoped_lock lock(m_uiFallbackWorkMutex);
@@ -283,7 +283,9 @@ bool ApplicationHost::PerformTeardown(bool saveSettings) noexcept {
         m_mainWindowLoadedToken = {};
     }
     m_powerTransitionCoordinator.Cancel();
-    auto const settingsWindowClosed = m_settingsWindowPresenter.Close(false);
+    // Close the settings window while its controller and Store are still alive so
+    // the final placement mutation can be committed before Store shutdown.
+    auto const settingsWindowClosed = m_settingsWindowPresenter.Close();
     m_teardownWindowCloseSucceeded.store(settingsWindowClosed);
     if (m_updateCoordinator) {
         m_updateCoordinator->Shutdown();
@@ -319,9 +321,6 @@ bool ApplicationHost::PerformTeardown(bool saveSettings) noexcept {
     if (m_notificationService) {
         m_notificationService->Teardown();
     }
-    if (saveSettings) {
-        static_cast<void>(m_settingsSaver.FlushNow(3));
-    }
     if (m_deviceManager) {
         m_deviceManager->ShutdownForProcessExit();
         m_deviceManager.reset();
@@ -334,11 +333,19 @@ bool ApplicationHost::PerformTeardown(bool saveSettings) noexcept {
         Gdiplus::GdiplusShutdown(m_gdiplusToken);
         m_gdiplusToken = 0;
     }
+    m_settingsController.reset();
+    if (m_settingsStore) {
+        const auto settingsShutdown = m_settingsStore->Shutdown(settingsShutdownMode, 3);
+        if (!settingsShutdown) {
+            DebugTrace(L"[App] SettingsStore shutdown failed mode={0}",
+                       settingsShutdownMode == SettingsShutdownMode::Flush ? L"flush" : L"discard-startup-failure");
+        }
+        m_settingsStore.reset();
+    }
     return settingsWindowClosed;
 }
-
 void ApplicationHost::Shutdown() noexcept {
-    static_cast<void>(PerformTeardown(/*saveSettings=*/true));
+    static_cast<void>(PerformTeardown(SettingsShutdownMode::Flush));
 }
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -455,15 +462,12 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept tr
     m_windowSubclassInstalled = true;
     DebugTrace(L"[App] Window subclass installed");
 
-    m_settings = std::make_shared<::Settings>();
-    m_settings->Load(GetModuleHandleW(nullptr));
-    m_settingsSaver.Initialize(m_settings, m_hwnd);
+    m_settingsStore = std::make_shared<SettingsStore>();
+    m_settingsStore->Load();
     DebugTrace(L"[App] Settings loaded");
 
-    {
-        auto locked = m_settings->LockSharedData();
-        StringResources::Instance().Initialize(GetModuleHandleW(nullptr), locked->Language);
-    }
+    const auto settingsSnapshot = m_settingsStore->Snapshot();
+    StringResources::Instance().Initialize(GetModuleHandleW(nullptr), settingsSnapshot.Data.Language);
     DebugTrace(L"[App] StringResources initialized");
 
     m_updateCoordinator = std::make_shared<UpdateCoordinator>(
@@ -484,18 +488,13 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept tr
     InitializeAdaptiveResources();
     InitializeNotifications();
     SetupDeviceEvents();
-    {
-        auto locked = m_settings->LockSharedData();
-        m_deviceManager->SetIncomingConnectionsEnabled(locked->AllowIncomingConnections);
-    }
+    const auto incomingSettingsSnapshot = m_settingsStore->Snapshot();
+    m_deviceManager->SetIncomingConnectionsEnabled(incomingSettingsSnapshot.Data.AllowIncomingConnections);
     m_deviceManager->StartDeviceWatcher();
     DebugTrace(L"[App] Device watcher started");
     InitializeCommandLineControl();
-    bool willAutoReconnect = false;
-    {
-        auto locked = m_settings->LockSharedData();
-        willAutoReconnect = AutoReconnectPlanner::HasReconnectTargets(*locked);
-    }
+    const auto reconnectSettingsSnapshot = m_settingsStore->Snapshot();
+    const bool willAutoReconnect = AutoReconnectPlanner::HasReconnectTargets(reconnectSettingsSnapshot.Data);
 
     if (m_notificationService && !willAutoReconnect) {
         try {
@@ -528,7 +527,7 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept tr
 
 void ApplicationHost::FailStartup(std::wstring_view stage) noexcept {
     DebugTrace(L"[App] Startup aborted at stage={0}", stage);
-    auto const settingsWindowClosed = PerformTeardown(/*saveSettings=*/false);
+    auto const settingsWindowClosed = PerformTeardown(SettingsShutdownMode::DiscardStartupFailure);
     auto const mainWindowClosed = CloseMainWindow(L"startup-failure");
     if (!settingsWindowClosed || !mainWindowClosed) TerminateAfterWindowCloseFailure(L"startup-window-close-failure");
 }
@@ -542,7 +541,7 @@ void ApplicationHost::InitializeTray() {
     m_trayController = std::make_shared<TrayController>();
     m_trayController->Initialize(m_hwnd, m_mainWindow);
     m_trayController->SetDeviceManager(m_deviceManager);
-    m_trayController->SetSettings(m_settings);
+    m_trayController->SetSettingsStore(m_settingsStore);
     auto weak = weak_from_this();
     if (m_settingsController) {
         m_settingsController->SetPresentationChangedCallback([weak](ISettingsController::PresentationChangeKind kind) {
@@ -553,9 +552,9 @@ void ApplicationHost::InitializeTray() {
                 return;
             }
             if (kind == ISettingsController::PresentationChangeKind::Appearance && self->m_trayController &&
-                self->m_settings) {
-                auto locked = self->m_settings->LockSharedData();
-                self->m_trayController->SetSystemBackdropEffectsEnabled(locked->UseSystemBackdropEffects);
+                self->m_settingsStore) {
+                const auto settingsSnapshot = self->m_settingsStore->Snapshot();
+                self->m_trayController->SetSystemBackdropEffectsEnabled(settingsSnapshot.Data.UseSystemBackdropEffects);
                 return;
             }
             self->ScheduleDeviceVisualRefresh(false);
@@ -625,9 +624,7 @@ void ApplicationHost::InitializeNotifications() {
     auto weak = weak_from_this();
     m_notificationService->SetShouldShowNotificationCallback([weak]() -> bool {
         if (auto self = weak.lock()) {
-            if (!self->m_settings) return true;
-            auto locked = self->m_settings->LockSharedData();
-            return locked->ShowNotifications;
+            if (self->m_settingsStore) return self->m_settingsStore->Snapshot().Data.ShowNotifications;
         }
         return true;
     });
@@ -653,19 +650,17 @@ void ApplicationHost::InitializeDeviceManager() {
     DebugTrace(L"[App] InitializeDeviceManager()");
     m_deviceManager = std::make_shared<DeviceManager>();
     auto weak = weak_from_this();
-    m_settingsController = std::make_shared<SettingsController>(m_settings, m_deviceManager, [weak]() {
-        if (auto self = weak.lock(); self && !self->m_exiting.load()) self->m_settingsSaver.RequestSave();
-    });
+    m_settingsController = std::make_shared<SettingsController>(m_settingsStore, m_deviceManager);
     auto weakSettingsController = std::weak_ptr<ISettingsController>(m_settingsController);
     m_startupTaskCoordinator = std::make_shared<StartupTaskCoordinator>([weakSettingsController](bool enabled) {
         if (auto controller = weakSettingsController.lock()) controller->SetStartWithWindows(enabled);
     });
     m_deviceManager->SetReconnectOnConnectionLossPredicate([weak](auto id) {
         auto self = weak.lock();
-        if (!self || self->m_exiting.load() || !self->m_settings) return false;
-        auto locked = self->m_settings->LockSharedData();
-        if (locked->GlobalReconnectOnConnectionLoss) return true;
-        return std::ranges::any_of(locked->Devices,
+        if (!self || self->m_exiting.load() || !self->m_settingsStore) return false;
+        const auto settingsSnapshot = self->m_settingsStore->Snapshot();
+        if (settingsSnapshot.Data.GlobalReconnectOnConnectionLoss) return true;
+        return std::ranges::any_of(settingsSnapshot.Data.Devices,
                                    [&](const auto& d) { return d.Id == id && d.ReconnectOnConnectionLoss; });
     });
     DebugTrace(L"[App] DeviceManager initialized");
@@ -676,14 +671,8 @@ void ApplicationHost::InitializeAppController() {
     auto weak = weak_from_this();
     Bridge::Operations operations;
     operations.ReadSettings = [weak]() {
-        if (auto self = weak.lock()) {
-            if (self->m_settingsController) return self->m_settingsController->Snapshot();
-            if (self->m_settings) {
-                auto locked = self->m_settings->LockSharedData();
-                return *locked;
-            }
-        }
-        return SettingsData{};
+        if (auto self = weak.lock(); self && self->m_settingsStore) return self->m_settingsStore->Snapshot();
+        throw std::runtime_error("ApplicationHost settings store unavailable");
     };
     operations.ReadConnectedDevices = [weak]() {
         std::vector<Bridge::DeviceRecord> devices;
@@ -800,17 +789,15 @@ void ApplicationHost::InitializeAppController() {
     };
     operations.SetDefaultDevice = [weak](std::wstring_view deviceId) {
         if (auto self = weak.lock(); self && self->m_settingsController) {
-            self->m_settingsController->SetDefaultDeviceId(std::wstring(deviceId));
+            return self->m_settingsController->SetDefaultDeviceId(std::wstring(deviceId));
         }
-        // The legacy controller method is void and historically a missing
-        // controller still produced a successful command response.
-        return true;
+        return false;
     };
     operations.ClearDefaultDevice = [weak]() {
         if (auto self = weak.lock(); self && self->m_settingsController) {
-            self->m_settingsController->ClearDefaultDevice();
+            return self->m_settingsController->ClearDefaultDevice();
         }
-        return true;
+        return false;
     };
     operations.SetDeviceAlias =
         [weak](std::wstring_view deviceId, std::wstring_view alias, std::wstring_view deviceName) {
@@ -935,8 +922,7 @@ void ApplicationHost::InitializeAppController() {
         return false;
     };
 
-    auto initialSettings = m_settingsController ? m_settingsController->Snapshot() : SettingsData{};
-    m_appBridge = std::make_shared<Bridge>(std::move(operations), std::move(initialSettings));
+    m_appBridge = std::make_shared<Bridge>(std::move(operations));
     std::weak_ptr<Bridge> weakBridge = m_appBridge;
     m_appController = std::make_unique<apc::app::AppController>(
         [weakBridge](apc::app::AppCommand const& command, apc::app::AppCommandContext const& context) {
@@ -1175,15 +1161,16 @@ void ApplicationHost::ScheduleAdaptiveResourceEvaluation(
 }
 
 winrt::hstring ApplicationHost::ResolveKnownDeviceName(winrt::hstring const& id) const {
-    if (!m_settings) return id;
-    auto locked = m_settings->LockSharedData();
-    auto it = std::ranges::find_if(locked->Devices, [&](const auto& device) { return device.Id == id; });
-    if (it != locked->Devices.end()) {
+    if (!m_settingsStore) return id;
+    const auto settingsSnapshot = m_settingsStore->Snapshot();
+    auto const& settings = settingsSnapshot.Data;
+    auto it = std::ranges::find_if(settings.Devices, [&](const auto& device) { return device.Id == id; });
+    if (it != settings.Devices.end()) {
         if (!it->Alias.empty()) return winrt::hstring(it->Alias);
-        if (locked->PrivacyModeEnabled) return winrt::hstring(_("Privacy_RedactedDevice"));
+        if (settings.PrivacyModeEnabled) return winrt::hstring(_("Privacy_RedactedDevice"));
         if (!it->Name.empty()) return winrt::hstring(it->Name);
     }
-    return locked->PrivacyModeEnabled ? winrt::hstring(_("Privacy_RedactedDevice")) : id;
+    return settings.PrivacyModeEnabled ? winrt::hstring(_("Privacy_RedactedDevice")) : id;
 }
 
 void ApplicationHost::ExecuteTrayCommand(apc::app::AppCommand command,
@@ -1200,14 +1187,11 @@ void ApplicationHost::ExecuteTrayCommand(apc::app::AppCommand command,
 }
 
 void ApplicationHost::TryAutoReconnect() {
-    if (m_exiting.load() || !m_settings || !m_deviceManager) return;
+    if (m_exiting.load() || !m_settingsStore || !m_deviceManager) return;
 
     DebugTrace(L"[App] TryAutoReconnect()");
-    std::vector<std::wstring> reconnectIds;
-    {
-        auto locked = m_settings->LockSharedData();
-        reconnectIds = AutoReconnectPlanner::BuildReconnectPlan(*locked);
-    }
+    const auto settingsSnapshot = m_settingsStore->Snapshot();
+    const auto reconnectIds = AutoReconnectPlanner::BuildReconnectPlan(settingsSnapshot.Data);
 
     for (const auto& id : reconnectIds) {
         DebugTrace(L"[App] Auto-reconnecting to: {0}", id);
@@ -1220,7 +1204,8 @@ void ApplicationHost::HandlePowerSuspend() {
     m_powerTransitionCoordinator.HandleSuspend(
         [weak]() {
             if (auto self = weak.lock()) {
-                static_cast<void>(self->m_settingsSaver.FlushNow());
+                if (!self->m_settingsStore || self->m_settingsStore->FlushNow(3)) return;
+                DebugTrace(L"[App] SettingsStore synchronous suspend flush failed after bounded attempts");
             }
         },
         m_deviceManager);
@@ -1268,21 +1253,12 @@ void ApplicationHost::HandlePowerResume() {
 winrt::fire_and_forget ApplicationHost::CheckForUpdatesOnStartupAsync() {
     try {
         auto lifetime = shared_from_this();
-        auto settings = m_settings;
+        auto settingsStore = m_settingsStore;
         auto notificationService = m_notificationService;
         auto updateCoordinator = m_updateCoordinator;
-        if (m_exiting.load() || !settings || !notificationService || !updateCoordinator) co_return;
-        auto weak = weak_from_this();
+        if (m_exiting.load() || !settingsStore || !notificationService || !updateCoordinator) co_return;
         co_await StartupUpdateCoordinator::CheckForUpdatesAsync(
-            *settings,
-            notificationService,
-            updateCoordinator,
-            [weak]() {
-                if (auto self = weak.lock(); self && !self->m_exiting.load()) {
-                    self->m_settingsSaver.RequestSave();
-                }
-            },
-            m_exiting);
+            *settingsStore, notificationService, updateCoordinator, m_exiting);
     } catch (winrt::hresult_error const& ex) {
         util::DebugTraceException(L"[App] Startup update check failed", ex);
     } catch (std::exception const& ex) {
@@ -1751,16 +1727,12 @@ bool ApplicationHost::ShowSettingsWindow() {
         },
         m_startupTaskCoordinator,
         m_trayController,
-        m_updateCoordinator,
-        [weak]() {
-            auto self = weak.lock();
-            if (self) self->m_settingsSaver.RequestSave();
-        });
+        m_updateCoordinator);
 }
 
 void ApplicationHost::ExitApplication() noexcept {
     DebugTrace(L"[App] ExitApplication() started");
-    auto const settingsWindowClosed = PerformTeardown(/*saveSettings=*/true);
+    auto const settingsWindowClosed = PerformTeardown(SettingsShutdownMode::Flush);
     auto const mainWindowClosed = CloseMainWindow(L"application-exit");
     if (!settingsWindowClosed || !mainWindowClosed) TerminateAfterWindowCloseFailure(L"exit-window-close-failure");
     DebugTrace(L"[App] ExitApplication() complete");
@@ -1792,7 +1764,7 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
         return;
     }
     m_powerTransitionCoordinator.NotifyDeviceConnected(std::wstring_view(id));
-    if (!m_settings) return;
+    if (!m_settingsStore) return;
 
     winrt::hstring rawDeviceName = id;
     if (auto displayName = m_deviceManager->GetConnectionDisplayName(id)) {
@@ -1800,52 +1772,14 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
     }
 
     auto const idString = std::wstring(id);
-    const bool validDeviceId =
-        !idString.empty() && apc::limits::IsBoundedUtf16(idString, apc::limits::c_maxDeviceIdCharacters);
     auto deviceName =
         apc::limits::TruncateUtf16(std::wstring_view(rawDeviceName), apc::limits::c_maxDeviceNameCharacters);
     if (deviceName.empty()) {
         deviceName = apc::limits::TruncateUtf16(idString, apc::limits::c_maxDeviceNameCharacters);
     }
-    bool addedNew = false;
-    bool settingsChanged = false;
-    bool devicePresentationChanged = false;
+    RecordConnectedDeviceResult record;
     try {
-        auto locked = m_settings->LockExclusiveData();
-        auto const existingDevice = std::ranges::find(locked->Devices, idString, &DeviceSettings::Id);
-        auto const hasExistingDevice = existingDevice != locked->Devices.end();
-        auto const existingDeviceIndex =
-            hasExistingDevice ? std::optional<std::size_t>(std::distance(locked->Devices.begin(), existingDevice))
-                              : std::nullopt;
-        auto const addDevice =
-            !hasExistingDevice && validDeviceId && locked->Devices.size() < apc::limits::c_maxPersistedDeviceCount;
-        auto const updateDeviceName = hasExistingDevice && existingDevice->Name != deviceName;
-        auto const updatedNameIsVisible =
-            updateDeviceName && existingDevice->Alias.empty() && !locked->PrivacyModeEnabled;
-        auto const promoteMru =
-            validDeviceId && (locked->LastConnectedIds.empty() || locked->LastConnectedIds.front() != idString ||
-                              std::ranges::count(locked->LastConnectedIds, idString) != 1);
-
-        if (addDevice || updateDeviceName || promoteMru) {
-            auto& data = locked.Mutate();
-            settingsChanged = true;
-            if (addDevice) {
-                DeviceSettings newDevice;
-                newDevice.Id = idString;
-                newDevice.Name = deviceName;
-                newDevice.ConnectOnStartup = data.GlobalConnectOnStartup;
-                newDevice.ReconnectOnConnectionLoss = data.GlobalReconnectOnConnectionLoss;
-                data.Devices.push_back(std::move(newDevice));
-                addedNew = true;
-                devicePresentationChanged = true;
-            } else if (updateDeviceName) {
-                data.Devices[*existingDeviceIndex].Name = deviceName;
-                devicePresentationChanged = updatedNameIsVisible;
-            }
-            if (promoteMru) {
-                static_cast<void>(AutoReconnectPlanner::PromoteMostRecentlyConnected(data.LastConnectedIds, idString));
-            }
-        }
+        record = m_settingsStore->RecordConnectedDevice(idString, deviceName);
     } catch (winrt::hresult_error const& ex) {
         util::DebugTraceException(L"[App] OnDeviceConnected settings update ERROR", ex);
         return;
@@ -1857,19 +1791,18 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
         return;
     }
 
-    if (settingsChanged) {
-        m_settingsSaver.RequestSave();
-        if (devicePresentationChanged) m_settingsWindowPresenter.RefreshKnownDevicesIfOpen();
-        if (addedNew) {
+    if (record.Mutation.IsApplied()) {
+        if (record.PresentationChanged) m_settingsWindowPresenter.RefreshKnownDevicesIfOpen();
+        if (record.AddedDevice) {
             DebugTrace(L"[App] New device added to settings: {0}", std::wstring(rawDeviceName));
         }
     }
 
     try {
-        auto locked = m_settings->LockSharedData();
-        bool reconnectOnConnectionLoss = locked->GlobalReconnectOnConnectionLoss;
-        auto it = std::ranges::find_if(locked->Devices, [&](const auto& d) { return d.Id == id; });
-        if (it != locked->Devices.end()) {
+        const auto settingsSnapshot = m_settingsStore->Snapshot();
+        bool reconnectOnConnectionLoss = settingsSnapshot.Data.GlobalReconnectOnConnectionLoss;
+        auto it = std::ranges::find_if(settingsSnapshot.Data.Devices, [&](const auto& d) { return d.Id == id; });
+        if (it != settingsSnapshot.Data.Devices.end()) {
             reconnectOnConnectionLoss = reconnectOnConnectionLoss || it->ReconnectOnConnectionLoss;
         }
         m_deviceManager->SetReconnectOnConnectionLoss(id, reconnectOnConnectionLoss);
@@ -2027,10 +1960,6 @@ LRESULT CALLBACK ApplicationHost::SubclassProc(
     if (msg == WM_TIMER && wParam == c_timerDeviceVisualRefreshRetry) {
         KillTimer(hwnd, c_timerDeviceVisualRefreshRetry);
         host->DrainDeviceVisualRefresh();
-        return 0;
-    }
-
-    if (msg == WM_TIMER && host->m_settingsSaver.HandleWindowTimer(wParam)) {
         return 0;
     }
 

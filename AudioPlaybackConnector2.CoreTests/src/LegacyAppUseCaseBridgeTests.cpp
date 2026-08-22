@@ -1,5 +1,6 @@
 #include <app/LegacyAppUseCaseBridge.hpp>
 #include <app/DeviceFactPublicationFence.hpp>
+#include <ui/TrayPrimaryActivation.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -24,6 +25,7 @@ using apc::app::AppResultCode;
 using apc::app::AppSnapshot;
 using apc::app::DeviceConnectionState;
 using apc::app::DeviceFactPublicationFence;
+using apc::app::DevicePickerOpenMode;
 using apc::app::DeviceSelector;
 using apc::app::DeviceSelectorKind;
 using apc::app::LegacyAppUseCaseBridge;
@@ -94,6 +96,7 @@ struct Harness {
     LegacyAppUseCaseBridge::RefreshResult RefreshResponse{OperationStatus::Succeeded, {}};
     LegacyAppUseCaseBridge::UiActionResult PickerResponse{OperationStatus::Failed, std::nullopt};
     LegacyAppUseCaseBridge::UiActionResult SettingsResponse{OperationStatus::Failed, std::nullopt};
+    std::vector<DevicePickerOpenMode> PickerOpenModes;
     AppSnapshot::ResourceStatusSnapshot Resource;
     std::uint64_t PickerGeneration = 0;
     std::chrono::steady_clock::time_point LastRefreshDeadline{};
@@ -207,7 +210,10 @@ struct Harness {
             found->Alias = alias;
             return true;
         };
-        operations.ShowDevicePicker = [this](AppCommandContext const&) { return PickerResponse; };
+        operations.ShowDevicePicker = [this](DevicePickerOpenMode openMode, AppCommandContext const&) {
+            PickerOpenModes.push_back(openMode);
+            return PickerResponse;
+        };
         operations.ShowSettings = [this](AppCommandContext const&) { return SettingsResponse; };
         operations.ResourceStatus = [this] { return Resource; };
         operations.PickerOpenedGeneration = [this] { return PickerGeneration; };
@@ -703,6 +709,25 @@ void TestSnapshotPrivacyResourcePickerAndStableGeneration() {
           "UI action indeterminacy must remain typed and transport-free");
 }
 
+void TestPickerOpenModePreservesTrayToggleAndControlEnsureOpen() {
+    Harness harness;
+    harness.PickerResponse = {OperationStatus::Succeeded, 11};
+
+    const auto controlShow = harness.Bridge.Execute(Command(AppCommandKind::ShowDevicePicker));
+    Check(controlShow.Code == AppResultCode::Success && !harness.PickerOpenModes.empty() &&
+              harness.PickerOpenModes.back() == DevicePickerOpenMode::EnsureOpen,
+          "control show must retain idempotent ensure-open picker semantics");
+
+    apc::app::AppResult trayShow;
+    auto callback = apc::ui::MakeTrayPrimaryActivationCallback([&](AppCommand command, AppCommandContext context) {
+        trayShow = harness.Bridge.Execute(std::move(command), context);
+    });
+    callback();
+    Check(trayShow.Code == AppResultCode::Success && harness.PickerOpenModes.size() == 2 &&
+              harness.PickerOpenModes.back() == DevicePickerOpenMode::ToggleIfOpen,
+          "tray primary activation must carry toggle-if-open semantics through the shared bridge");
+}
+
 void TestObservedFactsNormalizeAndOverlayWithoutInjection() {
     Harness harness;
     harness.LiveDevices = {Device(L"target", L"Target")};
@@ -1094,6 +1119,7 @@ int RunLegacyAppUseCaseBridgeTests() {
     TestReconnectAllStopsOnFirstPartialFailure();
     TestSettingsMutationsAndFailures();
     TestSnapshotPrivacyResourcePickerAndStableGeneration();
+    TestPickerOpenModePreservesTrayToggleAndControlEnsureOpen();
     TestObservedFactsNormalizeAndOverlayWithoutInjection();
     TestReadFailuresAndCommandReadScope();
     TestShutdownIsMonotonicAndRejectsCallbacks();

@@ -167,6 +167,7 @@ void TrayController::Teardown() noexcept try {
         m_themeChangedToken = 0;
     }
     m_showSettingsCallback = nullptr;
+    m_showDevicePickerCallback = nullptr;
     m_exitCallback = nullptr;
     m_connectCallback = nullptr;
     m_disconnectCallback = nullptr;
@@ -205,6 +206,7 @@ void TrayController::Teardown() noexcept try {
 /*------------------------------------------------------------------------------------------------------------*/
 
 void TrayController::SetCallbacks(ShowSettingsCallback showSettings,
+                                  ShowDevicePickerCallback showDevicePicker,
                                   ExitCallback exit,
                                   DeviceActionCallback connect,
                                   DeviceActionCallback disconnect,
@@ -213,6 +215,7 @@ void TrayController::SetCallbacks(ShowSettingsCallback showSettings,
                                   BulkDeviceActionCallback disconnectAll,
                                   BulkDeviceActionCallback reconnectAll) {
     m_showSettingsCallback = std::move(showSettings);
+    m_showDevicePickerCallback = std::move(showDevicePicker);
     m_exitCallback = std::move(exit);
     m_connectCallback = std::move(connect);
     m_disconnectCallback = std::move(disconnect);
@@ -573,7 +576,11 @@ void TrayController::HandleTrayMessage([[maybe_unused]] WPARAM wParam, LPARAM lP
                 break;
             }
             if (shouldProcess(m_lastLeftClickTick, c_clickDebounceMs)) {
-                (void)ShowDevicePicker();
+                if (m_showDevicePickerCallback) {
+                    m_showDevicePickerCallback();
+                } else {
+                    DebugTrace(L"[TrayController] ERROR: primary activation callback is not configured");
+                }
             }
             break;
 

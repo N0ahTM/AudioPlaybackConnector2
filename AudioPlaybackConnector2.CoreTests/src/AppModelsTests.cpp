@@ -1,4 +1,5 @@
 #include <app/AppModels.hpp>
+#include <ui/TrayPrimaryActivation.hpp>
 
 #include <chrono>
 #include <iostream>
@@ -128,6 +129,13 @@ void TestCommandContractsAndNormalizedResults() {
     Check(toggleLast.IsWellFormed(), "toggle-last must retain its last-device selector");
     AppCommand missingToggleTarget{AppCommandKind::ToggleLast, {}, {}};
     Check(!missingToggleTarget.IsWellFormed(), "toggle-last must reject a missing selector");
+
+    auto trayActivation = apc::ui::MakeTrayPrimaryActivationCommand();
+    Check(trayActivation.IsWellFormed() &&
+              trayActivation.PickerOpenMode == apc::app::DevicePickerOpenMode::ToggleIfOpen,
+          "the tray activation command must allow toggle mode only for show-picker");
+    AppCommand invalidPickerMode{AppCommandKind::Status, {}, {}, apc::app::DevicePickerOpenMode::ToggleIfOpen};
+    Check(!invalidPickerMode.IsWellFormed(), "toggle mode must be rejected on non-picker commands");
 
     apc::app::AppResult success{AppResultCode::Success, AppCommandKind::Connect};
     success.Device = apc::app::DeviceSnapshot{

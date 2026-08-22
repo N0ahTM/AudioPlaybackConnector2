@@ -144,6 +144,12 @@ enum class AppCommandKind {
     ReconnectAll
 };
 
+// A tray primary activation toggles an already-open picker, while a control
+// command is idempotent and only ensures that the picker is open.  Keeping
+// this distinction in the typed intent preserves P09 behavior without making
+// TrayController depend on AppController or transport details.
+enum class DevicePickerOpenMode { EnsureOpen, ToggleIfOpen };
+
 // The command carries intent only. It has no pipe headers, JSON flags,
 // localized text, or platform handles; adapters translate those concerns at
 // the boundary. Target and Alias are meaningful only for the command kinds
@@ -155,8 +161,12 @@ struct AppCommand {
     AppCommandKind Kind = AppCommandKind::Status;
     std::optional<DeviceSelector> Target;
     std::wstring Alias;
+    DevicePickerOpenMode PickerOpenMode = DevicePickerOpenMode::EnsureOpen;
 
     [[nodiscard]] bool IsWellFormed() const noexcept {
+        if (PickerOpenMode != DevicePickerOpenMode::EnsureOpen && Kind != AppCommandKind::ShowDevicePicker) {
+            return false;
+        }
         const bool hasTarget = Target.has_value();
         const bool hasAlias = !Alias.empty();
         const bool aliasIsValid = hasAlias && Alias.size() <= c_maxAppCommandTextCharacters && !Alias.contains(L'\r') &&

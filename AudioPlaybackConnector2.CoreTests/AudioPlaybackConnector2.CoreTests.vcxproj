@@ -164,6 +164,7 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceId.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\LatestServiceLifecycleState.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\ui\DiagnosticsLogCollector.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\ui\TrayPrimaryActivation.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceInventoryGeneration.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DevicePickerTypes.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsLimits.hpp" />

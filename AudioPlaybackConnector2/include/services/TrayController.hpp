@@ -3,6 +3,7 @@
 #include <core/DeviceTrayPresentation.hpp>
 #include <ui/TrayIcon.hpp>
 #include <ui/TrayContextMenu.hpp>
+#include <ui/TrayPrimaryActivation.hpp>
 #include <DevicePickerView/DevicePickerView.xaml.h>
 #include <ui/WindowPlacement.hpp>
 
@@ -25,6 +26,7 @@ public:
     /*//////// Callback Types ////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
+    using ShowDevicePickerCallback = apc::ui::TrayPrimaryActivationCallback;
     using ShowSettingsCallback = std::move_only_function<void()>;
     using ExitCallback = std::move_only_function<void()>;
     using DeviceActionCallback = std::move_only_function<void(winrt::hstring)>;
@@ -60,6 +62,7 @@ public:
     /*------------------------------------------------------------------------------------------------------------*/
 
     void SetCallbacks(ShowSettingsCallback showSettings,
+                      ShowDevicePickerCallback showDevicePicker,
                       ExitCallback exit,
                       DeviceActionCallback connect,
                       DeviceActionCallback disconnect,
@@ -121,6 +124,7 @@ private:
     winrt::AudioPlaybackConnector2::DevicePickerView m_devicePickerView{nullptr};
 
     ShowSettingsCallback m_showSettingsCallback;
+    ShowDevicePickerCallback m_showDevicePickerCallback;
     ExitCallback m_exitCallback;
     DeviceActionCallback m_connectCallback;
     DeviceActionCallback m_disconnectCallback;

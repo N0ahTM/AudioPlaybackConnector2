@@ -230,14 +230,19 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command, AppC
     switch (command.Kind) {
         case AppCommandKind::ShowDevicePicker:
         case AppCommandKind::ShowSettings: {
-            const auto action = command.Kind == AppCommandKind::ShowDevicePicker ? m_operations.ShowDevicePicker
-                                                                                 : m_operations.ShowSettings;
             UiActionResult actionResult;
-            if (action) {
+            if (command.Kind == AppCommandKind::ShowDevicePicker) {
+                if (m_operations.ShowDevicePicker) {
+                    if (const auto code = MutationAdmissionFailure(context)) {
+                        return MakeFailure(command.Kind, *code, AppOutcomeReason::NotReady);
+                    }
+                    actionResult = m_operations.ShowDevicePicker(command.PickerOpenMode, context);
+                }
+            } else if (m_operations.ShowSettings) {
                 if (const auto code = MutationAdmissionFailure(context)) {
                     return MakeFailure(command.Kind, *code, AppOutcomeReason::NotReady);
                 }
-                actionResult = action(context);
+                actionResult = m_operations.ShowSettings(context);
             }
             if (actionResult.Status != OperationStatus::Succeeded) {
                 const auto code = actionResult.Status == OperationStatus::Cancelled       ? AppResultCode::Cancelled

@@ -1,5 +1,6 @@
 #include <app/AppController.hpp>
 #include <app/SettingsWindowCommandExecutor.hpp>
+#include <ui/TrayPrimaryActivation.hpp>
 
 #include <chrono>
 #include <iostream>
@@ -22,6 +23,7 @@ using apc::app::AppResult;
 using apc::app::AppResultCode;
 using apc::app::AppSnapshot;
 using apc::app::DeviceConnectedEvent;
+using apc::app::DevicePickerOpenMode;
 using apc::app::DeviceSelector;
 using apc::app::SettingsWindowCommandExecutor;
 
@@ -60,6 +62,30 @@ void TestUiAndCliEquivalentCommandsUseOneExecutor() {
           "delegated results must record that the application executor was entered");
     Check(executed.size() == 2 && executed[0] == command && executed[1] == command,
           "equivalent UI and CLI intents must use the same typed executor");
+}
+
+void TestTrayPrimaryActivationUsesSharedExecutorAndDetachedUiIntent() {
+    std::optional<AppCommand> executedCommand;
+    std::optional<AppCommandContext> executedContext;
+    AppController controller(
+        [&](AppCommand const& command, AppCommandContext const& context) {
+            executedCommand = command;
+            executedContext = context;
+            return AppResult{AppResultCode::Success, command.Kind};
+        },
+        [] { return AppSnapshot{}; });
+
+    auto callback = apc::ui::MakeTrayPrimaryActivationCallback(
+        [&](AppCommand command, AppCommandContext context) { (void)controller.Execute(std::move(command), context); });
+    callback();
+
+    Check(executedCommand && executedCommand->Kind == AppCommandKind::ShowDevicePicker,
+          "tray primary activation must dispatch the typed show-picker command");
+    Check(executedCommand && executedCommand->PickerOpenMode == DevicePickerOpenMode::ToggleIfOpen,
+          "tray primary activation must retain toggle semantics in the shared command");
+    Check(
+        executedContext && executedContext->Completion == AppCommandContext::CompletionMode::Detached,
+        "tray primary activation must use detached completion so a UI-thread callback cannot wait on its Opened event");
 }
 
 void TestMalformedCancelledAndExpiredCommandsShortCircuit() {
@@ -213,6 +239,7 @@ void TestSettingsWindowCommandsUseSharedExecutor() {
 
 int RunAppControllerTests() {
     TestUiAndCliEquivalentCommandsUseOneExecutor();
+    TestTrayPrimaryActivationUsesSharedExecutorAndDetachedUiIntent();
     TestMalformedCancelledAndExpiredCommandsShortCircuit();
     TestExecutorExceptionsBecomeInternalErrors();
     TestSnapshotIsReturnedByValue();

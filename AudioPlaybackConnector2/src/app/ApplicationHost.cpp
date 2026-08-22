@@ -567,6 +567,12 @@ void ApplicationHost::InitializeTray() {
                 self->ExecuteTrayCommand(apc::app::AppCommand{apc::app::AppCommandKind::ShowSettings, {}, {}});
             }
         },
+        apc::ui::MakeTrayPrimaryActivationCallback(
+            [weak](apc::app::AppCommand command, apc::app::AppCommandContext context) {
+                if (auto self = weak.lock()) {
+                    self->ExecuteTrayCommand(std::move(command), context.Completion);
+                }
+            }),
         [weak]() {
             if (auto self = weak.lock()) self->ExitApplication();
         },
@@ -815,7 +821,8 @@ void ApplicationHost::InitializeAppController() {
             // Preserve the legacy missing-controller success behavior.
             return true;
         };
-    operations.ShowDevicePicker = [weak](apc::app::AppCommandContext const& context) {
+    operations.ShowDevicePicker = [weak](apc::app::DevicePickerOpenMode openMode,
+                                         apc::app::AppCommandContext const& context) {
         Bridge::UiActionResult result;
         auto self = weak.lock();
         if (!self || !self->m_trayController) return result;
@@ -824,9 +831,11 @@ void ApplicationHost::InitializeAppController() {
         const auto openedGeneration = tray->DevicePickerOpenedGeneration();
         const auto wasVisible = tray->IsDevicePickerVisibleOrTransitioning();
         const auto uiResult = self->RunControlUiAction(
-            [weak]() {
+            [weak, openMode]() {
                 auto self = weak.lock();
-                return self && self->m_trayController && self->m_trayController->ShowDevicePicker(false);
+                return self && self->m_trayController &&
+                       self->m_trayController->ShowDevicePicker(openMode ==
+                                                                apc::app::DevicePickerOpenMode::ToggleIfOpen);
             },
             context);
         if (uiResult != ControlUiActionResult::Succeeded) {
@@ -834,6 +843,17 @@ void ApplicationHost::InitializeAppController() {
             // canceled or expired context alone cannot distinguish an action
             // that never ran from one that may have already mutated the UI.
             result.Status = ToUiActionStatus(uiResult);
+            return result;
+        }
+
+        // Tray activation is dispatched detached from the UI callback.  The
+        // flyout's Opened event is posted back to this same dispatcher, so a
+        // detached UI-thread command must not wait for its generation here.
+        // Control `show` remains WaitForCompletion and keeps the existing
+        // acknowledgement semantics below.
+        if (context.Completion == apc::app::AppCommandContext::CompletionMode::Detached) {
+            result.Status = OperationStatus::Succeeded;
+            result.DevicePickerOpenedGeneration = tray->DevicePickerOpenedGeneration();
             return result;
         }
 

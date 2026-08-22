@@ -77,6 +77,8 @@ public:
         using ClearDefaultOperation = std::function<bool()>;
         using SetAliasOperation =
             std::function<bool(std::wstring_view deviceId, std::wstring_view alias, std::wstring_view deviceName)>;
+        using ShowDevicePickerAction =
+            std::function<UiActionResult(DevicePickerOpenMode openMode, AppCommandContext const&)>;
         using UiAction = std::function<UiActionResult(AppCommandContext const&)>;
         using ReadResourceStatus = std::function<AppSnapshot::ResourceStatusSnapshot()>;
         using ReadPickerGeneration = std::function<std::uint64_t()>;
@@ -105,7 +107,7 @@ public:
         ClearDefaultOperation ClearDefaultDevice;
         SetAliasOperation SetDeviceAlias;
 
-        UiAction ShowDevicePicker;
+        ShowDevicePickerAction ShowDevicePicker;
         UiAction ShowSettings;
 
         ReadResourceStatus ResourceStatus;

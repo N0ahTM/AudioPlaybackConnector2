@@ -37,7 +37,7 @@ Run on the oldest supported Windows environment and current Windows 11 when avai
 
 | Area | Required scenarios |
 |---|---|
-| Tray/picker | First/second launch; Explorer restart; left/right/double click; discovery changes while open; P03 four states/no timer; light/dark; 100/125/150/200% DPI; multi-monitor placement; P02 preload/release/pin. |
+| Tray/picker | First/second launch; Explorer restart; left/right/double click; discovery changes while open; P03 animation start/progress/stop for success/error/cancel/shutdown with no orphan timer; all tray states; light/dark; 100/125/150/200% DPI; multi-monitor placement; P02 preload/release/pin. |
 | Bluetooth | At least two A2DP devices; picker/tray/CLI commands; bulk and rapid actions; power-off during connect/connected; adapter disable/enable; incoming; startup/loss retry; sleep/resume; shutdown busy. |
 | Notifications | Every retained kind; P05 image; actions; P08 localization/redaction; P04 no toast/balloon. |
 | Settings | Every page/control; aliases/policies reflected in picker/CLI; live language/privacy; startup; approved updates; diagnostics; retained placement; corrupt recovery; restart persistence. |
@@ -68,7 +68,7 @@ Compare Release builds under the same conditions. Use [baseline procedure](perfo
 
 - [ ] P01 compatibility/security pass.
 - [ ] P02 parity pass.
-- [ ] P03 code/timer removed; static states pass.
+- [ ] P03 Connecting animation and every start/stop/cleanup path pass.
 - [ ] P04 never notifies.
 - [ ] P05 mapping passes.
 - [ ] P06 race/lifecycle matrix passes.

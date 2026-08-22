@@ -47,7 +47,7 @@ Names may stay compatible during migration. Boundaries are mandatory.
 | `SettingsStore` | P07 load; Snapshot/Update/Flush/Subscribe; one private writer state machine | Device/UI calls |
 | `SettingsSession` | Window-scoped rows, validation, busy/startup/update state, diagnostics text, typed intents | Persistence and XAML controls |
 | `SettingsWindow` | XAML, navigation, accessibility, layout, rendering, intent forwarding | Persistence, device/update coordination, diagnostics collection |
-| `TrayUi` | Notify icon, menu, flyout/picker lifetime, theme/DPI, P03 icons, tooltip, UI resource owner, intents | Residency policy, settings/device internals |
+| `TrayUi` | Notify icon, menu, flyout/picker lifetime, theme/DPI, P03 animation lifecycle/timer/frames and static icons, tooltip, UI resource owner, intents | Residency policy, settings/device internals |
 | `DevicePicker` | Render `DeviceRow`; emit intent | Direct settings, alias/privacy policy, `DeviceService` access |
 | `ControlServer` | P01 server pipe security/lifecycle/transport; private instances/transfers/cache/retry | XAML and use-case implementation |
 | `ControlCommandHandler` | Validated protocol ↔ `AppController` mapping | Pipe lifecycle and duplicate use cases |

@@ -86,7 +86,7 @@ The script [measure-performance-baseline.ps1](measure-performance-baseline.ps1) 
 ## Comparison rules for the rework
 
 - Compare Release x64 builds on the same machine, power scheme, display configuration, and resource-pressure/residency state.
-- Preserve the exact feature state: no connected devices, no settings edits, no picker animation, and no unrelated foreground workload.
+- Preserve the exact feature state: no connected devices, no settings edits, no active connect operation/Connecting animation, and no unrelated foreground workload.
 - Use at least 20 latency runs for a formal before/after decision. The 10-run settings result here is a snapshot; rerun both versions with 20 or more iterations before claiming a regression or improvement.
 - Report median and p95, not only the best run or arithmetic mean.
 - Report working set and private commit separately. Neither is a substitute for the other.

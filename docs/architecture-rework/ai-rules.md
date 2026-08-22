@@ -74,9 +74,9 @@ These rules are mandatory for new rework code and substantially migrated legacy 
 
 - Prefer early returns and explicit control flow over nesting or clever one-liners.
 - Let `clang-format` own whitespace; MUST NOT hand-align for appearance.
-- Functions should normally stay near 50 lines.
-- Production `.cpp` files should normally stay below 1,200 lines; XAML code-behind below 800.
-- Limits are review signals, not reasons to split cohesive logic. Document justified exceptions.
+- Split code only at cohesive responsibilities and real boundaries.
+- MUST NOT compress expressions, inline conditionals, combine unrelated responsibilities, or add indirection to meet a size/count goal.
+- Code size, file count, function length, and abstraction count MUST NOT be acceptance criteria.
 - Public headers expose minimal contracts; implementation-only types stay in `.cpp`.
 - Colocate headers and implementations by feature; keep only genuinely shared protocol headers public.
 - Comments explain non-obvious constraints, invariants, workarounds, security, or compatibility; they MUST NOT narrate code.

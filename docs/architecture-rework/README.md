@@ -1,6 +1,6 @@
 # Architecture Rework
 
-Goal: preserve required behavior while replacing the current ~25,000-line/138-file structure with cohesive owners and lower total comprehension cost. The 16,000–19,000-line/55–70-file target is directional, never a quota.
+Goal: preserve required behavior while replacing unnecessary indirection with cohesive owners and lower total comprehension cost. Code size and file count are never targets or acceptance criteria.
 
 ## Required reading
 

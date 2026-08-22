@@ -85,6 +85,7 @@ struct Harness {
     int SetDefaultCalls = 0;
     int ClearDefaultCalls = 0;
     int SetAliasCalls = 0;
+    bool DisconnectRemovesSession = false;
     bool SetDefaultAccepted = true;
     bool ClearDefaultAccepted = true;
     bool SetAliasAccepted = true;
@@ -156,7 +157,9 @@ struct Harness {
                                     : ReconnectStatus;
             if (status == OperationStatus::Succeeded) {
                 auto found = std::ranges::find_if(LiveDevices, [id](auto const& device) { return device.Id == id; });
-                if (found != LiveDevices.end()) {
+                if (found == LiveDevices.end()) {
+                    LiveDevices.push_back(Device(std::wstring(id), std::wstring(id), {}, true, true));
+                } else {
                     found->IsConnected = true;
                     found->State = DeviceConnectionState::Connected;
                 }
@@ -175,6 +178,10 @@ struct Harness {
             ++DisconnectCalls;
             auto found = std::ranges::find_if(LiveDevices, [id](auto const& device) { return device.Id == id; });
             if (found != LiveDevices.end()) {
+                if (DisconnectRemovesSession) {
+                    LiveDevices.erase(found);
+                    return;
+                }
                 found->IsConnected = false;
                 found->State = DeviceConnectionState::Idle;
             }
@@ -730,8 +737,7 @@ void TestPickerOpenModePreservesTrayToggleAndControlEnsureOpen() {
 
 void TestObservedFactsNormalizeAndOverlayWithoutInjection() {
     Harness harness;
-    harness.LiveDevices = {Device(L"target", L"Target")};
-    harness.AddSettingsDevice(harness.LiveDevices.front());
+    harness.AddSettingsDevice(Device(L"target", L"Target"));
     const auto before = harness.Bridge.Snapshot().Generation;
     auto status = harness.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceStatusChanged,
                                           L"target",
@@ -913,8 +919,7 @@ void TestFactsAfterShutdownDoNotPublishOrChangeBridgeState() {
 
 void TestTerminalFactsClearObservedBusyState() {
     Harness harness;
-    harness.LiveDevices = {Device(L"target", L"Target")};
-    harness.AddSettingsDevice(harness.LiveDevices.front());
+    harness.AddSettingsDevice(Device(L"target", L"Target"));
 
     (void)harness.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::AutoReconnectTriggered,
                                   L"target",
@@ -988,17 +993,102 @@ void TestExternalSnapshotIdPreservesP01LengthAndBoundedConversion() {
           "list/status snapshots must retain a valid P01 ID beyond the bounded persistence identity");
     Check(snapshot.Tray.ConnectedDevices.size() == 1 && snapshot.Tray.ConnectedDevices.front().Id.View() == longId,
           "connected tray snapshot entries must retain the same long external ID");
-    const auto event = harness.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceStatusChanged,
-                                               longId,
-                                               DeviceConnectionState::Connecting,
-                                               AppResultCode::OperationFailed});
+
+    Harness disconnected;
+    disconnected.AddSettingsDevice(Device(longId, L"Long device"));
+    const auto event = disconnected.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceStatusChanged,
+                                                    longId,
+                                                    DeviceConnectionState::Connecting,
+                                                    AppResultCode::OperationFailed});
     Check(event && std::holds_alternative<apc::app::DeviceStatusChangedEvent>(*event) &&
               std::get<apc::app::DeviceStatusChangedEvent>(*event).Id.View() == longId,
           "per-device events must preserve a valid long P01 identity without coercing it to DeviceId");
-    const auto afterEventSnapshot = harness.Bridge.Snapshot();
+    const auto afterEventSnapshot = disconnected.Bridge.Snapshot();
     Check(afterEventSnapshot.Devices.size() == 1 && afterEventSnapshot.Devices.front().Id.View() == longId &&
               afterEventSnapshot.Devices.front().State == DeviceConnectionState::Connecting,
           "long-ID event state must remain visible in an immutable snapshot");
+}
+
+void TestSessionTruthReconcilesObservedConnectionOverlays() {
+    Harness disconnect;
+    disconnect.LiveDevices = {Device(L"target", L"Target", {}, true)};
+    disconnect.AddSettingsDevice(disconnect.LiveDevices.front());
+    disconnect.DisconnectRemovesSession = true;
+    (void)disconnect.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceConnected,
+                                     L"target",
+                                     DeviceConnectionState::Connected,
+                                     AppResultCode::Success});
+    const auto disconnected = disconnect.Bridge.Execute(Command(AppCommandKind::Disconnect, IdSelector(L"target")));
+    const auto disconnectSnapshot = disconnect.Bridge.Snapshot();
+    Check(disconnected.Code == AppResultCode::Success && disconnected.Reason == AppOutcomeReason::DisconnectSucceeded &&
+              disconnected.Device && !disconnected.Device->IsConnected && disconnectSnapshot.Devices.size() == 1 &&
+              !disconnectSnapshot.Devices.front().IsConnected &&
+              disconnectSnapshot.Devices.front().State == DeviceConnectionState::Idle,
+          "a stale connected fact must not revive a session removed by a successful disconnect");
+
+    Harness connect;
+    connect.AddSettingsDevice(Device(L"target", L"Target"));
+    (void)connect.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceStatusChanged,
+                                  L"target",
+                                  DeviceConnectionState::Failed,
+                                  AppResultCode::OperationFailed});
+    const auto connected = connect.Bridge.Execute(Command(AppCommandKind::Connect, IdSelector(L"target")));
+    Check(connected.Code == AppResultCode::Success && connected.Reason == AppOutcomeReason::ConnectSucceeded &&
+              connected.Device && connected.Device->IsConnected && connect.ConnectCalls == 1,
+          "a failed observed state must not make a source-confirmed connect appear to fail");
+
+    Harness reconnect;
+    reconnect.AddSettingsDevice(Device(L"target", L"Target"));
+    (void)reconnect.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceStatusChanged,
+                                    L"target",
+                                    DeviceConnectionState::Idle,
+                                    AppResultCode::Success});
+    const auto reconnected = reconnect.Bridge.Execute(Command(AppCommandKind::Reconnect, IdSelector(L"target")));
+    Check(reconnected.Code == AppResultCode::Success && reconnected.Reason == AppOutcomeReason::ReconnectSucceeded &&
+              reconnected.Device && reconnected.Device->IsConnected && reconnect.ReconnectCalls == 1,
+          "an idle observed state must not make a source-confirmed reconnect appear to fail");
+
+    Harness sourceConnected;
+    sourceConnected.LiveDevices = {Device(L"target", L"Target", {}, true)};
+    sourceConnected.AddSettingsDevice(sourceConnected.LiveDevices.front());
+    (void)sourceConnected.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceStatusChanged,
+                                          L"target",
+                                          DeviceConnectionState::Failed,
+                                          AppResultCode::OperationFailed});
+    const auto sourceConnectedSnapshot = sourceConnected.Bridge.Snapshot();
+    Check(sourceConnectedSnapshot.Devices.size() == 1 && sourceConnectedSnapshot.Devices.front().IsConnected &&
+              sourceConnectedSnapshot.Devices.front().State == DeviceConnectionState::Connected,
+          "the source session record must remain available after merge to reject a stale failed overlay");
+
+    Harness staleConnected;
+    staleConnected.AddSettingsDevice(Device(L"target", L"Target"));
+    (void)staleConnected.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceConnected,
+                                         L"target",
+                                         DeviceConnectionState::Connected,
+                                         AppResultCode::Success});
+    const auto connectAfterStaleFact =
+        staleConnected.Bridge.Execute(Command(AppCommandKind::Connect, IdSelector(L"target")));
+    Check(connectAfterStaleFact.Code == AppResultCode::Success &&
+              connectAfterStaleFact.Reason == AppOutcomeReason::ConnectSucceeded && staleConnected.ConnectCalls == 1,
+          "a stale connected fact must not turn a source-disconnected connect into already-connected");
+
+    Harness transient;
+    transient.AddSettingsDevice(Device(L"target", L"Target"));
+    (void)transient.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceStatusChanged,
+                                    L"target",
+                                    DeviceConnectionState::Connecting,
+                                    AppResultCode::Success});
+    const auto connectingSnapshot = transient.Bridge.Snapshot();
+    (void)transient.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceStatusChanged,
+                                    L"target",
+                                    DeviceConnectionState::Failed,
+                                    AppResultCode::OperationFailed});
+    const auto failedSnapshot = transient.Bridge.Snapshot();
+    Check(connectingSnapshot.Devices.front().State == DeviceConnectionState::Connecting &&
+              !connectingSnapshot.Devices.front().IsConnected && connectingSnapshot.Devices.front().IsBusy &&
+              failedSnapshot.Devices.front().State == DeviceConnectionState::Failed &&
+              !failedSnapshot.Devices.front().IsConnected && !failedSnapshot.Devices.front().IsBusy,
+          "compatible non-connected observed states must still enrich a source-disconnected record");
 }
 
 void TestAuthoritativeBusyFactSurvivesSnapshotNormalization() {
@@ -1020,8 +1110,7 @@ void TestAuthoritativeBusyFactSurvivesSnapshotNormalization() {
 
 void TestQueuedConnectedFactCannotResurrectClosedSnapshot() {
     Harness harness;
-    harness.LiveDevices = {Device(L"target", L"Target")};
-    harness.AddSettingsDevice(harness.LiveDevices.front());
+    harness.AddSettingsDevice(Device(L"target", L"Target"));
     DeviceFactPublicationFence fence;
 
     const auto queuedConnected = fence.RecordConnected(L"target");
@@ -1060,8 +1149,7 @@ void TestQueuedConnectedFactCannotResurrectClosedSnapshot() {
 
 void TestQueuedStatusFactCannotOverwriteNewerStatus() {
     Harness harness;
-    harness.LiveDevices = {Device(L"target", L"Target")};
-    harness.AddSettingsDevice(harness.LiveDevices.front());
+    harness.AddSettingsDevice(Device(L"target", L"Target"));
     DeviceFactPublicationFence fence;
 
     const auto queuedConnected = fence.RecordConnected(L"target");
@@ -1128,6 +1216,7 @@ int RunLegacyAppUseCaseBridgeTests() {
     TestTerminalFactsClearObservedBusyState();
     TestMissingMutationCallbacksFailClosed();
     TestExternalSnapshotIdPreservesP01LengthAndBoundedConversion();
+    TestSessionTruthReconcilesObservedConnectionOverlays();
     TestAuthoritativeBusyFactSurvivesSnapshotNormalization();
     TestQueuedConnectedFactCannotResurrectClosedSnapshot();
     TestQueuedStatusFactCannotOverwriteNewerStatus();

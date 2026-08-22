@@ -881,13 +881,15 @@ std::vector<LegacyAppUseCaseBridge::DeviceRecord> LegacyAppUseCaseBridge::MergeD
 
     for (auto& device : refreshed)
         upsert(std::move(device));
-    for (auto& device : connected)
-        upsert(std::move(device));
+    // ApplyObservedStates needs the unmodified session records below: they
+    // remain the authority for connection truth after the presentation merge.
+    for (auto const& device : connected)
+        upsert(device);
     for (auto const& device : settings.Devices) {
         upsert(DeviceRecord{device.Id, device.Name, device.Alias, DeviceConnectionState::Idle, false, true, false});
     }
 
-    ApplyObservedStates(merged);
+    ApplyObservedStates(merged, connected);
     std::ranges::sort(merged, [](auto const& left, auto const& right) {
         const auto leftLabel = LowerInvariant(DeviceLabel(left));
         const auto rightLabel = LowerInvariant(DeviceLabel(right));
@@ -1124,21 +1126,44 @@ LegacyAppUseCaseBridge::MutationAdmissionFailure(AppCommandContext const& contex
     return std::nullopt;
 }
 
-void LegacyAppUseCaseBridge::ApplyObservedStates(std::vector<DeviceRecord>& devices) const {
+void LegacyAppUseCaseBridge::ApplyObservedStates(std::vector<DeviceRecord>& devices,
+                                                 std::vector<DeviceRecord> const& connectedDevices) const {
     std::unordered_map<std::wstring, DeviceRecord> observed;
     {
         std::scoped_lock lock(m_stateMutex);
         observed = m_observedStates;
     }
-    for (auto const& [id, state] : observed) {
-        auto current = std::ranges::find_if(devices, [&id](auto const& device) { return device.Id == id; });
-        if (current == devices.end()) continue;
-        if (current->Name.empty()) current->Name = state.Name;
-        if (current->Alias.empty()) current->Alias = state.Alias;
-        current->State = state.State;
-        current->IsConnected = state.IsConnected;
-        current->IsKnown = current->IsKnown || state.IsKnown;
-        if (IsBusyState(state.State)) current->IsBusy = true;
+
+    for (auto& current : devices) {
+        const auto source = FindById(connectedDevices, current.Id);
+        // The session map is authoritative for whether a device is connected.
+        // Facts cross the UI boundary asynchronously, so a late Connected fact
+        // must not revive a source record that has already been closed.
+        if (source) {
+            current.State = source->State;
+            current.IsConnected = source->IsConnected;
+            current.IsKnown = current.IsKnown || source->IsKnown;
+            current.IsBusy = source->IsBusy;
+            continue;
+        }
+
+        current.IsConnected = false;
+        if (current.State == DeviceConnectionState::Connected) {
+            current.State = DeviceConnectionState::Idle;
+        }
+
+        auto observedState = std::ranges::find_if(
+            observed, [&current](auto const& entry) { return EqualsIgnoreCase(entry.first, current.Id); });
+        if (observedState == observed.end()) continue;
+
+        auto const& state = observedState->second;
+        if (current.Name.empty()) current.Name = state.Name;
+        if (current.Alias.empty()) current.Alias = state.Alias;
+        current.IsKnown = current.IsKnown || state.IsKnown;
+        if (state.IsConnected) continue;
+
+        current.State = state.State;
+        if (IsBusyState(state.State)) current.IsBusy = true;
     }
 }
 

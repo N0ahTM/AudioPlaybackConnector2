@@ -241,7 +241,8 @@ private:
                                               DeviceSelectorKind selectorKind = DeviceSelectorKind::Id) noexcept;
     [[nodiscard]] static AppCommandContext CappedRefreshContext(AppCommandContext const& context);
     static void AdvanceGeneration(std::uint64_t& generation) noexcept;
-    void ApplyObservedStates(std::vector<DeviceRecord>& devices) const;
+    void ApplyObservedStates(std::vector<DeviceRecord>& devices,
+                             std::vector<DeviceRecord> const& connectedDevices) const;
     [[nodiscard]] bool PrivacyMode() const noexcept;
 
     Operations m_operations;

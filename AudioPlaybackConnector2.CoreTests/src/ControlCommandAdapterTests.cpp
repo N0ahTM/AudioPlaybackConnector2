@@ -10,6 +10,7 @@
 #include <mutex>
 #include <optional>
 #include <stop_token>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -248,6 +249,73 @@ void TestInvalidRequestsAndCompatibilityGrammar() {
     response = harness.Adapter.Handle(bareToggle, {}, apc::control::DeadlineAfter(1000));
     Check(response.Code == ExitCode::InvalidRequest && harness.Commands.empty(),
           "wire-level bare Toggle must remain invalid; the CLI parser supplies Default before transport");
+}
+
+void TestNonDeviceCommandsDoNotRequireInventorySnapshot() {
+    std::size_t snapshotCalls = 0;
+    std::size_t executeCalls = 0;
+    AppController controller(
+        [&](AppCommand const& command, AppCommandContext const&) {
+            ++executeCalls;
+            AppResult result;
+            result.Code = AppResultCode::Success;
+            result.Command = command.Kind;
+            result.PrivacyModeEnabled = false;
+            switch (command.Kind) {
+                case AppCommandKind::ShowDevicePicker: result.Reason = AppOutcomeReason::ShowOpened; break;
+                case AppCommandKind::ShowSettings: result.Reason = AppOutcomeReason::SettingsOpened; break;
+                case AppCommandKind::ClearDefault: result.Reason = AppOutcomeReason::DefaultCleared; break;
+                case AppCommandKind::DisconnectAll: result.Reason = AppOutcomeReason::DisconnectAllSucceeded; break;
+                default: break;
+            }
+            return result;
+        },
+        [&]() -> AppSnapshot {
+            ++snapshotCalls;
+            throw std::runtime_error("device enumeration failed");
+        });
+    ControlCommandAdapter adapter(controller, ControlCommandAdapter::Options{Localize});
+
+    const std::vector<Request> requests{MakeRequest(CommandType::Show),
+                                        MakeRequest(CommandType::Settings),
+                                        MakeRequest(CommandType::DefaultClear),
+                                        MakeRequest(CommandType::DisconnectAll)};
+    for (auto const& request : requests) {
+        const auto response = adapter.Handle(request, {}, apc::control::DeadlineAfter(1000));
+        Check(response.Code == ExitCode::Success,
+              "a non-device control command must execute when the inventory snapshot read fails");
+    }
+    Check(executeCalls == requests.size(),
+          "each non-device command must reach the shared AppController despite snapshot read failure");
+    Check(snapshotCalls == 0,
+          "non-device control commands must not obtain a device-enumerating snapshot for presentation");
+}
+
+void TestInventoryCommandsFailClosedOnSnapshotReadFailure() {
+    std::size_t snapshotCalls = 0;
+    std::size_t executeCalls = 0;
+    AppController controller(
+        [&](AppCommand const& command, AppCommandContext const&) {
+            ++executeCalls;
+            return AppResult{AppResultCode::Success, command.Kind};
+        },
+        [&]() -> AppSnapshot {
+            ++snapshotCalls;
+            throw std::runtime_error("device enumeration failed");
+        });
+    ControlCommandAdapter adapter(controller, ControlCommandAdapter::Options{Localize});
+
+    const std::vector<Request> requests{MakeRequest(CommandType::List),
+                                        MakeRequest(CommandType::Status),
+                                        MakeRequest(CommandType::DefaultShow),
+                                        MakeRequest(CommandType::AliasList)};
+    for (auto const& request : requests) {
+        const auto response = adapter.Handle(request, {}, apc::control::DeadlineAfter(1000));
+        Check(response.Code == ExitCode::Unavailable && response.Payload == L"Not ready",
+              "an inventory-backed control query must fail closed when its snapshot read fails");
+    }
+    Check(snapshotCalls == requests.size(), "each inventory-backed query must validate snapshot availability");
+    Check(executeCalls == 0, "a failed inventory snapshot must prevent query dispatch against partial state");
 }
 
 void TestUiAndCliTypedParityAndContextPropagation() {
@@ -570,6 +638,8 @@ void TestLongSnapshotIdsRemainWireVisibleAndRedactable() {
 int RunControlCommandAdapterTests() {
     TestAllCommandMappingsAndTargets();
     TestInvalidRequestsAndCompatibilityGrammar();
+    TestNonDeviceCommandsDoNotRequireInventorySnapshot();
+    TestInventoryCommandsFailClosedOnSnapshotReadFailure();
     TestUiAndCliTypedParityAndContextPropagation();
     TestMutationBusyAndNonmutationConcurrency();
     TestResultExitMappingAndGoldenTextJsonPrivacy();

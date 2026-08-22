@@ -1,9 +1,32 @@
+#ifdef APC_SETTINGS_PERSISTENCE_STANDALONE
+#include <windows.h>
+
+#include <wil/cppwinrt.h>
+#include <wil/resource.h>
+#include <wil/result.h>
+
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.Data.Json.h>
+#include <winrt/Windows.Storage.h>
+
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <exception>
+#include <cstdlib>
+#include <format>
+#include <limits>
+#include <ranges>
+#include <unordered_set>
+#else
 #include <pch.h>
+#endif
+
 #include <core/Settings.hpp>
 #include <core/SettingsLimits.hpp>
+#include <util/Logger.hpp>
 #include <util/Util.hpp>
-
-#include <unordered_set>
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Helpers ///////////////////////////////////////////////////////////////////////////////////////////*/
@@ -12,6 +35,16 @@
 namespace {
 std::wstring BoundedString(winrt::hstring const& value, std::size_t limit) {
     return apc::limits::TruncateUtf16(std::wstring_view(value), limit);
+}
+
+std::wstring BoundedExceptionMessage(std::exception const& exception) noexcept {
+    constexpr std::size_t c_maxExceptionMessageBytes = 4096;
+    try {
+        auto const* message = exception.what();
+        return util::Utf8ToUtf16(std::string_view(message, strnlen_s(message, c_maxExceptionMessageBytes)));
+    } catch (...) {
+        return L"<unavailable>";
+    }
 }
 
 bool IsPersistable(SettingsData const& data) {
@@ -301,7 +334,7 @@ void Settings::Load(HINSTANCE hInst) {
         DebugTrace(L"[Settings] Load ERROR (hresult): {0}", ex.message());
         BackupUnreadableSettingsFile(path);
     } catch (std::exception const& ex) {
-        DebugTrace(L"[Settings] Load ERROR (std): {0}", util::Utf8ToUtf16(ex.what()));
+        DebugTrace(L"[Settings] Load ERROR (std): {0}", BoundedExceptionMessage(ex));
         BackupUnreadableSettingsFile(path);
     } catch (...) {
         DebugTrace(L"[Settings] Load ERROR: Unknown exception");
@@ -431,6 +464,8 @@ bool Settings::Save(HINSTANCE hInst) {
 /*------------------------------------------------------------------------------------------------------------*/
 
 std::filesystem::path Settings::GetPath(HINSTANCE hInst) const {
+    if (!m_persistenceDirectory.empty()) return m_persistenceDirectory / c_fileName;
+
     try {
         auto localFolder = winrt::Windows::Storage::ApplicationData::Current().LocalFolder();
         return std::filesystem::path(std::wstring(localFolder.Path())) / c_fileName;

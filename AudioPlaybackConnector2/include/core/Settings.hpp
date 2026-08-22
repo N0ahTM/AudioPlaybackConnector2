@@ -80,6 +80,9 @@ public:
     /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
+    explicit Settings(std::filesystem::path persistenceDirectory = {})
+        : m_persistenceDirectory(std::move(persistenceDirectory)) {}
+
     void Load(HINSTANCE hInst);
     bool Save(HINSTANCE hInst);
     [[nodiscard]] bool HasUnsavedChanges() const noexcept {
@@ -114,5 +117,6 @@ private:
     std::mutex m_persistenceMutex;
     std::atomic<std::uint64_t> m_revision{0};
     std::atomic<std::uint64_t> m_savedRevision{0};
+    std::filesystem::path m_persistenceDirectory;
     static constexpr auto c_fileName = L"AudioPlaybackConnector2.json";
 };

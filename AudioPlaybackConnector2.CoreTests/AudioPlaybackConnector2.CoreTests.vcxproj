@@ -91,6 +91,7 @@
     <ClCompile Include="src\DiagnosticsLogCollectorTests.cpp" />
     <ClCompile Include="src\EventTests.cpp" />
     <ClCompile Include="src\SettingsDiagnosticsReportBuilderTests.cpp" />
+    <ClCompile Include="src\SettingsPersistenceTests.cpp" />
     <ClCompile Include="src\DevicePickerSnapshotTests.cpp" />
     <ClCompile Include="src\LatestStartupTaskRequestStateTests.cpp" />
     <ClCompile Include="src\LatestServiceLifecycleStateTests.cpp" />
@@ -121,6 +122,9 @@
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\DevicePickerSnapshot.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceInventoryGeneration.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\ReconnectController.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\Settings.cpp">
+      <PreprocessorDefinitions>APC_SETTINGS_PERSISTENCE_STANDALONE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\TrayTooltipBuilder.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\CommandLineControlServer.cpp" />
   </ItemGroup>
@@ -144,6 +148,7 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceInventoryGeneration.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DevicePickerTypes.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsLimits.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\Settings.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceTrayPresentation.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\TrayTooltipBuilder.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResourcePressureMonitor.hpp" />

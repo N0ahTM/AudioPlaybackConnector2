@@ -187,8 +187,10 @@ private:
         bool HasTarget = false;
     };
 
-    [[nodiscard]] AppResult
-    ExecuteCommand(AppCommand const& command, AppCommandContext const& context, SettingsData const& settings);
+    [[nodiscard]] AppResult ExecuteCommand(AppCommand const& command,
+                                           AppCommandContext const& context,
+                                           SettingsData const& settings,
+                                           std::uint64_t settingsRevision);
     [[nodiscard]] AppResult ExecuteTargetOperation(AppCommand const& command,
                                                    AppCommandContext const& context,
                                                    std::vector<DeviceRecord> const& devices,
@@ -205,9 +207,15 @@ private:
     BuildDevices(bool refresh, AppCommandContext const& context, SettingsData const& settings);
     [[nodiscard]] std::vector<DeviceRecord> BuildDevicesWithoutRefresh(SettingsData const& settings) const;
     [[nodiscard]] std::optional<SettingsSnapshot> ReadSettings() const noexcept;
+    // A late callback may return an older Store snapshot after another caller
+    // has already observed a newer revision. Retry outside the bridge lock so
+    // every caller starts from the newest revision known to this bridge.
+    [[nodiscard]] std::optional<SettingsSnapshot> ReadCoherentSettings() const noexcept;
+    [[nodiscard]] bool IsCurrentSettingsRevision(std::uint64_t revision) const noexcept;
     [[nodiscard]] std::vector<DeviceRecord> ReadConnectedDevices() const;
     [[nodiscard]] AppSnapshot SnapshotFromDevices(std::vector<DeviceRecord> devices,
-                                                  SettingsData const& settings) const noexcept;
+                                                  SettingsData const& settings,
+                                                  std::uint64_t settingsRevision) const noexcept;
     [[nodiscard]] std::vector<DeviceRecord> MergeDevices(std::vector<DeviceRecord> refreshed,
                                                          std::vector<DeviceRecord> connected,
                                                          SettingsData const& settings) const;

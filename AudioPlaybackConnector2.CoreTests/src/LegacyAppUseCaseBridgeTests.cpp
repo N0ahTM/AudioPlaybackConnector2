@@ -705,7 +705,7 @@ void TestSettingsRevisionFenceAdvancesGenerationOnce() {
 
 void TestSettingsRevisionFenceIgnoresStaleReads() {
     SettingsData settings;
-    const std::array<std::uint64_t, 4> revisions{2, 1, 2, 3};
+    const std::array<std::uint64_t, 5> revisions{2, 1, 2, 2, 3};
     std::size_t nextRevision = 0;
 
     LegacyAppUseCaseBridge::Operations operations;
@@ -723,6 +723,110 @@ void TestSettingsRevisionFenceIgnoresStaleReads() {
 
     Check(baseline.Generation == 0 && stale.Generation == 0 && repeated.Generation == 0 && newer.Generation == 1,
           "stale or equal Store revisions must not regress or repeatedly advance bridge generation");
+}
+
+void TestConcurrentSettingsReadsKeepSnapshotsAndStatusResultsCoherent() {
+    const auto makeSettings = [](std::wstring defaultId, std::wstring alias, bool privacy) {
+        SettingsData settings;
+        settings.PrivacyModeEnabled = privacy;
+        settings.DefaultDevice = ::DefaultDeviceMode::SpecificDevice;
+        settings.DefaultDeviceId = std::move(defaultId);
+        settings.Devices = {DeviceSettings{L"target", L"Target", std::move(alias), false, false},
+                            DeviceSettings{settings.DefaultDeviceId, L"Default", {}, false, false}};
+        return settings;
+    };
+    const auto oldSettings = makeSettings(L"old-default", L"Old alias", false);
+    const auto newSettings = makeSettings(L"new-default", L"New alias", true);
+
+    const auto isNewSnapshot = [](AppSnapshot const& snapshot) {
+        const auto target =
+            std::ranges::find_if(snapshot.Devices, [](auto const& device) { return device.Id.View() == L"target"; });
+        return snapshot.IsRunning && snapshot.PrivacyModeEnabled && snapshot.DefaultDevice &&
+               snapshot.DefaultDevice->Id && snapshot.DefaultDevice->Id->View() == L"new-default" &&
+               target != snapshot.Devices.end() && target->Alias == L"New alias";
+    };
+
+    const auto runInterleaving = [&](bool executeStatus) {
+        std::mutex callbackMutex;
+        std::condition_variable callbackEntered;
+        std::condition_variable callbackRelease;
+        int readCalls = 0;
+        bool firstReadBlocked = false;
+        bool secondReadBlocked = false;
+        bool releaseFirst = false;
+        bool releaseSecond = false;
+
+        LegacyAppUseCaseBridge::Operations operations;
+        operations.ReadSettings = [&] {
+            std::unique_lock lock(callbackMutex);
+            ++readCalls;
+            if (readCalls == 1) return SettingsSnapshot{oldSettings, 1, false};
+            if (readCalls == 2) {
+                firstReadBlocked = true;
+                callbackEntered.notify_all();
+                callbackRelease.wait(lock, [&] { return releaseFirst; });
+                return SettingsSnapshot{oldSettings, 1, false};
+            }
+            if (readCalls == 3) {
+                secondReadBlocked = true;
+                callbackEntered.notify_all();
+                callbackRelease.wait(lock, [&] { return releaseSecond; });
+                return SettingsSnapshot{newSettings, 2, false};
+            }
+            return SettingsSnapshot{newSettings, 2, false};
+        };
+        operations.ReadConnectedDevices = [] {
+            return std::vector<DeviceRecord>{
+                Device(L"target", L"Target"), Device(L"old-default", L"Default"), Device(L"new-default", L"Default")};
+        };
+        LegacyAppUseCaseBridge bridge(std::move(operations));
+        const auto baseline = bridge.Snapshot();
+
+        AppSnapshot staleSnapshot;
+        AppSnapshot currentSnapshot;
+        apc::app::AppResult status;
+        std::thread staleReader([&] {
+            if (executeStatus) {
+                status = bridge.Execute(Command(AppCommandKind::Status));
+            } else {
+                staleSnapshot = bridge.Snapshot();
+            }
+        });
+        {
+            std::unique_lock lock(callbackMutex);
+            callbackEntered.wait(lock, [&] { return firstReadBlocked; });
+        }
+        std::thread currentReader([&] { currentSnapshot = bridge.Snapshot(); });
+        {
+            std::unique_lock lock(callbackMutex);
+            callbackEntered.wait(lock, [&] { return secondReadBlocked; });
+            releaseSecond = true;
+        }
+        callbackRelease.notify_all();
+        currentReader.join();
+        {
+            std::scoped_lock lock(callbackMutex);
+            releaseFirst = true;
+        }
+        callbackRelease.notify_all();
+        staleReader.join();
+
+        const auto staleOutput = executeStatus ? status.Snapshot : std::optional<AppSnapshot>{staleSnapshot};
+        const bool statusDevicesAreNew = !executeStatus || std::ranges::any_of(status.Devices, [](auto const& device) {
+            return device.Id.View() == L"target" && device.Alias == L"New alias";
+        });
+        Check(
+            isNewSnapshot(currentSnapshot) && staleOutput && isNewSnapshot(*staleOutput) &&
+                currentSnapshot.Generation == baseline.Generation + 1 &&
+                staleOutput->Generation == currentSnapshot.Generation && statusDevicesAreNew,
+            executeStatus
+                ? "a stale status read must retry so result devices and its published snapshot retain one new revision"
+                : "a stale snapshot read must retry instead of combining old privacy/default/alias data with a newer "
+                  "generation");
+    };
+
+    runInterleaving(false);
+    runInterleaving(true);
 }
 
 void TestMutationResultsUseCommittedSettings() {
@@ -761,6 +865,36 @@ void TestMutationResultsUseCommittedSettings() {
     Check(aliasResult.Alias == L"Committed Alias" && aliasResult.Device &&
               aliasResult.Device->Alias == L"Committed Alias",
           "alias results must expose the reread committed alias instead of the pre-commit request");
+}
+
+void TestUnpersistableExternalDefaultRetainsP01Success() {
+    SettingsData settings;
+    std::uint64_t settingsRevision = 1;
+    const std::wstring longId(513, L'x');
+    int defaultMutations = 0;
+
+    LegacyAppUseCaseBridge::Operations operations;
+    operations.ReadSettings = [&] { return SettingsSnapshot{settings, settingsRevision, false}; };
+    operations.ReadConnectedDevices = [&] {
+        return std::vector<DeviceRecord>{Device(longId, L"Long external ID"), Device(L"bounded-id", L"Bounded ID")};
+    };
+    // This is the SettingsStore boundary outcome for a P01-valid external ID
+    // that exceeds the P07 persistence identity bound.
+    operations.SetDefaultDevice = [&](std::wstring_view id) {
+        ++defaultMutations;
+        return apc::core::DeviceId::TryCreate(id).has_value();
+    };
+    LegacyAppUseCaseBridge bridge(std::move(operations));
+
+    const auto longResult = bridge.Execute(Command(AppCommandKind::SetDefault, IdSelector(longId)));
+    Check(longResult.Code == AppResultCode::Success && longResult.Reason == AppOutcomeReason::DefaultSet &&
+              longResult.Target && longResult.Target->Id == longId && defaultMutations == 1,
+          "a Store-rejected unpersistable but live P01 ID must retain the set-default success outcome");
+
+    const auto boundedResult = bridge.Execute(Command(AppCommandKind::SetDefault, IdSelector(L"bounded-id")));
+    Check(boundedResult.Code == AppResultCode::OperationFailed &&
+              boundedResult.Reason == AppOutcomeReason::InternalError && defaultMutations == 2,
+          "a rejected bounded persistence ID must remain an observable set-default operation failure");
 }
 
 void TestSnapshotPrivacyResourcePickerAndStableGeneration() {
@@ -1311,7 +1445,9 @@ int RunLegacyAppUseCaseBridgeTests() {
     TestSettingsMutationsAndFailures();
     TestSettingsRevisionFenceAdvancesGenerationOnce();
     TestSettingsRevisionFenceIgnoresStaleReads();
+    TestConcurrentSettingsReadsKeepSnapshotsAndStatusResultsCoherent();
     TestMutationResultsUseCommittedSettings();
+    TestUnpersistableExternalDefaultRetainsP01Success();
     TestSnapshotPrivacyResourcePickerAndStableGeneration();
     TestPickerOpenModePreservesTrayToggleAndControlEnsureOpen();
     TestObservedFactsNormalizeAndOverlayWithoutInjection();

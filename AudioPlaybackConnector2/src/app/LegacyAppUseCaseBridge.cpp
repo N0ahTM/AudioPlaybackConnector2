@@ -82,13 +82,22 @@ AppResult LegacyAppUseCaseBridge::Execute(AppCommand command, AppCommandContext 
     }
 
     try {
-        const auto settings = ReadSettings();
-        if (!settings) {
-            return MakeFailure(command.Kind, AppResultCode::InternalError, AppOutcomeReason::InternalError);
+        // Only read-only queries can be replayed after a newer Store revision
+        // overtakes their input. Commands with side effects run once; their
+        // post-mutation paths explicitly reread committed settings instead.
+        const bool canRetryForSettings =
+            command.Kind == AppCommandKind::ListDevices || command.Kind == AppCommandKind::Status ||
+            command.Kind == AppCommandKind::ListAliases || command.Kind == AppCommandKind::ShowDefault;
+        for (std::size_t attempt = 0; attempt != 3; ++attempt) {
+            const auto settings = ReadCoherentSettings();
+            if (!settings) {
+                return MakeFailure(command.Kind, AppResultCode::InternalError, AppOutcomeReason::InternalError);
+            }
+            auto result = ExecuteCommand(command, context, settings->Data, settings->Revision);
+            result.Command = command.Kind;
+            if (!canRetryForSettings || IsCurrentSettingsRevision(settings->Revision)) return result;
         }
-        auto result = ExecuteCommand(command, context, settings->Data);
-        result.Command = command.Kind;
-        return result;
+        return MakeFailure(command.Kind, AppResultCode::InternalError, AppOutcomeReason::InternalError);
     } catch (...) {
         preflight.Code = AppResultCode::InternalError;
         preflight.Reason = AppOutcomeReason::InternalError;
@@ -106,14 +115,16 @@ AppSnapshot LegacyAppUseCaseBridge::Snapshot() const noexcept {
             unavailable.IsRunning = false;
             return unavailable;
         }
-        const auto settings = ReadSettings();
-        if (!settings) {
-            AppSnapshot unavailable;
-            unavailable.IsRunning = false;
-            return unavailable;
+        for (std::size_t attempt = 0; attempt != 3; ++attempt) {
+            const auto settings = ReadCoherentSettings();
+            if (!settings) break;
+            auto devices = BuildDevicesWithoutRefresh(settings->Data);
+            auto snapshot = SnapshotFromDevices(std::move(devices), settings->Data, settings->Revision);
+            if (snapshot.IsRunning || IsCurrentSettingsRevision(settings->Revision)) return snapshot;
         }
-        auto devices = BuildDevicesWithoutRefresh(settings->Data);
-        return SnapshotFromDevices(std::move(devices), settings->Data);
+        AppSnapshot unavailable;
+        unavailable.IsRunning = false;
+        return unavailable;
     } catch (...) {
         AppSnapshot unavailable;
         unavailable.IsRunning = false;
@@ -200,7 +211,8 @@ void LegacyAppUseCaseBridge::SetRunning(bool running) noexcept {
 
 AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command,
                                                  AppCommandContext const& context,
-                                                 SettingsData const& settings) {
+                                                 SettingsData const& settings,
+                                                 std::uint64_t settingsRevision) {
     const auto requiresRefresh = [&]() noexcept {
         if (command.Kind == AppCommandKind::ListDevices) return true;
         if (!command.Target) return false;
@@ -296,12 +308,12 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command,
             for (auto const& device : devices) {
                 if (auto snapshot = ToSnapshot(device)) result.Devices.push_back(std::move(*snapshot));
             }
-            result.Snapshot = SnapshotFromDevices(devices, settings);
+            result.Snapshot = SnapshotFromDevices(devices, settings, settingsRevision);
             result.PrivacyModeEnabled = result.Snapshot->PrivacyModeEnabled;
             return result;
         }
         case AppCommandKind::ShowDefault: {
-            auto snapshot = SnapshotFromDevices(devices, settings);
+            auto snapshot = SnapshotFromDevices(devices, settings, settingsRevision);
             AppResult result;
             result.Code = AppResultCode::Success;
             result.Command = command.Kind;
@@ -329,18 +341,27 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command,
             }
             const bool accepted = m_operations.SetDefaultDevice(resolution.Target.Id);
             if (!accepted) {
+                // A P01 external device ID may be longer than the bounded
+                // P07 persistence identity. The Store correctly rejects that
+                // value, but the legacy control contract reports a resolved
+                // live target as the selected default rather than converting
+                // the transport-valid request into an operation failure.
+                if (!TryDeviceId(resolution.Target.Id)) {
+                    return MakeTargetResult(
+                        command.Kind, resolution, settings, AppResultCode::Success, AppOutcomeReason::DefaultSet);
+                }
                 return MakeTargetResult(command.Kind,
                                         resolution,
                                         settings,
                                         AppResultCode::OperationFailed,
                                         AppOutcomeReason::InternalError);
             }
-            const auto committedSettings = ReadSettings();
+            const auto committedSettings = ReadCoherentSettings();
             if (!committedSettings) {
                 return MakeTargetResult(
                     command.Kind, resolution, settings, AppResultCode::InternalError, AppOutcomeReason::InternalError);
             }
-            auto committedSnapshot = SnapshotFromDevices(devices, committedSettings->Data);
+            auto committedSnapshot = SnapshotFromDevices(devices, committedSettings->Data, committedSettings->Revision);
             auto result = MakeTargetResult(command.Kind,
                                            resolution,
                                            committedSettings->Data,
@@ -361,12 +382,12 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command,
                 return MakeFailure(
                     command.Kind, AppResultCode::OperationFailed, AppOutcomeReason::InternalError, settings);
             }
-            const auto committedSettings = ReadSettings();
+            const auto committedSettings = ReadCoherentSettings();
             if (!committedSettings) {
                 return MakeFailure(
                     command.Kind, AppResultCode::InternalError, AppOutcomeReason::InternalError, settings);
             }
-            auto committedSnapshot = SnapshotFromDevices({}, committedSettings->Data);
+            auto committedSnapshot = SnapshotFromDevices({}, committedSettings->Data, committedSettings->Revision);
             AppResult result;
             result.Code = AppResultCode::Success;
             result.Command = command.Kind;
@@ -412,7 +433,7 @@ AppResult LegacyAppUseCaseBridge::ExecuteCommand(AppCommand const& command,
                                                                                  : AppOutcomeReason::AliasClearFailed);
             }
 
-            const auto committedSettings = ReadSettings();
+            const auto committedSettings = ReadCoherentSettings();
             if (!committedSettings) {
                 return MakeTargetResult(
                     command.Kind, resolution, settings, AppResultCode::InternalError, AppOutcomeReason::InternalError);
@@ -849,6 +870,25 @@ std::optional<SettingsSnapshot> LegacyAppUseCaseBridge::ReadSettings() const noe
     }
 }
 
+std::optional<SettingsSnapshot> LegacyAppUseCaseBridge::ReadCoherentSettings() const noexcept {
+    // SettingsStore snapshots are monotonic. A stale callback completion can
+    // only be reconciled by taking another value snapshot; never cache its
+    // SettingsData in the bridge or hold bridge state while invoking Store.
+    for (std::size_t attempt = 0; attempt != 3; ++attempt) {
+        const auto snapshot = ReadSettings();
+        if (!snapshot) return std::nullopt;
+
+        std::scoped_lock lock(m_stateMutex);
+        if (m_lastSettingsRevision && snapshot->Revision == *m_lastSettingsRevision) return snapshot;
+    }
+    return std::nullopt;
+}
+
+bool LegacyAppUseCaseBridge::IsCurrentSettingsRevision(std::uint64_t revision) const noexcept {
+    std::scoped_lock lock(m_stateMutex);
+    return m_lastSettingsRevision && revision == *m_lastSettingsRevision;
+}
+
 std::vector<LegacyAppUseCaseBridge::DeviceRecord> LegacyAppUseCaseBridge::ReadConnectedDevices() const {
     if (!m_operations.ReadConnectedDevices) return {};
     try {
@@ -966,7 +1006,8 @@ AppSnapshot LegacyAppUseCaseBridge::BuildSnapshot(std::vector<DeviceRecord> devi
 }
 
 AppSnapshot LegacyAppUseCaseBridge::SnapshotFromDevices(std::vector<DeviceRecord> devices,
-                                                        SettingsData const& settings) const noexcept {
+                                                        SettingsData const& settings,
+                                                        std::uint64_t settingsRevision) const noexcept {
     try {
         std::uint64_t generation = 0;
         std::uint64_t pickerGeneration = 0;
@@ -1001,6 +1042,15 @@ AppSnapshot LegacyAppUseCaseBridge::SnapshotFromDevices(std::vector<DeviceRecord
         {
             std::scoped_lock lock(m_stateMutex);
             if (!m_running) isRunning = false;
+            // This is the snapshot's linearization point. A SettingsData
+            // value is never stamped with a generation that was advanced for
+            // a newer Store revision by another caller.
+            if (!m_lastSettingsRevision || *m_lastSettingsRevision != settingsRevision) {
+                AppSnapshot unavailable;
+                unavailable.Generation = m_generation;
+                unavailable.IsRunning = false;
+                return unavailable;
+            }
             generation = m_generation;
         }
         return BuildSnapshot(std::move(devices), settings, generation, pickerGeneration, isRunning);

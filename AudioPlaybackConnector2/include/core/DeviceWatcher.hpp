@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace apc::device {
 
@@ -30,10 +31,18 @@ public:
 
 class DeviceWatcherPlatform {
 public:
+    using RefreshCompletion = std::function<void(winrt::Windows::Devices::Enumeration::DeviceInformationCollection,
+                                                 std::vector<device_picker::DeviceIdentity>)>;
+
     virtual ~DeviceWatcherPlatform() = default;
 
     [[nodiscard]] virtual std::unique_ptr<DeviceWatcherRegistration>
     CreateDeviceInformationWatcher(DeviceWatcherCallbacks callbacks) = 0;
+
+    virtual winrt::Windows::Foundation::IAsyncAction RefreshAsync(RefreshCompletion completion) {
+        if (completion) completion(nullptr, {});
+        co_return;
+    }
 };
 
 enum class DeviceWatcherFactKind { DeviceAdded, DeviceRemoved, EnumerationCompleted, InventoryChanged };

@@ -489,14 +489,14 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept tr
     InitializeNotifications();
     SetupDeviceEvents();
     const auto incomingSettingsSnapshot = m_settingsStore->Snapshot();
-    m_deviceService->SetIncomingConnectionsEnabled(incomingSettingsSnapshot.Data.AllowIncomingConnections);
+    m_deviceService->ConfigureIncomingConnections(incomingSettingsSnapshot.Data.AllowIncomingConnections);
     std::vector<std::wstring> individuallyEnabledReconnectIds;
     for (auto const& device : incomingSettingsSnapshot.Data.Devices) {
         if (device.ReconnectOnConnectionLoss) individuallyEnabledReconnectIds.push_back(device.Id);
     }
-    m_deviceService->ApplyReconnectOnConnectionLossPolicy(incomingSettingsSnapshot.Data.GlobalReconnectOnConnectionLoss,
-                                                          individuallyEnabledReconnectIds);
-    m_deviceService->StartDeviceWatcher();
+    m_deviceService->ConfigureReconnectPolicy(incomingSettingsSnapshot.Data.GlobalReconnectOnConnectionLoss,
+                                              individuallyEnabledReconnectIds);
+    static_cast<void>(m_deviceService->Start());
     DebugTrace(L"[App] Device watcher started");
     InitializeCommandLineControl();
     const auto reconnectSettingsSnapshot = m_settingsStore->Snapshot();
@@ -1205,8 +1205,8 @@ void ApplicationHost::TryAutoReconnect() {
 
     for (const auto& id : reconnectIds) {
         DebugTrace(L"[App] Auto-reconnecting to: {0}", id);
-        m_deviceService->ConnectDetached(winrt::hstring(id));
     }
+    m_deviceService->ConnectStartupTargets(reconnectIds);
 }
 
 void ApplicationHost::HandlePowerSuspend() {

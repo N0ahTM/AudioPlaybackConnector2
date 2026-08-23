@@ -9,6 +9,8 @@
 #include <utility>
 #include <vector>
 
+#include <windows.h>
+
 namespace {
 
 using apc::device::DeviceWatcher;
@@ -93,9 +95,49 @@ public:
         return std::make_unique<FakeDeviceInformationWatcher>(LastWatcher);
     }
 
+    winrt::Windows::Foundation::IAsyncAction RefreshAsync(RefreshCompletion completion) override {
+        auto gate = RefreshGate;
+        if (!gate) {
+            if (completion) completion(nullptr, {});
+            co_return;
+        }
+
+        co_await winrt::resume_background();
+        SetEvent(gate->Started);
+        WaitForSingleObject(gate->Released, INFINITE);
+        if (completion) completion(nullptr, gate->Inventory);
+        co_return;
+    }
+
+    struct PendingRefresh {
+        PendingRefresh() {
+            Started = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+            Released = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        }
+
+        ~PendingRefresh() {
+            if (Started) CloseHandle(Started);
+            if (Released) CloseHandle(Released);
+        }
+
+        HANDLE Started = nullptr;
+        HANDLE Released = nullptr;
+        std::vector<DeviceIdentity> Inventory;
+    };
+
+    [[nodiscard]] std::shared_ptr<PendingRefresh> BeginRefresh(std::vector<DeviceIdentity> inventory) {
+        auto gate = std::make_shared<PendingRefresh>();
+        gate->Inventory = std::move(inventory);
+        RefreshGate = gate;
+        return gate;
+    }
+
     std::shared_ptr<FakeDeviceInformationWatcherState> LastWatcher;
     std::vector<std::shared_ptr<FakeDeviceInformationWatcherState>> Watchers;
     bool FailNextStart = false;
+
+private:
+    std::shared_ptr<PendingRefresh> RefreshGate;
 };
 
 struct Fixture {
@@ -218,6 +260,27 @@ void TestShutdownRevokesCallbacksWithoutRetainingOwner() {
           "queued callbacks after destruction must not retain or access the destroyed watcher owner");
 }
 
+void TestRefreshDoesNotOverwriteNewerCallbackInventory() {
+    Fixture fixture;
+    Check(fixture.Watcher.Start(), "refresh race coverage requires an active watcher");
+    auto const platformWatcher = fixture.PlatformAccess->LastWatcher;
+    auto refreshGate = fixture.PlatformAccess->BeginRefresh({{L"stale", L"Stale"}});
+    auto refresh = fixture.Watcher.RefreshAsync();
+
+    Check(WaitForSingleObject(refreshGate->Started, 2'000) == WAIT_OBJECT_0,
+          "the controlled refresh must reach its deterministic release point");
+    platformWatcher->Add(L"fresh", L"Fresh");
+    fixture.Executor.RunAll();
+
+    SetEvent(refreshGate->Released);
+    refresh.get();
+    fixture.Executor.RunAll();
+
+    auto const snapshot = fixture.Watcher.Snapshot();
+    Check(snapshot.Devices.size() == 1 && snapshot.Devices.front().Id == L"fresh",
+          "a refresh started before a callback must not overwrite the callback's newer inventory");
+}
+
 } // namespace
 
 int RunDeviceWatcherTests() {
@@ -226,6 +289,7 @@ int RunDeviceWatcherTests() {
     TestCallbacksAreOrderedOnTheSerializedExecutor();
     TestEnumerationCompletePublishesOncePerGeneration();
     TestShutdownRevokesCallbacksWithoutRetainingOwner();
+    TestRefreshDoesNotOverwriteNewerCallbackInventory();
     return g_failures;
 }
 

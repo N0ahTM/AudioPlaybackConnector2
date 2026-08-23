@@ -194,9 +194,10 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
 
     void OnSessionFact(DeviceSessionFact const& fact) {
         if (IsShutdown) return;
-        Publish(fact.IsTerminalFailure || fact.Result == DeviceConnectionResult::Failed
-                    ? DeviceFactKind::OperationFailed
-                    : DeviceFactKind::SessionChanged,
+        auto const isFailure = fact.Result == DeviceConnectionResult::TimedOut ||
+                               fact.Result == DeviceConnectionResult::Denied ||
+                               fact.Result == DeviceConnectionResult::Failed;
+        Publish(isFailure ? DeviceFactKind::OperationFailed : DeviceFactKind::SessionChanged,
                 fact.Snapshot.DeviceId,
                 fact.Result,
                 fact.IsTerminalFailure);
@@ -241,29 +242,35 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
         Sessions.clear();
     }
 
-    winrt::Windows::Foundation::IAsyncAction AwaitTerminal(std::wstring deviceId) {
+    void CancelOperation(std::wstring const& deviceId, std::uint64_t operationEpoch) {
+        if (IsShutdown) return;
+        auto const iter = Sessions.find(deviceId);
+        if (iter == Sessions.end() || iter->second->Snapshot().OperationEpoch != operationEpoch) return;
+        iter->second->CancelReconnect();
+        iter->second->Disconnect(false);
+    }
+
+    winrt::Windows::Foundation::IAsyncAction AwaitTerminal(std::wstring deviceId, std::uint64_t operationEpoch) {
         auto const cancellation = co_await winrt::get_cancellation_token();
         auto const weak = weak_from_this();
-        cancellation.callback([weak, deviceId] {
+        cancellation.callback([weak, deviceId, operationEpoch] {
             if (auto state = weak.lock()) {
-                static_cast<void>(state->Post([state, deviceId] {
-                    if (auto iter = state->Sessions.find(deviceId); iter != state->Sessions.end()) {
-                        iter->second->CancelReconnect();
-                        iter->second->Disconnect(false);
-                    }
-                }));
+                static_cast<void>(state->Post(
+                    [state, deviceId, operationEpoch] { state->CancelOperation(deviceId, operationEpoch); }));
             }
         });
 
         for (;;) {
             if (cancellation()) co_return;
-            if (IsShutdown) throw winrt::hresult_error(E_ABORT);
+            auto const snapshot = Snapshot();
+            if (snapshot.IsShutdown) throw winrt::hresult_error(E_ABORT);
 
-            auto const iter = Sessions.find(deviceId);
-            if (iter == Sessions.end()) throw winrt::hresult_error(E_ABORT);
-            auto const snapshot = iter->second->Snapshot();
-            if (snapshot.State == DeviceLifecycleState::Connected) co_return;
-            if (snapshot.State == DeviceLifecycleState::Failed) throw winrt::hresult_error(E_FAIL);
+            auto const iter = std::ranges::find(snapshot.Sessions, deviceId, &DeviceSessionSnapshot::DeviceId);
+            if (iter == snapshot.Sessions.end() || iter->OperationEpoch != operationEpoch) {
+                throw winrt::hresult_error(E_ABORT);
+            }
+            if (iter->State == DeviceLifecycleState::Connected) co_return;
+            if (iter->State == DeviceLifecycleState::Failed) throw winrt::hresult_error(E_FAIL);
 
             co_await winrt::resume_after(std::chrono::milliseconds(25));
         }
@@ -643,7 +650,7 @@ winrt::Windows::Foundation::IAsyncAction DeviceService::ConnectAsync(winrt::hstr
     if (!state || deviceId.empty()) co_return;
     auto const result = Connect(std::wstring(deviceId));
     if (result.Kind == DeviceCommandResultKind::Rejected) throw winrt::hresult_error(E_ABORT);
-    co_await state->AwaitTerminal(std::wstring(deviceId));
+    co_await state->AwaitTerminal(std::wstring(deviceId), result.OperationEpoch);
 }
 
 void DeviceService::ConnectDetached(winrt::hstring deviceId) {
@@ -655,7 +662,7 @@ winrt::Windows::Foundation::IAsyncAction DeviceService::ReconnectAsync(winrt::hs
     if (!state || deviceId.empty()) co_return;
     auto const result = Reconnect(std::wstring(deviceId));
     if (result.Kind == DeviceCommandResultKind::Rejected) throw winrt::hresult_error(E_ABORT);
-    co_await state->AwaitTerminal(std::wstring(deviceId));
+    co_await state->AwaitTerminal(std::wstring(deviceId), result.OperationEpoch);
 }
 
 void DeviceService::ReconnectDetached(winrt::hstring deviceId) {
@@ -665,7 +672,7 @@ void DeviceService::ReconnectDetached(winrt::hstring deviceId) {
 winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
 DeviceService::RefreshDevicesAsync() {
     auto const state = m_state;
-    if (!state || state->IsShutdown || !state->Watcher) co_return nullptr;
+    if (!state || state->Snapshot().IsShutdown || !state->Watcher) co_return nullptr;
     co_return co_await state->Watcher->RefreshAsync();
 }
 
@@ -740,8 +747,10 @@ DeviceService::GetDevicePickerInventorySnapshotIfChanged(std::uint64_t knownGene
 DeviceTrayPresentationSnapshot DeviceService::GetTrayPresentationSnapshot() const {
     DeviceTrayPresentationSnapshot result;
     auto const snapshot = Snapshot();
-    result.HasBusyOperations = HasBusyOperations();
     for (auto const& session : snapshot.Sessions) {
+        result.HasBusyOperations = result.HasBusyOperations || session.State == DeviceLifecycleState::Connecting ||
+                                   session.State == DeviceLifecycleState::Disconnecting ||
+                                   session.State == DeviceLifecycleState::WaitingForReconnect;
         if (session.State == DeviceLifecycleState::Connected)
             result.ConnectedDevices.push_back({.Id = session.DeviceId, .Name = session.DeviceName});
     }

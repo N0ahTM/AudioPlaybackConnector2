@@ -50,13 +50,12 @@ struct DeviceStateHistory {
 }
 
 [[nodiscard]] std::wstring FailureText(DeviceConnectionResult result, bool terminal) {
-    if (terminal) return _("AutoReconnectFailed");
     switch (result) {
         case DeviceConnectionResult::TimedOut: return _("RequestTimedOut");
         case DeviceConnectionResult::Denied: return _("DeniedBySystem");
         case DeviceConnectionResult::Success:
-        case DeviceConnectionResult::Failed:
         case DeviceConnectionResult::Cancelled: return _("UnknownError");
+        case DeviceConnectionResult::Failed: return terminal ? _("AutoReconnectFailed") : _("UnknownError");
     }
     return _("UnknownError");
 }
@@ -215,7 +214,7 @@ void DeviceEventRouter::Attach(std::shared_ptr<apc::device::DeviceService> devic
         }
 
         if (fact.Kind == apc::device::DeviceFactKind::OperationFailed) {
-            if (state->callbacks.ConnectionError) {
+            if (session->State == DeviceLifecycleState::Failed && state->callbacks.ConnectionError) {
                 const auto message = winrt::hstring(FailureText(fact.ConnectionResult, fact.IsTerminalFailure));
                 const auto token = state->deviceFactPublicationFence.RecordStatus(
                     fact.DeviceId, apc::app::DeviceFactPublicationFence::Status::Error);

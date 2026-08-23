@@ -101,6 +101,19 @@ public:
     CreateDeviceInformationWatcher(DeviceWatcherCallbacks callbacks) override {
         return std::make_unique<WindowsDeviceInformationWatcher>(std::move(callbacks));
     }
+
+    winrt::Windows::Foundation::IAsyncAction RefreshAsync(RefreshCompletion completion) override {
+        auto const selector = winrt::Windows::Media::Audio::AudioPlaybackConnection::GetDeviceSelector();
+        auto devices = co_await winrt::Windows::Devices::Enumeration::DeviceInformation::FindAllAsync(selector);
+
+        std::vector<device_picker::DeviceIdentity> inventory;
+        inventory.reserve(static_cast<std::size_t>(devices.Size()));
+        for (auto const& device : devices) {
+            inventory.push_back({std::wstring(device.Id()), std::wstring(device.Name())});
+        }
+        if (completion) completion(devices, std::move(inventory));
+        co_return;
+    }
 };
 
 } // namespace
@@ -112,6 +125,7 @@ struct DeviceWatcher::State : std::enable_shared_from_this<DeviceWatcher::State>
     std::unique_ptr<DeviceWatcherRegistration> Registration;
     std::unordered_map<std::wstring, std::wstring> Devices;
     std::atomic_uint64_t WatcherGeneration = 0;
+    std::atomic_uint64_t InventoryVersion = 0;
     std::uint64_t InventoryGeneration = 0;
     std::atomic_bool IsWatcherRunning = false;
     bool IsEnumerationComplete = false;
@@ -155,6 +169,7 @@ struct DeviceWatcher::State : std::enable_shared_from_this<DeviceWatcher::State>
 
     void OnDeviceAdded(std::uint64_t callbackGeneration, device_picker::DeviceIdentity device) {
         if (!Accepts(callbackGeneration)) return;
+        ++InventoryVersion;
         auto [entry, inserted] = Devices.try_emplace(device.Id, device.Name);
         bool const inventoryChanged = inserted || entry->second != device.Name;
         if (inventoryChanged) {
@@ -167,6 +182,7 @@ struct DeviceWatcher::State : std::enable_shared_from_this<DeviceWatcher::State>
 
     void OnDeviceRemoved(std::uint64_t callbackGeneration, std::wstring deviceId) {
         if (!Accepts(callbackGeneration)) return;
+        ++InventoryVersion;
         bool const inventoryChanged = Devices.erase(deviceId) != 0;
         if (inventoryChanged) ++InventoryGeneration;
         Publish(DeviceWatcherFactKind::DeviceRemoved, std::move(deviceId));
@@ -176,6 +192,7 @@ struct DeviceWatcher::State : std::enable_shared_from_this<DeviceWatcher::State>
     void OnEnumerationCompleted(std::uint64_t callbackGeneration) {
         if (!Accepts(callbackGeneration) || IsEnumerationComplete) return;
         IsEnumerationComplete = true;
+        ++InventoryVersion;
         ++InventoryGeneration;
         Publish(DeviceWatcherFactKind::EnumerationCompleted);
         Publish(DeviceWatcherFactKind::InventoryChanged);
@@ -219,6 +236,7 @@ bool DeviceWatcher::Start() {
     state->IsWatcherRunning = true;
     state->IsEnumerationComplete = false;
     state->Devices.clear();
+    ++state->InventoryVersion;
     ++state->InventoryGeneration;
 
     DeviceWatcherCallbacks callbacks;
@@ -295,29 +313,40 @@ DeviceWatcher::RefreshAsync() {
     if (!state || state->IsShutdown.load(std::memory_order_acquire)) co_return nullptr;
 
     const auto watcherGeneration = state->WatcherGeneration.load(std::memory_order_acquire);
-    const auto selector = winrt::Windows::Media::Audio::AudioPlaybackConnection::GetDeviceSelector();
-    auto devices = co_await winrt::Windows::Devices::Enumeration::DeviceInformation::FindAllAsync(selector);
+    const auto inventoryVersion = state->InventoryVersion.load(std::memory_order_acquire);
+    struct RefreshResult {
+        winrt::Windows::Devices::Enumeration::DeviceInformationCollection Devices{nullptr};
+        std::vector<device_picker::DeviceIdentity> Inventory;
+    };
+    auto refreshResult = std::make_shared<RefreshResult>();
+    co_await state->Platform->RefreshAsync(
+        [refreshResult](auto refreshedDevices, std::vector<device_picker::DeviceIdentity> refreshedInventory) {
+            refreshResult->Devices = std::move(refreshedDevices);
+            refreshResult->Inventory = std::move(refreshedInventory);
+        });
 
     std::unordered_map<std::wstring, std::wstring> refreshed;
-    refreshed.reserve(static_cast<std::size_t>(devices.Size()));
-    for (auto const& device : devices) {
-        refreshed.insert_or_assign(std::wstring(device.Id()), std::wstring(device.Name()));
+    refreshed.reserve(refreshResult->Inventory.size());
+    for (auto const& device : refreshResult->Inventory) {
+        refreshed.insert_or_assign(device.Id, device.Name);
     }
 
-    state->Executor([state, watcherGeneration, refreshed = std::move(refreshed)]() mutable {
+    state->Executor([state, watcherGeneration, inventoryVersion, refreshed = std::move(refreshed)]() mutable {
         if (state->IsShutdown.load(std::memory_order_acquire) ||
-            watcherGeneration != state->WatcherGeneration.load(std::memory_order_acquire)) {
+            watcherGeneration != state->WatcherGeneration.load(std::memory_order_acquire) ||
+            inventoryVersion != state->InventoryVersion.load(std::memory_order_acquire)) {
             return;
         }
         const bool changed = state->Devices != refreshed || !state->IsEnumerationComplete;
         if (!changed) return;
         state->Devices = std::move(refreshed);
         state->IsEnumerationComplete = true;
+        ++state->InventoryVersion;
         ++state->InventoryGeneration;
         state->Publish(DeviceWatcherFactKind::InventoryChanged);
     });
 
-    co_return devices;
+    co_return refreshResult->Devices;
 }
 
 device_picker::DeviceInventorySnapshot DeviceWatcher::Snapshot() const {

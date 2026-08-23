@@ -4,6 +4,11 @@ Goal: preserve required behavior while replacing unnecessary indirection with co
 
 Phase 0 characterization matrix: [phase-0-characterization.md](phase-0-characterization.md).
 
+The migration source of truth is the consolidated sequence: Phases 0 Baseline,
+1 Models and API, 2 Settings, 3 Devices, 4 Application and Control, 5
+Resources and Tray, 6 UI and Supporting Services, and 7 Cleanup and Final
+Verification.
+
 ## Required reading
 
 Load only what the task needs:

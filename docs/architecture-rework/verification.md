@@ -18,6 +18,28 @@ Run the built core tests. Final acceptance also requires every supported archite
 
 P10 gate: all product/test projects use the same mode; MSVC, Windows SDK, C++/WinRT, dependencies, tests, packaging, x64, and ARM64 pass before declaring C++26 baseline.
 
+## Slice and phase gates
+
+For every implementation slice:
+
+- Compile the directly affected project/configuration.
+- Run focused deterministic tests for the changed behavior.
+- Run `git diff --check`.
+- Run formatting checks over every changed source file.
+
+At every consolidated phase gate, run the applicable restore, x64 Debug build,
+x64 Release rebuild, x64 Release CoreTests, clang-format, cppcheck,
+protocol/security/dependency checks, and named manual scenarios. Run the
+ARM64 Release rebuild when the phase changes shared production code, project
+files, platform contracts, or public headers. A source-only review cannot
+replace a required build or test. Record the exact candidate commit and exact
+commands/results for every check.
+
+If a required manual or hardware scenario is unavailable, do not mark it
+passed. Record the exact missing environment or user action, complete all
+remaining safe validation, report the unresolved acceptance blocker, and
+request only the minimum required assistance.
+
 ## Automated matrices
 
 | Area | Required cases |
@@ -79,3 +101,23 @@ Compare Release builds under the same conditions. Use [baseline procedure](perfo
 - [ ] No obsolete owner, duplicate pipeline, or migration adapter remains.
 - [ ] Dependency checks and final documentation match shipping code.
 - [ ] Final performance is recorded and explained.
+
+Final branch acceptance additionally requires:
+
+- Restore, supported Debug and Release builds, x64 and ARM64 Release/package
+  outputs, and every runnable native regression test.
+- Format and static analysis, dependency-boundary checks, and P01 security and
+  compatibility checks.
+- P02 resource parity, P03 animation lifecycle, P04/P05 notification,
+  P06 device race/lifecycle, P07 settings compatibility/atomicity, P08
+  privacy/localization/accessibility, and P09 tray checks.
+- Package and upgrade scenarios, including settings migration and startup/
+  activation behavior.
+- Comparable final Release measurements for startup/control readiness, first
+  and preloaded picker opening, Settings shell and complete-content timing,
+  Cold/Warm/Hot and Settings-open memory, idle CPU/wakeups/handles/threads,
+  repeated picker and CLI use, connect latency, settings write count/duration,
+  and idle/busy shutdown.
+
+Do not weaken P02 to improve performance numbers. Documentation and all
+reported evidence must match the exact final candidate commit.

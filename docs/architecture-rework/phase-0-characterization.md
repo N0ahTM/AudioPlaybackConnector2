@@ -260,23 +260,23 @@ Privacy-aware immutable presentation is exercised by `DevicePickerSnapshot` and
 Main WinUI user-visible strings use `StringResources`, but the control CLI currently
 hard-codes English help, parser, and transport/error text in
 `AudioPlaybackConnector2.Control/src/main.cpp:122-146,264-499,718-741`. This is a
-current P08 localization violation. Phase 7 Control should route CLI help/parser/
-transport errors through the approved localized catalog boundary, with Phase 9
-catalog-parity work completing the shared resource inventory; no behavior change is
-approved by this characterization.
+current P08 localization violation. Consolidated Phase 4B Control should route
+CLI help/parser/transport errors through the approved localized catalog
+boundary, with consolidated Phase 6B catalog-parity work completing the shared
+resource inventory; no behavior change is approved by this characterization.
 
 Local logging also violates the P08 privacy expectation: raw device IDs/names are
 written through `DebugTrace` in `TrayController.cpp:646-660`,
 `DeviceManager.cpp:344-437,567-660,1073,1362-1490,1908-2113`, and
 `ApplicationHost.cpp:940-980,2214-2367`, even though exported log collection redacts
-lines. Phase 10 under G01 owns the later privacy-aware logging remediation and must
+lines. Consolidated Phase 6C under G01 owns the later privacy-aware logging remediation and must
 retain the required bounded diagnostic tail; this assignment does not infer G01
 approval or authorize a Phase 0 logging change.
 
 | ID / required behavior | Existing automated evidence or named scenario | Status and gap |
 |---|---|---|
-| P08-01 privacy/redaction in tooltip, picker, diagnostics, CLI, notifications, and local logs | `AUTOMATED`: `TestPrivacyAndMissingSettings` (`TrayTooltipBuilderTests.cpp:34-44`); `TestPrivacyAndSnapshotGeneration` (`DevicePickerSnapshotTests.cpp:108-143`); `TestSensitiveValuesAreRedactedAndControlsNeutralized`, `TestCustomTemporaryDirectoryIsRedactedInsideLogLines` (`DiagnosticsLogCollectorTests.cpp:164-210`) cover exported diagnostics. Raw local IDs/names remain in `DebugTrace` call sites listed above. | `MANUAL P08-Privacy-All-Presentations`: enable privacy mode and inspect tray, picker, status/list/default/alias CLI, diagnostics export, notifications, local log, and error paths; `GAP`: Phase 10/G01 must provide privacy-aware local-log policy and production CLI/notification redaction tests. No G01 approval is inferred. |
-| P08-02 all eight language catalogs and localized actions/errors | Language IDs are bounded by `SettingsLimits.hpp:48-51`; main WinUI lookup is `StringResources`, but `Control/src/main.cpp:122-146,264-499,718-741` hard-codes English help/parser/transport errors. | `AUTOMATED`: `TestSupportedLanguages` only validates accepted identifiers. `MANUAL P08-Localization-Catalog-Matrix`: switch `system`, en, de, fr, es, ja, ko, zh_hans, zh_hant; exercise every tray, picker, settings, command, notification, and error action. `GAP`: current CLI literals violate P08; Phase 7 Control/Phase 9 catalog owners must route them through the localized catalog and add key-parity/UI coverage. |
+| P08-01 privacy/redaction in tooltip, picker, diagnostics, CLI, notifications, and local logs | `AUTOMATED`: `TestPrivacyAndMissingSettings` (`TrayTooltipBuilderTests.cpp:34-44`); `TestPrivacyAndSnapshotGeneration` (`DevicePickerSnapshotTests.cpp:108-143`); `TestSensitiveValuesAreRedactedAndControlsNeutralized`, `TestCustomTemporaryDirectoryIsRedactedInsideLogLines` (`DiagnosticsLogCollectorTests.cpp:164-210`) cover exported diagnostics. Raw local IDs/names remain in `DebugTrace` call sites listed above. | `MANUAL P08-Privacy-All-Presentations`: enable privacy mode and inspect tray, picker, status/list/default/alias CLI, diagnostics export, notifications, local log, and error paths; `GAP`: consolidated Phase 6C/G01 must provide privacy-aware local-log policy and production CLI/notification redaction tests. No G01 approval is inferred. |
+| P08-02 all eight language catalogs and localized actions/errors | Language IDs are bounded by `SettingsLimits.hpp:48-51`; main WinUI lookup is `StringResources`, but `Control/src/main.cpp:122-146,264-499,718-741` hard-codes English help/parser/transport errors. | `AUTOMATED`: `TestSupportedLanguages` only validates accepted identifiers. `MANUAL P08-Localization-Catalog-Matrix`: switch `system`, en, de, fr, es, ja, ko, zh_hans, zh_hant; exercise every tray, picker, settings, command, notification, and error action. `GAP`: current CLI literals violate P08; consolidated Phase 4B Control and Phase 6B catalog owners must route them through the localized catalog and add key-parity/UI coverage. |
 | P08-03 accessibility, keyboard behavior, XAML UI thread, theme, and DPI | XAML and dispatcher marshaling are in `TrayController.cpp:273-414,537-618,744-827`; theme/reregister is `TrayController.cpp:490-526` and `ApplicationHost.cpp:2463-2466`. | `MANUAL P08-UI-Accessibility-Theme-Dpi`: keyboard navigation, screen reader names, focus, light/dark, 100/125/150/200% DPI, and non-UI-thread callbacks. `GAP`: no automated XAML/UI-thread test in CoreTests. |
 
 ## P09 — tray interactions, actions, theme/DPI, and placement
@@ -313,7 +313,7 @@ and bulk actions (`ui/DevicePickerView/DevicePickerView.xaml.cpp:93-105,775-795`
 | P05 | Every retained notification kind has an image/action mapping | Six-kind source mapping table | No mapping test; AppStarted/Update share image; manual matrix required. |
 | P06 | Bluetooth ordering, serialized mutation, epochs, close barrier, token cleanup, incoming, retry, bulk, startup, suspend/resume, shutdown | Coordinator/reconnect/planner/lifecycle tests | No WinRT DeviceManager integration/race harness. |
 | P07 | JSON compatibility, validation, corrupt preservation, no lost update, temp/flush/atomic replace, retry, final flush | Six retained `SettingsPersistenceTests` cover current/legacy round-trip, malformed/corrupt preservation, validation/retry, replacement failure, and later final-save behavior; the final x64 Debug/Release suites passed; existing limits/deferred-save tests and source trace | Oversized rejection/logging-stall and corrupt-backup saturation are named manual defects/scenarios; no concurrent real-write, flush-order instrumentation, suspend/shutdown, package-upgrade, or full parser-bound matrix. |
-| P08 | Privacy/localization/accessibility/theme/DPI/UI thread | Pure tooltip/picker/export-redaction tests; main WinUI uses StringResources | CLI help/parser/transport errors are hard-coded English and local DebugTrace contains raw device IDs/names; Phase 7/9 catalog and Phase 10/G01 privacy remediation remain required. |
+| P08 | Privacy/localization/accessibility/theme/DPI/UI thread | Pure tooltip/picker/export-redaction tests; main WinUI uses StringResources | CLI help/parser/transport errors are hard-coded English and local DebugTrace contains raw device IDs/names; consolidated Phase 4B/6B catalog and Phase 6C/G01 privacy remediation remain required. |
 | P09 | Tray clicks/actions/theme/DPI/placement and retained notification actions | Pure tooltip/snapshot tests; source trace | No shell/XAML interaction test. |
 | P10 | C++23 remains current until dedicated C++26 gate; x64/ARM64 evidence required | Four vcxproj `stdcpp23` declarations; execution-ref evidence records Debug/Release outputs for x64/ARM64, x64 CoreTests passes, clang-format, and explicit cppcheck passes | ARM64 native CoreTests, manual desktop/security/package-verification checks, and the dedicated C++26 gate remain unrun or unattempted; C++26 not approved. |
 

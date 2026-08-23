@@ -403,8 +403,11 @@ DeviceCommandResult DeviceService::Connect(std::wstring deviceId) {
             return;
         }
         auto session = state->GetOrCreateSession(deviceId);
+        auto const supersedesPowerTransitionRecovery = session->IsSuspended();
+        state->PowerTransitionRecoveryEpochs.erase(deviceId);
         auto const snapshot = session->Snapshot();
-        if (session->IsBusy() && snapshot.State == DeviceLifecycleState::Disconnecting) {
+        if (session->IsBusy() && snapshot.State == DeviceLifecycleState::Disconnecting &&
+            !supersedesPowerTransitionRecovery) {
             *result = state->Result(DeviceCommandKind::Connect, DeviceCommandResultKind::Rejected, deviceId);
             return;
         }
@@ -437,7 +440,10 @@ DeviceCommandResult DeviceService::Disconnect(std::wstring deviceId) {
             return;
         }
         auto session = state->GetOrCreateSession(deviceId);
-        session->Disconnect(state->IsIncomingEnabled);
+        if (!session->Disconnect(state->IsIncomingEnabled)) {
+            *result = state->Result(DeviceCommandKind::Disconnect, DeviceCommandResultKind::Coalesced, deviceId);
+            return;
+        }
         *result = state->Result(DeviceCommandKind::Disconnect, DeviceCommandResultKind::Accepted, deviceId);
     });
     return ran ? *result
@@ -457,8 +463,11 @@ DeviceCommandResult DeviceService::Reconnect(std::wstring deviceId) {
             return;
         }
         auto session = state->GetOrCreateSession(deviceId);
+        auto const supersedesPowerTransitionRecovery = session->IsSuspended();
+        state->PowerTransitionRecoveryEpochs.erase(deviceId);
         auto const snapshot = session->Snapshot();
-        if (session->IsBusy() && snapshot.State == DeviceLifecycleState::Disconnecting) {
+        if (session->IsBusy() && snapshot.State == DeviceLifecycleState::Disconnecting &&
+            !supersedesPowerTransitionRecovery) {
             *result = state->Result(DeviceCommandKind::Reconnect, DeviceCommandResultKind::Rejected, deviceId);
             return;
         }

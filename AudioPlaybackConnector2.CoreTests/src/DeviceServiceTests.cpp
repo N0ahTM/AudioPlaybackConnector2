@@ -350,6 +350,23 @@ void TestCloseBarrierTimeoutRetainsTheOldConnectionUntilLateCompletion() {
     Check(fixture.ConnectionAccess->Connections.size() == createCount &&
               StateFor(fixture.Service, L"close-timeout") == DeviceLifecycleState::Failed,
           "a close timeout must be terminal while retaining the old connection barrier without a replacement");
+    auto const timedOutEpoch = SessionFor(fixture.Service, L"close-timeout").OperationEpoch;
+    auto const disconnect = fixture.Service.Disconnect(L"close-timeout");
+    Check(
+        disconnect.Kind == DeviceCommandResultKind::Coalesced &&
+            StateFor(fixture.Service, L"close-timeout") == DeviceLifecycleState::Failed &&
+            SessionFor(fixture.Service, L"close-timeout").OperationEpoch == timedOutEpoch &&
+            !fixture.Service.HasBusyOperations(),
+        "a disconnect after an abandoned close must retain the terminal state without a stuck Disconnecting operation");
+    (void)fixture.Service.DisconnectAll();
+    Check(StateFor(fixture.Service, L"close-timeout") == DeviceLifecycleState::Failed &&
+              SessionFor(fixture.Service, L"close-timeout").OperationEpoch == timedOutEpoch,
+          "bulk and internal disconnect callers must retain an abandoned close's terminal state");
+    auto reconnectAfterDisconnect = fixture.Service.ReconnectAsync(L"close-timeout");
+    Check(
+        reconnectAfterDisconnect.Status() == winrt::Windows::Foundation::AsyncStatus::Error &&
+            reconnectAfterDisconnect.ErrorCode() == E_FAIL,
+        "an async reconnect after an abandoned close and explicit disconnect must complete with the terminal failure");
     (void)fixture.Service.Reconnect(L"close-timeout");
     Check(fixture.ConnectionAccess->Connections.size() == createCount,
           "a command issued while a timed-out close remains unconfirmed must not create a replacement");
@@ -363,6 +380,10 @@ void TestCloseBarrierTimeoutRetainsTheOldConnectionUntilLateCompletion() {
     Check(StateFor(fixture.Service, L"close-timeout") == DeviceLifecycleState::Idle &&
               fixture.ConnectionAccess->Connections.size() == createCount,
           "the late completion must settle the abandoned operation without silently reconnecting");
+    oldConnection->CompleteClose();
+    Check(StateFor(fixture.Service, L"close-timeout") == DeviceLifecycleState::Idle &&
+              fixture.ConnectionAccess->Connections.size() == createCount,
+          "a duplicate late close callback after an abandoned barrier must be ignored");
     (void)fixture.Service.Reconnect(L"close-timeout");
     Check(fixture.ConnectionAccess->Connections.size() == createCount + 1,
           "a later explicit reconnect may start only after the close barrier has completed");
@@ -806,8 +827,8 @@ void TestManualTransientOpenRetriesPreserveFailureClassificationAndCancellation(
         Check(first->CloseCalls == 1, "a transient Open failure must close before scheduling its retry");
         CompleteCloseAndCooldown(fixture, first);
         auto* const retryTimer = fixture.TimerAccess->LastTimer;
-        Check(retryTimer->Delay == std::chrono::milliseconds(500),
-              "the first transient Open retry must use the characterized 500 ms delay");
+        Check(retryTimer->Delay == std::chrono::milliseconds::zero(),
+              "the first transient Open retry must use the legacy maximum with the completed close cooldown");
         retryTimer->FireEvenIfCancelled();
         auto* const second = fixture.ConnectionAccess->LastConnection;
         second->CompleteStart(DeviceConnectionResult::Success);
@@ -823,8 +844,8 @@ void TestManualTransientOpenRetriesPreserveFailureClassificationAndCancellation(
         first->CompleteStart(DeviceConnectionResult::Success);
         first->CompleteOpen({.Result = DeviceConnectionResult::Failed, .IsTransientFailure = true});
         CompleteCloseAndCooldown(fixture, first);
-        Check(fixture.TimerAccess->LastTimer->Delay == std::chrono::milliseconds(500),
-              "a qualified UnknownFailure must retain the transient Open retry classification");
+        Check(fixture.TimerAccess->LastTimer->Delay == std::chrono::milliseconds::zero(),
+              "a qualified UnknownFailure must retain transient classification and legacy maximum timing");
     }
 
     {
@@ -874,8 +895,8 @@ void TestManualTransientOpenRetryExhaustsAtTheCharacterizedLimit() {
         if (failedAttempt == 10) break;
         auto* const retryTimer = fixture.TimerAccess->LastTimer;
         Check(retryTimer->Delay == std::chrono::milliseconds(std::array<int, 9>{
-                                       500, 1000, 1500, 2500, 4000, 6000, 8000, 8000, 8000}[failedAttempt - 1]),
-              "each transient Open retry must retain the characterized bounded delay sequence");
+                                       0, 0, 0, 1000, 2500, 4500, 6500, 6500, 6500}[failedAttempt - 1]),
+              "each transient Open retry must retain the characterized maximum including the close cooldown");
         retryTimer->FireEvenIfCancelled();
     }
 
@@ -904,9 +925,9 @@ void TestAutomaticTransientOpenRetriesUseTheSameBoundedPolicy() {
             {.Result = DeviceConnectionResult::TimedOut, .IsTransientFailure = true});
         CompleteCloseAndCooldown(fixture, firstAutomaticConnection);
         auto* const transientRetryTimer = fixture.TimerAccess->LastTimer;
-        Check(transientRetryTimer->Delay == std::chrono::milliseconds(500) &&
+        Check(transientRetryTimer->Delay == std::chrono::milliseconds::zero() &&
                   SessionFor(fixture.Service, L"automatic-transient-open-success").CompletedRetryAttempts == 0,
-              "an automatic transient Open failure must use the inner 500 ms retry without consuming another reconnect "
+              "an automatic transient Open failure must use the legacy maximum without consuming another reconnect "
               "attempt");
         transientRetryTimer->FireEvenIfCancelled();
         auto* const recoveredConnection = fixture.ConnectionAccess->LastConnection;
@@ -1385,7 +1406,7 @@ void TestPowerTransitionDoesNotReleaseCloseInFlightBeforeDelayedResume() {
           "the delayed resume delivery must remain the only path that restarts a suspended close-in-flight session");
 }
 
-void TestManualCommandsDuringDelayedPowerRecoveryAreRetainedByTheSession() {
+void TestManualCommandsDuringDelayedPowerRecoverySupersedeRecovery() {
     for (auto const& [deviceId, command] : std::vector<std::pair<std::wstring, DeviceCommandKind>>{
              {L"power-manual-connect", DeviceCommandKind::Connect},
              {L"power-manual-reconnect", DeviceCommandKind::Reconnect},
@@ -1399,31 +1420,104 @@ void TestManualCommandsDuringDelayedPowerRecoveryAreRetainedByTheSession() {
         fixture.Service.ResumeAfterPowerTransition();
         CompleteCloseAndCooldown(fixture, connection);
         Check(StateFor(fixture.Service, deviceId) == DeviceLifecycleState::Idle,
-              "the completed suspend close must leave the session waiting for delayed recovery");
+              "the completed suspend close must leave the session available for manual recovery supersession");
 
         auto const result = command == DeviceCommandKind::Connect ? fixture.Service.Connect(deviceId)
                                                                   : fixture.Service.Reconnect(deviceId);
-        Check(result.Command == command && result.Kind == DeviceCommandResultKind::Coalesced,
-              "a manual command during delayed power recovery must not be accepted as an immediate connection");
-        Check(fixture.ConnectionAccess->Connections.size() == connectionCount,
-              "a manual command must not bypass delayed power recovery after the close barrier settles");
+        Check(result.Command == command && result.Kind == DeviceCommandResultKind::Accepted,
+              "a manual command during delayed power recovery must supersede the stale recovery intent");
+        Check(fixture.ConnectionAccess->Connections.size() == connectionCount + 1,
+              "a manual command must start immediately once the suspend close barrier has settled");
 
         fixture.Facts.clear();
         fixture.Service.ResumeSuspendedSessions({deviceId});
         Check(fixture.ConnectionAccess->Connections.size() == connectionCount + 1 &&
-                  std::ranges::any_of(fixture.Facts,
-                                      [deviceId, command](DeviceFact const& fact) {
-                                          return fact.DeviceId == deviceId &&
-                                                 fact.Operation ==
-                                                     (command == DeviceCommandKind::Connect
-                                                          ? apc::device::DeviceOperationKind::ManualConnect
-                                                          : apc::device::DeviceOperationKind::ManualReconnect);
-                                      }),
-              "the delayed recovery delivery must release the retained manual operation without an overlap");
+                  StateFor(fixture.Service, deviceId) == DeviceLifecycleState::Connecting,
+              "a stale delayed recovery delivery must not replace the superseding manual operation");
         fixture.ConnectionAccess->LastConnection->CompleteStart(DeviceConnectionResult::Success);
         fixture.ConnectionAccess->LastConnection->CompleteOpen(DeviceConnectionResult::Success);
         Check(StateFor(fixture.Service, deviceId) == DeviceLifecycleState::Connected,
-              "the retained manual request must complete through the existing delayed recovery path");
+              "the superseding manual request must complete without delayed recovery resurrection");
+    }
+}
+
+void TestTransientOpenRetryTimingUsesTheLegacyMaximum() {
+    {
+        Fixture fixture;
+        fixture.Service.ConnectStartupTargets({L"startup-transient-timing"});
+        auto* const connection = fixture.ConnectionAccess->LastConnection;
+        connection->CompleteStart(DeviceConnectionResult::Success);
+        connection->CompleteOpen({.Result = DeviceConnectionResult::TimedOut, .IsTransientFailure = true});
+        CompleteCloseAndCooldown(fixture, connection);
+        Check(fixture.TimerAccess->LastTimer->Delay == std::chrono::milliseconds::zero(),
+              "startup transient Open retries must include the completed close cooldown in the legacy maximum");
+    }
+
+    {
+        Fixture fixture;
+        ConnectSuccessfully(fixture, L"resume-transient-timing");
+        auto* const establishedConnection = fixture.ConnectionAccess->LastConnection;
+        fixture.Service.Suspend();
+        fixture.Service.Resume();
+        CompleteCloseAndCooldown(fixture, establishedConnection);
+
+        auto* const resumedConnection = fixture.ConnectionAccess->LastConnection;
+        resumedConnection->CompleteStart(DeviceConnectionResult::Success);
+        resumedConnection->CompleteOpen({.Result = DeviceConnectionResult::TimedOut, .IsTransientFailure = true});
+        CompleteCloseAndCooldown(fixture, resumedConnection);
+        Check(fixture.TimerAccess->LastTimer->Delay == std::chrono::milliseconds::zero(),
+              "resume transient Open retries must include the completed close cooldown in the legacy maximum");
+    }
+
+    {
+        Fixture fixture;
+        (void)fixture.Service.Connect(L"transient-cooldown-fallback");
+        auto* const connection = fixture.ConnectionAccess->LastConnection;
+        connection->CompleteStart(DeviceConnectionResult::Success);
+        connection->CompleteOpen({.Result = DeviceConnectionResult::TimedOut, .IsTransientFailure = true});
+        fixture.TimerAccess->ReturnNullNextSchedule = true;
+        connection->CompleteClose();
+        Check(fixture.TimerAccess->LastTimer->Delay == std::chrono::milliseconds(500),
+              "a close cooldown scheduling fallback must retain the full transient retry delay");
+    }
+}
+
+void TestManualAsyncCommandsSupersedeDelayedPowerRecoveryDuringCloseBarrier() {
+    for (auto const& [deviceId, command] : std::vector<std::pair<std::wstring, DeviceCommandKind>>{
+             {L"power-manual-connect-async", DeviceCommandKind::Connect},
+             {L"power-manual-reconnect-async", DeviceCommandKind::Reconnect},
+         }) {
+        Fixture fixture;
+        ConnectSuccessfully(fixture, deviceId);
+        auto* const connection = fixture.ConnectionAccess->LastConnection;
+        auto const connectionCount = fixture.ConnectionAccess->Connections.size();
+
+        fixture.Service.SuspendForPowerTransition();
+        fixture.Service.ResumeAfterPowerTransition();
+        auto operation = command == DeviceCommandKind::Connect
+                             ? fixture.Service.ConnectAsync(winrt::hstring(deviceId))
+                             : fixture.Service.ReconnectAsync(winrt::hstring(deviceId));
+        Check(operation.Status() == winrt::Windows::Foundation::AsyncStatus::Started &&
+                  fixture.ConnectionAccess->Connections.size() == connectionCount,
+              "a manual async command must wait for, rather than overlap, a suspend close barrier");
+
+        CompleteCloseAndCooldown(fixture, connection);
+        Check(fixture.ConnectionAccess->Connections.size() == connectionCount + 1,
+              "a manual async command must start after superseding the suspend close barrier");
+        fixture.Service.ResumeSuspendedSessions({deviceId});
+        Check(fixture.ConnectionAccess->Connections.size() == connectionCount + 1,
+              "a stale delayed recovery callback must not resurrect an async superseded session");
+
+        fixture.ConnectionAccess->LastConnection->CompleteStart(DeviceConnectionResult::Success);
+        fixture.ConnectionAccess->LastConnection->CompleteOpen(DeviceConnectionResult::Success);
+        auto const completionDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (operation.Status() == winrt::Windows::Foundation::AsyncStatus::Started &&
+               std::chrono::steady_clock::now() < completionDeadline) {
+            std::this_thread::yield();
+        }
+        Check(operation.Status() == winrt::Windows::Foundation::AsyncStatus::Completed &&
+                  StateFor(fixture.Service, deviceId) == DeviceLifecycleState::Connected,
+              "a superseding manual async command must complete at its terminal connected outcome");
     }
 }
 
@@ -1614,6 +1708,7 @@ int RunDeviceServiceTests() {
     TestManualTransientOpenRetriesPreserveFailureClassificationAndCancellation();
     TestManualTransientOpenRetryExhaustsAtTheCharacterizedLimit();
     TestAutomaticTransientOpenRetriesUseTheSameBoundedPolicy();
+    TestTransientOpenRetryTimingUsesTheLegacyMaximum();
     TestAutomaticPreEstablishmentCloseCountsEachAttemptOnce();
     TestPreEstablishmentClosePublishesOperationFailure();
     TestTerminalOutgoingPathsRestoreIncomingListener();
@@ -1627,7 +1722,8 @@ int RunDeviceServiceTests() {
     TestIdleDiscoveryResumesForManualConnectAfterPowerTransition();
     TestPowerTransitionRecoveryTargetsIncludeIncomingAndPendingReconnectWithoutConnectedSessions();
     TestPowerTransitionDoesNotReleaseCloseInFlightBeforeDelayedResume();
-    TestManualCommandsDuringDelayedPowerRecoveryAreRetainedByTheSession();
+    TestManualCommandsDuringDelayedPowerRecoverySupersedeRecovery();
+    TestManualAsyncCommandsSupersedeDelayedPowerRecoveryDuringCloseBarrier();
     TestPowerTransitionRecoveryCaptureRejectsStaleDelayedIntent();
     TestUnmatchedPowerResumeRestartsWatcherWithoutResurrectingSessions();
     TestStopAndShutdownReturnNormalizedTerminalResults();

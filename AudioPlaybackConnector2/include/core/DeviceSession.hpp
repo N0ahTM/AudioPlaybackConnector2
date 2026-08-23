@@ -102,7 +102,7 @@ public:
     void Rename(std::wstring deviceName);
     void HandleDeviceRemoved();
     void Connect(DeviceOperationKind operation, bool openImmediately);
-    void Disconnect(bool restoreIncoming);
+    bool Disconnect(bool restoreIncoming);
     void CancelReconnect();
     void SetReconnectEnabled(bool enabled);
     void SetIncomingEnabled(bool enabled);

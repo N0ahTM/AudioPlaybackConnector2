@@ -348,11 +348,18 @@ void TestIncomingCallbackOrderingAndLossFollowReconnectPolicy() {
     connection->Signal(DeviceConnectionState::Closed);
     auto* const retryTimer = fixture.TimerAccess->LastTimer;
     Check(fixture.ConnectionAccess->Connections.size() == connectionCount &&
-              StateFor(fixture.Service, L"incoming") == DeviceLifecycleState::WaitingForReconnect,
-          "an established incoming loss must enter the configured reconnect policy");
+              StateFor(fixture.Service, L"incoming") == DeviceLifecycleState::WaitingForReconnect &&
+              SessionFor(fixture.Service, L"incoming").HasConnection &&
+              fixture.ConnectionAccess->LastConnection == connection,
+          "an established incoming loss must retain its listener while it waits for the configured reconnect policy");
     retryTimer->FireEvenIfCancelled();
-    Check(fixture.ConnectionAccess->Connections.size() == connectionCount + 1,
-          "the incoming reconnect timer must recreate a listener only after its policy delay");
+    Check(connection->CloseCalls == 1 && fixture.ConnectionAccess->Connections.size() == connectionCount &&
+              StateFor(fixture.Service, L"incoming") == DeviceLifecycleState::Disconnecting,
+          "the incoming reconnect timer must close the retained listener through the close barrier before replacement");
+    CompleteCloseAndCooldown(fixture, connection);
+    Check(
+        fixture.ConnectionAccess->Connections.size() == connectionCount + 1,
+        "the incoming reconnect timer must recreate a listener only after the retained listener close barrier settles");
     fixture.ConnectionAccess->LastConnection->CompleteStart(DeviceConnectionResult::Success);
     Check(StateFor(fixture.Service, L"incoming") == DeviceLifecycleState::Idle,
           "an incoming reconnect must return to listening state without OpenAsync");
@@ -453,6 +460,32 @@ void TestRemovingAnIdleDiscoveredDeviceDoesNotPublishTerminalFailure() {
               fixture.Facts,
               [](DeviceFact const& fact) { return fact.DeviceId == L"idle-removed" && fact.IsTerminalFailure; }),
           "removing an idle discovered device must not publish a terminal failure fact");
+}
+
+void TestRemovingAnIdleIncomingListenerClosesWithoutTerminalFailure() {
+    Fixture fixture;
+    fixture.Service.ConfigureIncomingConnections(true);
+    fixture.WatcherAccess->LastWatcher->Add(L"incoming-removed", L"Incoming removed");
+    auto* const listener = fixture.ConnectionAccess->LastConnection;
+    listener->CompleteStart(DeviceConnectionResult::Success);
+    Check(StateFor(fixture.Service, L"incoming-removed") == DeviceLifecycleState::Idle &&
+              SessionFor(fixture.Service, L"incoming-removed").HasConnection,
+          "an incoming listener must be ready and idle before removal cleanup");
+    fixture.Facts.clear();
+
+    fixture.WatcherAccess->LastWatcher->Remove(L"incoming-removed");
+    Check(listener->CloseCalls == 1 &&
+              StateFor(fixture.Service, L"incoming-removed") == DeviceLifecycleState::Disconnecting,
+          "removing an idle incoming listener must close it through the serialized close barrier");
+    CompleteCloseAndCooldown(fixture, listener);
+
+    Check(StateFor(fixture.Service, L"incoming-removed") == DeviceLifecycleState::Idle &&
+              !SessionFor(fixture.Service, L"incoming-removed").HasConnection,
+          "removing an idle incoming listener must settle to idle instead of failed");
+    Check(!std::ranges::any_of(
+              fixture.Facts,
+              [](DeviceFact const& fact) { return fact.DeviceId == L"incoming-removed" && fact.IsTerminalFailure; }),
+          "removing an idle incoming listener must not publish a terminal failure fact");
 }
 
 void TestPlatformSetupExceptionsCleanUpAndPublishTerminalFacts() {
@@ -824,6 +857,7 @@ int RunDeviceServiceTests() {
     TestDisablingIncomingClosesEstablishedAndPendingIncomingSessions();
     TestDeviceRemovalClosesCurrentSessionAndRejectsLateCallbacks();
     TestRemovingAnIdleDiscoveredDeviceDoesNotPublishTerminalFailure();
+    TestRemovingAnIdleIncomingListenerClosesWithoutTerminalFailure();
     TestPlatformSetupExceptionsCleanUpAndPublishTerminalFacts();
     TestRetryTimerAndManualCancellationRejectStaleTimerCallbacks();
     TestReconnectPolicyAndUserCancellationRemainDistinct();

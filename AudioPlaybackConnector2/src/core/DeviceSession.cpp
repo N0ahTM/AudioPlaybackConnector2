@@ -370,6 +370,7 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
     void OnStateChanged(std::uint64_t epoch, DeviceConnection const* expectedConnection, DeviceConnectionState state) {
         if (!IsCurrentConnection(epoch, expectedConnection) || IsShutdown) return;
         if (state == DeviceConnectionState::Opened) {
+            CancelTimer();
             Lifecycle = DeviceLifecycleState::Connected;
             CompletedRetryAttempts = 0;
             RetryEligible = IsReconnectEnabled;
@@ -379,10 +380,14 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
         if (Lifecycle == DeviceLifecycleState::Disconnecting) return;
         bool const wasEstablished = Lifecycle == DeviceLifecycleState::Connected;
         bool const isIncomingListener = !OpenImmediately && IsIncomingEnabled;
-        if (wasEstablished && isIncomingListener && !IsReconnectEnabled) {
-            Lifecycle = DeviceLifecycleState::Idle;
-            RetryEligible = false;
-            Publish();
+        if (wasEstablished && isIncomingListener) {
+            if (!IsReconnectEnabled) {
+                Lifecycle = DeviceLifecycleState::Idle;
+                RetryEligible = false;
+                Publish();
+                return;
+            }
+            ScheduleReconnect(DeviceConnectionResult::Failed, true, false);
             return;
         }
         RevokeStateChanged();
@@ -747,8 +752,17 @@ void DeviceSession::HandleDeviceRemoved() {
         state->Publish();
         return;
     }
+    bool const isIdleIncomingListener =
+        state->Connection && state->Lifecycle == DeviceLifecycleState::Idle && state->IsIncomingEnabled && !shouldRetry;
     ++state->OperationEpoch;
     auto const epoch = state->OperationEpoch;
+    if (isIdleIncomingListener) {
+        state->Lifecycle = DeviceLifecycleState::Disconnecting;
+        state->RevokeStateChanged();
+        state->Publish();
+        state->BeginClose(epoch, State::CloseContinuation::Idle);
+        return;
+    }
     if (state->IsCloseInFlight) {
         state->Lifecycle = DeviceLifecycleState::Disconnecting;
         state->Publish(DeviceConnectionResult::Failed);

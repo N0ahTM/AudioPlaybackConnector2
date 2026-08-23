@@ -19,6 +19,7 @@ enum class DeviceCommandKind {
     DisconnectAll,
     ReconnectAll,
     Start,
+    Stop,
     Suspend,
     Resume,
     Shutdown

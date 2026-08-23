@@ -9,6 +9,7 @@
 
 namespace {
 
+using apc::device::DeviceCommandKind;
 using apc::device::DeviceCommandResultKind;
 using apc::device::DeviceConnection;
 using apc::device::DeviceConnectionPlatform;
@@ -109,20 +110,22 @@ public:
 
 class FakeTimer final : public DeviceTimer {
 public:
-    explicit FakeTimer(DeviceTimerPlatform::Callback callback) : Callback(std::move(callback)) {}
+    FakeTimer(std::chrono::seconds delay, DeviceTimerPlatform::Callback callback)
+        : Delay(delay), Callback(std::move(callback)) {}
     void Cancel() noexcept override { IsCancelled = true; }
     void FireEvenIfCancelled() {
         if (Callback) Callback();
     }
 
+    std::chrono::seconds Delay;
     DeviceTimerPlatform::Callback Callback;
     bool IsCancelled = false;
 };
 
 class FakeTimerPlatform final : public DeviceTimerPlatform {
 public:
-    [[nodiscard]] std::unique_ptr<DeviceTimer> Schedule(std::chrono::seconds, Callback callback) override {
-        auto timer = std::make_unique<FakeTimer>(std::move(callback));
+    [[nodiscard]] std::unique_ptr<DeviceTimer> Schedule(std::chrono::seconds delay, Callback callback) override {
+        auto timer = std::make_unique<FakeTimer>(delay, std::move(callback));
         LastTimer = timer.get();
         Timers.push_back(LastTimer);
         return timer;
@@ -185,6 +188,12 @@ DeviceLifecycleState StateFor(DeviceService const& service, std::wstring_view de
     return found == snapshot.Sessions.end() ? DeviceLifecycleState::Failed : found->State;
 }
 
+apc::device::DeviceSessionSnapshot SessionFor(DeviceService const& service, std::wstring_view deviceId) {
+    auto const snapshot = service.Snapshot();
+    auto const found = std::ranges::find(snapshot.Sessions, deviceId, &apc::device::DeviceSessionSnapshot::DeviceId);
+    return found == snapshot.Sessions.end() ? apc::device::DeviceSessionSnapshot{} : *found;
+}
+
 void ConnectSuccessfully(Fixture& fixture, std::wstring id) {
     (void)fixture.Service.Connect(std::move(id));
     fixture.ConnectionAccess->LastConnection->CompleteStart(DeviceConnectionResult::Success);
@@ -232,6 +241,20 @@ void TestIncomingConnectionDoesNotOpenUntilThePlatformSignalsOpened() {
     connection->Signal(DeviceConnectionState::Opened);
     Check(StateFor(fixture.Service, L"incoming") == DeviceLifecycleState::Connected,
           "a platform Opened callback must transition the retained listener to connected");
+    auto const connectionCount = fixture.ConnectionAccess->Connections.size();
+    connection->Signal(DeviceConnectionState::Closed);
+    Check(fixture.ConnectionAccess->Connections.size() == connectionCount + 1,
+          "a closed incoming listener must be recreated instead of entering reconnect failure");
+    Check(StateFor(fixture.Service, L"incoming") == DeviceLifecycleState::Connecting,
+          "the recreated incoming listener must wait only for StartAsync");
+    Check(!std::ranges::any_of(fixture.Facts,
+                               [](DeviceFact const& fact) {
+                                   return fact.DeviceId == L"incoming" && fact.Kind == DeviceFactKind::OperationFailed;
+                               }),
+          "incoming listener recreation must not publish a reconnect failure fact");
+    fixture.ConnectionAccess->LastConnection->CompleteStart(DeviceConnectionResult::Success);
+    Check(StateFor(fixture.Service, L"incoming") == DeviceLifecycleState::Idle,
+          "the recreated incoming listener must return to listening idle state after StartAsync");
 }
 
 void TestRetryTimerAndManualCancellationRejectStaleTimerCallbacks() {
@@ -239,13 +262,25 @@ void TestRetryTimerAndManualCancellationRejectStaleTimerCallbacks() {
     ConnectSuccessfully(fixture, L"retry");
     auto* const first = fixture.ConnectionAccess->LastConnection;
     first->Signal(DeviceConnectionState::Closed);
-    auto* const timer = fixture.TimerAccess->LastTimer;
+    auto* timer = fixture.TimerAccess->LastTimer;
     Check(StateFor(fixture.Service, L"retry") == DeviceLifecycleState::WaitingForReconnect,
           "unexpected loss must schedule the bounded reconnect policy");
+    Check(timer->Delay == std::chrono::seconds(5) && SessionFor(fixture.Service, L"retry").CompletedRetryAttempts == 0,
+          "the initial reconnect timer must be attempt one at five seconds without consuming a completed failure");
+    timer->FireEvenIfCancelled();
+    auto* const retry = fixture.ConnectionAccess->LastConnection;
+    retry->CompleteStart(DeviceConnectionResult::Success);
+    retry->CompleteOpen(DeviceConnectionResult::Failed);
+    retry->CompleteClose();
+    Check(fixture.TimerAccess->LastTimer->Delay == std::chrono::seconds(10) &&
+              SessionFor(fixture.Service, L"retry").CompletedRetryAttempts == 1,
+          "only a completed automatic attempt may advance the retry count and backoff");
+    timer = fixture.TimerAccess->LastTimer;
     (void)fixture.Service.CancelReconnect(L"retry");
     timer->FireEvenIfCancelled();
-    Check(fixture.ConnectionAccess->Connections.size() == 1,
-          "a cancelled timer callback must not create a replacement connection");
+    Check(fixture.ConnectionAccess->Connections.size() == 2 &&
+              SessionFor(fixture.Service, L"retry").CompletedRetryAttempts == 1,
+          "a cancelled pending timer must not create or count another automatic attempt");
 }
 
 void TestBulkSuspendResumeAndShutdownCannotResurrectSessions() {
@@ -259,14 +294,19 @@ void TestBulkSuspendResumeAndShutdownCannotResurrectSessions() {
               StateFor(fixture.Service, L"b") == DeviceLifecycleState::Idle,
           "bulk disconnect must settle every serialized session");
 
-    (void)fixture.Service.Connect(L"resume");
+    ConnectSuccessfully(fixture, L"resume");
     auto* const busy = fixture.ConnectionAccess->LastConnection;
+    auto const beforeResume = fixture.ConnectionAccess->Connections.size();
     fixture.Service.Suspend();
-    busy->CompleteStart(DeviceConnectionResult::Success);
-    Check(StateFor(fixture.Service, L"resume") == DeviceLifecycleState::Idle,
-          "suspend must invalidate in-flight completions before they can mutate state");
     fixture.Service.Resume();
-    Check(fixture.ConnectionAccess->Connections.size() >= 4, "resume must restart a previously busy connection target");
+    Check(fixture.ConnectionAccess->Connections.size() == beforeResume,
+          "resume must not create a replacement before the suspend close barrier completes");
+    busy->CompleteClose();
+    Check(fixture.ConnectionAccess->Connections.size() == beforeResume + 1,
+          "the current suspend close completion must release the resume replacement");
+    busy->CompleteClose();
+    Check(fixture.ConnectionAccess->Connections.size() == beforeResume + 1,
+          "a stale suspend close completion must not create another replacement");
 
     auto* const late = fixture.ConnectionAccess->LastConnection;
     fixture.Service.Shutdown();
@@ -274,6 +314,18 @@ void TestBulkSuspendResumeAndShutdownCannotResurrectSessions() {
     late->Signal(DeviceConnectionState::Opened);
     Check(fixture.Service.Snapshot().IsShutdown && fixture.Service.Snapshot().Sessions.empty(),
           "shutdown must release sessions and reject every late platform callback");
+}
+
+void TestStopAndShutdownReturnNormalizedTerminalResults() {
+    Fixture fixture;
+    Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted, "start must establish watcher ownership");
+    auto const stop = fixture.Service.Stop();
+    Check(stop.Command == DeviceCommandKind::Stop && stop.Kind == DeviceCommandResultKind::Accepted,
+          "stop must report the Stop command kind rather than Start");
+    fixture.Service.Shutdown();
+    auto const snapshot = fixture.Service.Snapshot();
+    Check(snapshot.IsShutdown && snapshot.Sessions.empty() && !snapshot.IsRunning,
+          "post-shutdown snapshots must retain the terminal shutdown state");
 }
 
 void TestFactsCarryNormalizedSnapshots() {
@@ -295,6 +347,7 @@ int RunDeviceServiceTests() {
     TestIncomingConnectionDoesNotOpenUntilThePlatformSignalsOpened();
     TestRetryTimerAndManualCancellationRejectStaleTimerCallbacks();
     TestBulkSuspendResumeAndShutdownCannotResurrectSessions();
+    TestStopAndShutdownReturnNormalizedTerminalResults();
     TestFactsCarryNormalizedSnapshots();
     return g_failures;
 }

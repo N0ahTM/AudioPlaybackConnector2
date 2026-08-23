@@ -254,20 +254,20 @@ DeviceCommandResult DeviceService::Stop() {
     auto result = std::make_shared<DeviceCommandResult>();
     auto const ran = state->Post([state, result] {
         if (state->IsShutdown) {
-            *result = state->Result(DeviceCommandKind::Start, DeviceCommandResultKind::Rejected);
+            *result = state->Result(DeviceCommandKind::Stop, DeviceCommandResultKind::Rejected);
             return;
         }
         if (!state->IsRunning) {
-            *result = state->Result(DeviceCommandKind::Start, DeviceCommandResultKind::Coalesced);
+            *result = state->Result(DeviceCommandKind::Stop, DeviceCommandResultKind::Coalesced);
             return;
         }
         state->Watcher->Stop();
         state->IsRunning = false;
-        *result = state->Result(DeviceCommandKind::Start, DeviceCommandResultKind::Accepted);
+        *result = state->Result(DeviceCommandKind::Stop, DeviceCommandResultKind::Accepted);
         state->Publish(DeviceFactKind::InventoryChanged);
     });
     return ran ? *result
-               : DeviceCommandResult{.Command = DeviceCommandKind::Start, .Kind = DeviceCommandResultKind::Coalesced};
+               : DeviceCommandResult{.Command = DeviceCommandKind::Stop, .Kind = DeviceCommandResultKind::Coalesced};
 }
 
 DeviceCommandResult DeviceService::Connect(std::wstring deviceId) {
@@ -495,7 +495,7 @@ void DeviceService::Resume() {
 }
 
 void DeviceService::Shutdown() noexcept {
-    auto state = std::exchange(m_state, {});
+    auto const state = m_state;
     if (!state) return;
     state->Post([state] {
         if (state->IsShutdown) return;

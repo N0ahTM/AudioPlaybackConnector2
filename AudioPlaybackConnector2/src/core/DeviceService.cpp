@@ -578,7 +578,7 @@ void DeviceService::Resume() {
     static_cast<void>(state->Post([state] {
         if (state->IsShutdown || !state->IsSuspended) return;
         state->IsSuspended = false;
-        if (state->IsRunning && state->Watcher) static_cast<void>(state->Watcher->Start());
+        if (state->IsRunning && state->Watcher) state->IsRunning = state->Watcher->Start();
         for (auto const& [id, session] : state->Sessions) {
             (void)id;
             session->Resume();
@@ -627,7 +627,7 @@ void DeviceService::ResumeAfterPowerTransition() {
     static_cast<void>(state->Post([state] {
         if (state->IsShutdown || !state->IsSuspended) return;
         state->IsSuspended = false;
-        if (state->IsRunning && state->Watcher) static_cast<void>(state->Watcher->Start());
+        if (state->IsRunning && state->Watcher) state->IsRunning = state->Watcher->Start();
         for (auto const& [id, session] : state->Sessions) {
             (void)id;
             session->ResumeIdleAfterPowerTransition();

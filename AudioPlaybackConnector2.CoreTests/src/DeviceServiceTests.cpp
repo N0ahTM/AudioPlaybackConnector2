@@ -1,5 +1,7 @@
 #include <core/DeviceService.hpp>
 
+#include <winerror.h>
+
 #include <algorithm>
 #include <condition_variable>
 #include <iostream>
@@ -161,12 +163,16 @@ public:
     bool ThrowNextSchedule = false;
 };
 
-class FakeWatcherRegistration final : public DeviceWatcherRegistration {
+class FakeWatcherState {
 public:
-    explicit FakeWatcherRegistration(DeviceWatcherCallbacks callbacks) : Callbacks(std::move(callbacks)) {}
-    void Start() override { ++StartCalls; }
-    void Stop() noexcept override { ++StopCalls; }
-    void RevokeCallbacks() noexcept override { ++RevokeCalls; }
+    explicit FakeWatcherState(DeviceWatcherCallbacks callbacks) : Callbacks(std::move(callbacks)) {}
+
+    void Start() {
+        ++StartCalls;
+        if (FailStart) throw std::runtime_error("Start watcher");
+    }
+    void Stop() noexcept { ++StopCalls; }
+    void RevokeCallbacks() noexcept { ++RevokeCalls; }
     void Add(std::wstring id, std::wstring name) { Callbacks.DeviceAdded({std::move(id), std::move(name)}); }
     void Remove(std::wstring id) { Callbacks.DeviceRemoved(std::move(id)); }
 
@@ -174,18 +180,36 @@ public:
     int StartCalls = 0;
     int StopCalls = 0;
     int RevokeCalls = 0;
+    bool FailStart = false;
+};
+
+class FakeWatcherRegistration final : public DeviceWatcherRegistration {
+public:
+    explicit FakeWatcherRegistration(std::shared_ptr<FakeWatcherState> state) : m_state(std::move(state)) {}
+
+    void Start() override { m_state->Start(); }
+    void Stop() noexcept override { m_state->Stop(); }
+    void RevokeCallbacks() noexcept override { m_state->RevokeCallbacks(); }
+
+private:
+    std::shared_ptr<FakeWatcherState> m_state;
 };
 
 class FakeWatcherPlatform final : public DeviceWatcherPlatform {
 public:
     [[nodiscard]] std::unique_ptr<DeviceWatcherRegistration>
     CreateDeviceInformationWatcher(DeviceWatcherCallbacks callbacks) override {
-        auto watcher = std::make_unique<FakeWatcherRegistration>(std::move(callbacks));
+        auto watcher = std::make_shared<FakeWatcherState>(std::move(callbacks));
+        watcher->FailStart = FailNextStart;
+        FailNextStart = false;
         LastWatcher = watcher.get();
-        return watcher;
+        Watchers.push_back(std::move(watcher));
+        return std::make_unique<FakeWatcherRegistration>(Watchers.back());
     }
 
-    FakeWatcherRegistration* LastWatcher = nullptr;
+    FakeWatcherState* LastWatcher = nullptr;
+    std::vector<std::shared_ptr<FakeWatcherState>> Watchers;
+    bool FailNextStart = false;
 };
 
 struct Fixture {
@@ -308,8 +332,8 @@ void TestCloseBarrierTimeoutRetainsTheOldConnectionUntilLateCompletion() {
     Check(closeBarrierTimer->Delay == std::chrono::seconds(5), "the close barrier must retain a bounded cooldown");
     closeBarrierTimer->FireEvenIfCancelled();
     Check(fixture.ConnectionAccess->Connections.size() == createCount &&
-              StateFor(fixture.Service, L"close-timeout") == DeviceLifecycleState::Disconnecting,
-          "a close timeout must retain the old connection barrier without creating an overlapping replacement");
+              StateFor(fixture.Service, L"close-timeout") == DeviceLifecycleState::Failed,
+          "a close timeout must be terminal while retaining the old connection barrier without a replacement");
     (void)fixture.Service.Reconnect(L"close-timeout");
     Check(fixture.ConnectionAccess->Connections.size() == createCount,
           "a command issued while a timed-out close remains unconfirmed must not create a replacement");
@@ -332,6 +356,62 @@ void TestCloseBarrierTimeoutRetainsTheOldConnectionUntilLateCompletion() {
                                          fact.ConnectionResult == DeviceConnectionResult::TimedOut;
                               }),
           "the close timeout must publish a deterministic terminal timeout fact");
+}
+
+void TestCloseBarrierTimeoutTerminatesReconnectAsyncWithoutOverlappingConnection() {
+    Fixture fixture;
+    ConnectSuccessfully(fixture, L"async-close-timeout");
+    auto* const oldConnection = fixture.ConnectionAccess->LastConnection;
+    auto const createCount = fixture.ConnectionAccess->Connections.size();
+
+    (void)fixture.Service.Reconnect(L"async-close-timeout");
+    fixture.TimerAccess->LastTimer->FireEvenIfCancelled();
+    Check(StateFor(fixture.Service, L"async-close-timeout") == DeviceLifecycleState::Failed,
+          "a missing close callback must make the timed-out operation terminal while retaining its barrier");
+
+    auto reconnect = fixture.Service.ReconnectAsync(L"async-close-timeout");
+    Check(reconnect.Status() == winrt::Windows::Foundation::AsyncStatus::Error,
+          "a reconnect async operation issued after a close timeout must terminate instead of polling indefinitely");
+    if (reconnect.Status() == winrt::Windows::Foundation::AsyncStatus::Error) {
+        Check(reconnect.ErrorCode() == E_FAIL,
+              "a close-barrier timeout must surface the terminal failed async outcome until close completion is "
+              "confirmed");
+    }
+    Check(fixture.ConnectionAccess->Connections.size() == createCount && oldConnection->CloseCalls == 1,
+          "the terminal async outcome must not weaken the close-before-reconnect barrier");
+}
+
+void TestResumeWatcherFailureClearsRunningStateAndAllowsRetry() {
+    Fixture fixture;
+    Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted,
+          "watcher start must establish the resume failure fixture");
+    auto* const stoppedWatcher = fixture.WatcherAccess->LastWatcher;
+
+    fixture.Service.Suspend();
+    fixture.WatcherAccess->FailNextStart = true;
+    fixture.Service.Resume();
+    auto* const failedResumeWatcher = fixture.WatcherAccess->LastWatcher;
+    auto const failedSnapshot = fixture.Service.Snapshot();
+    Check(failedResumeWatcher && failedResumeWatcher != stoppedWatcher && failedResumeWatcher->StartCalls == 1,
+          "resume must attempt a fresh watcher generation");
+    Check(!failedSnapshot.IsRunning && !failedSnapshot.IsSuspended,
+          "a failed watcher restart must leave the service resumed but not running");
+
+    failedResumeWatcher->Add(L"stale-resume", L"Stale resume");
+    Check(fixture.Service.Snapshot().Inventory.Devices.empty(),
+          "callbacks from the failed resume generation must remain rejected");
+
+    Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted,
+          "a failed watcher restart must permit a later Start retry");
+    auto* const retriedWatcher = fixture.WatcherAccess->LastWatcher;
+    Check(retriedWatcher && retriedWatcher != failedResumeWatcher,
+          "the Start retry must use a newer watcher generation");
+    failedResumeWatcher->Add(L"late-resume", L"Late resume");
+    retriedWatcher->Add(L"fresh-resume", L"Fresh resume");
+    auto const retriedSnapshot = fixture.Service.Snapshot();
+    Check(retriedSnapshot.IsRunning && retriedSnapshot.Inventory.Devices.size() == 1 &&
+              retriedSnapshot.Inventory.Devices.front().Id == L"fresh-resume",
+          "the successful retry must accept only the current watcher generation");
 }
 
 void TestIncomingCallbackOrderingAndLossFollowReconnectPolicy() {
@@ -881,6 +961,8 @@ int RunDeviceServiceTests() {
     TestReconnectWaitsForCloseAndRevokesTheOldToken();
     TestDuplicateConnectCoalescesWithoutReplacingConnectedSession();
     TestCloseBarrierTimeoutRetainsTheOldConnectionUntilLateCompletion();
+    TestCloseBarrierTimeoutTerminatesReconnectAsyncWithoutOverlappingConnection();
+    TestResumeWatcherFailureClearsRunningStateAndAllowsRetry();
     TestIncomingCallbackOrderingAndLossFollowReconnectPolicy();
     TestDisablingIncomingClosesEstablishedAndPendingIncomingSessions();
     TestDeviceRemovalClosesCurrentSessionAndRejectsLateCallbacks();

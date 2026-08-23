@@ -216,7 +216,8 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
     }
 
     [[nodiscard]] bool IsBusy() const noexcept {
-        return Lifecycle == DeviceLifecycleState::Connecting || Lifecycle == DeviceLifecycleState::Disconnecting ||
+        return IsCloseInFlight || Lifecycle == DeviceLifecycleState::Connecting ||
+               Lifecycle == DeviceLifecycleState::Disconnecting ||
                Lifecycle == DeviceLifecycleState::WaitingForReconnect;
     }
 
@@ -252,7 +253,10 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
 
     void StartConnection(DeviceOperationKind operation, bool openImmediately) {
         if (IsShutdown || IsSuspended || DeviceId.empty()) return;
-        if (Lifecycle == DeviceLifecycleState::Connecting || Lifecycle == DeviceLifecycleState::Disconnecting) return;
+        if (IsCloseInFlight || Lifecycle == DeviceLifecycleState::Connecting ||
+            Lifecycle == DeviceLifecycleState::Disconnecting) {
+            return;
+        }
 
         if (operation != DeviceOperationKind::AutomaticReconnect) {
             IsReconnectCancelled = false;
@@ -478,6 +482,9 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
         if (IsShutdown || !IsCloseInFlight || IsCloseCooldown || closeBarrierEpoch != CloseBarrierEpoch) return;
         CancelCloseBarrierTimer();
         if (timedOut) {
+            // The old connection remains owned until its close callback arrives, but this operation is terminal.
+            // Keeping the barrier busy prevents a replacement from overlapping the indeterminate close.
+            Lifecycle = DeviceLifecycleState::Failed;
             Publish(DeviceConnectionResult::TimedOut, true);
             AbandonCloseContinuation();
             return;

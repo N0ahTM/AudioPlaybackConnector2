@@ -149,6 +149,10 @@ std::unique_ptr<DeviceTimerPlatform> CreateWindowsDeviceTimerPlatform() {
 }
 
 struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State> {
+    enum class CloseContinuation { Idle, Replace, Retry, Suspend };
+
+    static constexpr auto CloseBarrierTimeout = ReconnectPolicy::BlockedRetryDelay;
+
     State(std::wstring deviceId,
           std::wstring deviceName,
           SerializedExecutor executor,
@@ -165,10 +169,13 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
     DeviceTimerPlatform& TimerPlatform;
     FactSink PublishFact;
     std::unique_ptr<DeviceConnection> Connection;
+    std::unique_ptr<DeviceConnection> ClosingConnection;
     std::unique_ptr<DeviceTimer> ReconnectTimer;
+    std::unique_ptr<DeviceTimer> CloseBarrierTimer;
     std::uint64_t StateChangedToken = 0;
     std::uint64_t OperationEpoch = 0;
     std::uint64_t TimerEpoch = 0;
+    std::uint64_t CloseBarrierEpoch = 0;
     std::size_t CompletedRetryAttempts = 0;
     DeviceLifecycleState Lifecycle = DeviceLifecycleState::Idle;
     DeviceOperationKind CurrentOperation = DeviceOperationKind::ManualConnect;
@@ -185,6 +192,11 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
     bool ResumeRequested = false;
     bool IsSuspendClosePending = false;
     std::uint64_t SuspendCloseEpoch = 0;
+    bool IsCloseInFlight = false;
+    CloseContinuation PendingCloseContinuation = CloseContinuation::Idle;
+    DeviceConnectionResult PendingCloseFailure = DeviceConnectionResult::Success;
+    bool PendingCloseRetryEligible = false;
+    bool PendingCloseCompletedAttempt = false;
 
     [[nodiscard]] DeviceSessionSnapshot Snapshot() const {
         return {
@@ -226,6 +238,11 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
         if (timer) timer->Cancel();
     }
 
+    void CancelCloseBarrierTimer() noexcept {
+        auto timer = std::move(CloseBarrierTimer);
+        if (timer) timer->Cancel();
+    }
+
     void RevokeStateChanged() noexcept {
         if (Connection && StateChangedToken != 0) Connection->RevokeStateChanged(std::exchange(StateChangedToken, 0));
     }
@@ -251,7 +268,7 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
             RestoreIncomingAfterClose = false;
             RevokeStateChanged();
             Publish();
-            CloseCurrent(epoch, true);
+            BeginClose(epoch, CloseContinuation::Replace);
             return;
         }
         BeginCreate(epoch);
@@ -273,25 +290,40 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
 
         auto* const expectedConnection = Connection.get();
         auto weak = weak_from_this();
-        StateChangedToken =
-            Connection->RegisterStateChanged([weak, epoch, expectedConnection](DeviceConnectionState state) {
+        try {
+            StateChangedToken =
+                Connection->RegisterStateChanged([weak, epoch, expectedConnection](DeviceConnectionState state) {
+                    if (auto session = weak.lock()) {
+                        try {
+                            session->Post([weak, epoch, expectedConnection, state] {
+                                if (auto current = weak.lock())
+                                    current->OnStateChanged(epoch, expectedConnection, state);
+                            });
+                        } catch (...) {
+                            session->PostFailure(epoch, expectedConnection);
+                        }
+                    }
+                });
+            if (StateChangedToken == 0) throw std::runtime_error("DeviceSession state handler registration failed");
+            Connection->Start([weak, epoch, expectedConnection](DeviceConnectionResult result) {
                 if (auto session = weak.lock()) {
-                    session->Post([weak, epoch, expectedConnection, state] {
-                        if (auto current = weak.lock()) current->OnStateChanged(epoch, expectedConnection, state);
-                    });
+                    try {
+                        session->Post([weak, epoch, expectedConnection, result] {
+                            if (auto current = weak.lock()) current->OnStarted(epoch, expectedConnection, result);
+                        });
+                    } catch (...) {
+                        session->PostFailure(epoch, expectedConnection);
+                    }
                 }
             });
-        Connection->Start([weak, epoch, expectedConnection](DeviceConnectionResult result) {
-            if (auto session = weak.lock()) {
-                session->Post([weak, epoch, expectedConnection, result] {
-                    if (auto current = weak.lock()) current->OnStarted(epoch, expectedConnection, result);
-                });
-            }
-        });
+        } catch (...) {
+            CompleteFailure(epoch, DeviceConnectionResult::Failed);
+        }
     }
 
     void OnStarted(std::uint64_t epoch, DeviceConnection const* expectedConnection, DeviceConnectionResult result) {
         if (!IsCurrentConnection(epoch, expectedConnection)) return;
+        if (Lifecycle == DeviceLifecycleState::Connected) return;
         if (result != DeviceConnectionResult::Success) {
             CompleteFailure(epoch, result);
             return;
@@ -302,17 +334,26 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
             return;
         }
         auto weak = weak_from_this();
-        Connection->Open([weak, epoch, expectedConnection](DeviceConnectionResult openResult) {
-            if (auto session = weak.lock()) {
-                session->Post([weak, epoch, expectedConnection, openResult] {
-                    if (auto current = weak.lock()) current->OnOpened(epoch, expectedConnection, openResult);
-                });
-            }
-        });
+        try {
+            Connection->Open([weak, epoch, expectedConnection](DeviceConnectionResult openResult) {
+                if (auto session = weak.lock()) {
+                    try {
+                        session->Post([weak, epoch, expectedConnection, openResult] {
+                            if (auto current = weak.lock()) current->OnOpened(epoch, expectedConnection, openResult);
+                        });
+                    } catch (...) {
+                        session->PostFailure(epoch, expectedConnection);
+                    }
+                }
+            });
+        } catch (...) {
+            CompleteFailure(epoch, DeviceConnectionResult::Failed);
+        }
     }
 
     void OnOpened(std::uint64_t epoch, DeviceConnection const* expectedConnection, DeviceConnectionResult result) {
         if (!IsCurrentConnection(epoch, expectedConnection)) return;
+        if (Lifecycle == DeviceLifecycleState::Connected) return;
         if (result != DeviceConnectionResult::Success) {
             CompleteFailure(epoch, result);
             return;
@@ -328,14 +369,16 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
         if (state == DeviceConnectionState::Opened) {
             Lifecycle = DeviceLifecycleState::Connected;
             CompletedRetryAttempts = 0;
+            RetryEligible = IsReconnectEnabled;
             Publish();
             return;
         }
         if (Lifecycle == DeviceLifecycleState::Disconnecting) return;
+        bool const wasEstablished = Lifecycle == DeviceLifecycleState::Connected;
         RevokeStateChanged();
         Connection.reset();
         ++OperationEpoch;
-        if (!OpenImmediately && IsIncomingEnabled) {
+        if (!OpenImmediately && IsIncomingEnabled && !wasEstablished) {
             Lifecycle = DeviceLifecycleState::Idle;
             Publish();
             StartConnection(DeviceOperationKind::IncomingEnable, false);
@@ -354,40 +397,98 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
         Lifecycle = DeviceLifecycleState::Disconnecting;
         RestoreIncomingAfterClose = false;
         Publish(result);
-        CloseCurrent(epoch, false, result);
+        BeginClose(epoch,
+                   CloseContinuation::Retry,
+                   result,
+                   RetryEligible,
+                   CurrentOperation == DeviceOperationKind::AutomaticReconnect);
     }
 
-    void CloseCurrent(std::uint64_t epoch,
-                      bool beginReplacement,
-                      DeviceConnectionResult failure = DeviceConnectionResult::Success) {
+    void BeginClose(std::uint64_t epoch,
+                    CloseContinuation continuation,
+                    DeviceConnectionResult failure = DeviceConnectionResult::Success,
+                    bool shouldRetry = false,
+                    bool completedAttempt = false) {
+        PendingCloseContinuation = continuation;
+        PendingCloseFailure = failure;
+        PendingCloseRetryEligible = shouldRetry;
+        PendingCloseCompletedAttempt = completedAttempt;
+        if (IsCloseInFlight) return;
         if (!Connection) {
-            OnClosed(epoch, beginReplacement, failure);
+            ContinueAfterClose(epoch, false);
             return;
         }
+
+        RevokeStateChanged();
+        ClosingConnection = std::move(Connection);
+        IsCloseInFlight = true;
+        auto const closeBarrierEpoch = ++CloseBarrierEpoch;
         auto weak = weak_from_this();
-        Connection->Close([weak, epoch, beginReplacement, failure] {
+        ClosingConnection->Close([weak, closeBarrierEpoch] {
             if (auto session = weak.lock()) {
-                session->Post([weak, epoch, beginReplacement, failure] {
-                    if (auto current = weak.lock()) current->OnClosed(epoch, beginReplacement, failure);
-                });
+                try {
+                    session->Post([weak, closeBarrierEpoch] {
+                        if (auto current = weak.lock()) current->CompleteCloseBarrier(closeBarrierEpoch, false);
+                    });
+                } catch (...) {
+                }
             }
         });
+
+        try {
+            CloseBarrierTimer = TimerPlatform.Schedule(CloseBarrierTimeout, [weak, closeBarrierEpoch] {
+                if (auto session = weak.lock()) {
+                    try {
+                        session->Post([weak, closeBarrierEpoch] {
+                            if (auto current = weak.lock()) current->CompleteCloseBarrier(closeBarrierEpoch, true);
+                        });
+                    } catch (...) {
+                    }
+                }
+            });
+        } catch (...) {
+            CloseBarrierTimer.reset();
+        }
+        if (!CloseBarrierTimer) {
+            Publish(DeviceConnectionResult::Failed, true);
+            CompleteCloseBarrier(closeBarrierEpoch, true);
+        }
     }
 
-    void OnClosed(std::uint64_t epoch, bool beginReplacement, DeviceConnectionResult failure) {
-        if (!IsCurrent(epoch) || IsShutdown) return;
-        Connection.reset();
+    void CompleteCloseBarrier(std::uint64_t closeBarrierEpoch, bool timedOut) {
+        if (IsShutdown || !IsCloseInFlight || closeBarrierEpoch != CloseBarrierEpoch) return;
+        CancelCloseBarrierTimer();
+        ClosingConnection.reset();
+        IsCloseInFlight = false;
         StateChangedToken = 0;
-        if (beginReplacement) {
+        if (timedOut) Publish(DeviceConnectionResult::TimedOut, true);
+        ContinueAfterClose(OperationEpoch, timedOut);
+    }
+
+    void ContinueAfterClose(std::uint64_t epoch, bool) {
+        if (!IsCurrent(epoch) || IsShutdown) return;
+        auto const continuation = PendingCloseContinuation;
+        auto const failure = PendingCloseFailure;
+        auto const shouldRetry = PendingCloseRetryEligible;
+        auto const completedAttempt = PendingCloseCompletedAttempt;
+        PendingCloseContinuation = CloseContinuation::Idle;
+        PendingCloseFailure = DeviceConnectionResult::Success;
+        PendingCloseRetryEligible = false;
+        PendingCloseCompletedAttempt = false;
+        if (continuation == CloseContinuation::Replace) {
             BeginCreate(epoch);
             return;
         }
-        if (failure != DeviceConnectionResult::Success) {
-            ScheduleReconnect(failure, RetryEligible, CurrentOperation == DeviceOperationKind::AutomaticReconnect);
+        if (continuation == CloseContinuation::Retry) {
+            ScheduleReconnect(failure, shouldRetry, completedAttempt);
+            return;
+        }
+        if (continuation == CloseContinuation::Suspend) {
+            CompleteSuspendClose(epoch);
             return;
         }
         Lifecycle = DeviceLifecycleState::Idle;
-        Publish();
+        Publish(failure);
         if (RestoreIncomingAfterClose && IsIncomingEnabled && !IsSuspended) {
             RestoreIncomingAfterClose = false;
             StartConnection(DeviceOperationKind::IncomingEnable, false);
@@ -397,7 +498,7 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
     void ScheduleReconnect(DeviceConnectionResult result, bool shouldRetry, bool completedAttempt) {
         if (IsShutdown || IsSuspended || !shouldRetry || !IsReconnectEnabled || IsReconnectCancelled) {
             Lifecycle = DeviceLifecycleState::Failed;
-            Publish(result);
+            Publish(result, true);
             return;
         }
         if (completedAttempt) ++CompletedRetryAttempts;
@@ -428,7 +529,7 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
         }
         if (!ReconnectTimer) {
             Lifecycle = DeviceLifecycleState::Failed;
-            Publish(DeviceConnectionResult::Failed);
+            Publish(DeviceConnectionResult::Failed, true);
             return;
         }
         Publish(result);
@@ -440,7 +541,7 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
             return;
         }
         ReconnectTimer.reset();
-        StartConnection(DeviceOperationKind::AutomaticReconnect, true);
+        StartConnection(DeviceOperationKind::AutomaticReconnect, OpenImmediately);
     }
 
     void CancelAutomaticReconnect() {
@@ -455,11 +556,11 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
         }
         ++OperationEpoch;
         auto const epoch = OperationEpoch;
-        if (Connection) {
+        if (Connection || IsCloseInFlight) {
             Lifecycle = DeviceLifecycleState::Disconnecting;
             RestoreIncomingAfterClose = false;
             RevokeStateChanged();
-            CloseCurrent(epoch, false);
+            BeginClose(epoch, CloseContinuation::Idle, DeviceConnectionResult::Cancelled);
             return;
         }
         Lifecycle = DeviceLifecycleState::Idle;
@@ -474,29 +575,22 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
     }
 
     void CloseForShutdown() noexcept {
+        CancelCloseBarrierTimer();
         RevokeStateChanged();
         if (Connection) Connection->Close({});
         Connection.reset();
+        ClosingConnection.reset();
+        IsCloseInFlight = false;
+        ++CloseBarrierEpoch;
         StateChangedToken = 0;
     }
 
     void BeginSuspendClose(std::uint64_t epoch) {
-        if (!Connection) {
-            CompleteSuspendClose(epoch);
-            return;
-        }
         IsSuspendClosePending = true;
         SuspendCloseEpoch = epoch;
         Lifecycle = DeviceLifecycleState::Disconnecting;
         RevokeStateChanged();
-        auto weak = weak_from_this();
-        Connection->Close([weak, epoch] {
-            if (auto session = weak.lock()) {
-                session->Post([weak, epoch] {
-                    if (auto current = weak.lock()) current->CompleteSuspendClose(epoch);
-                });
-            }
-        });
+        BeginClose(epoch, CloseContinuation::Suspend, DeviceConnectionResult::Cancelled);
     }
 
     void CompleteSuspendClose(std::uint64_t epoch) {
@@ -513,6 +607,18 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
         ResumeRequested = false;
         IsSuspended = false;
         StartAfterResume();
+    }
+
+    void PostFailure(std::uint64_t epoch, DeviceConnection const* expectedConnection) noexcept {
+        try {
+            Post([weak = weak_from_this(), epoch, expectedConnection] {
+                if (auto current = weak.lock()) {
+                    if (current->IsCurrentConnection(epoch, expectedConnection))
+                        current->CompleteFailure(epoch, DeviceConnectionResult::Failed);
+                }
+            });
+        } catch (...) {
+        }
     }
 
     void StartAfterResume() {
@@ -565,19 +671,24 @@ void DeviceSession::HandleDeviceRemoved() {
     auto const state = m_state;
     if (!state || state->IsShutdown) return;
     state->CancelTimer();
-    state->RetryEligible = false;
     state->RestoreIncomingAfterClose = false;
+    bool const shouldRetry = state->RetryEligible;
     ++state->OperationEpoch;
     auto const epoch = state->OperationEpoch;
+    if (state->IsCloseInFlight) {
+        state->Lifecycle = DeviceLifecycleState::Disconnecting;
+        state->Publish(DeviceConnectionResult::Failed);
+        state->BeginClose(epoch, State::CloseContinuation::Retry, DeviceConnectionResult::Failed, shouldRetry);
+        return;
+    }
     if (!state->Connection) {
-        state->Lifecycle = DeviceLifecycleState::Idle;
-        state->Publish(DeviceConnectionResult::Cancelled);
+        state->ScheduleReconnect(DeviceConnectionResult::Failed, shouldRetry, false);
         return;
     }
     state->Lifecycle = DeviceLifecycleState::Disconnecting;
     state->RevokeStateChanged();
-    state->Publish(DeviceConnectionResult::Cancelled);
-    state->CloseCurrent(epoch, false);
+    state->Publish(DeviceConnectionResult::Failed);
+    state->BeginClose(epoch, State::CloseContinuation::Retry, DeviceConnectionResult::Failed, shouldRetry);
 }
 
 void DeviceSession::Connect(DeviceOperationKind operation, bool openImmediately) {
@@ -593,7 +704,7 @@ void DeviceSession::Disconnect(bool restoreIncoming) {
     ++state->OperationEpoch;
     auto const epoch = state->OperationEpoch;
     state->RestoreIncomingAfterClose = restoreIncoming;
-    if (!state->Connection) {
+    if (!state->Connection && !state->IsCloseInFlight) {
         state->Lifecycle = DeviceLifecycleState::Idle;
         state->Publish();
         return;
@@ -601,7 +712,7 @@ void DeviceSession::Disconnect(bool restoreIncoming) {
     state->Lifecycle = DeviceLifecycleState::Disconnecting;
     state->RevokeStateChanged();
     state->Publish();
-    state->CloseCurrent(epoch, false);
+    state->BeginClose(epoch, State::CloseContinuation::Idle);
 }
 
 void DeviceSession::CancelReconnect() {
@@ -642,13 +753,13 @@ void DeviceSession::SetIncomingEnabled(bool enabled) {
 void DeviceSession::Suspend() {
     auto const state = m_state;
     if (!state || state->IsShutdown || state->IsSuspended) return;
-    state->ResumeRequired = state->Connection || state->IsBusy();
-    state->ResumeOpenImmediately = state->Connection ? state->OpenImmediately : true;
+    state->ResumeRequired = state->Connection || state->IsCloseInFlight || state->IsBusy();
+    state->ResumeOpenImmediately = state->OpenImmediately;
     state->IsSuspended = true;
     state->CancelTimer();
     ++state->OperationEpoch;
     auto const epoch = state->OperationEpoch;
-    if (state->Connection) {
+    if (state->Connection || state->IsCloseInFlight) {
         state->BeginSuspendClose(epoch);
         return;
     }

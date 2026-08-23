@@ -5,6 +5,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string_view>
 #include <thread>
 #include <utility>
@@ -37,9 +38,18 @@ void Check(bool condition, std::string_view message) {
     std::cerr << "FAILED: " << message << '\n';
 }
 
+struct FakeConnectionBehavior {
+    bool ThrowOnRegister = false;
+    bool ThrowOnStart = false;
+    bool ThrowOnOpen = false;
+};
+
 class FakeConnectionState {
 public:
+    explicit FakeConnectionState(FakeConnectionBehavior behavior) : Behavior(behavior) {}
+
     [[nodiscard]] std::uint64_t RegisterStateChanged(DeviceConnection::StateChangedHandler handler) {
+        if (Behavior.ThrowOnRegister) throw std::runtime_error("RegisterStateChanged");
         StateChanged = std::move(handler);
         return ++LastToken;
     }
@@ -51,8 +61,14 @@ public:
         }
     }
 
-    void Start(DeviceConnection::Completion completion) { StartCompletion = std::move(completion); }
-    void Open(DeviceConnection::Completion completion) { OpenCompletion = std::move(completion); }
+    void Start(DeviceConnection::Completion completion) {
+        if (Behavior.ThrowOnStart) throw std::runtime_error("Start");
+        StartCompletion = std::move(completion);
+    }
+    void Open(DeviceConnection::Completion completion) {
+        if (Behavior.ThrowOnOpen) throw std::runtime_error("Open");
+        OpenCompletion = std::move(completion);
+    }
     void Close(DeviceConnection::CloseCompletion completion) noexcept {
         ++CloseCalls;
         CloseCompletionCallback = std::move(completion);
@@ -75,6 +91,7 @@ public:
     DeviceConnection::Completion StartCompletion;
     DeviceConnection::Completion OpenCompletion;
     DeviceConnection::CloseCompletion CloseCompletionCallback;
+    FakeConnectionBehavior Behavior;
     std::uint64_t LastToken = 0;
     int RevokeCalls = 0;
     int CloseCalls = 0;
@@ -99,7 +116,7 @@ private:
 class FakeConnectionPlatform final : public DeviceConnectionPlatform {
 public:
     [[nodiscard]] std::unique_ptr<DeviceConnection> Create(std::wstring const&) override {
-        auto state = std::make_shared<FakeConnectionState>();
+        auto state = std::make_shared<FakeConnectionState>(NextBehavior);
         LastConnection = state.get();
         Connections.push_back(LastConnection);
         States.push_back(std::move(state));
@@ -109,6 +126,7 @@ public:
     FakeConnectionState* LastConnection = nullptr;
     std::vector<FakeConnectionState*> Connections;
     std::vector<std::shared_ptr<FakeConnectionState>> States;
+    FakeConnectionBehavior NextBehavior;
 };
 
 class FakeTimer final : public DeviceTimer {
@@ -128,6 +146,10 @@ public:
 class FakeTimerPlatform final : public DeviceTimerPlatform {
 public:
     [[nodiscard]] std::unique_ptr<DeviceTimer> Schedule(std::chrono::seconds delay, Callback callback) override {
+        if (ThrowNextSchedule) {
+            ThrowNextSchedule = false;
+            throw std::runtime_error("Schedule");
+        }
         auto timer = std::make_unique<FakeTimer>(delay, std::move(callback));
         LastTimer = timer.get();
         Timers.push_back(LastTimer);
@@ -136,6 +158,7 @@ public:
 
     FakeTimer* LastTimer = nullptr;
     std::vector<FakeTimer*> Timers;
+    bool ThrowNextSchedule = false;
 };
 
 class FakeWatcherRegistration final : public DeviceWatcherRegistration {
@@ -232,33 +255,59 @@ void TestReconnectWaitsForCloseAndRevokesTheOldToken() {
           "the close completion must be the only transition that starts replacement creation");
 }
 
-void TestIncomingConnectionDoesNotOpenUntilThePlatformSignalsOpened() {
+void TestCloseBarrierIsOneShotAndFallsBackAfterBoundedTimeout() {
+    Fixture fixture;
+    ConnectSuccessfully(fixture, L"close-timeout");
+    auto* const oldConnection = fixture.ConnectionAccess->LastConnection;
+    auto const createCount = fixture.ConnectionAccess->Connections.size();
+
+    (void)fixture.Service.Reconnect(L"close-timeout");
+    (void)fixture.Service.Reconnect(L"close-timeout");
+    auto* const closeBarrierTimer = fixture.TimerAccess->LastTimer;
+    Check(oldConnection->CloseCalls == 1, "a close barrier must issue exactly one close while it is in flight");
+    Check(closeBarrierTimer->Delay == std::chrono::seconds(5), "the close barrier must retain a bounded cooldown");
+    closeBarrierTimer->FireEvenIfCancelled();
+    Check(fixture.ConnectionAccess->Connections.size() == createCount + 1,
+          "the close timeout fallback must release exactly one replacement operation");
+    oldConnection->CompleteClose();
+    Check(oldConnection->CloseCalls == 1 && fixture.ConnectionAccess->Connections.size() == createCount + 1,
+          "late close completion must neither close again nor create another replacement");
+    Check(std::ranges::any_of(fixture.Facts,
+                              [](DeviceFact const& fact) {
+                                  return fact.DeviceId == L"close-timeout" && fact.IsTerminalFailure &&
+                                         fact.ConnectionResult == DeviceConnectionResult::TimedOut;
+                              }),
+          "the close timeout fallback must publish a deterministic terminal timeout fact");
+}
+
+void TestIncomingCallbackOrderingAndLossFollowReconnectPolicy() {
     Fixture fixture;
     Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted, "watcher start must be accepted");
     fixture.Service.ConfigureIncomingConnections(true);
     fixture.WatcherAccess->LastWatcher->Add(L"incoming", L"Incoming");
     auto* const connection = fixture.ConnectionAccess->LastConnection;
-    connection->CompleteStart(DeviceConnectionResult::Success);
-    Check(!connection->OpenCompletion, "incoming enablement must start listening without issuing OpenAsync");
-    Check(StateFor(fixture.Service, L"incoming") == DeviceLifecycleState::Idle,
-          "an incoming listener is idle until an inbound connection opens");
     connection->Signal(DeviceConnectionState::Opened);
+    connection->CompleteStart(DeviceConnectionResult::Success);
     Check(StateFor(fixture.Service, L"incoming") == DeviceLifecycleState::Connected,
-          "a platform Opened callback must transition the retained listener to connected");
+          "a delayed incoming Start completion must not overwrite an established Connected state");
     auto const connectionCount = fixture.ConnectionAccess->Connections.size();
     connection->Signal(DeviceConnectionState::Closed);
+    auto* const retryTimer = fixture.TimerAccess->LastTimer;
+    Check(fixture.ConnectionAccess->Connections.size() == connectionCount &&
+              StateFor(fixture.Service, L"incoming") == DeviceLifecycleState::WaitingForReconnect,
+          "an established incoming loss must enter the configured reconnect policy");
+    retryTimer->FireEvenIfCancelled();
     Check(fixture.ConnectionAccess->Connections.size() == connectionCount + 1,
-          "a closed incoming listener must be recreated instead of entering reconnect failure");
-    Check(StateFor(fixture.Service, L"incoming") == DeviceLifecycleState::Connecting,
-          "the recreated incoming listener must wait only for StartAsync");
-    Check(!std::ranges::any_of(fixture.Facts,
-                               [](DeviceFact const& fact) {
-                                   return fact.DeviceId == L"incoming" && fact.Kind == DeviceFactKind::OperationFailed;
-                               }),
-          "incoming listener recreation must not publish a reconnect failure fact");
+          "the incoming reconnect timer must recreate a listener only after its policy delay");
     fixture.ConnectionAccess->LastConnection->CompleteStart(DeviceConnectionResult::Success);
     Check(StateFor(fixture.Service, L"incoming") == DeviceLifecycleState::Idle,
-          "the recreated incoming listener must return to listening idle state after StartAsync");
+          "an incoming reconnect must return to listening state without OpenAsync");
+
+    fixture.ConnectionAccess->LastConnection->Signal(DeviceConnectionState::Opened);
+    fixture.Service.ConfigureReconnectPolicy(false, {});
+    fixture.ConnectionAccess->LastConnection->Signal(DeviceConnectionState::Closed);
+    Check(StateFor(fixture.Service, L"incoming") == DeviceLifecycleState::Failed,
+          "an established incoming loss must respect disabled reconnect policy");
 }
 
 void TestDeviceRemovalClosesCurrentSessionAndRejectsLateCallbacks() {
@@ -276,12 +325,90 @@ void TestDeviceRemovalClosesCurrentSessionAndRejectsLateCallbacks() {
     Check(fixture.ConnectionAccess->Connections.size() == connectionCount,
           "late callbacks from a removed device must not create a replacement connection");
     connection->CompleteClose();
-    Check(StateFor(fixture.Service, L"removed") == DeviceLifecycleState::Idle,
-          "a removed device must settle its session after the close barrier");
+    Check(StateFor(fixture.Service, L"removed") == DeviceLifecycleState::WaitingForReconnect &&
+              !SessionFor(fixture.Service, L"removed").IsReconnectCancelled,
+          "device removal must preserve loss recovery without recording explicit user cancellation");
 
     fixture.WatcherAccess->LastWatcher->Add(L"removed", L"Removed Again");
     Check(SessionFor(fixture.Service, L"removed").DeviceName == L"Removed Again",
           "reappearing devices must update the retained session snapshot");
+    fixture.TimerAccess->LastTimer->FireEvenIfCancelled();
+    fixture.ConnectionAccess->LastConnection->CompleteStart(DeviceConnectionResult::Success);
+    fixture.ConnectionAccess->LastConnection->CompleteOpen(DeviceConnectionResult::Success);
+    Check(StateFor(fixture.Service, L"removed") == DeviceLifecycleState::Connected,
+          "a returned device must recover through the retained reconnect policy");
+}
+
+void TestPlatformSetupExceptionsCleanUpAndPublishTerminalFacts() {
+    auto checkFailure = [](Fixture& fixture, std::wstring_view deviceId, std::string_view context) {
+        auto const session = SessionFor(fixture.Service, deviceId);
+        Check(session.State == DeviceLifecycleState::Failed && !session.HasConnection,
+              "a platform setup exception must leave no retained connecting connection");
+        Check(std::ranges::any_of(fixture.Facts,
+                                  [deviceId](DeviceFact const& fact) {
+                                      return fact.DeviceId == deviceId && fact.IsTerminalFailure &&
+                                             fact.ConnectionResult == DeviceConnectionResult::Failed;
+                                  }),
+              context);
+    };
+
+    {
+        Fixture fixture;
+        fixture.ConnectionAccess->NextBehavior.ThrowOnRegister = true;
+        (void)fixture.Service.Connect(L"register-throws");
+        auto* const connection = fixture.ConnectionAccess->LastConnection;
+        Check(connection->CloseCalls == 1, "handler registration failure must close the created connection once");
+        connection->CompleteClose();
+        checkFailure(fixture, L"register-throws", "handler registration failure must publish a terminal failure fact");
+    }
+    {
+        Fixture fixture;
+        fixture.ConnectionAccess->NextBehavior.ThrowOnStart = true;
+        (void)fixture.Service.Connect(L"start-throws");
+        auto* const connection = fixture.ConnectionAccess->LastConnection;
+        Check(connection->RevokeCalls == 1 && connection->CloseCalls == 1,
+              "Start failure must revoke its token and close the created connection once");
+        connection->CompleteClose();
+        checkFailure(fixture, L"start-throws", "Start failure must publish a terminal failure fact");
+    }
+    {
+        Fixture fixture;
+        fixture.ConnectionAccess->NextBehavior.ThrowOnOpen = true;
+        (void)fixture.Service.Connect(L"open-throws");
+        auto* const connection = fixture.ConnectionAccess->LastConnection;
+        connection->CompleteStart(DeviceConnectionResult::Success);
+        Check(connection->RevokeCalls == 1 && connection->CloseCalls == 1,
+              "Open failure must revoke its token and close the created connection once");
+        connection->CompleteClose();
+        checkFailure(fixture, L"open-throws", "Open failure must publish a terminal failure fact");
+    }
+    {
+        Fixture fixture;
+        ConnectSuccessfully(fixture, L"retry-timer-throws");
+        fixture.TimerAccess->ThrowNextSchedule = true;
+        fixture.ConnectionAccess->LastConnection->Signal(DeviceConnectionState::Closed);
+        checkFailure(
+            fixture, L"retry-timer-throws", "reconnect timer setup failure must publish a terminal failure fact");
+    }
+    {
+        Fixture fixture;
+        ConnectSuccessfully(fixture, L"close-timer-throws");
+        auto* const connection = fixture.ConnectionAccess->LastConnection;
+        auto const createCount = fixture.ConnectionAccess->Connections.size();
+        fixture.TimerAccess->ThrowNextSchedule = true;
+        (void)fixture.Service.Reconnect(L"close-timer-throws");
+        Check(connection->CloseCalls == 1 && fixture.ConnectionAccess->Connections.size() == createCount + 1,
+              "close timer setup failure must release its close barrier through the deterministic fallback");
+        connection->CompleteClose();
+        Check(fixture.ConnectionAccess->Connections.size() == createCount + 1,
+              "a late close completion after timer setup failure must remain stale");
+        Check(std::ranges::any_of(fixture.Facts,
+                                  [](DeviceFact const& fact) {
+                                      return fact.DeviceId == L"close-timer-throws" && fact.IsTerminalFailure &&
+                                             fact.ConnectionResult == DeviceConnectionResult::Failed;
+                                  }),
+              "close timer setup failure must publish a terminal failure fact");
+    }
 }
 
 void TestRetryTimerAndManualCancellationRejectStaleTimerCallbacks() {
@@ -445,8 +572,10 @@ void TestFactsCarryNormalizedSnapshots() {
 int RunDeviceServiceTests() {
     TestOperationEpochRejectsStaleCompletion();
     TestReconnectWaitsForCloseAndRevokesTheOldToken();
-    TestIncomingConnectionDoesNotOpenUntilThePlatformSignalsOpened();
+    TestCloseBarrierIsOneShotAndFallsBackAfterBoundedTimeout();
+    TestIncomingCallbackOrderingAndLossFollowReconnectPolicy();
     TestDeviceRemovalClosesCurrentSessionAndRejectsLateCallbacks();
+    TestPlatformSetupExceptionsCleanUpAndPublishTerminalFacts();
     TestRetryTimerAndManualCancellationRejectStaleTimerCallbacks();
     TestReconnectPolicyAndUserCancellationRemainDistinct();
     TestConcurrentCommandWaitsForSerializedMutation();

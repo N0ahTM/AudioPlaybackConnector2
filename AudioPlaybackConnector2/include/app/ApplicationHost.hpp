@@ -115,7 +115,7 @@ private:
     /*------------------------------------------------------------------------------------------------------------*/
 
     void OnDeviceConnected(winrt::hstring const& id);
-    void OnDeviceDisconnected(winrt::hstring const& id);
+    void OnDeviceDisconnected(winrt::hstring const& id, apc::device::DeviceDisconnectReason reason);
     void OnConnectionError(winrt::hstring const& id, winrt::hstring msg);
     void OnAutoReconnectTriggered(winrt::hstring const& id);
     void OnAutoReconnectFailed(winrt::hstring const& id);

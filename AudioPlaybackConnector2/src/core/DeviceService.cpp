@@ -154,7 +154,8 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
                  std::wstring deviceId = {},
                  DeviceConnectionResult result = DeviceConnectionResult::Success,
                  bool terminal = false,
-                 DeviceOperationKind operation = DeviceOperationKind::ManualConnect) {
+                 DeviceOperationKind operation = DeviceOperationKind::ManualConnect,
+                 DeviceDisconnectReason disconnectReason = DeviceDisconnectReason::None) {
         ++Generation;
         UpdatePublishedSnapshot();
         if (Subscriber)
@@ -163,7 +164,8 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
                         .DeviceId = std::move(deviceId),
                         .ConnectionResult = result,
                         .Operation = operation,
-                        .IsTerminalFailure = terminal});
+                        .IsTerminalFailure = terminal,
+                        .DisconnectReason = disconnectReason});
     }
 
     [[nodiscard]] std::wstring DeviceName(std::wstring const& deviceId) const {
@@ -200,11 +202,15 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
         auto const isFailure = fact.Result == DeviceConnectionResult::TimedOut ||
                                fact.Result == DeviceConnectionResult::Denied ||
                                fact.Result == DeviceConnectionResult::Failed;
-        Publish(isFailure ? DeviceFactKind::OperationFailed : DeviceFactKind::SessionChanged,
+        auto const isExceptionalDisconnect = fact.DisconnectReason == DeviceDisconnectReason::UnexpectedLoss ||
+                                             fact.DisconnectReason == DeviceDisconnectReason::DeviceRemoved;
+        Publish(isExceptionalDisconnect || !isFailure ? DeviceFactKind::SessionChanged
+                                                      : DeviceFactKind::OperationFailed,
                 fact.Snapshot.DeviceId,
                 fact.Result,
                 fact.IsTerminalFailure,
-                fact.Operation);
+                fact.Operation,
+                fact.DisconnectReason);
     }
 
     void OnWatcherFact(DeviceWatcherFact const& fact) {

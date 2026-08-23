@@ -12,6 +12,7 @@ enum class DeviceLifecycleState { Idle, Connecting, Connected, Disconnecting, Wa
 enum class DeviceOperationKind { ManualConnect, ManualReconnect, AutomaticReconnect, Startup, Resume, IncomingEnable };
 enum class DeviceConnectionState { Opened, Closed };
 enum class DeviceConnectionResult { Success, TimedOut, Denied, Failed, Cancelled };
+enum class DeviceDisconnectReason { None, Normal, UnexpectedLoss, DeviceRemoved };
 
 struct DeviceSessionSnapshot {
     std::wstring DeviceId;
@@ -30,6 +31,7 @@ struct DeviceSessionFact {
     DeviceOperationKind Operation = DeviceOperationKind::ManualConnect;
     DeviceConnectionResult Result = DeviceConnectionResult::Success;
     bool IsTerminalFailure = false;
+    DeviceDisconnectReason DisconnectReason = DeviceDisconnectReason::None;
 };
 
 class DeviceConnection {

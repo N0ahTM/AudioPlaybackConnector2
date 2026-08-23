@@ -165,15 +165,18 @@ void DeviceEventRouter::Attach(std::shared_ptr<apc::device::DeviceService> devic
                 }
                 state->callbacks.DeviceConnected(id);
             }));
-        } else if (wasConnected && !isConnected && state->callbacks.DeviceDisconnected) {
+        } else if (wasConnected && !isConnected && fact.DisconnectReason != apc::device::DeviceDisconnectReason::None &&
+                   state->callbacks.DeviceDisconnected) {
             const auto token = state->deviceFactPublicationFence.RecordDisconnected(fact.DeviceId);
-            static_cast<void>(DeviceEventRouter::Dispatch(state, [state, id, token = std::move(token)] {
-                if (!state->active.load(std::memory_order_acquire) ||
-                    !state->deviceFactPublicationFence.IsCurrent(token) || !state->callbacks.DeviceDisconnected) {
-                    return;
-                }
-                state->callbacks.DeviceDisconnected(id);
-            }));
+            const auto disconnectReason = fact.DisconnectReason;
+            static_cast<void>(
+                DeviceEventRouter::Dispatch(state, [state, id, disconnectReason, token = std::move(token)] {
+                    if (!state->active.load(std::memory_order_acquire) ||
+                        !state->deviceFactPublicationFence.IsCurrent(token) || !state->callbacks.DeviceDisconnected) {
+                        return;
+                    }
+                    state->callbacks.DeviceDisconnected(id, disconnectReason);
+                }));
         }
 
         if (state->callbacks.DeviceStatusChanged && currentStatus != DeviceStatusKind::None) {

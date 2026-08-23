@@ -57,6 +57,7 @@ struct DeviceFact {
     DeviceConnectionResult ConnectionResult = DeviceConnectionResult::Success;
     DeviceOperationKind Operation = DeviceOperationKind::ManualConnect;
     bool IsTerminalFailure = false;
+    DeviceDisconnectReason DisconnectReason = DeviceDisconnectReason::None;
 };
 
 struct DeviceServiceDependencies {

@@ -201,6 +201,7 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
     DeviceConnectionResult PendingCloseFailure = DeviceConnectionResult::Success;
     bool PendingCloseRetryEligible = false;
     bool PendingCloseCompletedAttempt = false;
+    DeviceDisconnectReason PendingCloseDisconnectReason = DeviceDisconnectReason::None;
 
     [[nodiscard]] DeviceSessionSnapshot Snapshot() const {
         return {
@@ -224,12 +225,15 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
 
     [[nodiscard]] bool IsLocallySuspended() const noexcept { return IsSuspended; }
 
-    void Publish(DeviceConnectionResult result = DeviceConnectionResult::Success, bool terminal = false) {
+    void Publish(DeviceConnectionResult result = DeviceConnectionResult::Success,
+                 bool terminal = false,
+                 DeviceDisconnectReason disconnectReason = DeviceDisconnectReason::None) {
         if (PublishFact)
             PublishFact({.Snapshot = Snapshot(),
                          .Operation = CurrentOperation,
                          .Result = result,
-                         .IsTerminalFailure = terminal});
+                         .IsTerminalFailure = terminal,
+                         .DisconnectReason = disconnectReason});
     }
 
     void Post(Task task) {
@@ -277,7 +281,7 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
             Lifecycle = DeviceLifecycleState::Disconnecting;
             RestoreIncomingAfterClose = false;
             RevokeStateChanged();
-            Publish();
+            Publish(DeviceConnectionResult::Success, false, DeviceDisconnectReason::Normal);
             BeginClose(epoch, CloseContinuation::Replace);
             return;
         }
@@ -392,10 +396,10 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
             if (!IsReconnectEnabled) {
                 Lifecycle = DeviceLifecycleState::Idle;
                 RetryEligible = false;
-                Publish();
+                Publish(DeviceConnectionResult::Success, false, DeviceDisconnectReason::UnexpectedLoss);
                 return;
             }
-            ScheduleReconnect(DeviceConnectionResult::Failed, true, false);
+            ScheduleReconnect(DeviceConnectionResult::Failed, true, false, DeviceDisconnectReason::UnexpectedLoss);
             return;
         }
         RevokeStateChanged();
@@ -407,7 +411,7 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
             StartConnection(DeviceOperationKind::IncomingEnable, false);
             return;
         }
-        ScheduleReconnect(DeviceConnectionResult::Failed, RetryEligible, false);
+        ScheduleReconnect(DeviceConnectionResult::Failed, RetryEligible, false, DeviceDisconnectReason::UnexpectedLoss);
     }
 
     void CompleteFailure(std::uint64_t epoch, DeviceConnectionResult result) {
@@ -431,7 +435,8 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
                     CloseContinuation continuation,
                     DeviceConnectionResult failure = DeviceConnectionResult::Success,
                     bool shouldRetry = false,
-                    bool completedAttempt = false) {
+                    bool completedAttempt = false,
+                    DeviceDisconnectReason disconnectReason = DeviceDisconnectReason::None) {
         if (IsCloseInFlight) {
             if (IsCloseContinuationAbandoned) return;
         }
@@ -439,6 +444,7 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
         PendingCloseFailure = failure;
         PendingCloseRetryEligible = shouldRetry;
         PendingCloseCompletedAttempt = completedAttempt;
+        PendingCloseDisconnectReason = disconnectReason;
         IsCloseContinuationAbandoned = false;
         if (IsCloseInFlight) return;
         if (!Connection) {
@@ -469,7 +475,7 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
             // The close remains unconfirmed, so retain ClosingConnection and IsCloseInFlight. The
             // operation itself is terminal, however, so callers must not await Disconnecting forever.
             Lifecycle = DeviceLifecycleState::Failed;
-            Publish(DeviceConnectionResult::Failed, true);
+            Publish(DeviceConnectionResult::Failed, true, PendingCloseDisconnectReason);
             AbandonCloseContinuation();
         }
         ClosingConnection->Close([weak, closeBarrierEpoch] {
@@ -491,7 +497,7 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
             // The old connection remains owned until its close callback arrives, but this operation is terminal.
             // Keeping the barrier busy prevents a replacement from overlapping the indeterminate close.
             Lifecycle = DeviceLifecycleState::Failed;
-            Publish(DeviceConnectionResult::TimedOut, true);
+            Publish(DeviceConnectionResult::TimedOut, true, PendingCloseDisconnectReason);
             AbandonCloseContinuation();
             return;
         }
@@ -530,6 +536,7 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
         PendingCloseFailure = DeviceConnectionResult::Success;
         PendingCloseRetryEligible = false;
         PendingCloseCompletedAttempt = false;
+        PendingCloseDisconnectReason = DeviceDisconnectReason::None;
         RestoreIncomingAfterClose = false;
         IsCloseContinuationAbandoned = true;
     }
@@ -540,10 +547,12 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
         auto const failure = PendingCloseFailure;
         auto const shouldRetry = PendingCloseRetryEligible;
         auto const completedAttempt = PendingCloseCompletedAttempt;
+        auto const disconnectReason = PendingCloseDisconnectReason;
         PendingCloseContinuation = CloseContinuation::Idle;
         PendingCloseFailure = DeviceConnectionResult::Success;
         PendingCloseRetryEligible = false;
         PendingCloseCompletedAttempt = false;
+        PendingCloseDisconnectReason = DeviceDisconnectReason::None;
         if (IsCloseContinuationAbandoned) {
             IsCloseContinuationAbandoned = false;
             if (IsSuspendClosePending) {
@@ -563,7 +572,7 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
             return;
         }
         if (continuation == CloseContinuation::Retry) {
-            ScheduleReconnect(failure, shouldRetry, completedAttempt);
+            ScheduleReconnect(failure, shouldRetry, completedAttempt, disconnectReason);
             return;
         }
         if (continuation == CloseContinuation::Suspend) {
@@ -571,17 +580,20 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
             return;
         }
         Lifecycle = DeviceLifecycleState::Idle;
-        Publish(failure);
+        Publish(failure, false, disconnectReason);
         if (RestoreIncomingAfterClose && IsIncomingEnabled && !IsSuspended) {
             RestoreIncomingAfterClose = false;
             StartConnection(DeviceOperationKind::IncomingEnable, false);
         }
     }
 
-    void ScheduleReconnect(DeviceConnectionResult result, bool shouldRetry, bool completedAttempt) {
+    void ScheduleReconnect(DeviceConnectionResult result,
+                           bool shouldRetry,
+                           bool completedAttempt,
+                           DeviceDisconnectReason disconnectReason = DeviceDisconnectReason::None) {
         if (IsShutdown || IsSuspended || !shouldRetry || !IsReconnectEnabled || IsReconnectCancelled) {
             Lifecycle = DeviceLifecycleState::Failed;
-            Publish(result, true);
+            Publish(result, true, disconnectReason);
             return;
         }
         if (completedAttempt) ++CompletedRetryAttempts;
@@ -592,7 +604,7 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
         });
         if (decision.Kind == ReconnectDecisionKind::TerminalFailure) {
             Lifecycle = DeviceLifecycleState::Failed;
-            Publish(result, true);
+            Publish(result, true, disconnectReason);
             return;
         }
         Lifecycle = DeviceLifecycleState::WaitingForReconnect;
@@ -615,10 +627,10 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
         }
         if (!ReconnectTimer) {
             Lifecycle = DeviceLifecycleState::Failed;
-            Publish(DeviceConnectionResult::Failed, true);
+            Publish(DeviceConnectionResult::Failed, true, disconnectReason);
             return;
         }
-        Publish(result);
+        Publish(result, false, disconnectReason);
     }
 
     void OnRetryTimer(std::uint64_t timerEpoch, std::uint64_t operationEpoch) {
@@ -785,18 +797,29 @@ void DeviceSession::HandleDeviceRemoved() {
     }
     if (state->IsCloseInFlight) {
         state->Lifecycle = DeviceLifecycleState::Disconnecting;
-        state->Publish(DeviceConnectionResult::Failed);
-        state->BeginClose(epoch, State::CloseContinuation::Retry, DeviceConnectionResult::Failed, shouldRetry);
+        state->Publish(DeviceConnectionResult::Failed, false, DeviceDisconnectReason::DeviceRemoved);
+        state->BeginClose(epoch,
+                          State::CloseContinuation::Retry,
+                          DeviceConnectionResult::Failed,
+                          shouldRetry,
+                          false,
+                          DeviceDisconnectReason::DeviceRemoved);
         return;
     }
     if (!state->Connection) {
-        state->ScheduleReconnect(DeviceConnectionResult::Failed, shouldRetry, false);
+        state->ScheduleReconnect(
+            DeviceConnectionResult::Failed, shouldRetry, false, DeviceDisconnectReason::DeviceRemoved);
         return;
     }
     state->Lifecycle = DeviceLifecycleState::Disconnecting;
     state->RevokeStateChanged();
-    state->Publish(DeviceConnectionResult::Failed);
-    state->BeginClose(epoch, State::CloseContinuation::Retry, DeviceConnectionResult::Failed, shouldRetry);
+    state->Publish(DeviceConnectionResult::Failed, false, DeviceDisconnectReason::DeviceRemoved);
+    state->BeginClose(epoch,
+                      State::CloseContinuation::Retry,
+                      DeviceConnectionResult::Failed,
+                      shouldRetry,
+                      false,
+                      DeviceDisconnectReason::DeviceRemoved);
 }
 
 void DeviceSession::Connect(DeviceOperationKind operation, bool openImmediately) {
@@ -825,12 +848,12 @@ void DeviceSession::Disconnect(bool restoreIncoming) {
     state->RestoreIncomingAfterClose = restoreIncoming;
     if (!state->Connection && !state->IsCloseInFlight) {
         state->Lifecycle = DeviceLifecycleState::Idle;
-        state->Publish();
+        state->Publish(DeviceConnectionResult::Success, false, DeviceDisconnectReason::Normal);
         return;
     }
     state->Lifecycle = DeviceLifecycleState::Disconnecting;
     state->RevokeStateChanged();
-    state->Publish();
+    state->Publish(DeviceConnectionResult::Success, false, DeviceDisconnectReason::Normal);
     state->BeginClose(epoch, State::CloseContinuation::Idle);
 }
 

@@ -1638,9 +1638,9 @@ void ApplicationHost::SetupDeviceEvents() {
             self->PublishDeviceFact({.Kind = Bridge::FactKind::DeviceConnected, .Id = std::wstring(id)});
         }
     };
-    callbacks.DeviceDisconnected = [weak](auto const& id) {
+    callbacks.DeviceDisconnected = [weak](auto const& id, auto const reason) {
         if (auto self = weak.lock()) {
-            self->OnDeviceDisconnected(id);
+            self->OnDeviceDisconnected(id, reason);
             self->PublishDeviceFact({.Kind = Bridge::FactKind::DeviceDisconnected, .Id = std::wstring(id)});
         }
     };
@@ -1836,12 +1836,22 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
     ScheduleDeviceVisualRefresh(false);
 }
 
-void ApplicationHost::OnDeviceDisconnected(winrt::hstring const& id) {
+void ApplicationHost::OnDeviceDisconnected(winrt::hstring const& id, apc::device::DeviceDisconnectReason reason) {
     if (m_exiting.load()) return;
     DebugTrace(L"[App] OnDeviceDisconnected: {0}", std::wstring(id));
 
-    // P04: a normal disconnect refreshes state, tooltip, CLI, and diagnostics only; it never notifies.
     ScheduleDeviceVisualRefresh(false);
+    if (!DeviceEventRouter::ShouldNotifyDisconnect(reason) || !m_notificationService) return;
+
+    try {
+        m_notificationService->ShowDeviceDisconnected(id, ResolveKnownDeviceName(id));
+    } catch (winrt::hresult_error const& ex) {
+        util::DebugTraceException(L"[App] OnDeviceDisconnected notification ERROR", ex);
+    } catch (std::exception const& ex) {
+        util::DebugTraceException(L"[App] OnDeviceDisconnected notification ERROR", ex);
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[App] OnDeviceDisconnected notification ERROR");
+    }
 }
 
 void ApplicationHost::OnConnectionError(winrt::hstring const& id, winrt::hstring msg) {

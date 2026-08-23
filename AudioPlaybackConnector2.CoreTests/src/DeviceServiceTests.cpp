@@ -1,3 +1,4 @@
+#include <app/DeviceEventRouter.hpp>
 #include <core/DeviceService.hpp>
 
 #include <winerror.h>
@@ -21,6 +22,7 @@ using apc::device::DeviceConnection;
 using apc::device::DeviceConnectionPlatform;
 using apc::device::DeviceConnectionResult;
 using apc::device::DeviceConnectionState;
+using apc::device::DeviceDisconnectReason;
 using apc::device::DeviceFact;
 using apc::device::DeviceFactKind;
 using apc::device::DeviceLifecycleState;
@@ -1193,6 +1195,62 @@ void TestFailureFactsRetainOperationKind() {
     }
 }
 
+void TestDisconnectReasonsSelectTheLockedNotificationPolicy() {
+    {
+        Fixture fixture;
+        ConnectSuccessfully(fixture, L"normal-disconnect");
+        fixture.Facts.clear();
+        (void)fixture.Service.Disconnect(L"normal-disconnect");
+
+        auto const normal = std::ranges::find_if(fixture.Facts, [](DeviceFact const& fact) {
+            return fact.DeviceId == L"normal-disconnect" && fact.DisconnectReason == DeviceDisconnectReason::Normal;
+        });
+        Check(normal != fixture.Facts.end() && normal->Kind == DeviceFactKind::SessionChanged,
+              "an explicit disconnect must remain a typed session fact");
+        Check(normal != fixture.Facts.end() && !DeviceEventRouter::ShouldNotifyDisconnect(normal->DisconnectReason),
+              "normal disconnect policy must suppress toast and fallback notification");
+    }
+
+    {
+        Fixture fixture;
+        ConnectSuccessfully(fixture, L"unexpected-loss");
+        fixture.Service.ConfigureReconnectPolicy(false, {});
+        fixture.Facts.clear();
+        fixture.ConnectionAccess->LastConnection->Signal(DeviceConnectionState::Closed);
+
+        auto const unexpected = std::ranges::find_if(fixture.Facts, [](DeviceFact const& fact) {
+            return fact.DeviceId == L"unexpected-loss" &&
+                   fact.DisconnectReason == DeviceDisconnectReason::UnexpectedLoss;
+        });
+        Check(unexpected != fixture.Facts.end() && unexpected->Kind == DeviceFactKind::SessionChanged &&
+                  unexpected->IsTerminalFailure,
+              "a terminal unexpected loss must remain a typed disconnect fact");
+        Check(unexpected != fixture.Facts.end() &&
+                  DeviceEventRouter::ShouldNotifyDisconnect(unexpected->DisconnectReason),
+              "an unexpected loss must retain the notifying disconnect policy");
+        Check(!std::ranges::any_of(fixture.Facts,
+                                   [](DeviceFact const& fact) {
+                                       return fact.DeviceId == L"unexpected-loss" &&
+                                              fact.Kind == DeviceFactKind::OperationFailed && fact.IsTerminalFailure;
+                                   }),
+              "terminal unexpected loss must not synthesize an operation-error fact");
+    }
+}
+
+void TestOperationFailuresRemainOperationFailuresWithoutDisconnectReason() {
+    Fixture fixture;
+    fixture.ConnectionAccess->NextBehavior.ThrowOnStart = true;
+    (void)fixture.Service.Connect(L"operation-failure");
+
+    Check(std::ranges::any_of(fixture.Facts,
+                              [](DeviceFact const& fact) {
+                                  return fact.DeviceId == L"operation-failure" &&
+                                         fact.Kind == DeviceFactKind::OperationFailed &&
+                                         fact.DisconnectReason == DeviceDisconnectReason::None;
+                              }),
+          "connection setup failures must retain the operation-error fact category");
+}
+
 } // namespace
 
 int RunDeviceServiceTests() {
@@ -1225,6 +1283,8 @@ int RunDeviceServiceTests() {
     TestStopAndShutdownReturnNormalizedTerminalResults();
     TestFactsCarryNormalizedSnapshots();
     TestFailureFactsRetainOperationKind();
+    TestDisconnectReasonsSelectTheLockedNotificationPolicy();
+    TestOperationFailuresRemainOperationFailuresWithoutDisconnectReason();
     return g_failures;
 }
 

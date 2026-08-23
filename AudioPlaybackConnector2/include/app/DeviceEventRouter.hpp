@@ -19,9 +19,14 @@ public:
 
     using UiDispatcher = std::function<bool(std::function<void()> work)>;
 
+    [[nodiscard]] static constexpr bool ShouldNotifyDisconnect(apc::device::DeviceDisconnectReason reason) noexcept {
+        return reason == apc::device::DeviceDisconnectReason::UnexpectedLoss ||
+               reason == apc::device::DeviceDisconnectReason::DeviceRemoved;
+    }
+
     struct Callbacks {
         std::function<void(winrt::hstring const& id)> DeviceConnected;
-        std::function<void(winrt::hstring const& id)> DeviceDisconnected;
+        std::function<void(winrt::hstring const& id, apc::device::DeviceDisconnectReason reason)> DeviceDisconnected;
         std::function<void(winrt::hstring const& id, winrt::hstring const& message)> ConnectionError;
         std::function<void(winrt::hstring const& id)> AutoReconnectTriggered;
         std::function<void(winrt::hstring const& id)> AutoReconnectFailed;

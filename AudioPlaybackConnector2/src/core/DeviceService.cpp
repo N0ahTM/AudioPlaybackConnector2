@@ -55,6 +55,7 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
     std::unique_ptr<DeviceWatcher> Watcher;
     std::unordered_map<std::wstring, std::shared_ptr<DeviceSession>> Sessions;
     std::unordered_set<std::wstring> IndividuallyReconnectEnabled;
+    std::unordered_map<std::wstring, std::uint64_t> PowerTransitionRecoveryEpochs;
     FactSink Subscriber;
     Subscription ActiveSubscription = 0;
     Subscription NextSubscription = 1;
@@ -253,18 +254,40 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
         iter->second->Disconnect(false);
     }
 
-    winrt::Windows::Foundation::IAsyncAction
-    AwaitTerminal(std::wstring deviceId, std::uint64_t operationEpoch, bool ownsCancellation) {
-        auto const cancellation = co_await winrt::get_cancellation_token();
-        auto const weak = weak_from_this();
-        if (ownsCancellation) {
-            cancellation.callback([weak, deviceId, operationEpoch] {
-                if (auto state = weak.lock()) {
-                    static_cast<void>(state->Post(
-                        [state, deviceId, operationEpoch] { state->CancelOperation(deviceId, operationEpoch); }));
-                }
-            });
+    [[nodiscard]] static bool RequiresPowerTransitionRecovery(DeviceSessionSnapshot const& snapshot) noexcept {
+        return snapshot.State == DeviceLifecycleState::Connected || snapshot.IsIncomingEnabled ||
+               snapshot.State == DeviceLifecycleState::Connecting ||
+               snapshot.State == DeviceLifecycleState::Disconnecting ||
+               snapshot.State == DeviceLifecycleState::WaitingForReconnect;
+    }
+
+    [[nodiscard]] std::vector<std::wstring> CapturePowerTransitionRecoveryAndSuspend() {
+        std::vector<std::wstring> recoveryDeviceIds;
+        if (IsShutdown || IsSuspended) return recoveryDeviceIds;
+
+        for (auto const& [deviceId, session] : Sessions) {
+            if (RequiresPowerTransitionRecovery(session->Snapshot())) recoveryDeviceIds.push_back(deviceId);
         }
+
+        IsSuspended = true;
+        if (Watcher) Watcher->Stop();
+        for (auto const& [deviceId, session] : Sessions) {
+            (void)deviceId;
+            session->Suspend();
+        }
+
+        PowerTransitionRecoveryEpochs.clear();
+        for (auto const& deviceId : recoveryDeviceIds) {
+            if (auto session = Sessions.find(deviceId); session != Sessions.end()) {
+                PowerTransitionRecoveryEpochs.emplace(deviceId, session->second->Snapshot().OperationEpoch);
+            }
+        }
+        Publish(DeviceFactKind::SessionChanged);
+        return recoveryDeviceIds;
+    }
+
+    winrt::Windows::Foundation::IAsyncAction AwaitTerminal(std::wstring deviceId, std::uint64_t operationEpoch) {
+        auto const cancellation = co_await winrt::get_cancellation_token();
 
         for (;;) {
             if (cancellation()) co_return;
@@ -377,13 +400,13 @@ DeviceCommandResult DeviceService::Connect(std::wstring deviceId) {
             *result = state->Result(DeviceCommandKind::Connect, DeviceCommandResultKind::Coalesced, deviceId);
             return;
         }
-        auto const wasBusy = session->IsBusy();
-        auto const wasSuspended = session->IsSuspended();
+        auto const operationEpoch = session->Snapshot().OperationEpoch;
         session->Connect(DeviceOperationKind::ManualConnect, true);
-        *result = state->Result(DeviceCommandKind::Connect,
-                                wasBusy || wasSuspended ? DeviceCommandResultKind::Coalesced
-                                                        : DeviceCommandResultKind::Accepted,
-                                deviceId);
+        *result =
+            state->Result(DeviceCommandKind::Connect,
+                          session->Snapshot().OperationEpoch == operationEpoch ? DeviceCommandResultKind::Coalesced
+                                                                               : DeviceCommandResultKind::Accepted,
+                          deviceId);
     });
     return ran ? *result
                : DeviceCommandResult{.Command = DeviceCommandKind::Connect,
@@ -422,13 +445,13 @@ DeviceCommandResult DeviceService::Reconnect(std::wstring deviceId) {
             return;
         }
         auto session = state->GetOrCreateSession(deviceId);
-        auto const wasBusy = session->IsBusy();
-        auto const wasSuspended = session->IsSuspended();
+        auto const operationEpoch = session->Snapshot().OperationEpoch;
         session->Connect(DeviceOperationKind::ManualReconnect, true);
-        *result = state->Result(DeviceCommandKind::Reconnect,
-                                wasBusy || wasSuspended ? DeviceCommandResultKind::Coalesced
-                                                        : DeviceCommandResultKind::Accepted,
-                                deviceId);
+        *result =
+            state->Result(DeviceCommandKind::Reconnect,
+                          session->Snapshot().OperationEpoch == operationEpoch ? DeviceCommandResultKind::Coalesced
+                                                                               : DeviceCommandResultKind::Accepted,
+                          deviceId);
     });
     return ran ? *result
                : DeviceCommandResult{.Command = DeviceCommandKind::Reconnect,
@@ -567,16 +590,7 @@ void DeviceService::ConnectStartupTargets(std::vector<std::wstring> deviceIds) {
 void DeviceService::Suspend() {
     auto state = m_state;
     if (!state) return;
-    static_cast<void>(state->Post([state] {
-        if (state->IsShutdown || state->IsSuspended) return;
-        state->IsSuspended = true;
-        if (state->Watcher) state->Watcher->Stop();
-        for (auto const& [id, session] : state->Sessions) {
-            (void)id;
-            session->Suspend();
-        }
-        state->Publish(DeviceFactKind::SessionChanged);
-    }));
+    static_cast<void>(state->Post([state] { static_cast<void>(state->CapturePowerTransitionRecoveryAndSuspend()); }));
 }
 
 void DeviceService::Resume() {
@@ -585,6 +599,7 @@ void DeviceService::Resume() {
     static_cast<void>(state->Post([state] {
         if (state->IsShutdown || !state->IsSuspended) return;
         state->IsSuspended = false;
+        state->PowerTransitionRecoveryEpochs.clear();
         if (state->IsRunning && state->Watcher) state->IsRunning = state->Watcher->Start();
         for (auto const& [id, session] : state->Sessions) {
             (void)id;
@@ -624,20 +639,31 @@ void DeviceService::ShutdownForProcessExit() noexcept {
     Shutdown();
 }
 
-void DeviceService::SuspendForPowerTransition() noexcept {
-    Suspend();
+std::vector<std::wstring> DeviceService::SuspendForPowerTransition() {
+    auto state = m_state;
+    if (!state) return {};
+    auto recoveryDeviceIds = std::make_shared<std::vector<std::wstring>>();
+    auto const ran = state->Post(
+        [state, recoveryDeviceIds] { *recoveryDeviceIds = state->CapturePowerTransitionRecoveryAndSuspend(); });
+    return ran ? std::move(*recoveryDeviceIds) : std::vector<std::wstring>{};
 }
 
 void DeviceService::ResumeAfterPowerTransition() {
     auto const state = m_state;
     if (!state) return;
     static_cast<void>(state->Post([state] {
-        if (state->IsShutdown || !state->IsSuspended) return;
+        if (state->IsShutdown) return;
+        auto const wasSuspended = state->IsSuspended;
         state->IsSuspended = false;
-        if (state->IsRunning && state->Watcher) state->IsRunning = state->Watcher->Start();
-        for (auto const& [id, session] : state->Sessions) {
-            (void)id;
-            session->ResumeIdleAfterPowerTransition();
+        if (state->IsRunning && state->Watcher) {
+            if (!wasSuspended) state->Watcher->Stop();
+            state->IsRunning = state->Watcher->Start();
+        }
+        if (wasSuspended) {
+            for (auto const& [id, session] : state->Sessions) {
+                (void)id;
+                session->ResumeIdleAfterPowerTransition();
+            }
         }
         state->Publish(DeviceFactKind::SessionChanged);
     }));
@@ -649,18 +675,18 @@ void DeviceService::ResumeSuspendedSessions(std::vector<std::wstring> deviceIds)
     static_cast<void>(state->Post([state, deviceIds = std::move(deviceIds)] {
         if (state->IsShutdown || state->IsSuspended) return;
         std::unordered_set<std::wstring> requested(deviceIds.begin(), deviceIds.end());
-        for (auto const& [id, session] : state->Sessions) {
-            auto const snapshot = session->Snapshot();
-            if (requested.contains(id) || snapshot.IsIncomingEnabled || session->IsBusy()) session->Resume();
-        }
         for (auto const& id : requested) {
             if (id.empty()) continue;
-            auto session = state->GetOrCreateSession(id);
-            if (!session) continue;
-            session->Resume();
-            auto const snapshot = session->Snapshot();
-            if (!session->IsBusy() && snapshot.State != DeviceLifecycleState::Connected)
-                session->Connect(DeviceOperationKind::Resume, true);
+            auto const session = state->Sessions.find(id);
+            auto const recoveryEpoch = state->PowerTransitionRecoveryEpochs.find(id);
+            if (session == state->Sessions.end() || recoveryEpoch == state->PowerTransitionRecoveryEpochs.end() ||
+                session->second->Snapshot().OperationEpoch != recoveryEpoch->second) {
+                if (recoveryEpoch != state->PowerTransitionRecoveryEpochs.end())
+                    state->PowerTransitionRecoveryEpochs.erase(recoveryEpoch);
+                continue;
+            }
+            session->second->Resume();
+            state->PowerTransitionRecoveryEpochs.erase(recoveryEpoch);
         }
         state->Publish(DeviceFactKind::SessionChanged);
     }));
@@ -696,10 +722,20 @@ void DeviceService::SetReconnectOnConnectionLoss(std::wstring deviceId, bool ena
 winrt::Windows::Foundation::IAsyncAction DeviceService::ConnectAsync(winrt::hstring deviceId) {
     auto const state = m_state;
     if (!state || deviceId.empty()) co_return;
+    auto const cancellation = co_await winrt::get_cancellation_token();
     auto const result = Connect(std::wstring(deviceId));
     if (result.Kind == DeviceCommandResultKind::Rejected) throw winrt::hresult_error(E_ABORT);
-    co_await state->AwaitTerminal(
-        std::wstring(deviceId), result.OperationEpoch, result.Kind == DeviceCommandResultKind::Accepted);
+    if (result.Kind == DeviceCommandResultKind::Accepted) {
+        auto const weak = state->weak_from_this();
+        cancellation.callback([weak, deviceId = std::wstring(deviceId), operationEpoch = result.OperationEpoch] {
+            if (auto current = weak.lock()) {
+                static_cast<void>(current->Post(
+                    [current, deviceId, operationEpoch] { current->CancelOperation(deviceId, operationEpoch); }));
+            }
+        });
+    }
+    cancellation.enable_propagation();
+    co_await state->AwaitTerminal(std::wstring(deviceId), result.OperationEpoch);
 }
 
 void DeviceService::ConnectDetached(winrt::hstring deviceId) {
@@ -709,10 +745,20 @@ void DeviceService::ConnectDetached(winrt::hstring deviceId) {
 winrt::Windows::Foundation::IAsyncAction DeviceService::ReconnectAsync(winrt::hstring deviceId) {
     auto const state = m_state;
     if (!state || deviceId.empty()) co_return;
+    auto const cancellation = co_await winrt::get_cancellation_token();
     auto const result = Reconnect(std::wstring(deviceId));
     if (result.Kind == DeviceCommandResultKind::Rejected) throw winrt::hresult_error(E_ABORT);
-    co_await state->AwaitTerminal(
-        std::wstring(deviceId), result.OperationEpoch, result.Kind == DeviceCommandResultKind::Accepted);
+    if (result.Kind == DeviceCommandResultKind::Accepted) {
+        auto const weak = state->weak_from_this();
+        cancellation.callback([weak, deviceId = std::wstring(deviceId), operationEpoch = result.OperationEpoch] {
+            if (auto current = weak.lock()) {
+                static_cast<void>(current->Post(
+                    [current, deviceId, operationEpoch] { current->CancelOperation(deviceId, operationEpoch); }));
+            }
+        });
+    }
+    cancellation.enable_propagation();
+    co_await state->AwaitTerminal(std::wstring(deviceId), result.OperationEpoch);
 }
 
 void DeviceService::ReconnectDetached(winrt::hstring deviceId) {
@@ -741,11 +787,8 @@ std::vector<DeviceSessionSnapshot> DeviceService::GetConnectionSessions() const 
 std::vector<std::wstring> DeviceService::GetPowerTransitionRecoveryDeviceIds() const {
     std::vector<std::wstring> result;
     for (auto const& session : Snapshot().Sessions) {
-        bool const requiresRecovery = session.State == DeviceLifecycleState::Connected || session.IsIncomingEnabled ||
-                                      session.State == DeviceLifecycleState::Connecting ||
-                                      session.State == DeviceLifecycleState::Disconnecting ||
-                                      session.State == DeviceLifecycleState::WaitingForReconnect;
-        if (requiresRecovery && !session.DeviceId.empty()) result.push_back(session.DeviceId);
+        if (State::RequiresPowerTransitionRecovery(session) && !session.DeviceId.empty())
+            result.push_back(session.DeviceId);
     }
     return result;
 }

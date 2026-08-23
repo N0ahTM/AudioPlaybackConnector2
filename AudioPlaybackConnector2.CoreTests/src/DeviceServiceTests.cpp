@@ -773,6 +773,42 @@ void TestRetryTimerAndManualCancellationRejectStaleTimerCallbacks() {
           "a cancelled pending timer must not create or count another automatic attempt");
 }
 
+void TestManualAsyncCommandsCancelSupersededReconnectEpochs() {
+    for (auto const& [deviceId, command] : std::vector<std::pair<std::wstring, DeviceCommandKind>>{
+             {L"cancel-manual-connect", DeviceCommandKind::Connect},
+             {L"cancel-manual-reconnect", DeviceCommandKind::Reconnect},
+         }) {
+        Fixture fixture;
+        ConnectSuccessfully(fixture, deviceId);
+        fixture.ConnectionAccess->LastConnection->Signal(DeviceConnectionState::Closed);
+        auto const waitingEpoch = SessionFor(fixture.Service, deviceId).OperationEpoch;
+        Check(StateFor(fixture.Service, deviceId) == DeviceLifecycleState::WaitingForReconnect,
+              "a lost connection must wait before the manual supersession test");
+
+        auto operation = command == DeviceCommandKind::Connect
+                             ? fixture.Service.ConnectAsync(winrt::hstring(deviceId))
+                             : fixture.Service.ReconnectAsync(winrt::hstring(deviceId));
+        operation.Completed([](auto const&, auto const&) noexcept {});
+        auto* const manualConnection = fixture.ConnectionAccess->LastConnection;
+        Check(SessionFor(fixture.Service, deviceId).OperationEpoch > waitingEpoch &&
+                  StateFor(fixture.Service, deviceId) == DeviceLifecycleState::Connecting,
+              "a manual command from WaitingForReconnect must own a new operation epoch");
+
+        operation.Cancel();
+        Check(manualConnection->CloseCalls == 1 &&
+                  StateFor(fixture.Service, deviceId) == DeviceLifecycleState::Disconnecting,
+              "cancelling a superseding manual async command must close its exact operation");
+
+        manualConnection->CompleteStart(DeviceConnectionResult::Success);
+        manualConnection->CompleteOpen(DeviceConnectionResult::Success);
+        Check(StateFor(fixture.Service, deviceId) == DeviceLifecycleState::Disconnecting,
+              "late start and open completions after async cancellation must not reconnect the session");
+        CompleteCloseAndCooldown(fixture, manualConnection);
+        Check(StateFor(fixture.Service, deviceId) == DeviceLifecycleState::Idle,
+              "the cancelled manual operation must settle without a replacement connection");
+    }
+}
+
 void TestReconnectPolicyAndUserCancellationRemainDistinct() {
     Fixture fixture;
     ConnectSuccessfully(fixture, L"policy");
@@ -1049,6 +1085,51 @@ void TestManualCommandsDuringDelayedPowerRecoveryAreRetainedByTheSession() {
     }
 }
 
+void TestPowerTransitionRecoveryCaptureRejectsStaleDelayedIntent() {
+    Fixture fixture;
+    ConnectSuccessfully(fixture, L"power-stale-intent");
+    auto* const connection = fixture.ConnectionAccess->LastConnection;
+    auto const connectionCount = fixture.ConnectionAccess->Connections.size();
+
+    auto const recoveryTargets = fixture.Service.SuspendForPowerTransition();
+    Check(std::ranges::find(recoveryTargets, L"power-stale-intent") != recoveryTargets.end(),
+          "suspension must return the exact recovery intent captured with the serialized mutation");
+    Check(fixture.Service.Disconnect(L"power-stale-intent").Kind == DeviceCommandResultKind::Rejected,
+          "a disconnect arriving after atomic suspension must not interleave before the captured recovery intent");
+
+    fixture.Service.ResumeAfterPowerTransition();
+    CompleteCloseAndCooldown(fixture, connection);
+    Check(StateFor(fixture.Service, L"power-stale-intent") == DeviceLifecycleState::Idle,
+          "the suspended connection must wait for delayed recovery after its close barrier");
+
+    Check(fixture.Service.Disconnect(L"power-stale-intent").Kind == DeviceCommandResultKind::Accepted,
+          "a post-resume manual disconnect must advance the session operation epoch");
+    fixture.Service.ResumeSuspendedSessions(recoveryTargets);
+    Check(fixture.ConnectionAccess->Connections.size() == connectionCount &&
+              StateFor(fixture.Service, L"power-stale-intent") == DeviceLifecycleState::Idle,
+          "a delayed recovery delivery must reject an intent superseded by manual disconnect");
+}
+
+void TestUnmatchedPowerResumeRestartsWatcherWithoutResurrectingSessions() {
+    Fixture fixture;
+    Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted,
+          "watcher start must establish the unmatched-resume fixture");
+    auto* const staleWatcher = fixture.WatcherAccess->LastWatcher;
+
+    fixture.Service.ResumeAfterPowerTransition();
+    auto* const resumedWatcher = fixture.WatcherAccess->LastWatcher;
+    Check(resumedWatcher && resumedWatcher != staleWatcher && resumedWatcher->StartCalls == 1 &&
+              fixture.Service.Snapshot().IsRunning,
+          "an unmatched resume must restore the intended watcher generation");
+
+    staleWatcher->Add(L"stale-unmatched-resume", L"Stale unmatched resume");
+    resumedWatcher->Add(L"fresh-unmatched-resume", L"Fresh unmatched resume");
+    Check(fixture.Service.Snapshot().Inventory.Devices.size() == 1 &&
+              fixture.Service.Snapshot().Inventory.Devices.front().Id == L"fresh-unmatched-resume" &&
+              fixture.ConnectionAccess->Connections.empty(),
+          "unmatched resume recovery must reject stale watcher callbacks without starting canceled sessions");
+}
+
 void TestStopAndShutdownReturnNormalizedTerminalResults() {
     Fixture fixture;
     Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted, "start must establish watcher ownership");
@@ -1124,6 +1205,7 @@ int RunDeviceServiceTests() {
     TestRemovingAnIdleIncomingListenerClosesWithoutTerminalFailure();
     TestPlatformSetupExceptionsCleanUpAndPublishTerminalFacts();
     TestRetryTimerAndManualCancellationRejectStaleTimerCallbacks();
+    TestManualAsyncCommandsCancelSupersededReconnectEpochs();
     TestReconnectPolicyAndUserCancellationRemainDistinct();
     TestConcurrentCommandWaitsForSerializedMutation();
     TestBulkSuspendResumeAndShutdownCannotResurrectSessions();
@@ -1132,6 +1214,8 @@ int RunDeviceServiceTests() {
     TestPowerTransitionRecoveryTargetsIncludeIncomingAndPendingReconnectWithoutConnectedSessions();
     TestPowerTransitionDoesNotReleaseCloseInFlightBeforeDelayedResume();
     TestManualCommandsDuringDelayedPowerRecoveryAreRetainedByTheSession();
+    TestPowerTransitionRecoveryCaptureRejectsStaleDelayedIntent();
+    TestUnmatchedPowerResumeRestartsWatcherWithoutResurrectingSessions();
     TestStopAndShutdownReturnNormalizedTerminalResults();
     TestFactsCarryNormalizedSnapshots();
     TestFailureFactsRetainOperationKind();

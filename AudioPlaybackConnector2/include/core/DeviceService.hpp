@@ -103,7 +103,7 @@ public:
     void StartDeviceWatcher();
     void StopDeviceWatcher();
     void ShutdownForProcessExit() noexcept;
-    void SuspendForPowerTransition() noexcept;
+    std::vector<std::wstring> SuspendForPowerTransition();
     void ResumeAfterPowerTransition();
     void ResumeSuspendedSessions(std::vector<std::wstring> deviceIds);
     void SetIncomingConnectionsEnabled(bool enabled);

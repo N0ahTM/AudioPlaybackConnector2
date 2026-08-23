@@ -54,12 +54,14 @@ void PowerTransitionCoordinator::HandleSuspend(std::function<void()> flushSettin
         }
         CancelResumeReconnectTimer();
 
+        if (flushSettings) flushSettings();
+
         std::vector<std::wstring> activeDeviceIds;
         if (deviceService) {
             try {
-                activeDeviceIds = deviceService->GetPowerTransitionRecoveryDeviceIds();
+                activeDeviceIds = deviceService->SuspendForPowerTransition();
             } catch (...) {
-                DebugTrace(L"[PowerTransitionCoordinator] Failed to capture active devices before suspend");
+                DebugTrace(L"[PowerTransitionCoordinator] Failed to capture recovery intent while suspending devices");
             }
         }
 
@@ -71,9 +73,6 @@ void PowerTransitionCoordinator::HandleSuspend(std::function<void()> flushSettin
             state->DeliveryInFlight = false;
             state->Attempts.BeginCycle(std::move(activeDeviceIds));
         }
-
-        if (flushSettings) flushSettings();
-        if (deviceService) deviceService->SuspendForPowerTransition();
     } catch (...) {
         DebugTrace(L"[PowerTransitionCoordinator] HandleSuspend ERROR: ignored exception");
     }

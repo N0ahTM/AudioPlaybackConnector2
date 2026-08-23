@@ -878,11 +878,12 @@ void TestUnpersistableExternalDefaultRetainsP01Success() {
     operations.ReadConnectedDevices = [&] {
         return std::vector<DeviceRecord>{Device(longId, L"Long external ID"), Device(L"bounded-id", L"Bounded ID")};
     };
-    // This is the SettingsStore boundary outcome for a P01-valid external ID
-    // that exceeds the P07 persistence identity bound.
+    // The long ID models the SettingsStore boundary rejection caused by the
+    // P07 persistence identity bound. The bounded ID models an independent
+    // persistence failure so the bridge keeps reporting that failure.
     operations.SetDefaultDevice = [&](std::wstring_view id) {
         ++defaultMutations;
-        return apc::core::DeviceId::TryCreate(id).has_value();
+        return id != L"bounded-id" && apc::core::DeviceId::TryCreate(id).has_value();
     };
     LegacyAppUseCaseBridge bridge(std::move(operations));
 

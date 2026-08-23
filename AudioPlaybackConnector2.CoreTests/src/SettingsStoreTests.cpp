@@ -53,8 +53,10 @@ public:
     bool WriteAtomically(std::filesystem::path const&, std::string_view bytes) override {
         const auto finish = wil::scope_exit([&] {
             std::scoped_lock lock(m_operationMutex);
+            ++m_completedWrites;
             --m_activeWriters;
             --m_activeStorageOperations;
+            m_writeCompleted.notify_all();
         });
         {
             std::unique_lock lock(m_operationMutex);
@@ -119,6 +121,11 @@ public:
         m_writeStarted.wait(lock, [&] { return m_writes >= count; });
     }
 
+    void WaitForCompletedWrites(unsigned int count) {
+        std::unique_lock lock(m_operationMutex);
+        m_writeCompleted.wait(lock, [&] { return m_completedWrites >= count; });
+    }
+
     void WaitForRead() {
         std::unique_lock lock(m_operationMutex);
         m_readStarted.wait(lock, [&] { return m_reads != 0; });
@@ -155,12 +162,14 @@ private:
     mutable std::mutex m_operationMutex;
     mutable std::mutex m_dataMutex;
     std::condition_variable m_writeStarted;
+    std::condition_variable m_writeCompleted;
     std::condition_variable m_allowWrite;
     std::condition_variable m_readStarted;
     std::condition_variable m_allowRead;
     std::optional<std::string> m_input;
     std::string m_output;
     unsigned int m_writes = 0;
+    unsigned int m_completedWrites = 0;
     unsigned int m_reads = 0;
     unsigned int m_activeWriters = 0;
     unsigned int m_activeStorageOperations = 0;
@@ -484,6 +493,29 @@ void TestMutationDuringBlockedWriteAndFinalFlush() {
     static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
 }
 
+void TestDebouncedWorkerWaitsForSynchronousWriter() {
+    auto storage = std::make_shared<ControlledStorage>();
+    storage->BlockWrites();
+    SettingsStore store({}, storage);
+    Check(store.SetLanguage(L"de").IsApplied(), "the first revision must schedule persistence");
+    bool flushResult = false;
+    std::jthread flushing([&] { flushResult = store.FlushNow(2); });
+    storage->WaitForWrite();
+    Check(store.SetPrivacyModeEnabled(true).IsApplied(),
+          "a newer mutation must rearm the debounce timer during a synchronous write");
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    Check(storage->MaxActiveWriters() == 1,
+          "the debounced worker must wait instead of retrying while a synchronous writer is active");
+    storage->ReleaseWrites();
+    flushing.join();
+
+    Check(flushResult, "the synchronous flush must complete after the blocked writer is released");
+    Check(storage->Output().find("privacyModeEnabled\":true") != std::string::npos,
+          "the synchronous flush must persist the newest revision after the debounce deadline");
+    static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+}
+
 void TestLoadAdmissionFencesMutationAndFlush() {
     auto storage = std::make_shared<ControlledStorage>();
     storage->SetInput(R"({"language":"fr","privacyModeEnabled":false})");
@@ -607,7 +639,7 @@ void TestAutomaticDebounceAndRetry() {
     storage->m_failWrites = 1;
     SettingsStore store({}, storage);
     Check(store.SetLanguage(L"fr").IsApplied(), "automatic persistence must begin from a committed mutation");
-    storage->WaitForWrites(2);
+    storage->WaitForCompletedWrites(2);
     Check(storage->Output().find("\"language\":\"fr\"") != std::string::npos,
           "the worker must retry the failed debounced write without a caller-driven flush");
     Check(storage->MaxActiveWriters() == 1, "automatic retry must retain one writer at a time");
@@ -823,6 +855,7 @@ int RunSettingsStoreTests() {
     TestDeviceIdValidationRejectsWithoutRevision();
     TestRecordConnectedDeviceEffectiveReconnectPolicy();
     TestMutationDuringBlockedWriteAndFinalFlush();
+    TestDebouncedWorkerWaitsForSynchronousWriter();
     TestLoadAdmissionFencesMutationAndFlush();
     TestShutdownWaitsForAdmittedLoad();
     TestShutdownClosesAdmissionBeforeAdmittedLoadCompletes();

@@ -451,12 +451,14 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
         workerStartKnown = true;
         changed.notify_all();
         while (!stopToken.stop_requested()) {
-            changed.wait(
-                lock, [&] { return stopToken.stop_requested() || shutdownRequested || (timerArmed && !loadActive); });
+            changed.wait(lock, [&] {
+                return stopToken.stop_requested() || shutdownRequested || (timerArmed && !loadActive && !writerActive);
+            });
             if (stopToken.stop_requested() || shutdownRequested) return;
             const auto scheduled = due;
             if (changed.wait_until(lock, scheduled, [&] {
-                    return stopToken.stop_requested() || shutdownRequested || due != scheduled || loadActive;
+                    return stopToken.stop_requested() || shutdownRequested || !timerArmed || writerActive ||
+                           due != scheduled || loadActive;
                 }))
                 continue;
             SettingsData snapshot;

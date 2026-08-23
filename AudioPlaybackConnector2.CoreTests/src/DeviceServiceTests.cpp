@@ -352,6 +352,16 @@ void TestIncomingCallbackOrderingAndLossFollowReconnectPolicy() {
               SessionFor(fixture.Service, L"incoming").HasConnection &&
               fixture.ConnectionAccess->LastConnection == connection,
           "an established incoming loss must retain its listener while it waits for the configured reconnect policy");
+    auto const waitingEpoch = SessionFor(fixture.Service, L"incoming").OperationEpoch;
+    auto const factCount = fixture.Facts.size();
+    connection->Signal(DeviceConnectionState::Closed);
+    Check(
+        StateFor(fixture.Service, L"incoming") == DeviceLifecycleState::WaitingForReconnect &&
+            SessionFor(fixture.Service, L"incoming").HasConnection &&
+            SessionFor(fixture.Service, L"incoming").OperationEpoch == waitingEpoch &&
+            fixture.ConnectionAccess->LastConnection == connection && fixture.TimerAccess->LastTimer == retryTimer &&
+            fixture.Facts.size() == factCount,
+        "a duplicate incoming closed callback while waiting for reconnect must not mutate the retained listener state");
     retryTimer->FireEvenIfCancelled();
     Check(connection->CloseCalls == 1 && fixture.ConnectionAccess->Connections.size() == connectionCount &&
               StateFor(fixture.Service, L"incoming") == DeviceLifecycleState::Disconnecting,

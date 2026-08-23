@@ -369,6 +369,7 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
 
     void OnStateChanged(std::uint64_t epoch, DeviceConnection const* expectedConnection, DeviceConnectionState state) {
         if (!IsCurrentConnection(epoch, expectedConnection) || IsShutdown) return;
+        bool const isIncomingListener = !OpenImmediately && IsIncomingEnabled;
         if (state == DeviceConnectionState::Opened) {
             CancelTimer();
             Lifecycle = DeviceLifecycleState::Connected;
@@ -378,8 +379,8 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
             return;
         }
         if (Lifecycle == DeviceLifecycleState::Disconnecting) return;
+        if (isIncomingListener && Lifecycle == DeviceLifecycleState::WaitingForReconnect) return;
         bool const wasEstablished = Lifecycle == DeviceLifecycleState::Connected;
-        bool const isIncomingListener = !OpenImmediately && IsIncomingEnabled;
         if (wasEstablished && isIncomingListener) {
             if (!IsReconnectEnabled) {
                 Lifecycle = DeviceLifecycleState::Idle;

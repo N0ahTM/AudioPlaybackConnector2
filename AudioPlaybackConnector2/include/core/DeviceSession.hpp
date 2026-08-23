@@ -99,6 +99,7 @@ public:
     void SetIncomingEnabled(bool enabled);
     void Suspend();
     void Resume();
+    void ResumeIdleAfterPowerTransition();
     void Shutdown() noexcept;
 
 private:

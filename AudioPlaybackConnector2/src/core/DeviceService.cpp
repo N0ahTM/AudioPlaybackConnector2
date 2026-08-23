@@ -621,6 +621,10 @@ void DeviceService::ResumeAfterPowerTransition() {
         if (state->IsShutdown || !state->IsSuspended) return;
         state->IsSuspended = false;
         if (state->IsRunning && state->Watcher) static_cast<void>(state->Watcher->Start());
+        for (auto const& [id, session] : state->Sessions) {
+            (void)id;
+            session->ResumeIdleAfterPowerTransition();
+        }
         state->Publish(DeviceFactKind::SessionChanged);
     }));
 }

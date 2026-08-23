@@ -590,6 +590,45 @@ void TestStartupPolicyAndDelayedPowerResume() {
     }
 }
 
+void TestIdleDiscoveryResumesForManualConnectAfterPowerTransition() {
+    Fixture fixture;
+    Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted,
+          "watcher start must establish an idle discovered session");
+    fixture.WatcherAccess->LastWatcher->Add(L"idle-power", L"Idle power");
+    Check(StateFor(fixture.Service, L"idle-power") == DeviceLifecycleState::Idle,
+          "a discovered device without incoming connections must remain idle");
+
+    fixture.Service.SuspendForPowerTransition();
+    fixture.Service.ResumeAfterPowerTransition();
+    Check(fixture.ConnectionAccess->Connections.empty(),
+          "an idle discovery must not be automatically connected by the power transition");
+
+    auto const connect = fixture.Service.Connect(L"idle-power");
+    Check(connect.Kind == DeviceCommandResultKind::Accepted && fixture.ConnectionAccess->LastConnection != nullptr,
+          "a manually requested connect after power resume must start a new connection");
+    fixture.ConnectionAccess->LastConnection->CompleteStart(DeviceConnectionResult::Success);
+    fixture.ConnectionAccess->LastConnection->CompleteOpen(DeviceConnectionResult::Success);
+    Check(StateFor(fixture.Service, L"idle-power") == DeviceLifecycleState::Connected,
+          "a manually requested connect after power resume must reach connected");
+}
+
+void TestPowerTransitionDoesNotReleaseCloseInFlightBeforeDelayedResume() {
+    Fixture fixture;
+    ConnectSuccessfully(fixture, L"power-close");
+    auto* const connection = fixture.ConnectionAccess->LastConnection;
+    auto const beforeResume = fixture.ConnectionAccess->Connections.size();
+
+    fixture.Service.SuspendForPowerTransition();
+    fixture.Service.ResumeAfterPowerTransition();
+    CompleteCloseAndCooldown(fixture, connection);
+    Check(fixture.ConnectionAccess->Connections.size() == beforeResume,
+          "power transition must not release a close-in-flight session before delayed resume delivery");
+
+    fixture.Service.ResumeSuspendedSessions({L"power-close"});
+    Check(fixture.ConnectionAccess->Connections.size() == beforeResume + 1,
+          "the delayed resume delivery must remain the only path that restarts a suspended close-in-flight session");
+}
+
 void TestStopAndShutdownReturnNormalizedTerminalResults() {
     Fixture fixture;
     Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted, "start must establish watcher ownership");
@@ -627,6 +666,8 @@ int RunDeviceServiceTests() {
     TestConcurrentCommandWaitsForSerializedMutation();
     TestBulkSuspendResumeAndShutdownCannotResurrectSessions();
     TestStartupPolicyAndDelayedPowerResume();
+    TestIdleDiscoveryResumesForManualConnectAfterPowerTransition();
+    TestPowerTransitionDoesNotReleaseCloseInFlightBeforeDelayedResume();
     TestStopAndShutdownReturnNormalizedTerminalResults();
     TestFactsCarryNormalizedSnapshots();
     return g_failures;

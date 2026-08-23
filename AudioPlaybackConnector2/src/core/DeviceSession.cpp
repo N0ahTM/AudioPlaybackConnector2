@@ -813,6 +813,17 @@ void DeviceSession::Resume() {
     state->StartAfterResume();
 }
 
+void DeviceSession::ResumeIdleAfterPowerTransition() {
+    auto const state = m_state;
+    // Active and incoming sessions remain suspended until the coordinator supplies the delayed resume targets.
+    if (!state || state->IsShutdown || !state->IsSuspended || state->IsSuspendClosePending || state->ResumeRequired ||
+        state->ResumeRequested || state->IsIncomingEnabled) {
+        return;
+    }
+    state->IsSuspended = false;
+    state->Publish();
+}
+
 void DeviceSession::Shutdown() noexcept {
     auto const state = m_state;
     if (!state || state->IsShutdown) return;

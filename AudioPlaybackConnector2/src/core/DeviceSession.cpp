@@ -1,0 +1,598 @@
+#include <pch.h>
+
+#include <core/AudioConnectionService.hpp>
+#include <core/DeviceSession.hpp>
+#include <core/ReconnectPolicy.hpp>
+
+#include <stdexcept>
+#include <utility>
+
+namespace apc::device {
+namespace {
+
+DeviceConnectionResult
+ToConnectionResult(winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResultStatus status) noexcept {
+    using Status = winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResultStatus;
+    switch (status) {
+        case Status::Success: return DeviceConnectionResult::Success;
+        case Status::RequestTimedOut: return DeviceConnectionResult::TimedOut;
+        case Status::DeniedBySystem: return DeviceConnectionResult::Denied;
+        default: return DeviceConnectionResult::Failed;
+    }
+}
+
+class WindowsDeviceConnection final : public DeviceConnection {
+public:
+    explicit WindowsDeviceConnection(winrt::Windows::Media::Audio::AudioPlaybackConnection connection)
+        : m_connection(std::move(connection)) {}
+
+    [[nodiscard]] std::uint64_t RegisterStateChanged(StateChangedHandler handler) override {
+        if (!m_connection) return 0;
+        m_stateChangedToken = AudioConnectionService::RegisterStateChanged(
+            m_connection, [handler = std::move(handler)](auto sender, auto const&) {
+                if (!handler) return;
+                try {
+                    auto const state = sender.State();
+                    if (state == winrt::Windows::Media::Audio::AudioPlaybackConnectionState::Opened) {
+                        handler(DeviceConnectionState::Opened);
+                    } else if (state == winrt::Windows::Media::Audio::AudioPlaybackConnectionState::Closed) {
+                        handler(DeviceConnectionState::Closed);
+                    }
+                } catch (...) {
+                    handler(DeviceConnectionState::Closed);
+                }
+            });
+        return static_cast<std::uint64_t>(m_stateChangedToken.value);
+    }
+
+    void RevokeStateChanged(std::uint64_t token) noexcept override {
+        if (token == 0 || token != static_cast<std::uint64_t>(m_stateChangedToken.value)) return;
+        AudioConnectionService::RevokeStateChanged(m_connection, m_stateChangedToken);
+        m_stateChangedToken = {};
+    }
+
+    void Start(Completion completion) override { StartDetached(m_connection, std::move(completion)); }
+
+    void Open(Completion completion) override { OpenDetached(m_connection, std::move(completion)); }
+
+    void Close(CloseCompletion completion) noexcept override {
+        RevokeStateChanged(static_cast<std::uint64_t>(m_stateChangedToken.value));
+        auto connection = std::move(m_connection);
+        CloseDetached(std::move(connection), std::move(completion));
+    }
+
+private:
+    static winrt::fire_and_forget StartDetached(winrt::Windows::Media::Audio::AudioPlaybackConnection connection,
+                                                Completion completion) {
+        try {
+            co_await winrt::resume_background();
+            co_await AudioConnectionService::StartAsync(connection);
+            if (completion) completion(DeviceConnectionResult::Success);
+        } catch (winrt::hresult_error const&) {
+            if (completion) completion(DeviceConnectionResult::Failed);
+        } catch (...) {
+            if (completion) completion(DeviceConnectionResult::Failed);
+        }
+    }
+
+    static winrt::fire_and_forget OpenDetached(winrt::Windows::Media::Audio::AudioPlaybackConnection connection,
+                                               Completion completion) {
+        try {
+            co_await winrt::resume_background();
+            auto const result = co_await AudioConnectionService::OpenAsync(connection);
+            if (completion) completion(ToConnectionResult(result.Status()));
+        } catch (winrt::hresult_error const&) {
+            if (completion) completion(DeviceConnectionResult::Failed);
+        } catch (...) {
+            if (completion) completion(DeviceConnectionResult::Failed);
+        }
+    }
+
+    static winrt::fire_and_forget CloseDetached(winrt::Windows::Media::Audio::AudioPlaybackConnection connection,
+                                                CloseCompletion completion) noexcept {
+        try {
+            co_await winrt::resume_background();
+            AudioConnectionService::Close(connection);
+        } catch (...) {
+        }
+        if (completion) completion();
+    }
+
+    winrt::Windows::Media::Audio::AudioPlaybackConnection m_connection{nullptr};
+    winrt::event_token m_stateChangedToken{};
+};
+
+class WindowsDeviceConnectionPlatform final : public DeviceConnectionPlatform {
+public:
+    [[nodiscard]] std::unique_ptr<DeviceConnection> Create(std::wstring const& deviceId) override {
+        auto connection = AudioConnectionService::TryCreateFromId(winrt::hstring(deviceId));
+        if (!connection) return {};
+        return std::make_unique<WindowsDeviceConnection>(std::move(connection));
+    }
+};
+
+class WindowsDeviceTimer final : public DeviceTimer {
+public:
+    explicit WindowsDeviceTimer(winrt::Windows::System::Threading::ThreadPoolTimer timer) : m_timer(std::move(timer)) {}
+    void Cancel() noexcept override {
+        try {
+            if (m_timer) m_timer.Cancel();
+        } catch (...) {
+        }
+        m_timer = nullptr;
+    }
+
+private:
+    winrt::Windows::System::Threading::ThreadPoolTimer m_timer{nullptr};
+};
+
+class WindowsDeviceTimerPlatform final : public DeviceTimerPlatform {
+public:
+    [[nodiscard]] std::unique_ptr<DeviceTimer> Schedule(std::chrono::seconds delay, Callback callback) override {
+        auto timer = winrt::Windows::System::Threading::ThreadPoolTimer::CreateTimer(
+            [callback = std::move(callback)](auto const&) {
+                if (callback) callback();
+            },
+            delay);
+        return std::make_unique<WindowsDeviceTimer>(std::move(timer));
+    }
+};
+
+} // namespace
+
+std::unique_ptr<DeviceConnectionPlatform> CreateWindowsDeviceConnectionPlatform() {
+    return std::make_unique<WindowsDeviceConnectionPlatform>();
+}
+
+std::unique_ptr<DeviceTimerPlatform> CreateWindowsDeviceTimerPlatform() {
+    return std::make_unique<WindowsDeviceTimerPlatform>();
+}
+
+struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State> {
+    State(std::wstring deviceId,
+          std::wstring deviceName,
+          SerializedExecutor executor,
+          DeviceConnectionPlatform& connectionPlatform,
+          DeviceTimerPlatform& timerPlatform,
+          FactSink factSink)
+        : DeviceId(std::move(deviceId)), DeviceName(std::move(deviceName)), Executor(std::move(executor)),
+          ConnectionPlatform(connectionPlatform), TimerPlatform(timerPlatform), PublishFact(std::move(factSink)) {}
+
+    std::wstring DeviceId;
+    std::wstring DeviceName;
+    SerializedExecutor Executor;
+    DeviceConnectionPlatform& ConnectionPlatform;
+    DeviceTimerPlatform& TimerPlatform;
+    FactSink PublishFact;
+    std::unique_ptr<DeviceConnection> Connection;
+    std::unique_ptr<DeviceTimer> ReconnectTimer;
+    std::uint64_t StateChangedToken = 0;
+    std::uint64_t OperationEpoch = 0;
+    std::uint64_t TimerEpoch = 0;
+    std::size_t CompletedRetryAttempts = 0;
+    DeviceLifecycleState Lifecycle = DeviceLifecycleState::Idle;
+    DeviceOperationKind CurrentOperation = DeviceOperationKind::ManualConnect;
+    bool IsIncomingEnabled = false;
+    bool IsReconnectEnabled = true;
+    bool IsReconnectCancelled = false;
+    bool IsSuspended = false;
+    bool IsShutdown = false;
+    bool OpenImmediately = true;
+    bool RetryEligible = false;
+    bool RestoreIncomingAfterClose = false;
+    bool ResumeRequired = false;
+
+    [[nodiscard]] DeviceSessionSnapshot Snapshot() const {
+        return {
+            .DeviceId = DeviceId,
+            .DeviceName = DeviceName,
+            .State = Lifecycle,
+            .OperationEpoch = OperationEpoch,
+            .CompletedRetryAttempts = CompletedRetryAttempts,
+            .HasConnection = static_cast<bool>(Connection),
+            .IsIncomingEnabled = IsIncomingEnabled,
+            .IsReconnectEnabled = IsReconnectEnabled,
+            .IsReconnectCancelled = IsReconnectCancelled,
+        };
+    }
+
+    [[nodiscard]] bool IsBusy() const noexcept {
+        return Lifecycle == DeviceLifecycleState::Connecting || Lifecycle == DeviceLifecycleState::Disconnecting ||
+               Lifecycle == DeviceLifecycleState::WaitingForReconnect;
+    }
+
+    void Publish(DeviceConnectionResult result = DeviceConnectionResult::Success, bool terminal = false) {
+        if (PublishFact)
+            PublishFact({.Snapshot = Snapshot(),
+                         .Operation = CurrentOperation,
+                         .Result = result,
+                         .IsTerminalFailure = terminal});
+    }
+
+    void Post(Task task) {
+        auto weak = weak_from_this();
+        Executor([weak, task = std::move(task)]() mutable {
+            if (auto state = weak.lock()) task();
+        });
+    }
+
+    void CancelTimer() noexcept {
+        ++TimerEpoch;
+        auto timer = std::move(ReconnectTimer);
+        if (timer) timer->Cancel();
+    }
+
+    void RevokeStateChanged() noexcept {
+        if (Connection && StateChangedToken != 0) Connection->RevokeStateChanged(std::exchange(StateChangedToken, 0));
+    }
+
+    void StartConnection(DeviceOperationKind operation, bool openImmediately) {
+        if (IsShutdown || IsSuspended || DeviceId.empty()) return;
+        if (Lifecycle == DeviceLifecycleState::Connecting || Lifecycle == DeviceLifecycleState::Disconnecting) return;
+
+        if (operation != DeviceOperationKind::AutomaticReconnect) {
+            IsReconnectCancelled = false;
+            CompletedRetryAttempts = 0;
+        }
+        CancelTimer();
+        CurrentOperation = operation;
+        RetryEligible = operation == DeviceOperationKind::AutomaticReconnect ||
+                        operation == DeviceOperationKind::Startup || operation == DeviceOperationKind::Resume;
+        OpenImmediately = openImmediately;
+        ++OperationEpoch;
+        auto const epoch = OperationEpoch;
+
+        if (Connection) {
+            Lifecycle = DeviceLifecycleState::Disconnecting;
+            RestoreIncomingAfterClose = false;
+            RevokeStateChanged();
+            Publish();
+            CloseCurrent(epoch, true);
+            return;
+        }
+        BeginCreate(epoch);
+    }
+
+    void BeginCreate(std::uint64_t epoch) {
+        if (!IsCurrent(epoch) || IsShutdown || IsSuspended) return;
+        Lifecycle = DeviceLifecycleState::Connecting;
+        Publish();
+        try {
+            Connection = ConnectionPlatform.Create(DeviceId);
+        } catch (...) {
+            Connection.reset();
+        }
+        if (!Connection) {
+            CompleteFailure(epoch, DeviceConnectionResult::Failed);
+            return;
+        }
+
+        auto* const expectedConnection = Connection.get();
+        auto weak = weak_from_this();
+        StateChangedToken =
+            Connection->RegisterStateChanged([weak, epoch, expectedConnection](DeviceConnectionState state) {
+                if (auto session = weak.lock()) {
+                    session->Post([weak, epoch, expectedConnection, state] {
+                        if (auto current = weak.lock()) current->OnStateChanged(epoch, expectedConnection, state);
+                    });
+                }
+            });
+        Connection->Start([weak, epoch, expectedConnection](DeviceConnectionResult result) {
+            if (auto session = weak.lock()) {
+                session->Post([weak, epoch, expectedConnection, result] {
+                    if (auto current = weak.lock()) current->OnStarted(epoch, expectedConnection, result);
+                });
+            }
+        });
+    }
+
+    void OnStarted(std::uint64_t epoch, DeviceConnection const* expectedConnection, DeviceConnectionResult result) {
+        if (!IsCurrentConnection(epoch, expectedConnection)) return;
+        if (result != DeviceConnectionResult::Success) {
+            CompleteFailure(epoch, result);
+            return;
+        }
+        if (!OpenImmediately) {
+            Lifecycle = DeviceLifecycleState::Idle;
+            Publish();
+            return;
+        }
+        auto weak = weak_from_this();
+        Connection->Open([weak, epoch, expectedConnection](DeviceConnectionResult openResult) {
+            if (auto session = weak.lock()) {
+                session->Post([weak, epoch, expectedConnection, openResult] {
+                    if (auto current = weak.lock()) current->OnOpened(epoch, expectedConnection, openResult);
+                });
+            }
+        });
+    }
+
+    void OnOpened(std::uint64_t epoch, DeviceConnection const* expectedConnection, DeviceConnectionResult result) {
+        if (!IsCurrentConnection(epoch, expectedConnection)) return;
+        if (result != DeviceConnectionResult::Success) {
+            CompleteFailure(epoch, result);
+            return;
+        }
+        Lifecycle = DeviceLifecycleState::Connected;
+        CompletedRetryAttempts = 0;
+        RetryEligible = IsReconnectEnabled;
+        Publish();
+    }
+
+    void OnStateChanged(std::uint64_t epoch, DeviceConnection const* expectedConnection, DeviceConnectionState state) {
+        if (!IsCurrentConnection(epoch, expectedConnection) || IsShutdown) return;
+        if (state == DeviceConnectionState::Opened) {
+            Lifecycle = DeviceLifecycleState::Connected;
+            CompletedRetryAttempts = 0;
+            Publish();
+            return;
+        }
+        if (Lifecycle == DeviceLifecycleState::Disconnecting) return;
+        RevokeStateChanged();
+        Connection.reset();
+        ++OperationEpoch;
+        ScheduleReconnect(DeviceConnectionResult::Failed, RetryEligible);
+    }
+
+    void CompleteFailure(std::uint64_t epoch, DeviceConnectionResult result) {
+        if (!IsCurrent(epoch)) return;
+        RevokeStateChanged();
+        if (!Connection) {
+            ScheduleReconnect(result, RetryEligible);
+            return;
+        }
+        Lifecycle = DeviceLifecycleState::Disconnecting;
+        RestoreIncomingAfterClose = false;
+        Publish(result);
+        CloseCurrent(epoch, false, result);
+    }
+
+    void CloseCurrent(std::uint64_t epoch,
+                      bool beginReplacement,
+                      DeviceConnectionResult failure = DeviceConnectionResult::Success) {
+        if (!Connection) {
+            OnClosed(epoch, beginReplacement, failure);
+            return;
+        }
+        auto weak = weak_from_this();
+        Connection->Close([weak, epoch, beginReplacement, failure] {
+            if (auto session = weak.lock()) {
+                session->Post([weak, epoch, beginReplacement, failure] {
+                    if (auto current = weak.lock()) current->OnClosed(epoch, beginReplacement, failure);
+                });
+            }
+        });
+    }
+
+    void OnClosed(std::uint64_t epoch, bool beginReplacement, DeviceConnectionResult failure) {
+        if (!IsCurrent(epoch) || IsShutdown) return;
+        Connection.reset();
+        StateChangedToken = 0;
+        if (beginReplacement) {
+            BeginCreate(epoch);
+            return;
+        }
+        if (failure != DeviceConnectionResult::Success) {
+            ScheduleReconnect(failure, RetryEligible);
+            return;
+        }
+        Lifecycle = DeviceLifecycleState::Idle;
+        Publish();
+        if (RestoreIncomingAfterClose && IsIncomingEnabled && !IsSuspended) {
+            RestoreIncomingAfterClose = false;
+            StartConnection(DeviceOperationKind::IncomingEnable, false);
+        }
+    }
+
+    void ScheduleReconnect(DeviceConnectionResult result, bool shouldRetry) {
+        if (IsShutdown || IsSuspended || !shouldRetry || !IsReconnectEnabled || IsReconnectCancelled) {
+            Lifecycle = DeviceLifecycleState::Failed;
+            Publish(result);
+            return;
+        }
+        ++CompletedRetryAttempts;
+        auto const decision = ReconnectPolicy::Evaluate({
+            .Request = ReconnectRequest::ConnectionLoss,
+            .CompletedAttempts = CompletedRetryAttempts,
+            .IsBlocked = false,
+        });
+        if (decision.Kind == ReconnectDecisionKind::TerminalFailure) {
+            Lifecycle = DeviceLifecycleState::Failed;
+            Publish(result, true);
+            return;
+        }
+        Lifecycle = DeviceLifecycleState::WaitingForReconnect;
+        auto const timerEpoch = ++TimerEpoch;
+        auto const operationEpoch = OperationEpoch;
+        auto weak = weak_from_this();
+        try {
+            ReconnectTimer = TimerPlatform.Schedule(decision.Delay, [weak, timerEpoch, operationEpoch] {
+                if (auto session = weak.lock()) {
+                    session->Post([weak, timerEpoch, operationEpoch] {
+                        if (auto current = weak.lock()) current->OnRetryTimer(timerEpoch, operationEpoch);
+                    });
+                }
+            });
+        } catch (...) {
+            ReconnectTimer.reset();
+        }
+        if (!ReconnectTimer) {
+            Lifecycle = DeviceLifecycleState::Failed;
+            Publish(DeviceConnectionResult::Failed);
+            return;
+        }
+        Publish(result);
+    }
+
+    void OnRetryTimer(std::uint64_t timerEpoch, std::uint64_t operationEpoch) {
+        if (IsShutdown || IsSuspended || timerEpoch != TimerEpoch || operationEpoch != OperationEpoch ||
+            Lifecycle != DeviceLifecycleState::WaitingForReconnect) {
+            return;
+        }
+        ReconnectTimer.reset();
+        StartConnection(DeviceOperationKind::AutomaticReconnect, true);
+    }
+
+    [[nodiscard]] bool IsCurrent(std::uint64_t epoch) const noexcept { return !IsShutdown && epoch == OperationEpoch; }
+
+    [[nodiscard]] bool IsCurrentConnection(std::uint64_t epoch,
+                                           DeviceConnection const* expectedConnection) const noexcept {
+        return IsCurrent(epoch) && Connection.get() == expectedConnection;
+    }
+
+    void CloseForShutdown() noexcept {
+        RevokeStateChanged();
+        if (Connection) Connection->Close({});
+        Connection.reset();
+        StateChangedToken = 0;
+    }
+};
+
+DeviceSession::DeviceSession(std::wstring deviceId,
+                             std::wstring deviceName,
+                             SerializedExecutor serializedExecutor,
+                             DeviceConnectionPlatform& connectionPlatform,
+                             DeviceTimerPlatform& timerPlatform,
+                             FactSink factSink)
+    : m_state(std::make_shared<State>(std::move(deviceId),
+                                      std::move(deviceName),
+                                      std::move(serializedExecutor),
+                                      connectionPlatform,
+                                      timerPlatform,
+                                      std::move(factSink))) {
+    if (!m_state->Executor) throw std::invalid_argument("DeviceSession requires a serialized executor");
+}
+
+DeviceSession::~DeviceSession() {
+    Shutdown();
+}
+
+DeviceSessionSnapshot DeviceSession::Snapshot() const {
+    return m_state ? m_state->Snapshot() : DeviceSessionSnapshot{};
+}
+
+bool DeviceSession::IsBusy() const noexcept {
+    return m_state && m_state->IsBusy();
+}
+
+void DeviceSession::Rename(std::wstring deviceName) {
+    if (!m_state || m_state->IsShutdown) return;
+    m_state->DeviceName = std::move(deviceName);
+    m_state->Publish();
+}
+
+void DeviceSession::Connect(DeviceOperationKind operation, bool openImmediately) {
+    if (m_state) m_state->StartConnection(operation, openImmediately);
+}
+
+void DeviceSession::Disconnect(bool restoreIncoming) {
+    auto const state = m_state;
+    if (!state || state->IsShutdown) return;
+    state->CancelTimer();
+    state->IsReconnectCancelled = true;
+    state->RetryEligible = false;
+    ++state->OperationEpoch;
+    auto const epoch = state->OperationEpoch;
+    state->RestoreIncomingAfterClose = restoreIncoming;
+    if (!state->Connection) {
+        state->Lifecycle = DeviceLifecycleState::Idle;
+        state->Publish();
+        return;
+    }
+    state->Lifecycle = DeviceLifecycleState::Disconnecting;
+    state->RevokeStateChanged();
+    state->Publish();
+    state->CloseCurrent(epoch, false);
+}
+
+void DeviceSession::CancelReconnect() {
+    auto const state = m_state;
+    if (!state || state->IsShutdown) return;
+    state->CancelTimer();
+    state->IsReconnectCancelled = true;
+    state->RetryEligible = false;
+    bool const cancelsActiveReconnect = state->Lifecycle == DeviceLifecycleState::WaitingForReconnect ||
+                                        (state->Lifecycle == DeviceLifecycleState::Connecting &&
+                                         state->CurrentOperation == DeviceOperationKind::AutomaticReconnect);
+    if (!cancelsActiveReconnect) {
+        state->Publish(DeviceConnectionResult::Cancelled);
+        return;
+    }
+    ++state->OperationEpoch;
+    auto const epoch = state->OperationEpoch;
+    if (state->Connection) {
+        state->Lifecycle = DeviceLifecycleState::Disconnecting;
+        state->RestoreIncomingAfterClose = false;
+        state->RevokeStateChanged();
+        state->CloseCurrent(epoch, false);
+        return;
+    }
+    if (state->Lifecycle == DeviceLifecycleState::WaitingForReconnect) state->Lifecycle = DeviceLifecycleState::Idle;
+    state->Publish(DeviceConnectionResult::Cancelled);
+}
+
+void DeviceSession::SetReconnectEnabled(bool enabled) {
+    auto const state = m_state;
+    if (!state || state->IsShutdown) return;
+    state->IsReconnectEnabled = enabled;
+    if (!enabled && (state->Lifecycle == DeviceLifecycleState::WaitingForReconnect ||
+                     (state->Lifecycle == DeviceLifecycleState::Connecting &&
+                      state->CurrentOperation == DeviceOperationKind::AutomaticReconnect))) {
+        CancelReconnect();
+        return;
+    }
+    state->Publish();
+}
+
+void DeviceSession::SetIncomingEnabled(bool enabled) {
+    auto const state = m_state;
+    if (!state || state->IsShutdown) return;
+    state->IsIncomingEnabled = enabled;
+    if (!enabled && state->Connection && state->Lifecycle != DeviceLifecycleState::Connected) {
+        Disconnect(false);
+        return;
+    }
+    if (enabled && !state->Connection && !state->IsSuspended) {
+        state->StartConnection(DeviceOperationKind::IncomingEnable, false);
+        return;
+    }
+    state->Publish();
+}
+
+void DeviceSession::Suspend() {
+    auto const state = m_state;
+    if (!state || state->IsShutdown || state->IsSuspended) return;
+    state->ResumeRequired = state->Connection || state->IsBusy();
+    state->IsSuspended = true;
+    state->CancelTimer();
+    ++state->OperationEpoch;
+    state->CloseForShutdown();
+    state->Lifecycle = DeviceLifecycleState::Idle;
+    state->Publish(DeviceConnectionResult::Cancelled);
+}
+
+void DeviceSession::Resume() {
+    auto const state = m_state;
+    if (!state || state->IsShutdown || !state->IsSuspended) return;
+    state->IsSuspended = false;
+    if (state->ResumeRequired) {
+        state->ResumeRequired = false;
+        state->StartConnection(DeviceOperationKind::Resume, true);
+    } else if (state->IsIncomingEnabled) {
+        state->StartConnection(DeviceOperationKind::IncomingEnable, false);
+    } else {
+        state->Publish();
+    }
+}
+
+void DeviceSession::Shutdown() noexcept {
+    auto const state = m_state;
+    if (!state || state->IsShutdown) return;
+    state->IsShutdown = true;
+    ++state->OperationEpoch;
+    state->CancelTimer();
+    state->CloseForShutdown();
+    state->Lifecycle = DeviceLifecycleState::Idle;
+}
+
+} // namespace apc::device

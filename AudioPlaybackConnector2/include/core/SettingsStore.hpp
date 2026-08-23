@@ -89,6 +89,11 @@ public:
 
     void Load();
     [[nodiscard]] SettingsSnapshot Snapshot() const;
+#if defined(APC_SETTINGS_STORE_TESTING)
+    // Test-only observability for the deterministic worker-parking regression.
+    [[nodiscard]] std::uint64_t WorkerLoopIterationsForTesting() const noexcept;
+    [[nodiscard]] bool WorkerWaitingForTesting() const noexcept;
+#endif
     [[nodiscard]] Subscription Subscribe(SnapshotCallback callback);
 
     [[nodiscard]] SettingsMutationResult SetGlobalConnectOnStartup(bool enabled);

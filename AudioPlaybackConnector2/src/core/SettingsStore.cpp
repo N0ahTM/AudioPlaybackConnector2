@@ -7,6 +7,7 @@
 #include <util/RuntimeApartment.hpp>
 #include <util/Util.hpp>
 
+#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <limits>
@@ -283,6 +284,10 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
     bool loadClaimed = false;
     bool loadActive = false;
     unsigned int failures = 0;
+#if defined(APC_SETTINGS_STORE_TESTING)
+    std::atomic_uint64_t workerLoopIterations = 0;
+    std::atomic_bool workerWaiting = false;
+#endif
     std::jthread worker;
 
     [[nodiscard]] SettingsSnapshot SnapshotLocked() const { return {data, revision, revision != persistedRevision}; }
@@ -451,9 +456,21 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
         workerStartKnown = true;
         changed.notify_all();
         while (!stopToken.stop_requested()) {
+#if defined(APC_SETTINGS_STORE_TESTING)
+            ++workerLoopIterations;
+            workerWaiting.store(true, std::memory_order_release);
+#endif
             changed.wait(lock, [&] {
-                return stopToken.stop_requested() || shutdownRequested || (timerArmed && !loadActive && !writerActive);
+                const auto ready =
+                    stopToken.stop_requested() || shutdownRequested || (timerArmed && !loadActive && !writerActive);
+#if defined(APC_SETTINGS_STORE_TESTING)
+                if (ready) workerWaiting.store(false, std::memory_order_release);
+#endif
+                return ready;
             });
+#if defined(APC_SETTINGS_STORE_TESTING)
+            workerWaiting.store(false, std::memory_order_release);
+#endif
             if (stopToken.stop_requested() || shutdownRequested) return;
             const auto scheduled = due;
             if (changed.wait_until(lock, scheduled, [&] {
@@ -632,6 +649,16 @@ SettingsSnapshot SettingsStore::Snapshot() const {
     std::scoped_lock lock(m_impl->mutex);
     return m_impl->SnapshotLocked();
 }
+
+#if defined(APC_SETTINGS_STORE_TESTING)
+std::uint64_t SettingsStore::WorkerLoopIterationsForTesting() const noexcept {
+    return m_impl->workerLoopIterations.load(std::memory_order_relaxed);
+}
+
+bool SettingsStore::WorkerWaitingForTesting() const noexcept {
+    return m_impl->workerWaiting.load(std::memory_order_acquire);
+}
+#endif
 
 SettingsStore::Subscription SettingsStore::Subscribe(SnapshotCallback callback) {
     if (!callback) return {};

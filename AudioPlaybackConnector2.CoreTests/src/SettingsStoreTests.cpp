@@ -504,9 +504,15 @@ void TestDebouncedWorkerWaitsForSynchronousWriter() {
     Check(store.SetPrivacyModeEnabled(true).IsApplied(),
           "a newer mutation must rearm the debounce timer during a synchronous write");
 
+    const auto waitDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!store.WorkerWaitingForTesting() && std::chrono::steady_clock::now() < waitDeadline)
+        std::this_thread::yield();
+    Check(store.WorkerWaitingForTesting(), "the debounced worker must park behind the synchronous writer");
+    const auto parkedIterations = store.WorkerLoopIterationsForTesting();
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    Check(storage->MaxActiveWriters() == 1,
-          "the debounced worker must wait instead of retrying while a synchronous writer is active");
+    Check(store.WorkerLoopIterationsForTesting() == parkedIterations,
+          "the debounced worker must remain parked instead of hot-spinning while a synchronous writer is active");
+    Check(storage->MaxActiveWriters() == 1, "the debounced worker must not overlap the synchronous writer");
     storage->ReleaseWrites();
     flushing.join();
 

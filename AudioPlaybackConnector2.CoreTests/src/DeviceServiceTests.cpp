@@ -552,6 +552,44 @@ void TestDisablingReconnectRestoresPendingIncomingListenerAfterCloseBarrier() {
           "policy cancellation must restore a non-opening incoming listener without a terminal failure");
 }
 
+void TestExplicitDisconnectRestoresIncomingListenerAfterOutgoingRetry() {
+    Fixture fixture;
+    Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted,
+          "watcher start must establish the outgoing retry fixture");
+    fixture.WatcherAccess->LastWatcher->Add(L"outgoing-retry", L"Outgoing retry");
+    ConnectSuccessfully(fixture, L"outgoing-retry");
+    auto* const outgoingConnection = fixture.ConnectionAccess->LastConnection;
+
+    fixture.Service.ConfigureIncomingConnections(true);
+    outgoingConnection->Signal(DeviceConnectionState::Closed);
+    auto* const retryTimer = fixture.TimerAccess->LastTimer;
+    auto const staleRetryCallback = retryTimer->Callback;
+    auto const connectionCount = fixture.ConnectionAccess->Connections.size();
+    Check(StateFor(fixture.Service, L"outgoing-retry") == DeviceLifecycleState::WaitingForReconnect &&
+              !SessionFor(fixture.Service, L"outgoing-retry").HasConnection,
+          "an outgoing loss must reach waiting-reconnect without retaining a current connection");
+
+    Check(fixture.Service.Disconnect(L"outgoing-retry").Kind == DeviceCommandResultKind::Accepted,
+          "an explicit disconnect must cancel the pending outgoing retry");
+    auto* const incomingListener = fixture.ConnectionAccess->LastConnection;
+    Check(retryTimer->IsCancelled && fixture.ConnectionAccess->Connections.size() == connectionCount + 1 &&
+              incomingListener != outgoingConnection &&
+              SessionFor(fixture.Service, L"outgoing-retry").IsReconnectCancelled,
+          "disconnecting a waiting outgoing session must retain cancellation while creating the incoming listener");
+
+    if (staleRetryCallback) staleRetryCallback();
+    Check(fixture.ConnectionAccess->Connections.size() == connectionCount + 1,
+          "a stale outgoing retry must not replace the restored incoming listener");
+
+    incomingListener->CompleteStart(DeviceConnectionResult::Success);
+    Check(StateFor(fixture.Service, L"outgoing-retry") == DeviceLifecycleState::Idle &&
+              SessionFor(fixture.Service, L"outgoing-retry").HasConnection && !incomingListener->OpenCompletion,
+          "the restored incoming listener must be active without an outgoing open request");
+    incomingListener->Signal(DeviceConnectionState::Opened);
+    Check(StateFor(fixture.Service, L"outgoing-retry") == DeviceLifecycleState::Connected,
+          "the restored incoming listener must accept a simulated incoming connection");
+}
+
 void TestDisablingIncomingClosesEstablishedAndPendingIncomingSessions() {
     {
         Fixture fixture;
@@ -1116,6 +1154,14 @@ void TestPowerTransitionRecoveryCaptureRejectsStaleDelayedIntent() {
     Check(fixture.ConnectionAccess->Connections.size() == connectionCount &&
               StateFor(fixture.Service, L"power-stale-intent") == DeviceLifecycleState::Idle,
           "a delayed recovery delivery must reject an intent superseded by manual disconnect");
+
+    Check(fixture.Service.Connect(L"power-stale-intent").Kind == DeviceCommandResultKind::Accepted &&
+              fixture.ConnectionAccess->Connections.size() == connectionCount + 1,
+          "rejecting stale recovery must release the local suspension for a later manual connection");
+    fixture.ConnectionAccess->LastConnection->CompleteStart(DeviceConnectionResult::Success);
+    fixture.ConnectionAccess->LastConnection->CompleteOpen(DeviceConnectionResult::Success);
+    Check(StateFor(fixture.Service, L"power-stale-intent") == DeviceLifecycleState::Connected,
+          "the later manual connection must complete without resurrecting stale recovery work");
 }
 
 void TestUnmatchedPowerResumeRestartsWatcherWithoutResurrectingSessions() {
@@ -1263,6 +1309,7 @@ int RunDeviceServiceTests() {
     TestResumeWatcherFailureClearsRunningStateAndAllowsRetry();
     TestIncomingCallbackOrderingAndLossFollowReconnectPolicy();
     TestDisablingReconnectRestoresPendingIncomingListenerAfterCloseBarrier();
+    TestExplicitDisconnectRestoresIncomingListenerAfterOutgoingRetry();
     TestDisablingIncomingClosesEstablishedAndPendingIncomingSessions();
     TestDeviceRemovalClosesCurrentSessionAndRejectsLateCallbacks();
     TestRemovingAnIdleDiscoveredDeviceDoesNotPublishTerminalFailure();

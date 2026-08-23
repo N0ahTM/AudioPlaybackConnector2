@@ -103,6 +103,7 @@ public:
     void Suspend();
     void Resume();
     void ResumeIdleAfterPowerTransition();
+    void CancelPowerTransitionRecovery();
     void Shutdown() noexcept;
 
 private:

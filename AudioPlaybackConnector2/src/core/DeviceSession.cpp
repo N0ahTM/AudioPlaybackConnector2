@@ -265,7 +265,7 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
             return;
         }
 
-        if (operation != DeviceOperationKind::AutomaticReconnect) {
+        if (operation != DeviceOperationKind::AutomaticReconnect && operation != DeviceOperationKind::IncomingEnable) {
             IsReconnectCancelled = false;
             CompletedRetryAttempts = 0;
         }
@@ -849,6 +849,10 @@ void DeviceSession::Disconnect(bool restoreIncoming) {
     if (!state->Connection && !state->IsCloseInFlight) {
         state->Lifecycle = DeviceLifecycleState::Idle;
         state->Publish(DeviceConnectionResult::Success, false, DeviceDisconnectReason::Normal);
+        if (state->RestoreIncomingAfterClose && state->IsIncomingEnabled && !state->IsSuspended) {
+            state->RestoreIncomingAfterClose = false;
+            state->StartConnection(DeviceOperationKind::IncomingEnable, false);
+        }
         return;
     }
     state->Lifecycle = DeviceLifecycleState::Disconnecting;
@@ -934,6 +938,19 @@ void DeviceSession::ResumeIdleAfterPowerTransition() {
         return;
     }
     state->IsSuspended = false;
+    state->Publish();
+}
+
+void DeviceSession::CancelPowerTransitionRecovery() {
+    auto const state = m_state;
+    if (!state || state->IsShutdown || !state->IsSuspended) return;
+
+    // The delayed recovery was superseded on the serialized context. Release only its local hold;
+    // the superseding operation still owns the current lifecycle and any close barrier.
+    state->IsSuspended = false;
+    state->ResumeRequired = false;
+    state->ResumeRequested = false;
+    state->IsSuspendClosePending = false;
     state->Publish();
 }
 

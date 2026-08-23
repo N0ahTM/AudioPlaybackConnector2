@@ -687,8 +687,10 @@ void DeviceService::ResumeSuspendedSessions(std::vector<std::wstring> deviceIds)
             auto const recoveryEpoch = state->PowerTransitionRecoveryEpochs.find(id);
             if (session == state->Sessions.end() || recoveryEpoch == state->PowerTransitionRecoveryEpochs.end() ||
                 session->second->Snapshot().OperationEpoch != recoveryEpoch->second) {
-                if (recoveryEpoch != state->PowerTransitionRecoveryEpochs.end())
+                if (recoveryEpoch != state->PowerTransitionRecoveryEpochs.end()) {
+                    if (session != state->Sessions.end()) session->second->CancelPowerTransitionRecovery();
                     state->PowerTransitionRecoveryEpochs.erase(recoveryEpoch);
+                }
                 continue;
             }
             session->second->Resume();

@@ -166,8 +166,12 @@
     <ClInclude Include="include\core\DeviceInventoryGeneration.hpp" />
     <ClInclude Include="include\core\DevicePickerSnapshot.hpp" />
     <ClInclude Include="include\core\DevicePickerTypes.hpp" />
+    <ClInclude Include="include\core\DeviceService.hpp" />
+    <ClInclude Include="include\core\DeviceSession.hpp" />
     <ClInclude Include="include\core\DeviceSessionStore.hpp" />
     <ClInclude Include="include\core\DeviceTrayPresentation.hpp" />
+    <ClInclude Include="include\core\DeviceWatcher.hpp" />
+    <ClInclude Include="include\core\ReconnectPolicy.hpp" />
     <ClInclude Include="include\core\ReconnectController.hpp" />
     <ClInclude Include="include\core\DeviceManager.hpp" />
     <ClInclude Include="include\services\NotificationService.hpp" />

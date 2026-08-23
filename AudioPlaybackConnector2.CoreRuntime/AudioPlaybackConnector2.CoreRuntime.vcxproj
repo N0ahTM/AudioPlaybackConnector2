@@ -105,8 +105,12 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceInventoryGeneration.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DevicePickerSnapshot.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DevicePickerTypes.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceService.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceSession.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceSessionStore.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceTrayPresentation.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceWatcher.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\ReconnectPolicy.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\ReconnectController.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsStore.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsData.hpp" />
@@ -149,7 +153,11 @@
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceOperationCoordinator.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\DevicePickerSnapshot.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceInventoryGeneration.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceService.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceSession.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceSessionStore.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceWatcher.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\ReconnectPolicy.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\ReconnectController.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\TrayTooltipBuilder.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\SettingsStore.cpp" />

@@ -90,7 +90,9 @@
     <ClCompile Include="src\CommandClientTests.cpp" />
     <ClCompile Include="src\ControlUiActionGateTests.cpp" />
     <ClCompile Include="src\ControlTargetMatcherTests.cpp" />
+    <ClCompile Include="src\DeviceServiceTests.cpp" />
     <ClCompile Include="src\DeviceOperationCoordinatorTests.cpp" />
+    <ClCompile Include="src\DeviceWatcherTests.cpp" />
     <ClCompile Include="src\DiagnosticsLogCollectorTests.cpp" />
     <ClCompile Include="src\EventTests.cpp" />
     <ClCompile Include="src\SettingsDiagnosticsReportBuilderTests.cpp" />
@@ -100,6 +102,7 @@
     <ClCompile Include="src\LatestServiceLifecycleStateTests.cpp" />
     <ClCompile Include="src\LegacyAppUseCaseBridgeTests.cpp" />
     <ClCompile Include="src\ReconnectControllerTests.cpp" />
+    <ClCompile Include="src\ReconnectPolicyTests.cpp" />
     <ClCompile Include="src\ResourcePressureMonitorTests.cpp" />
     <ClCompile Include="src\RuntimeApartmentTests.cpp" />
     <ClCompile Include="src\SettingsLimitsTests.cpp" />
@@ -128,6 +131,16 @@
       <AdditionalIncludeDirectories>..\AudioPlaybackConnector2.CoreRuntime\include;..\AudioPlaybackConnector2\res;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceOperationCoordinator.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceService.cpp">
+      <AdditionalIncludeDirectories>..\AudioPlaybackConnector2.CoreRuntime\include;..\AudioPlaybackConnector2\res;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceSession.cpp">
+      <AdditionalIncludeDirectories>..\AudioPlaybackConnector2.CoreRuntime\include;..\AudioPlaybackConnector2\res;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceWatcher.cpp">
+      <AdditionalIncludeDirectories>..\AudioPlaybackConnector2.CoreRuntime\include;..\AudioPlaybackConnector2\res;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\ReconnectPolicy.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\ui\DiagnosticsLogCollector.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\ui\SettingsDiagnosticsReportBuilder.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\UpdateCoordinator.cpp" />
@@ -160,7 +173,10 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandProtocol.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\ControlTargetMatcher.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceOperationCoordinator.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceService.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceSession.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceId.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceWatcher.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\LatestServiceLifecycleState.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\ui\DiagnosticsLogCollector.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\ui\TrayPrimaryActivation.hpp" />
@@ -179,6 +195,7 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\AutomaticUpdateWindow.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DevicePickerSnapshot.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\ReconnectController.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\ReconnectPolicy.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\util\Event.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\util\RuntimeApartment.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\ToastXmlSanitizer.hpp" />

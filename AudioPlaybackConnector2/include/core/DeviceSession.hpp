@@ -14,6 +14,11 @@ enum class DeviceConnectionState { Opened, Closed };
 enum class DeviceConnectionResult { Success, TimedOut, Denied, Failed, Cancelled };
 enum class DeviceDisconnectReason { None, Normal, UnexpectedLoss, DeviceRemoved };
 
+struct DeviceOpenResult {
+    DeviceConnectionResult Result = DeviceConnectionResult::Failed;
+    bool IsTransientFailure = false;
+};
+
 struct DeviceSessionSnapshot {
     std::wstring DeviceId;
     std::wstring DeviceName;
@@ -38,13 +43,14 @@ class DeviceConnection {
 public:
     using StateChangedHandler = std::function<void(DeviceConnectionState)>;
     using Completion = std::function<void(DeviceConnectionResult)>;
+    using OpenCompletion = std::function<void(DeviceOpenResult)>;
     using CloseCompletion = std::function<void()>;
 
     virtual ~DeviceConnection() = default;
     [[nodiscard]] virtual std::uint64_t RegisterStateChanged(StateChangedHandler handler) = 0;
     virtual void RevokeStateChanged(std::uint64_t token) noexcept = 0;
     virtual void Start(Completion completion) = 0;
-    virtual void Open(Completion completion) = 0;
+    virtual void Open(OpenCompletion completion) = 0;
     virtual void Close(CloseCompletion completion) noexcept = 0;
 };
 

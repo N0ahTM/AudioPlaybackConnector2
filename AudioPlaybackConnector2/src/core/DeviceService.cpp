@@ -257,7 +257,7 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
         auto const iter = Sessions.find(deviceId);
         if (iter == Sessions.end() || iter->second->Snapshot().OperationEpoch != operationEpoch) return;
         iter->second->CancelReconnect();
-        iter->second->Disconnect(false);
+        iter->second->Disconnect(IsIncomingEnabled);
     }
 
     [[nodiscard]] static bool RequiresPowerTransitionRecovery(DeviceSessionSnapshot const& snapshot) noexcept {
@@ -306,6 +306,7 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
             }
             if (iter->State == DeviceLifecycleState::Connected) co_return;
             if (iter->State == DeviceLifecycleState::Failed) throw winrt::hresult_error(E_FAIL);
+            if (iter->State == DeviceLifecycleState::Idle) throw winrt::hresult_error(E_ABORT);
 
             co_await winrt::resume_after(std::chrono::milliseconds(25));
         }
@@ -402,7 +403,12 @@ DeviceCommandResult DeviceService::Connect(std::wstring deviceId) {
             return;
         }
         auto session = state->GetOrCreateSession(deviceId);
-        if (session->Snapshot().State == DeviceLifecycleState::Connected) {
+        auto const snapshot = session->Snapshot();
+        if (session->IsBusy() && snapshot.State == DeviceLifecycleState::Disconnecting) {
+            *result = state->Result(DeviceCommandKind::Connect, DeviceCommandResultKind::Rejected, deviceId);
+            return;
+        }
+        if (snapshot.State == DeviceLifecycleState::Connected) {
             *result = state->Result(DeviceCommandKind::Connect, DeviceCommandResultKind::Coalesced, deviceId);
             return;
         }
@@ -451,7 +457,12 @@ DeviceCommandResult DeviceService::Reconnect(std::wstring deviceId) {
             return;
         }
         auto session = state->GetOrCreateSession(deviceId);
-        auto const operationEpoch = session->Snapshot().OperationEpoch;
+        auto const snapshot = session->Snapshot();
+        if (session->IsBusy() && snapshot.State == DeviceLifecycleState::Disconnecting) {
+            *result = state->Result(DeviceCommandKind::Reconnect, DeviceCommandResultKind::Rejected, deviceId);
+            return;
+        }
+        auto const operationEpoch = snapshot.OperationEpoch;
         session->Connect(DeviceOperationKind::ManualReconnect, true);
         *result =
             state->Result(DeviceCommandKind::Reconnect,

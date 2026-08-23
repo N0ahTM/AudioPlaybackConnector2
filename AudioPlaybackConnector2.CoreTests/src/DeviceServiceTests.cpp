@@ -4,6 +4,7 @@
 #include <winerror.h>
 
 #include <algorithm>
+#include <array>
 #include <condition_variable>
 #include <iostream>
 #include <memory>
@@ -26,6 +27,7 @@ using apc::device::DeviceDisconnectReason;
 using apc::device::DeviceFact;
 using apc::device::DeviceFactKind;
 using apc::device::DeviceLifecycleState;
+using apc::device::DeviceOpenResult;
 using apc::device::DeviceService;
 using apc::device::DeviceServiceDependencies;
 using apc::device::DeviceTimer;
@@ -69,7 +71,7 @@ public:
         if (Behavior.ThrowOnStart) throw std::runtime_error("Start");
         StartCompletion = std::move(completion);
     }
-    void Open(DeviceConnection::Completion completion) {
+    void Open(DeviceConnection::OpenCompletion completion) {
         if (Behavior.ThrowOnOpen) throw std::runtime_error("Open");
         OpenCompletion = std::move(completion);
     }
@@ -82,6 +84,9 @@ public:
         if (StartCompletion) StartCompletion(result);
     }
     void CompleteOpen(DeviceConnectionResult result) {
+        if (OpenCompletion) OpenCompletion({.Result = result});
+    }
+    void CompleteOpen(DeviceOpenResult result) {
         if (OpenCompletion) OpenCompletion(result);
     }
     void CompleteClose() {
@@ -93,7 +98,7 @@ public:
 
     DeviceConnection::StateChangedHandler StateChanged;
     DeviceConnection::Completion StartCompletion;
-    DeviceConnection::Completion OpenCompletion;
+    DeviceConnection::OpenCompletion OpenCompletion;
     DeviceConnection::CloseCompletion CloseCompletionCallback;
     FakeConnectionBehavior Behavior;
     std::uint64_t LastToken = 0;
@@ -110,7 +115,7 @@ public:
     }
     void RevokeStateChanged(std::uint64_t token) noexcept override { m_state->RevokeStateChanged(token); }
     void Start(Completion completion) override { m_state->Start(std::move(completion)); }
-    void Open(Completion completion) override { m_state->Open(std::move(completion)); }
+    void Open(OpenCompletion completion) override { m_state->Open(std::move(completion)); }
     void Close(CloseCompletion completion) noexcept override { m_state->Close(std::move(completion)); }
 
 private:
@@ -137,7 +142,10 @@ class FakeTimer final : public DeviceTimer {
 public:
     FakeTimer(std::chrono::milliseconds delay, DeviceTimerPlatform::Callback callback)
         : Delay(delay), Callback(std::move(callback)) {}
-    void Cancel() noexcept override { IsCancelled = true; }
+    void Cancel() noexcept override {
+        IsCancelled = true;
+        *CancellationState = true;
+    }
     void FireEvenIfCancelled() {
         if (Callback) Callback();
     }
@@ -145,6 +153,7 @@ public:
     std::chrono::milliseconds Delay;
     DeviceTimerPlatform::Callback Callback;
     bool IsCancelled = false;
+    std::shared_ptr<bool> CancellationState = std::make_shared<bool>(false);
 };
 
 class FakeTimerPlatform final : public DeviceTimerPlatform {
@@ -519,13 +528,14 @@ void TestDisablingReconnectRestoresPendingIncomingListenerAfterCloseBarrier() {
     listener->Signal(DeviceConnectionState::Closed);
     auto* const retryTimer = fixture.TimerAccess->LastTimer;
     auto const retryCallback = retryTimer->Callback;
+    auto const retryTimerCancellationState = retryTimer->CancellationState;
     auto const connectionCount = fixture.ConnectionAccess->Connections.size();
     auto const terminalFailureCount = std::ranges::count_if(fixture.Facts, [](DeviceFact const& fact) {
         return fact.DeviceId == L"incoming-policy-disable" && fact.IsTerminalFailure;
     });
 
     fixture.Service.ConfigureReconnectPolicy(false, {});
-    Check(retryTimer->IsCancelled, "disabling reconnect policy must cancel the pending incoming retry timer");
+    Check(*retryTimerCancellationState, "disabling reconnect policy must cancel the pending incoming retry timer");
     Check(listener->CloseCalls == 1, "disabling reconnect policy must close the retained incoming listener");
     if (retryCallback) retryCallback();
     Check(fixture.ConnectionAccess->Connections.size() == connectionCount,
@@ -783,6 +793,291 @@ void TestPlatformSetupExceptionsCleanUpAndPublishTerminalFacts() {
                                   }),
               "close timer setup failure must publish a terminal failure fact");
     }
+}
+
+void TestManualTransientOpenRetriesPreserveFailureClassificationAndCancellation() {
+    {
+        Fixture fixture;
+        (void)fixture.Service.Connect(L"transient-open-success");
+        auto* const first = fixture.ConnectionAccess->LastConnection;
+        first->CompleteStart(DeviceConnectionResult::Success);
+        first->CompleteOpen({.Result = DeviceConnectionResult::TimedOut, .IsTransientFailure = true});
+        Check(first->CloseCalls == 1, "a transient Open failure must close before scheduling its retry");
+        CompleteCloseAndCooldown(fixture, first);
+        auto* const retryTimer = fixture.TimerAccess->LastTimer;
+        Check(retryTimer->Delay == std::chrono::milliseconds(500),
+              "the first transient Open retry must use the characterized 500 ms delay");
+        retryTimer->FireEvenIfCancelled();
+        auto* const second = fixture.ConnectionAccess->LastConnection;
+        second->CompleteStart(DeviceConnectionResult::Success);
+        second->CompleteOpen(DeviceConnectionResult::Success);
+        Check(StateFor(fixture.Service, L"transient-open-success") == DeviceLifecycleState::Connected,
+              "a successful transient Open retry must establish the original manual operation");
+    }
+
+    {
+        Fixture fixture;
+        (void)fixture.Service.Connect(L"qualified-unknown-open");
+        auto* const first = fixture.ConnectionAccess->LastConnection;
+        first->CompleteStart(DeviceConnectionResult::Success);
+        first->CompleteOpen({.Result = DeviceConnectionResult::Failed, .IsTransientFailure = true});
+        CompleteCloseAndCooldown(fixture, first);
+        Check(fixture.TimerAccess->LastTimer->Delay == std::chrono::milliseconds(500),
+              "a qualified UnknownFailure must retain the transient Open retry classification");
+    }
+
+    {
+        Fixture fixture;
+        (void)fixture.Service.Connect(L"permanent-open-failure");
+        auto* const connection = fixture.ConnectionAccess->LastConnection;
+        connection->CompleteStart(DeviceConnectionResult::Success);
+        connection->CompleteOpen(DeviceConnectionResult::Failed);
+        CompleteCloseAndCooldown(fixture, connection);
+        Check(StateFor(fixture.Service, L"permanent-open-failure") == DeviceLifecycleState::Failed &&
+                  fixture.ConnectionAccess->Connections.size() == 1,
+              "an unqualified Open failure must remain terminal instead of entering transient retry");
+    }
+
+    {
+        Fixture fixture;
+        (void)fixture.Service.Connect(L"cancel-transient-open");
+        auto* const first = fixture.ConnectionAccess->LastConnection;
+        first->CompleteStart(DeviceConnectionResult::Success);
+        first->CompleteOpen({.Result = DeviceConnectionResult::TimedOut, .IsTransientFailure = true});
+        CompleteCloseAndCooldown(fixture, first);
+        auto const staleRetryCallback = fixture.TimerAccess->LastTimer->Callback;
+        (void)fixture.Service.CancelReconnect(L"cancel-transient-open");
+        if (staleRetryCallback) staleRetryCallback();
+        Check(StateFor(fixture.Service, L"cancel-transient-open") == DeviceLifecycleState::Idle &&
+                  fixture.ConnectionAccess->Connections.size() == 1,
+              "manual cancellation must invalidate a transient Open retry timer without creating a new connection");
+    }
+}
+
+void TestManualTransientOpenRetryExhaustsAtTheCharacterizedLimit() {
+    Fixture fixture;
+    Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted,
+          "watcher start must establish the transient exhaustion incoming fixture");
+    fixture.Service.ConfigureIncomingConnections(true);
+    fixture.WatcherAccess->LastWatcher->Add(L"transient-open-exhaust", L"Transient open exhaust");
+    auto* const originalListener = fixture.ConnectionAccess->LastConnection;
+    originalListener->CompleteStart(DeviceConnectionResult::Success);
+    (void)fixture.Service.Connect(L"transient-open-exhaust");
+    CompleteCloseAndCooldown(fixture, originalListener);
+
+    for (std::size_t failedAttempt = 1; failedAttempt <= 10; ++failedAttempt) {
+        auto* const connection = fixture.ConnectionAccess->LastConnection;
+        connection->CompleteStart(DeviceConnectionResult::Success);
+        connection->CompleteOpen({.Result = DeviceConnectionResult::TimedOut, .IsTransientFailure = true});
+        CompleteCloseAndCooldown(fixture, connection);
+        if (failedAttempt == 10) break;
+        auto* const retryTimer = fixture.TimerAccess->LastTimer;
+        Check(retryTimer->Delay == std::chrono::milliseconds(std::array<int, 9>{
+                                       500, 1000, 1500, 2500, 4000, 6000, 8000, 8000, 8000}[failedAttempt - 1]),
+              "each transient Open retry must retain the characterized bounded delay sequence");
+        retryTimer->FireEvenIfCancelled();
+    }
+
+    auto* const restoredListener = fixture.ConnectionAccess->LastConnection;
+    restoredListener->CompleteStart(DeviceConnectionResult::Success);
+    Check(StateFor(fixture.Service, L"transient-open-exhaust") == DeviceLifecycleState::Idle &&
+              fixture.ConnectionAccess->Connections.size() == 12 && !restoredListener->OpenCompletion,
+          "transient Open exhaustion must restore the incoming listener without an eleventh outgoing attempt");
+    Check(std::ranges::any_of(fixture.Facts,
+                              [](DeviceFact const& fact) {
+                                  return fact.DeviceId == L"transient-open-exhaust" && fact.IsTerminalFailure &&
+                                         fact.ConnectionResult == DeviceConnectionResult::TimedOut;
+                              }),
+          "transient Open exhaustion must retain the terminal timeout classification");
+}
+
+void TestAutomaticTransientOpenRetriesUseTheSameBoundedPolicy() {
+    {
+        Fixture fixture;
+        ConnectSuccessfully(fixture, L"automatic-transient-open-success");
+        fixture.ConnectionAccess->LastConnection->Signal(DeviceConnectionState::Closed);
+        fixture.TimerAccess->LastTimer->FireEvenIfCancelled();
+        auto* const firstAutomaticConnection = fixture.ConnectionAccess->LastConnection;
+        firstAutomaticConnection->CompleteStart(DeviceConnectionResult::Success);
+        firstAutomaticConnection->CompleteOpen(
+            {.Result = DeviceConnectionResult::TimedOut, .IsTransientFailure = true});
+        CompleteCloseAndCooldown(fixture, firstAutomaticConnection);
+        auto* const transientRetryTimer = fixture.TimerAccess->LastTimer;
+        Check(transientRetryTimer->Delay == std::chrono::milliseconds(500) &&
+                  SessionFor(fixture.Service, L"automatic-transient-open-success").CompletedRetryAttempts == 0,
+              "an automatic transient Open failure must use the inner 500 ms retry without consuming another reconnect "
+              "attempt");
+        transientRetryTimer->FireEvenIfCancelled();
+        auto* const recoveredConnection = fixture.ConnectionAccess->LastConnection;
+        recoveredConnection->CompleteStart(DeviceConnectionResult::Success);
+        recoveredConnection->CompleteOpen(DeviceConnectionResult::Success);
+        Check(StateFor(fixture.Service, L"automatic-transient-open-success") == DeviceLifecycleState::Connected,
+              "an automatic transient Open retry must recover the same automatic operation");
+    }
+
+    {
+        Fixture fixture;
+        ConnectSuccessfully(fixture, L"automatic-transient-open-exhaust");
+        fixture.ConnectionAccess->LastConnection->Signal(DeviceConnectionState::Closed);
+        fixture.TimerAccess->LastTimer->FireEvenIfCancelled();
+
+        for (std::size_t failedAttempt = 1; failedAttempt <= 10; ++failedAttempt) {
+            auto* const connection = fixture.ConnectionAccess->LastConnection;
+            connection->CompleteStart(DeviceConnectionResult::Success);
+            connection->CompleteOpen({.Result = DeviceConnectionResult::Failed, .IsTransientFailure = true});
+            CompleteCloseAndCooldown(fixture, connection);
+            if (failedAttempt == 10) break;
+            fixture.TimerAccess->LastTimer->FireEvenIfCancelled();
+        }
+
+        Check(StateFor(fixture.Service, L"automatic-transient-open-exhaust") == DeviceLifecycleState::Failed &&
+                  fixture.ConnectionAccess->Connections.size() == 11,
+              "the tenth automatic transient Open failure must terminate without scheduling an eleventh inner retry");
+    }
+
+    {
+        Fixture fixture;
+        ConnectSuccessfully(fixture, L"automatic-transient-open-cancel");
+        fixture.ConnectionAccess->LastConnection->Signal(DeviceConnectionState::Closed);
+        fixture.TimerAccess->LastTimer->FireEvenIfCancelled();
+        auto* const connection = fixture.ConnectionAccess->LastConnection;
+        connection->CompleteStart(DeviceConnectionResult::Success);
+        connection->CompleteOpen({.Result = DeviceConnectionResult::TimedOut, .IsTransientFailure = true});
+        CompleteCloseAndCooldown(fixture, connection);
+        auto const staleRetryCallback = fixture.TimerAccess->LastTimer->Callback;
+        (void)fixture.Service.CancelReconnect(L"automatic-transient-open-cancel");
+        if (staleRetryCallback) staleRetryCallback();
+        Check(StateFor(fixture.Service, L"automatic-transient-open-cancel") == DeviceLifecycleState::Idle &&
+                  fixture.ConnectionAccess->Connections.size() == 2,
+              "cancellation must invalidate an automatic transient Open retry callback");
+    }
+}
+
+void TestAutomaticPreEstablishmentCloseCountsEachAttemptOnce() {
+    Fixture fixture;
+    ConnectSuccessfully(fixture, L"automatic-pre-establishment-close");
+    fixture.ConnectionAccess->LastConnection->Signal(DeviceConnectionState::Closed);
+
+    for (std::size_t attempt = 1; attempt <= 10; ++attempt) {
+        auto* const retryTimer = fixture.TimerAccess->LastTimer;
+        retryTimer->FireEvenIfCancelled();
+        auto* const connection = fixture.ConnectionAccess->LastConnection;
+        auto const staleClosedCallback = connection->StateChanged;
+        connection->Signal(DeviceConnectionState::Closed);
+        if (attempt == 1 && staleClosedCallback) staleClosedCallback(DeviceConnectionState::Closed);
+        Check(SessionFor(fixture.Service, L"automatic-pre-establishment-close").CompletedRetryAttempts == attempt,
+              "each automatic close-before-connected callback must consume exactly one retry attempt");
+    }
+
+    Check(StateFor(fixture.Service, L"automatic-pre-establishment-close") == DeviceLifecycleState::Failed &&
+              SessionFor(fixture.Service, L"automatic-pre-establishment-close").CompletedRetryAttempts == 10,
+          "repeated automatic pre-establishment closes must reach bounded retry exhaustion exactly once per attempt");
+}
+
+void TestPreEstablishmentClosePublishesOperationFailure() {
+    Fixture fixture;
+    (void)fixture.Service.Connect(L"manual-pre-establishment-close");
+    fixture.ConnectionAccess->LastConnection->Signal(DeviceConnectionState::Closed);
+
+    Check(std::ranges::any_of(fixture.Facts,
+                              [](DeviceFact const& fact) {
+                                  return fact.DeviceId == L"manual-pre-establishment-close" &&
+                                         fact.Kind == DeviceFactKind::OperationFailed && fact.IsTerminalFailure &&
+                                         fact.DisconnectReason == DeviceDisconnectReason::None;
+                              }),
+          "a manual close before establishment must be an operation failure without an unexpected-loss fact");
+    Check(!std::ranges::any_of(fixture.Facts,
+                               [](DeviceFact const& fact) {
+                                   return fact.DeviceId == L"manual-pre-establishment-close" &&
+                                          fact.DisconnectReason == DeviceDisconnectReason::UnexpectedLoss;
+                               }),
+          "UnexpectedLoss must remain reserved for an established connection loss");
+}
+
+void TestTerminalOutgoingPathsRestoreIncomingListener() {
+    {
+        Fixture fixture;
+        Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted,
+              "watcher start must establish the outgoing failure listener fixture");
+        fixture.Service.ConfigureIncomingConnections(true);
+        fixture.WatcherAccess->LastWatcher->Add(L"restore-after-start-failure", L"Restore after start failure");
+        auto* const listener = fixture.ConnectionAccess->LastConnection;
+        listener->CompleteStart(DeviceConnectionResult::Success);
+        fixture.ConnectionAccess->NextBehavior.ThrowOnStart = true;
+        (void)fixture.Service.Connect(L"restore-after-start-failure");
+        CompleteCloseAndCooldown(fixture, listener);
+        auto* const failedOutgoing = fixture.ConnectionAccess->LastConnection;
+        fixture.ConnectionAccess->NextBehavior = {};
+        CompleteCloseAndCooldown(fixture, failedOutgoing);
+        auto* const restoredListener = fixture.ConnectionAccess->LastConnection;
+        restoredListener->CompleteStart(DeviceConnectionResult::Success);
+        Check(StateFor(fixture.Service, L"restore-after-start-failure") == DeviceLifecycleState::Idle &&
+                  restoredListener != failedOutgoing && !restoredListener->OpenCompletion,
+              "a terminal outgoing Start failure must restore the incoming listener after its close barrier");
+    }
+
+    {
+        Fixture fixture;
+        ConnectSuccessfully(fixture, L"restore-after-unexpected-loss");
+        fixture.Service.ConfigureIncomingConnections(true);
+        fixture.Service.ConfigureReconnectPolicy(false, {});
+        fixture.ConnectionAccess->LastConnection->Signal(DeviceConnectionState::Closed);
+        auto* const restoredListener = fixture.ConnectionAccess->LastConnection;
+        restoredListener->CompleteStart(DeviceConnectionResult::Success);
+        Check(StateFor(fixture.Service, L"restore-after-unexpected-loss") == DeviceLifecycleState::Idle &&
+                  SessionFor(fixture.Service, L"restore-after-unexpected-loss").HasConnection &&
+                  !restoredListener->OpenCompletion,
+              "terminal established unexpected loss must restore an enabled incoming listener");
+    }
+
+    {
+        Fixture fixture;
+        Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted,
+              "watcher start must establish the outgoing cancellation listener fixture");
+        fixture.Service.ConfigureIncomingConnections(true);
+        fixture.WatcherAccess->LastWatcher->Add(L"restore-after-cancellation", L"Restore after cancellation");
+        auto* const listener = fixture.ConnectionAccess->LastConnection;
+        listener->CompleteStart(DeviceConnectionResult::Success);
+
+        auto operation = fixture.Service.ConnectAsync(L"restore-after-cancellation");
+        CompleteCloseAndCooldown(fixture, listener);
+        auto* const outgoing = fixture.ConnectionAccess->LastConnection;
+        operation.Cancel();
+        Check(outgoing->CloseCalls == 1,
+              "cancelling a replacement outgoing connection must close it before restoring the listener");
+        CompleteCloseAndCooldown(fixture, outgoing);
+        auto* const restoredListener = fixture.ConnectionAccess->LastConnection;
+        restoredListener->CompleteStart(DeviceConnectionResult::Success);
+        Check(StateFor(fixture.Service, L"restore-after-cancellation") == DeviceLifecycleState::Idle &&
+                  SessionFor(fixture.Service, L"restore-after-cancellation").IsReconnectCancelled &&
+                  !restoredListener->OpenCompletion,
+              "outgoing cancellation must restore the incoming listener without clearing user cancellation");
+    }
+}
+
+void TestAsyncConnectAndReconnectRejectCloseBarrierOverlap() {
+    Fixture fixture;
+    ConnectSuccessfully(fixture, L"async-close-barrier-overlap");
+    auto* const connection = fixture.ConnectionAccess->LastConnection;
+    (void)fixture.Service.Reconnect(L"async-close-barrier-overlap");
+
+    auto connect = fixture.Service.ConnectAsync(L"async-close-barrier-overlap");
+    auto reconnect = fixture.Service.ReconnectAsync(L"async-close-barrier-overlap");
+    Check(connect.Status() == winrt::Windows::Foundation::AsyncStatus::Error &&
+              reconnect.Status() == winrt::Windows::Foundation::AsyncStatus::Error,
+          "async commands coalesced behind an active close barrier must complete with an explicit busy result");
+    if (connect.Status() == winrt::Windows::Foundation::AsyncStatus::Error) {
+        Check(connect.ErrorCode() == E_ABORT,
+              "a rejected connect overlap must report E_ABORT instead of waiting forever");
+    }
+    if (reconnect.Status() == winrt::Windows::Foundation::AsyncStatus::Error) {
+        Check(reconnect.ErrorCode() == E_ABORT,
+              "a rejected reconnect overlap must report E_ABORT instead of waiting for an idle epoch");
+    }
+
+    CompleteCloseAndCooldown(fixture, connection);
+    Check(StateFor(fixture.Service, L"async-close-barrier-overlap") == DeviceLifecycleState::Connecting,
+          "the original reconnect must retain ownership after overlapping async commands are rejected");
 }
 
 void TestRetryTimerAndManualCancellationRejectStaleTimerCallbacks() {
@@ -1315,6 +1610,13 @@ int RunDeviceServiceTests() {
     TestRemovingAnIdleDiscoveredDeviceDoesNotPublishTerminalFailure();
     TestRemovingAnIdleIncomingListenerClosesWithoutTerminalFailure();
     TestPlatformSetupExceptionsCleanUpAndPublishTerminalFacts();
+    TestManualTransientOpenRetriesPreserveFailureClassificationAndCancellation();
+    TestManualTransientOpenRetryExhaustsAtTheCharacterizedLimit();
+    TestAutomaticTransientOpenRetriesUseTheSameBoundedPolicy();
+    TestAutomaticPreEstablishmentCloseCountsEachAttemptOnce();
+    TestPreEstablishmentClosePublishesOperationFailure();
+    TestTerminalOutgoingPathsRestoreIncomingListener();
+    TestAsyncConnectAndReconnectRejectCloseBarrierOverlap();
     TestRetryTimerAndManualCancellationRejectStaleTimerCallbacks();
     TestManualAsyncCommandsCancelSupersededReconnectEpochs();
     TestReconnectPolicyAndUserCancellationRemainDistinct();

@@ -120,6 +120,7 @@ public:
     RefreshDevicesAsync();
     [[nodiscard]] std::vector<DeviceSessionSnapshot> GetConnectedDevices() const;
     [[nodiscard]] std::vector<DeviceSessionSnapshot> GetConnectionSessions() const;
+    [[nodiscard]] std::vector<std::wstring> GetPowerTransitionRecoveryDeviceIds() const;
     [[nodiscard]] bool IsDeviceConnected(std::wstring_view deviceId) const;
     [[nodiscard]] bool IsDeviceConnected(winrt::hstring const& deviceId) const {
         return IsDeviceConnected(std::wstring(deviceId));

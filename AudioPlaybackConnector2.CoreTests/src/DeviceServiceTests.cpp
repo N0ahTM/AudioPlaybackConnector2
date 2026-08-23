@@ -295,7 +295,7 @@ void TestDuplicateConnectCoalescesWithoutReplacingConnectedSession() {
           "an explicit reconnect must create a replacement after the close barrier");
 }
 
-void TestCloseBarrierIsOneShotAndFallsBackAfterBoundedTimeout() {
+void TestCloseBarrierTimeoutRetainsTheOldConnectionUntilLateCompletion() {
     Fixture fixture;
     ConnectSuccessfully(fixture, L"close-timeout");
     auto* const oldConnection = fixture.ConnectionAccess->LastConnection;
@@ -307,17 +307,31 @@ void TestCloseBarrierIsOneShotAndFallsBackAfterBoundedTimeout() {
     Check(oldConnection->CloseCalls == 1, "a close barrier must issue exactly one close while it is in flight");
     Check(closeBarrierTimer->Delay == std::chrono::seconds(5), "the close barrier must retain a bounded cooldown");
     closeBarrierTimer->FireEvenIfCancelled();
-    Check(fixture.ConnectionAccess->Connections.size() == createCount + 1,
-          "the close timeout fallback must release exactly one replacement operation");
+    Check(fixture.ConnectionAccess->Connections.size() == createCount &&
+              StateFor(fixture.Service, L"close-timeout") == DeviceLifecycleState::Disconnecting,
+          "a close timeout must retain the old connection barrier without creating an overlapping replacement");
+    (void)fixture.Service.Reconnect(L"close-timeout");
+    Check(fixture.ConnectionAccess->Connections.size() == createCount,
+          "a command issued while a timed-out close remains unconfirmed must not create a replacement");
     oldConnection->CompleteClose();
-    Check(oldConnection->CloseCalls == 1 && fixture.ConnectionAccess->Connections.size() == createCount + 1,
-          "late close completion must neither close again nor create another replacement");
+    Check(oldConnection->CloseCalls == 1 && fixture.ConnectionAccess->Connections.size() == createCount,
+          "late close completion must retain the normal cooldown without creating the abandoned replacement");
+    auto* const cooldown = fixture.TimerAccess->LastTimer;
+    Check(cooldown->Delay == std::chrono::milliseconds(1500),
+          "a late completion after timeout must enter the normal close cooldown");
+    cooldown->FireEvenIfCancelled();
+    Check(StateFor(fixture.Service, L"close-timeout") == DeviceLifecycleState::Idle &&
+              fixture.ConnectionAccess->Connections.size() == createCount,
+          "the late completion must settle the abandoned operation without silently reconnecting");
+    (void)fixture.Service.Reconnect(L"close-timeout");
+    Check(fixture.ConnectionAccess->Connections.size() == createCount + 1,
+          "a later explicit reconnect may start only after the close barrier has completed");
     Check(std::ranges::any_of(fixture.Facts,
                               [](DeviceFact const& fact) {
                                   return fact.DeviceId == L"close-timeout" && fact.IsTerminalFailure &&
                                          fact.ConnectionResult == DeviceConnectionResult::TimedOut;
                               }),
-          "the close timeout fallback must publish a deterministic terminal timeout fact");
+          "the close timeout must publish a deterministic terminal timeout fact");
 }
 
 void TestIncomingCallbackOrderingAndLossFollowReconnectPolicy() {
@@ -343,11 +357,57 @@ void TestIncomingCallbackOrderingAndLossFollowReconnectPolicy() {
     Check(StateFor(fixture.Service, L"incoming") == DeviceLifecycleState::Idle,
           "an incoming reconnect must return to listening state without OpenAsync");
 
+    auto* const retainedListener = fixture.ConnectionAccess->LastConnection;
     fixture.ConnectionAccess->LastConnection->Signal(DeviceConnectionState::Opened);
     fixture.Service.ConfigureReconnectPolicy(false, {});
+    auto const failureCount = std::ranges::count_if(
+        fixture.Facts, [](DeviceFact const& fact) { return fact.DeviceId == L"incoming" && fact.IsTerminalFailure; });
     fixture.ConnectionAccess->LastConnection->Signal(DeviceConnectionState::Closed);
-    Check(StateFor(fixture.Service, L"incoming") == DeviceLifecycleState::Failed,
-          "an established incoming loss must respect disabled reconnect policy");
+    Check(StateFor(fixture.Service, L"incoming") == DeviceLifecycleState::Idle &&
+              SessionFor(fixture.Service, L"incoming").HasConnection &&
+              fixture.ConnectionAccess->LastConnection == retainedListener,
+          "an established incoming loss with reconnect disabled must retain the ready listener instead of failing");
+    Check(std::ranges::count_if(fixture.Facts,
+                                [](DeviceFact const& fact) {
+                                    return fact.DeviceId == L"incoming" && fact.IsTerminalFailure;
+                                }) == failureCount,
+          "a retained incoming listener loss must not publish a terminal failure fact when reconnect is disabled");
+    retainedListener->Signal(DeviceConnectionState::Opened);
+    Check(StateFor(fixture.Service, L"incoming") == DeviceLifecycleState::Connected,
+          "the retained incoming listener must accept a later opened callback");
+}
+
+void TestDisablingIncomingClosesEstablishedAndPendingIncomingSessions() {
+    {
+        Fixture fixture;
+        fixture.Service.ConfigureIncomingConnections(true);
+        fixture.WatcherAccess->LastWatcher->Add(L"incoming-disable", L"Incoming disable");
+        auto* const connection = fixture.ConnectionAccess->LastConnection;
+        connection->Signal(DeviceConnectionState::Opened);
+        fixture.Service.ConfigureIncomingConnections(false);
+        Check(connection->CloseCalls == 1,
+              "disabling incoming connections must close an established incoming listener exactly once");
+        CompleteCloseAndCooldown(fixture, connection);
+        Check(StateFor(fixture.Service, L"incoming-disable") == DeviceLifecycleState::Idle &&
+                  !SessionFor(fixture.Service, L"incoming-disable").HasConnection,
+              "disabling incoming connections must settle an established listener without leaving it connected");
+    }
+
+    {
+        Fixture fixture;
+        fixture.Service.ConfigureIncomingConnections(true);
+        fixture.WatcherAccess->LastWatcher->Add(L"incoming-pending", L"Incoming pending");
+        auto* const connection = fixture.ConnectionAccess->LastConnection;
+        connection->Signal(DeviceConnectionState::Opened);
+        connection->Signal(DeviceConnectionState::Closed);
+        auto* const pendingRetry = fixture.TimerAccess->LastTimer;
+        fixture.Service.ConfigureIncomingConnections(false);
+        Check(StateFor(fixture.Service, L"incoming-pending") == DeviceLifecycleState::Idle && pendingRetry->IsCancelled,
+              "disabling incoming connections must cancel a pending incoming reconnect timer");
+        pendingRetry->FireEvenIfCancelled();
+        Check(fixture.ConnectionAccess->Connections.size() == 1,
+              "a stale pending incoming reconnect timer must not recreate a listener after incoming is disabled");
+    }
 }
 
 void TestDeviceRemovalClosesCurrentSessionAndRejectsLateCallbacks() {
@@ -377,6 +437,22 @@ void TestDeviceRemovalClosesCurrentSessionAndRejectsLateCallbacks() {
     fixture.ConnectionAccess->LastConnection->CompleteOpen(DeviceConnectionResult::Success);
     Check(StateFor(fixture.Service, L"removed") == DeviceLifecycleState::Connected,
           "a returned device must recover through the retained reconnect policy");
+}
+
+void TestRemovingAnIdleDiscoveredDeviceDoesNotPublishTerminalFailure() {
+    Fixture fixture;
+    Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted, "watcher start must be accepted");
+    fixture.WatcherAccess->LastWatcher->Add(L"idle-removed", L"Idle removed");
+    fixture.Facts.clear();
+
+    fixture.WatcherAccess->LastWatcher->Remove(L"idle-removed");
+
+    Check(StateFor(fixture.Service, L"idle-removed") == DeviceLifecycleState::Idle,
+          "removing an idle discovered device must retain its idle session state");
+    Check(!std::ranges::any_of(
+              fixture.Facts,
+              [](DeviceFact const& fact) { return fact.DeviceId == L"idle-removed" && fact.IsTerminalFailure; }),
+          "removing an idle discovered device must not publish a terminal failure fact");
 }
 
 void TestPlatformSetupExceptionsCleanUpAndPublishTerminalFacts() {
@@ -437,11 +513,14 @@ void TestPlatformSetupExceptionsCleanUpAndPublishTerminalFacts() {
         auto const createCount = fixture.ConnectionAccess->Connections.size();
         fixture.TimerAccess->ThrowNextSchedule = true;
         (void)fixture.Service.Reconnect(L"close-timer-throws");
-        Check(connection->CloseCalls == 1 && fixture.ConnectionAccess->Connections.size() == createCount + 1,
-              "close timer setup failure must release its close barrier through the deterministic fallback");
+        Check(connection->CloseCalls == 1 && fixture.ConnectionAccess->Connections.size() == createCount,
+              "close timer setup failure must retain its close barrier until close completion is confirmed");
         connection->CompleteClose();
-        Check(fixture.ConnectionAccess->Connections.size() == createCount + 1,
-              "a late close completion after timer setup failure must remain stale");
+        CompleteCloseAndCooldown(fixture, connection);
+        Check(
+            fixture.ConnectionAccess->Connections.size() == createCount &&
+                StateFor(fixture.Service, L"close-timer-throws") == DeviceLifecycleState::Idle,
+            "a late close completion after timer setup failure must settle without starting the abandoned replacement");
         Check(std::ranges::any_of(fixture.Facts,
                                   [](DeviceFact const& fact) {
                                       return fact.DeviceId == L"close-timer-throws" && fact.IsTerminalFailure &&
@@ -644,6 +723,56 @@ void TestIdleDiscoveryResumesForManualConnectAfterPowerTransition() {
           "a manually requested connect after power resume must reach connected");
 }
 
+void TestPowerTransitionRecoveryTargetsIncludeIncomingAndPendingReconnectWithoutConnectedSessions() {
+    {
+        Fixture fixture;
+        fixture.Service.ConfigureIncomingConnections(true);
+        fixture.WatcherAccess->LastWatcher->Add(L"power-incoming", L"Power incoming");
+        fixture.ConnectionAccess->LastConnection->CompleteStart(DeviceConnectionResult::Success);
+        Check(StateFor(fixture.Service, L"power-incoming") == DeviceLifecycleState::Idle &&
+                  fixture.Service.GetConnectedDevices().empty(),
+              "an incoming-only listener must be idle while no device is connected");
+        auto const targets = fixture.Service.GetPowerTransitionRecoveryDeviceIds();
+        Check(std::ranges::find(targets, L"power-incoming") != targets.end(),
+              "power recovery target capture must retain an incoming-only listener with zero connected devices");
+
+        auto* const listener = fixture.ConnectionAccess->LastConnection;
+        fixture.Service.SuspendForPowerTransition();
+        fixture.Service.ResumeAfterPowerTransition();
+        fixture.Service.ResumeSuspendedSessions(targets);
+        CompleteCloseAndCooldown(fixture, listener);
+        Check(fixture.ConnectionAccess->Connections.size() == 2,
+              "the delayed recovery target must restart an incoming-only listener after its close barrier completes");
+    }
+
+    {
+        Fixture fixture;
+        ConnectSuccessfully(fixture, L"power-pending");
+        fixture.ConnectionAccess->LastConnection->Signal(DeviceConnectionState::Closed);
+        Check(StateFor(fixture.Service, L"power-pending") == DeviceLifecycleState::WaitingForReconnect &&
+                  fixture.Service.GetConnectedDevices().empty(),
+              "a pending reconnect must be recoverable while zero devices are connected");
+        auto const targets = fixture.Service.GetPowerTransitionRecoveryDeviceIds();
+        Check(std::ranges::find(targets, L"power-pending") != targets.end(),
+              "power recovery target capture must retain a pending reconnect with zero connected devices");
+
+        fixture.Service.SuspendForPowerTransition();
+        fixture.Service.ResumeAfterPowerTransition();
+        fixture.Service.ResumeSuspendedSessions(targets);
+        Check(fixture.ConnectionAccess->Connections.size() == 2,
+              "the delayed recovery target must resume a pending reconnect without waiting for its stale timer");
+    }
+
+    {
+        Fixture fixture;
+        Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted, "watcher start must be accepted");
+        fixture.WatcherAccess->LastWatcher->Add(L"power-idle", L"Power idle");
+        auto const targets = fixture.Service.GetPowerTransitionRecoveryDeviceIds();
+        Check(std::ranges::find(targets, L"power-idle") == targets.end(),
+              "ordinary idle discovery must not become a power recovery target");
+    }
+}
+
 void TestPowerTransitionDoesNotReleaseCloseInFlightBeforeDelayedResume() {
     Fixture fixture;
     ConnectSuccessfully(fixture, L"power-close");
@@ -690,9 +819,11 @@ int RunDeviceServiceTests() {
     TestOperationEpochRejectsStaleCompletion();
     TestReconnectWaitsForCloseAndRevokesTheOldToken();
     TestDuplicateConnectCoalescesWithoutReplacingConnectedSession();
-    TestCloseBarrierIsOneShotAndFallsBackAfterBoundedTimeout();
+    TestCloseBarrierTimeoutRetainsTheOldConnectionUntilLateCompletion();
     TestIncomingCallbackOrderingAndLossFollowReconnectPolicy();
+    TestDisablingIncomingClosesEstablishedAndPendingIncomingSessions();
     TestDeviceRemovalClosesCurrentSessionAndRejectsLateCallbacks();
+    TestRemovingAnIdleDiscoveredDeviceDoesNotPublishTerminalFailure();
     TestPlatformSetupExceptionsCleanUpAndPublishTerminalFacts();
     TestRetryTimerAndManualCancellationRejectStaleTimerCallbacks();
     TestReconnectPolicyAndUserCancellationRemainDistinct();
@@ -700,6 +831,7 @@ int RunDeviceServiceTests() {
     TestBulkSuspendResumeAndShutdownCannotResurrectSessions();
     TestStartupPolicyAndDelayedPowerResume();
     TestIdleDiscoveryResumesForManualConnectAfterPowerTransition();
+    TestPowerTransitionRecoveryTargetsIncludeIncomingAndPendingReconnectWithoutConnectedSessions();
     TestPowerTransitionDoesNotReleaseCloseInFlightBeforeDelayedResume();
     TestStopAndShutdownReturnNormalizedTerminalResults();
     TestFactsCarryNormalizedSnapshots();

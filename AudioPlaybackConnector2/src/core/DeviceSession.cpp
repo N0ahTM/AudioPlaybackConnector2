@@ -195,6 +195,7 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
     std::uint64_t SuspendCloseEpoch = 0;
     bool IsCloseInFlight = false;
     bool IsCloseCooldown = false;
+    bool IsCloseContinuationAbandoned = false;
     CloseContinuation PendingCloseContinuation = CloseContinuation::Idle;
     DeviceConnectionResult PendingCloseFailure = DeviceConnectionResult::Success;
     bool PendingCloseRetryEligible = false;
@@ -377,6 +378,13 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
         }
         if (Lifecycle == DeviceLifecycleState::Disconnecting) return;
         bool const wasEstablished = Lifecycle == DeviceLifecycleState::Connected;
+        bool const isIncomingListener = !OpenImmediately && IsIncomingEnabled;
+        if (wasEstablished && isIncomingListener && !IsReconnectEnabled) {
+            Lifecycle = DeviceLifecycleState::Idle;
+            RetryEligible = false;
+            Publish();
+            return;
+        }
         RevokeStateChanged();
         Connection.reset();
         ++OperationEpoch;
@@ -411,10 +419,14 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
                     DeviceConnectionResult failure = DeviceConnectionResult::Success,
                     bool shouldRetry = false,
                     bool completedAttempt = false) {
+        if (IsCloseInFlight) {
+            if (IsCloseContinuationAbandoned) return;
+        }
         PendingCloseContinuation = continuation;
         PendingCloseFailure = failure;
         PendingCloseRetryEligible = shouldRetry;
         PendingCloseCompletedAttempt = completedAttempt;
+        IsCloseContinuationAbandoned = false;
         if (IsCloseInFlight) return;
         if (!Connection) {
             ContinueAfterClose(epoch, false);
@@ -426,17 +438,6 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
         IsCloseInFlight = true;
         auto const closeBarrierEpoch = ++CloseBarrierEpoch;
         auto weak = weak_from_this();
-        ClosingConnection->Close([weak, closeBarrierEpoch] {
-            if (auto session = weak.lock()) {
-                try {
-                    session->Post([weak, closeBarrierEpoch] {
-                        if (auto current = weak.lock()) current->CompleteCloseBarrier(closeBarrierEpoch, false);
-                    });
-                } catch (...) {
-                }
-            }
-        });
-
         try {
             CloseBarrierTimer = TimerPlatform.Schedule(CloseBarrierTimeout, [weak, closeBarrierEpoch] {
                 if (auto session = weak.lock()) {
@@ -453,22 +454,31 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
         }
         if (!CloseBarrierTimer) {
             Publish(DeviceConnectionResult::Failed, true);
-            CompleteCloseBarrier(closeBarrierEpoch, true);
+            AbandonCloseContinuation();
         }
+        ClosingConnection->Close([weak, closeBarrierEpoch] {
+            if (auto session = weak.lock()) {
+                try {
+                    session->Post([weak, closeBarrierEpoch] {
+                        if (auto current = weak.lock()) current->CompleteCloseBarrier(closeBarrierEpoch, false);
+                    });
+                } catch (...) {
+                }
+            }
+        });
     }
 
     void CompleteCloseBarrier(std::uint64_t closeBarrierEpoch, bool timedOut) {
         if (IsShutdown || !IsCloseInFlight || IsCloseCooldown || closeBarrierEpoch != CloseBarrierEpoch) return;
         CancelCloseBarrierTimer();
-        ClosingConnection.reset();
-        StateChangedToken = 0;
         if (timedOut) {
-            IsCloseInFlight = false;
             Publish(DeviceConnectionResult::TimedOut, true);
-            ContinueAfterClose(OperationEpoch, true);
+            AbandonCloseContinuation();
             return;
         }
 
+        ClosingConnection.reset();
+        StateChangedToken = 0;
         IsCloseCooldown = true;
         auto weak = weak_from_this();
         try {
@@ -496,6 +506,15 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
         ContinueAfterClose(OperationEpoch, false);
     }
 
+    void AbandonCloseContinuation() noexcept {
+        PendingCloseContinuation = CloseContinuation::Idle;
+        PendingCloseFailure = DeviceConnectionResult::Success;
+        PendingCloseRetryEligible = false;
+        PendingCloseCompletedAttempt = false;
+        RestoreIncomingAfterClose = false;
+        IsCloseContinuationAbandoned = true;
+    }
+
     void ContinueAfterClose(std::uint64_t epoch, bool) {
         if (!IsCurrent(epoch) || IsShutdown) return;
         auto const continuation = PendingCloseContinuation;
@@ -506,6 +525,20 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
         PendingCloseFailure = DeviceConnectionResult::Success;
         PendingCloseRetryEligible = false;
         PendingCloseCompletedAttempt = false;
+        if (IsCloseContinuationAbandoned) {
+            IsCloseContinuationAbandoned = false;
+            if (IsSuspendClosePending) {
+                IsSuspendClosePending = false;
+                ResumeRequired = false;
+                if (ResumeRequested) {
+                    ResumeRequested = false;
+                    IsSuspended = false;
+                }
+            }
+            Lifecycle = DeviceLifecycleState::Idle;
+            Publish();
+            return;
+        }
         if (continuation == CloseContinuation::Replace) {
             BeginCreate(epoch);
             return;
@@ -616,6 +649,7 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
         ClosingConnection.reset();
         IsCloseInFlight = false;
         IsCloseCooldown = false;
+        IsCloseContinuationAbandoned = false;
         ++CloseBarrierEpoch;
         StateChangedToken = 0;
     }
@@ -708,6 +742,11 @@ void DeviceSession::HandleDeviceRemoved() {
     state->CancelTimer();
     state->RestoreIncomingAfterClose = false;
     bool const shouldRetry = state->RetryEligible;
+    if (!state->Connection && !state->IsCloseInFlight && state->Lifecycle == DeviceLifecycleState::Idle &&
+        !shouldRetry) {
+        state->Publish();
+        return;
+    }
     ++state->OperationEpoch;
     auto const epoch = state->OperationEpoch;
     if (state->IsCloseInFlight) {
@@ -774,7 +813,10 @@ void DeviceSession::SetIncomingEnabled(bool enabled) {
     auto const state = m_state;
     if (!state || state->IsShutdown) return;
     state->IsIncomingEnabled = enabled;
-    if (!enabled && state->Connection && state->Lifecycle != DeviceLifecycleState::Connected) {
+    bool const hasIncomingLifecycle =
+        !state->OpenImmediately &&
+        (state->Connection || state->IsCloseInFlight || state->Lifecycle == DeviceLifecycleState::WaitingForReconnect);
+    if (!enabled && hasIncomingLifecycle) {
         Disconnect(false);
         return;
     }

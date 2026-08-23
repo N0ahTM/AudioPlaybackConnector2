@@ -57,11 +57,7 @@ void PowerTransitionCoordinator::HandleSuspend(std::function<void()> flushSettin
         std::vector<std::wstring> activeDeviceIds;
         if (deviceService) {
             try {
-                auto connected = deviceService->GetConnectedDevices();
-                activeDeviceIds.reserve(connected.size());
-                for (auto const& session : connected) {
-                    if (!session.DeviceId.empty()) activeDeviceIds.push_back(session.DeviceId);
-                }
+                activeDeviceIds = deviceService->GetPowerTransitionRecoveryDeviceIds();
             } catch (...) {
                 DebugTrace(L"[PowerTransitionCoordinator] Failed to capture active devices before suspend");
             }

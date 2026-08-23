@@ -250,15 +250,18 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
         iter->second->Disconnect(false);
     }
 
-    winrt::Windows::Foundation::IAsyncAction AwaitTerminal(std::wstring deviceId, std::uint64_t operationEpoch) {
+    winrt::Windows::Foundation::IAsyncAction
+    AwaitTerminal(std::wstring deviceId, std::uint64_t operationEpoch, bool ownsCancellation) {
         auto const cancellation = co_await winrt::get_cancellation_token();
         auto const weak = weak_from_this();
-        cancellation.callback([weak, deviceId, operationEpoch] {
-            if (auto state = weak.lock()) {
-                static_cast<void>(state->Post(
-                    [state, deviceId, operationEpoch] { state->CancelOperation(deviceId, operationEpoch); }));
-            }
-        });
+        if (ownsCancellation) {
+            cancellation.callback([weak, deviceId, operationEpoch] {
+                if (auto state = weak.lock()) {
+                    static_cast<void>(state->Post(
+                        [state, deviceId, operationEpoch] { state->CancelOperation(deviceId, operationEpoch); }));
+                }
+            });
+        }
 
         for (;;) {
             if (cancellation()) co_return;
@@ -688,7 +691,8 @@ winrt::Windows::Foundation::IAsyncAction DeviceService::ConnectAsync(winrt::hstr
     if (!state || deviceId.empty()) co_return;
     auto const result = Connect(std::wstring(deviceId));
     if (result.Kind == DeviceCommandResultKind::Rejected) throw winrt::hresult_error(E_ABORT);
-    co_await state->AwaitTerminal(std::wstring(deviceId), result.OperationEpoch);
+    co_await state->AwaitTerminal(
+        std::wstring(deviceId), result.OperationEpoch, result.Kind == DeviceCommandResultKind::Accepted);
 }
 
 void DeviceService::ConnectDetached(winrt::hstring deviceId) {
@@ -700,7 +704,8 @@ winrt::Windows::Foundation::IAsyncAction DeviceService::ReconnectAsync(winrt::hs
     if (!state || deviceId.empty()) co_return;
     auto const result = Reconnect(std::wstring(deviceId));
     if (result.Kind == DeviceCommandResultKind::Rejected) throw winrt::hresult_error(E_ABORT);
-    co_await state->AwaitTerminal(std::wstring(deviceId), result.OperationEpoch);
+    co_await state->AwaitTerminal(
+        std::wstring(deviceId), result.OperationEpoch, result.Kind == DeviceCommandResultKind::Accepted);
 }
 
 void DeviceService::ReconnectDetached(winrt::hstring deviceId) {
@@ -724,6 +729,18 @@ std::vector<DeviceSessionSnapshot> DeviceService::GetConnectedDevices() const {
 
 std::vector<DeviceSessionSnapshot> DeviceService::GetConnectionSessions() const {
     return Snapshot().Sessions;
+}
+
+std::vector<std::wstring> DeviceService::GetPowerTransitionRecoveryDeviceIds() const {
+    std::vector<std::wstring> result;
+    for (auto const& session : Snapshot().Sessions) {
+        bool const requiresRecovery = session.State == DeviceLifecycleState::Connected || session.IsIncomingEnabled ||
+                                      session.State == DeviceLifecycleState::Connecting ||
+                                      session.State == DeviceLifecycleState::Disconnecting ||
+                                      session.State == DeviceLifecycleState::WaitingForReconnect;
+        if (requiresRecovery && !session.DeviceId.empty()) result.push_back(session.DeviceId);
+    }
+    return result;
 }
 
 bool DeviceService::IsDeviceConnected(std::wstring_view deviceId) const {

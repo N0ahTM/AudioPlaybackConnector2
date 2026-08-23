@@ -459,6 +459,19 @@ void TestRecordConnectedDeviceEffectiveReconnectPolicy() {
     const auto known = store.RecordConnectedDevice(L"known", L"Known");
     Check(known.EffectiveReconnectOnConnectionLoss,
           "recording a known device must OR its per-device policy with the global policy");
+    Check(store.SetDeviceAlias(L"known", L"Desk").Mutation.IsApplied(),
+          "an alias must be persisted before testing hidden name updates");
+    const auto aliasedName = store.RecordConnectedDevice(L"known", L"Renamed");
+    Check(aliasedName.Mutation.IsApplied() && !aliasedName.PresentationChanged,
+          "a renamed aliased device must persist its name without changing its visible presentation");
+    Check(store.Snapshot().Data.Devices.front().Name == L"Renamed",
+          "a renamed aliased device must update its stored name");
+    Check(store.SetPrivacyModeEnabled(true).IsApplied(), "privacy mode must apply before the second hidden rename");
+    const auto privateName = store.RecordConnectedDevice(L"known", L"PrivateName");
+    Check(privateName.Mutation.IsApplied() && !privateName.PresentationChanged,
+          "a renamed private device must persist its name without changing its visible presentation");
+    Check(store.Snapshot().Data.Devices.front().Name == L"PrivateName",
+          "a renamed private device must update its stored name");
 
     for (std::size_t index = 1; index < apc::limits::c_maxPersistedDeviceCount; ++index) {
         const auto id = L"device-" + std::to_wstring(index);
@@ -473,7 +486,18 @@ void TestRecordConnectedDeviceEffectiveReconnectPolicy() {
     const auto overflow = store.RecordConnectedDevice(L"overflow", L"Overflow");
     Check(!overflow.AddedDevice && overflow.EffectiveReconnectOnConnectionLoss,
           "an overflow device must still report the global effective reconnect policy");
+    Check(store.FlushNow(2), "hidden device-name mutations must flush successfully");
+    storage->SetInput(storage->Output());
     static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+
+    SettingsStore reader({}, storage);
+    reader.Load();
+    const auto& persisted = reader.Snapshot().Data;
+    const auto persistedKnown = std::ranges::find(persisted.Devices, L"known", &DeviceSettings::Id);
+    Check(persistedKnown != persisted.Devices.end() && persistedKnown->Name == L"PrivateName" &&
+              persistedKnown->Alias == L"Desk",
+          "hidden device-name mutations must round-trip with alias and privacy state");
+    static_cast<void>(reader.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
 }
 
 void TestMutationDuringBlockedWriteAndFinalFlush() {
@@ -520,6 +544,32 @@ void TestDebouncedWorkerWaitsForSynchronousWriter() {
     Check(storage->Output().find("privacyModeEnabled\":true") != std::string::npos,
           "the synchronous flush must persist the newest revision after the debounce deadline");
     static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+}
+
+void TestWorkerSnapshotCaptureFailureRetries() {
+    auto storage = std::make_shared<ControlledStorage>();
+    SettingsStore store({}, storage);
+    store.FailNextSnapshotCapturesForTesting(1);
+    Check(store.SetLanguage(L"fr").IsApplied(), "the worker failure test must commit a dirty revision");
+    storage->WaitForCompletedWrites(1);
+    Check(store.SnapshotCaptureFailuresForTesting() == 1,
+          "the worker failure test must exercise the injected allocation failure");
+    Check(storage->Output().find("\"language\":\"fr\"") != std::string::npos,
+          "the worker must retry after a snapshot allocation failure");
+    static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+}
+
+void TestSynchronousSnapshotCaptureFailureRetries() {
+    auto storage = std::make_shared<ControlledStorage>();
+    SettingsStore store({}, storage);
+    store.FailNextSnapshotCapturesForTesting(1);
+    Check(store.SetLanguage(L"de").IsApplied(), "the shutdown failure test must commit a dirty revision");
+    Check(store.Shutdown(SettingsShutdownMode::Flush, 2),
+          "synchronous shutdown must retry after a snapshot allocation failure");
+    Check(store.SnapshotCaptureFailuresForTesting() == 1,
+          "the shutdown failure test must exercise the injected allocation failure");
+    Check(storage->Output().find("\"language\":\"de\"") != std::string::npos,
+          "synchronous shutdown must persist the revision after recovering from snapshot allocation failure");
 }
 
 void TestLoadAdmissionFencesMutationAndFlush() {
@@ -862,6 +912,8 @@ int RunSettingsStoreTests() {
     TestRecordConnectedDeviceEffectiveReconnectPolicy();
     TestMutationDuringBlockedWriteAndFinalFlush();
     TestDebouncedWorkerWaitsForSynchronousWriter();
+    TestWorkerSnapshotCaptureFailureRetries();
+    TestSynchronousSnapshotCaptureFailureRetries();
     TestLoadAdmissionFencesMutationAndFlush();
     TestShutdownWaitsForAdmittedLoad();
     TestShutdownClosesAdmissionBeforeAdmittedLoadCompletes();

@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <deque>
 #include <limits>
+#include <new>
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
@@ -287,10 +288,33 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
 #if defined(APC_SETTINGS_STORE_TESTING)
     std::atomic_uint64_t workerLoopIterations = 0;
     std::atomic_bool workerWaiting = false;
+    std::atomic_uint32_t forcedSnapshotCaptureFailures = 0;
+    std::atomic_uint32_t snapshotCaptureFailures = 0;
 #endif
     std::jthread worker;
 
     [[nodiscard]] SettingsSnapshot SnapshotLocked() const { return {data, revision, revision != persistedRevision}; }
+
+    [[nodiscard]] bool TryCaptureSnapshotLocked(SettingsData& snapshot, std::uint64_t& capturedRevision) noexcept {
+        try {
+#if defined(APC_SETTINGS_STORE_TESTING)
+            auto remaining = forcedSnapshotCaptureFailures.load(std::memory_order_relaxed);
+            while (remaining != 0 &&
+                   !forcedSnapshotCaptureFailures.compare_exchange_weak(
+                       remaining, remaining - 1, std::memory_order_relaxed, std::memory_order_relaxed)) {
+            }
+            if (remaining != 0) {
+                ++snapshotCaptureFailures;
+                throw std::bad_alloc();
+            }
+#endif
+            snapshot = data;
+            capturedRevision = revision;
+            return true;
+        } catch (...) {
+            return false;
+        }
+    }
 
     void CompleteLoadWithoutCommit() noexcept {
         {
@@ -399,8 +423,7 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
         return false;
     }
 
-    void CompleteWrite(std::uint64_t capturedRevision, bool succeeded) noexcept {
-        std::scoped_lock lock(mutex);
+    void CompleteWriteLocked(std::uint64_t capturedRevision, bool succeeded) noexcept {
         writerActive = false;
         if (succeeded) {
             persistedRevision = std::max(persistedRevision, capturedRevision);
@@ -414,6 +437,11 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
             timerArmed = true;
             due = std::chrono::steady_clock::now() + RetryDelay(failures);
         }
+    }
+
+    void CompleteWrite(std::uint64_t capturedRevision, bool succeeded) noexcept {
+        std::scoped_lock lock(mutex);
+        CompleteWriteLocked(capturedRevision, succeeded);
         changed.notify_all();
     }
 
@@ -431,8 +459,11 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
                 changed.wait(lock, [&] { return !writerActive && !loadActive; });
                 if (discardRequested || revision == persistedRevision) return true;
                 writerActive = true;
-                snapshot = data;
-                capturedRevision = revision;
+                if (!TryCaptureSnapshotLocked(snapshot, capturedRevision)) {
+                    CompleteWriteLocked(revision, false);
+                    changed.notify_all();
+                    continue;
+                }
             }
             const auto succeeded = Write(snapshot);
             CompleteWrite(capturedRevision, succeeded);
@@ -483,8 +514,11 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
             if (writerActive || revision == persistedRevision || discardRequested) continue;
             writerActive = true;
             timerArmed = false;
-            snapshot = data;
-            capturedRevision = revision;
+            if (!TryCaptureSnapshotLocked(snapshot, capturedRevision)) {
+                CompleteWriteLocked(revision, false);
+                changed.notify_all();
+                continue;
+            }
             lock.unlock();
             const auto succeeded = Write(snapshot);
             CompleteWrite(capturedRevision, succeeded);
@@ -657,6 +691,14 @@ std::uint64_t SettingsStore::WorkerLoopIterationsForTesting() const noexcept {
 
 bool SettingsStore::WorkerWaitingForTesting() const noexcept {
     return m_impl->workerWaiting.load(std::memory_order_acquire);
+}
+
+void SettingsStore::FailNextSnapshotCapturesForTesting(unsigned int count) noexcept {
+    m_impl->forcedSnapshotCaptureFailures.store(count, std::memory_order_relaxed);
+}
+
+std::uint32_t SettingsStore::SnapshotCaptureFailuresForTesting() const noexcept {
+    return m_impl->snapshotCaptureFailures.load(std::memory_order_relaxed);
 }
 #endif
 
@@ -954,6 +996,7 @@ RecordConnectedDeviceResult SettingsStore::RecordConnectedDevice(std::wstring_vi
         m_impl->Commit([&result, deviceId = std::wstring(deviceId), deviceName = std::wstring(deviceName)](auto& data) {
             result.EffectiveReconnectOnConnectionLoss = data.GlobalReconnectOnConnectionLoss;
             auto* device = FindDevice(data, deviceId);
+            bool nameChanged = false;
             if (!device) {
                 if (data.Devices.size() < apc::limits::c_maxPersistedDeviceCount) {
                     data.Devices.push_back(
@@ -964,6 +1007,7 @@ RecordConnectedDeviceResult SettingsStore::RecordConnectedDevice(std::wstring_vi
                 }
             } else if (!deviceName.empty() && device->Name != deviceName) {
                 device->Name = deviceName;
+                nameChanged = true;
                 result.PresentationChanged = device->Alias.empty() && !data.PrivacyModeEnabled;
             }
             if (device) {
@@ -975,7 +1019,7 @@ RecordConnectedDeviceResult SettingsStore::RecordConnectedDevice(std::wstring_vi
             std::erase(data.LastConnectedIds, deviceId);
             data.LastConnectedIds.insert(data.LastConnectedIds.begin(), deviceId);
             if (data.LastConnectedIds.size() > apc::limits::c_maxPersistedDeviceCount) data.LastConnectedIds.pop_back();
-            return result.AddedDevice || result.PresentationChanged || data.LastConnectedIds != before;
+            return result.AddedDevice || nameChanged || data.LastConnectedIds != before;
         });
     return result;
 }

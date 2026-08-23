@@ -93,6 +93,8 @@ public:
     // Test-only observability for the deterministic worker-parking regression.
     [[nodiscard]] std::uint64_t WorkerLoopIterationsForTesting() const noexcept;
     [[nodiscard]] bool WorkerWaitingForTesting() const noexcept;
+    void FailNextSnapshotCapturesForTesting(unsigned int count) noexcept;
+    [[nodiscard]] std::uint32_t SnapshotCaptureFailuresForTesting() const noexcept;
 #endif
     [[nodiscard]] Subscription Subscribe(SnapshotCallback callback);
 

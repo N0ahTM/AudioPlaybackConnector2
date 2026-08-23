@@ -788,7 +788,6 @@ void TestManualAsyncCommandsCancelSupersededReconnectEpochs() {
         auto operation = command == DeviceCommandKind::Connect
                              ? fixture.Service.ConnectAsync(winrt::hstring(deviceId))
                              : fixture.Service.ReconnectAsync(winrt::hstring(deviceId));
-        operation.Completed([](auto const&, auto const&) noexcept {});
         auto* const manualConnection = fixture.ConnectionAccess->LastConnection;
         Check(SessionFor(fixture.Service, deviceId).OperationEpoch > waitingEpoch &&
                   StateFor(fixture.Service, deviceId) == DeviceLifecycleState::Connecting,
@@ -806,6 +805,13 @@ void TestManualAsyncCommandsCancelSupersededReconnectEpochs() {
         CompleteCloseAndCooldown(fixture, manualConnection);
         Check(StateFor(fixture.Service, deviceId) == DeviceLifecycleState::Idle,
               "the cancelled manual operation must settle without a replacement connection");
+        auto const completionDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (operation.Status() == winrt::Windows::Foundation::AsyncStatus::Started &&
+               std::chrono::steady_clock::now() < completionDeadline) {
+            std::this_thread::yield();
+        }
+        Check(operation.Status() != winrt::Windows::Foundation::AsyncStatus::Started,
+              "a cancelled manual async command must complete before its fixture is destroyed");
     }
 }
 

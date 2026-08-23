@@ -190,6 +190,7 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
     bool RestoreIncomingAfterClose = false;
     bool ResumeRequired = false;
     bool ResumeOpenImmediately = true;
+    DeviceOperationKind ResumeOperation = DeviceOperationKind::Resume;
     bool ResumeRequested = false;
     bool IsSuspendClosePending = false;
     std::uint64_t SuspendCloseEpoch = 0;
@@ -220,6 +221,8 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
                Lifecycle == DeviceLifecycleState::Disconnecting ||
                Lifecycle == DeviceLifecycleState::WaitingForReconnect;
     }
+
+    [[nodiscard]] bool IsLocallySuspended() const noexcept { return IsSuspended; }
 
     void Publish(DeviceConnectionResult result = DeviceConnectionResult::Success, bool terminal = false) {
         if (PublishFact)
@@ -627,11 +630,13 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
         StartConnection(DeviceOperationKind::AutomaticReconnect, OpenImmediately);
     }
 
-    void CancelAutomaticReconnect() {
+    void CancelAutomaticReconnect(bool restoreIncoming) {
         CancelTimer();
         RetryEligible = false;
         bool const cancelsActiveReconnect = Lifecycle == DeviceLifecycleState::WaitingForReconnect ||
                                             (Lifecycle == DeviceLifecycleState::Connecting &&
+                                             CurrentOperation == DeviceOperationKind::AutomaticReconnect) ||
+                                            (Lifecycle == DeviceLifecycleState::Disconnecting &&
                                              CurrentOperation == DeviceOperationKind::AutomaticReconnect);
         if (!cancelsActiveReconnect) {
             Publish(DeviceConnectionResult::Cancelled);
@@ -641,13 +646,14 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
         auto const epoch = OperationEpoch;
         if (Connection || IsCloseInFlight) {
             Lifecycle = DeviceLifecycleState::Disconnecting;
-            RestoreIncomingAfterClose = false;
+            RestoreIncomingAfterClose = restoreIncoming && IsIncomingEnabled;
             RevokeStateChanged();
             BeginClose(epoch, CloseContinuation::Idle, DeviceConnectionResult::Cancelled);
             return;
         }
         Lifecycle = DeviceLifecycleState::Idle;
         Publish(DeviceConnectionResult::Cancelled);
+        if (restoreIncoming && IsIncomingEnabled) StartConnection(DeviceOperationKind::IncomingEnable, false);
     }
 
     [[nodiscard]] bool IsCurrent(std::uint64_t epoch) const noexcept { return !IsShutdown && epoch == OperationEpoch; }
@@ -709,8 +715,7 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
     void StartAfterResume() {
         if (ResumeRequired) {
             ResumeRequired = false;
-            StartConnection(ResumeOpenImmediately ? DeviceOperationKind::Resume : DeviceOperationKind::IncomingEnable,
-                            ResumeOpenImmediately);
+            StartConnection(ResumeOperation, ResumeOpenImmediately);
         } else if (IsIncomingEnabled) {
             StartConnection(DeviceOperationKind::IncomingEnable, false);
         } else {
@@ -744,6 +749,10 @@ DeviceSessionSnapshot DeviceSession::Snapshot() const {
 
 bool DeviceSession::IsBusy() const noexcept {
     return m_state && m_state->IsBusy();
+}
+
+bool DeviceSession::IsSuspended() const noexcept {
+    return m_state && m_state->IsLocallySuspended();
 }
 
 void DeviceSession::Rename(std::wstring deviceName) {
@@ -791,7 +800,18 @@ void DeviceSession::HandleDeviceRemoved() {
 }
 
 void DeviceSession::Connect(DeviceOperationKind operation, bool openImmediately) {
-    if (m_state) m_state->StartConnection(operation, openImmediately);
+    auto const state = m_state;
+    if (!state || state->IsShutdown) return;
+    if (state->IsSuspended &&
+        (operation == DeviceOperationKind::ManualConnect || operation == DeviceOperationKind::ManualReconnect)) {
+        // Power recovery owns the release point, but a manual request must retain its operation until that point.
+        state->ResumeRequired = true;
+        state->ResumeOpenImmediately = openImmediately;
+        state->ResumeOperation = operation;
+        state->Publish();
+        return;
+    }
+    state->StartConnection(operation, openImmediately);
 }
 
 void DeviceSession::Disconnect(bool restoreIncoming) {
@@ -818,7 +838,7 @@ void DeviceSession::CancelReconnect() {
     auto const state = m_state;
     if (!state || state->IsShutdown) return;
     state->IsReconnectCancelled = true;
-    state->CancelAutomaticReconnect();
+    state->CancelAutomaticReconnect(false);
 }
 
 void DeviceSession::SetReconnectEnabled(bool enabled) {
@@ -826,9 +846,10 @@ void DeviceSession::SetReconnectEnabled(bool enabled) {
     if (!state || state->IsShutdown) return;
     state->IsReconnectEnabled = enabled;
     if (!enabled && (state->Lifecycle == DeviceLifecycleState::WaitingForReconnect ||
-                     (state->Lifecycle == DeviceLifecycleState::Connecting &&
+                     ((state->Lifecycle == DeviceLifecycleState::Connecting ||
+                       state->Lifecycle == DeviceLifecycleState::Disconnecting) &&
                       state->CurrentOperation == DeviceOperationKind::AutomaticReconnect))) {
-        state->CancelAutomaticReconnect();
+        state->CancelAutomaticReconnect(state->IsIncomingEnabled);
         return;
     }
     state->Publish();
@@ -857,6 +878,8 @@ void DeviceSession::Suspend() {
     if (!state || state->IsShutdown || state->IsSuspended) return;
     state->ResumeRequired = state->Connection || state->IsCloseInFlight || state->IsBusy();
     state->ResumeOpenImmediately = state->OpenImmediately;
+    state->ResumeOperation =
+        state->ResumeOpenImmediately ? DeviceOperationKind::Resume : DeviceOperationKind::IncomingEnable;
     state->IsSuspended = true;
     state->CancelTimer();
     ++state->OperationEpoch;

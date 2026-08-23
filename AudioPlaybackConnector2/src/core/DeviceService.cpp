@@ -378,9 +378,11 @@ DeviceCommandResult DeviceService::Connect(std::wstring deviceId) {
             return;
         }
         auto const wasBusy = session->IsBusy();
+        auto const wasSuspended = session->IsSuspended();
         session->Connect(DeviceOperationKind::ManualConnect, true);
         *result = state->Result(DeviceCommandKind::Connect,
-                                wasBusy ? DeviceCommandResultKind::Coalesced : DeviceCommandResultKind::Accepted,
+                                wasBusy || wasSuspended ? DeviceCommandResultKind::Coalesced
+                                                        : DeviceCommandResultKind::Accepted,
                                 deviceId);
     });
     return ran ? *result
@@ -421,9 +423,11 @@ DeviceCommandResult DeviceService::Reconnect(std::wstring deviceId) {
         }
         auto session = state->GetOrCreateSession(deviceId);
         auto const wasBusy = session->IsBusy();
+        auto const wasSuspended = session->IsSuspended();
         session->Connect(DeviceOperationKind::ManualReconnect, true);
         *result = state->Result(DeviceCommandKind::Reconnect,
-                                wasBusy ? DeviceCommandResultKind::Coalesced : DeviceCommandResultKind::Accepted,
+                                wasBusy || wasSuspended ? DeviceCommandResultKind::Coalesced
+                                                        : DeviceCommandResultKind::Accepted,
                                 deviceId);
     });
     return ran ? *result

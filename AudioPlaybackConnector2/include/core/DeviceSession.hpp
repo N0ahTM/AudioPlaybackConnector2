@@ -90,6 +90,7 @@ public:
 
     [[nodiscard]] DeviceSessionSnapshot Snapshot() const;
     [[nodiscard]] bool IsBusy() const noexcept;
+    [[nodiscard]] bool IsSuspended() const noexcept;
     void Rename(std::wstring deviceName);
     void HandleDeviceRemoved();
     void Connect(DeviceOperationKind operation, bool openImmediately);

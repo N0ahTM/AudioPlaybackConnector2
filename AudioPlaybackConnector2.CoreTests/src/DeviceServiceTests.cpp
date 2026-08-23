@@ -506,6 +506,50 @@ void TestIncomingCallbackOrderingAndLossFollowReconnectPolicy() {
           "the retained incoming listener must accept a later opened callback");
 }
 
+void TestDisablingReconnectRestoresPendingIncomingListenerAfterCloseBarrier() {
+    Fixture fixture;
+    Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted,
+          "watcher start must establish the pending incoming policy fixture");
+    fixture.Service.ConfigureIncomingConnections(true);
+    fixture.WatcherAccess->LastWatcher->Add(L"incoming-policy-disable", L"Incoming policy disable");
+    auto* const listener = fixture.ConnectionAccess->LastConnection;
+    listener->Signal(DeviceConnectionState::Opened);
+    listener->Signal(DeviceConnectionState::Closed);
+    auto* const retryTimer = fixture.TimerAccess->LastTimer;
+    auto const retryCallback = retryTimer->Callback;
+    auto const connectionCount = fixture.ConnectionAccess->Connections.size();
+    auto const terminalFailureCount = std::ranges::count_if(fixture.Facts, [](DeviceFact const& fact) {
+        return fact.DeviceId == L"incoming-policy-disable" && fact.IsTerminalFailure;
+    });
+
+    fixture.Service.ConfigureReconnectPolicy(false, {});
+    Check(retryTimer->IsCancelled, "disabling reconnect policy must cancel the pending incoming retry timer");
+    Check(listener->CloseCalls == 1, "disabling reconnect policy must close the retained incoming listener");
+    if (retryCallback) retryCallback();
+    Check(fixture.ConnectionAccess->Connections.size() == connectionCount,
+          "a cancelled incoming retry timer must not bypass the close barrier");
+
+    listener->CompleteClose();
+    auto* const cooldown = fixture.TimerAccess->LastTimer;
+    Check(cooldown && cooldown->Delay == std::chrono::milliseconds(1500) &&
+              fixture.ConnectionAccess->Connections.size() == connectionCount,
+          "policy cancellation must retain the incoming listener close cooldown before recreation");
+    cooldown->FireEvenIfCancelled();
+    Check(fixture.ConnectionAccess->Connections.size() == connectionCount + 1,
+          "the closed incoming listener must be recreated only after the cooldown barrier");
+
+    auto* const restoredListener = fixture.ConnectionAccess->LastConnection;
+    restoredListener->CompleteStart(DeviceConnectionResult::Success);
+    Check(StateFor(fixture.Service, L"incoming-policy-disable") == DeviceLifecycleState::Idle &&
+              SessionFor(fixture.Service, L"incoming-policy-disable").HasConnection &&
+              !restoredListener->OpenCompletion &&
+              std::ranges::count_if(fixture.Facts,
+                                    [](DeviceFact const& fact) {
+                                        return fact.DeviceId == L"incoming-policy-disable" && fact.IsTerminalFailure;
+                                    }) == terminalFailureCount,
+          "policy cancellation must restore a non-opening incoming listener without a terminal failure");
+}
+
 void TestDisablingIncomingClosesEstablishedAndPendingIncomingSessions() {
     {
         Fixture fixture;
@@ -963,6 +1007,48 @@ void TestPowerTransitionDoesNotReleaseCloseInFlightBeforeDelayedResume() {
           "the delayed resume delivery must remain the only path that restarts a suspended close-in-flight session");
 }
 
+void TestManualCommandsDuringDelayedPowerRecoveryAreRetainedByTheSession() {
+    for (auto const& [deviceId, command] : std::vector<std::pair<std::wstring, DeviceCommandKind>>{
+             {L"power-manual-connect", DeviceCommandKind::Connect},
+             {L"power-manual-reconnect", DeviceCommandKind::Reconnect},
+         }) {
+        Fixture fixture;
+        ConnectSuccessfully(fixture, deviceId);
+        auto* const connection = fixture.ConnectionAccess->LastConnection;
+        auto const connectionCount = fixture.ConnectionAccess->Connections.size();
+
+        fixture.Service.SuspendForPowerTransition();
+        fixture.Service.ResumeAfterPowerTransition();
+        CompleteCloseAndCooldown(fixture, connection);
+        Check(StateFor(fixture.Service, deviceId) == DeviceLifecycleState::Idle,
+              "the completed suspend close must leave the session waiting for delayed recovery");
+
+        auto const result = command == DeviceCommandKind::Connect ? fixture.Service.Connect(deviceId)
+                                                                  : fixture.Service.Reconnect(deviceId);
+        Check(result.Command == command && result.Kind == DeviceCommandResultKind::Coalesced,
+              "a manual command during delayed power recovery must not be accepted as an immediate connection");
+        Check(fixture.ConnectionAccess->Connections.size() == connectionCount,
+              "a manual command must not bypass delayed power recovery after the close barrier settles");
+
+        fixture.Facts.clear();
+        fixture.Service.ResumeSuspendedSessions({deviceId});
+        Check(fixture.ConnectionAccess->Connections.size() == connectionCount + 1 &&
+                  std::ranges::any_of(fixture.Facts,
+                                      [deviceId, command](DeviceFact const& fact) {
+                                          return fact.DeviceId == deviceId &&
+                                                 fact.Operation ==
+                                                     (command == DeviceCommandKind::Connect
+                                                          ? apc::device::DeviceOperationKind::ManualConnect
+                                                          : apc::device::DeviceOperationKind::ManualReconnect);
+                                      }),
+              "the delayed recovery delivery must release the retained manual operation without an overlap");
+        fixture.ConnectionAccess->LastConnection->CompleteStart(DeviceConnectionResult::Success);
+        fixture.ConnectionAccess->LastConnection->CompleteOpen(DeviceConnectionResult::Success);
+        Check(StateFor(fixture.Service, deviceId) == DeviceLifecycleState::Connected,
+              "the retained manual request must complete through the existing delayed recovery path");
+    }
+}
+
 void TestStopAndShutdownReturnNormalizedTerminalResults() {
     Fixture fixture;
     Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted, "start must establish watcher ownership");
@@ -1031,6 +1117,7 @@ int RunDeviceServiceTests() {
     TestCloseBarrierTimerSetupFailureTerminatesReconnectAsyncWithoutOverlappingConnection();
     TestResumeWatcherFailureClearsRunningStateAndAllowsRetry();
     TestIncomingCallbackOrderingAndLossFollowReconnectPolicy();
+    TestDisablingReconnectRestoresPendingIncomingListenerAfterCloseBarrier();
     TestDisablingIncomingClosesEstablishedAndPendingIncomingSessions();
     TestDeviceRemovalClosesCurrentSessionAndRejectsLateCallbacks();
     TestRemovingAnIdleDiscoveredDeviceDoesNotPublishTerminalFailure();
@@ -1044,6 +1131,7 @@ int RunDeviceServiceTests() {
     TestIdleDiscoveryResumesForManualConnectAfterPowerTransition();
     TestPowerTransitionRecoveryTargetsIncludeIncomingAndPendingReconnectWithoutConnectedSessions();
     TestPowerTransitionDoesNotReleaseCloseInFlightBeforeDelayedResume();
+    TestManualCommandsDuringDelayedPowerRecoveryAreRetainedByTheSession();
     TestStopAndShutdownReturnNormalizedTerminalResults();
     TestFactsCarryNormalizedSnapshots();
     TestFailureFactsRetainOperationKind();

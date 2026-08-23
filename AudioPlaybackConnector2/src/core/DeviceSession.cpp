@@ -463,6 +463,9 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
             CloseBarrierTimer.reset();
         }
         if (!CloseBarrierTimer) {
+            // The close remains unconfirmed, so retain ClosingConnection and IsCloseInFlight. The
+            // operation itself is terminal, however, so callers must not await Disconnecting forever.
+            Lifecycle = DeviceLifecycleState::Failed;
             Publish(DeviceConnectionResult::Failed, true);
             AbandonCloseContinuation();
         }

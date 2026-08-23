@@ -55,6 +55,7 @@ struct DeviceFact {
     DeviceServiceSnapshot Snapshot;
     std::wstring DeviceId;
     DeviceConnectionResult ConnectionResult = DeviceConnectionResult::Success;
+    DeviceOperationKind Operation = DeviceOperationKind::ManualConnect;
     bool IsTerminalFailure = false;
 };
 

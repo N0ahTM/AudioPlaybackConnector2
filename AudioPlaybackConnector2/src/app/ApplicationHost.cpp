@@ -1840,17 +1840,7 @@ void ApplicationHost::OnDeviceDisconnected(winrt::hstring const& id) {
     if (m_exiting.load()) return;
     DebugTrace(L"[App] OnDeviceDisconnected: {0}", std::wstring(id));
 
-    winrt::hstring deviceName = ResolveKnownDeviceName(id);
-    if (m_notificationService) {
-        try {
-            m_notificationService->ShowDeviceDisconnected(id, deviceName);
-        } catch (winrt::hresult_error const& ex) {
-            util::DebugTraceException(L"[App] OnDeviceDisconnected notification ERROR", ex);
-        } catch (std::exception const& ex) {
-            util::DebugTraceException(L"[App] OnDeviceDisconnected notification ERROR", ex);
-        }
-    }
-
+    // P04: a normal disconnect refreshes state, tooltip, CLI, and diagnostics only; it never notifies.
     ScheduleDeviceVisualRefresh(false);
 }
 

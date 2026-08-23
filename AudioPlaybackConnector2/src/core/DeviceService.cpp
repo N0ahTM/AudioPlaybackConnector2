@@ -152,7 +152,8 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
     void Publish(DeviceFactKind kind,
                  std::wstring deviceId = {},
                  DeviceConnectionResult result = DeviceConnectionResult::Success,
-                 bool terminal = false) {
+                 bool terminal = false,
+                 DeviceOperationKind operation = DeviceOperationKind::ManualConnect) {
         ++Generation;
         UpdatePublishedSnapshot();
         if (Subscriber)
@@ -160,6 +161,7 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
                         .Snapshot = Snapshot(),
                         .DeviceId = std::move(deviceId),
                         .ConnectionResult = result,
+                        .Operation = operation,
                         .IsTerminalFailure = terminal});
     }
 
@@ -200,7 +202,8 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
         Publish(isFailure ? DeviceFactKind::OperationFailed : DeviceFactKind::SessionChanged,
                 fact.Snapshot.DeviceId,
                 fact.Result,
-                fact.IsTerminalFailure);
+                fact.IsTerminalFailure,
+                fact.Operation);
     }
 
     void OnWatcherFact(DeviceWatcherFact const& fact) {

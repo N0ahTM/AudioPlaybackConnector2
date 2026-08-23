@@ -152,6 +152,10 @@ public:
             ThrowNextSchedule = false;
             throw std::runtime_error("Schedule");
         }
+        if (ReturnNullNextSchedule) {
+            ReturnNullNextSchedule = false;
+            return nullptr;
+        }
         auto timer = std::make_unique<FakeTimer>(delay, std::move(callback));
         LastTimer = timer.get();
         Timers.push_back(LastTimer);
@@ -161,6 +165,7 @@ public:
     FakeTimer* LastTimer = nullptr;
     std::vector<FakeTimer*> Timers;
     bool ThrowNextSchedule = false;
+    bool ReturnNullNextSchedule = false;
 };
 
 class FakeWatcherState {
@@ -379,6 +384,33 @@ void TestCloseBarrierTimeoutTerminatesReconnectAsyncWithoutOverlappingConnection
     }
     Check(fixture.ConnectionAccess->Connections.size() == createCount && oldConnection->CloseCalls == 1,
           "the terminal async outcome must not weaken the close-before-reconnect barrier");
+}
+
+void TestCloseBarrierTimerSetupFailureTerminatesReconnectAsyncWithoutOverlappingConnection() {
+    Fixture fixture;
+    ConnectSuccessfully(fixture, L"async-close-timer-failure");
+    auto* const oldConnection = fixture.ConnectionAccess->LastConnection;
+    auto const createCount = fixture.ConnectionAccess->Connections.size();
+
+    fixture.TimerAccess->ReturnNullNextSchedule = true;
+    (void)fixture.Service.Reconnect(L"async-close-timer-failure");
+    Check(StateFor(fixture.Service, L"async-close-timer-failure") == DeviceLifecycleState::Failed,
+          "a missing close-barrier timer must make the reconnect operation terminal");
+
+    auto reconnect = fixture.Service.ReconnectAsync(L"async-close-timer-failure");
+    Check(reconnect.Status() == winrt::Windows::Foundation::AsyncStatus::Error,
+          "a reconnect async operation after close-barrier timer setup failure must terminate instead of polling");
+    if (reconnect.Status() == winrt::Windows::Foundation::AsyncStatus::Error) {
+        Check(reconnect.ErrorCode() == E_FAIL,
+              "a close-barrier timer setup failure must surface the terminal failed async outcome");
+    }
+    Check(fixture.ConnectionAccess->Connections.size() == createCount && oldConnection->CloseCalls == 1,
+          "a terminal timer setup failure must retain the close barrier without creating a replacement");
+
+    oldConnection->CompleteClose();
+    CompleteCloseAndCooldown(fixture, oldConnection);
+    Check(StateFor(fixture.Service, L"async-close-timer-failure") == DeviceLifecycleState::Idle,
+          "a late close completion must settle the retained barrier after timer setup failure");
 }
 
 void TestResumeWatcherFailureClearsRunningStateAndAllowsRetry() {
@@ -954,6 +986,40 @@ void TestFactsCarryNormalizedSnapshots() {
     Check(hasSortedSnapshot, "typed facts must contain normalized, deterministically ordered snapshots");
 }
 
+void TestFailureFactsRetainOperationKind() {
+    {
+        Fixture fixture;
+        fixture.ConnectionAccess->NextBehavior.ThrowOnStart = true;
+        (void)fixture.Service.Connect(L"manual-fact-operation");
+        CompleteCloseAndCooldown(fixture, fixture.ConnectionAccess->LastConnection);
+        Check(std::ranges::any_of(fixture.Facts,
+                                  [](DeviceFact const& fact) {
+                                      return fact.DeviceId == L"manual-fact-operation" && fact.IsTerminalFailure &&
+                                             fact.Operation == apc::device::DeviceOperationKind::ManualConnect;
+                                  }),
+              "manual terminal failures must retain ManualConnect through the service fact");
+    }
+
+    {
+        Fixture fixture;
+        ConnectSuccessfully(fixture, L"automatic-fact-operation");
+        fixture.Service.SetReconnectOnConnectionLoss(std::wstring(L"automatic-fact-operation"), true);
+        fixture.ConnectionAccess->LastConnection->Signal(DeviceConnectionState::Closed);
+        fixture.ConnectionAccess->NextBehavior.ThrowOnStart = true;
+        fixture.TimerAccess->LastTimer->FireEvenIfCancelled();
+        auto* const automaticConnection = fixture.ConnectionAccess->LastConnection;
+        automaticConnection->CompleteClose();
+        fixture.TimerAccess->ThrowNextSchedule = true;
+        fixture.TimerAccess->LastTimer->FireEvenIfCancelled();
+        Check(std::ranges::any_of(fixture.Facts,
+                                  [](DeviceFact const& fact) {
+                                      return fact.DeviceId == L"automatic-fact-operation" && fact.IsTerminalFailure &&
+                                             fact.Operation == apc::device::DeviceOperationKind::AutomaticReconnect;
+                                  }),
+              "automatic terminal failures must retain AutomaticReconnect through the service fact");
+    }
+}
+
 } // namespace
 
 int RunDeviceServiceTests() {
@@ -962,6 +1028,7 @@ int RunDeviceServiceTests() {
     TestDuplicateConnectCoalescesWithoutReplacingConnectedSession();
     TestCloseBarrierTimeoutRetainsTheOldConnectionUntilLateCompletion();
     TestCloseBarrierTimeoutTerminatesReconnectAsyncWithoutOverlappingConnection();
+    TestCloseBarrierTimerSetupFailureTerminatesReconnectAsyncWithoutOverlappingConnection();
     TestResumeWatcherFailureClearsRunningStateAndAllowsRetry();
     TestIncomingCallbackOrderingAndLossFollowReconnectPolicy();
     TestDisablingIncomingClosesEstablishedAndPendingIncomingSessions();
@@ -979,6 +1046,7 @@ int RunDeviceServiceTests() {
     TestPowerTransitionDoesNotReleaseCloseInFlightBeforeDelayedResume();
     TestStopAndShutdownReturnNormalizedTerminalResults();
     TestFactsCarryNormalizedSnapshots();
+    TestFailureFactsRetainOperationKind();
     return g_failures;
 }
 

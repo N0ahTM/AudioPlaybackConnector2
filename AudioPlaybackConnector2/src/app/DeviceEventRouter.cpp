@@ -49,13 +49,14 @@ struct DeviceStateHistory {
     return {};
 }
 
-[[nodiscard]] std::wstring FailureText(DeviceConnectionResult result, bool terminal) {
+[[nodiscard]] std::wstring FailureText(DeviceConnectionResult result, bool isAutomaticReconnectTerminalFailure) {
     switch (result) {
         case DeviceConnectionResult::TimedOut: return _("RequestTimedOut");
         case DeviceConnectionResult::Denied: return _("DeniedBySystem");
         case DeviceConnectionResult::Success:
         case DeviceConnectionResult::Cancelled: return _("UnknownError");
-        case DeviceConnectionResult::Failed: return terminal ? _("AutoReconnectFailed") : _("UnknownError");
+        case DeviceConnectionResult::Failed:
+            return isAutomaticReconnectTerminalFailure ? _("AutoReconnectFailed") : _("UnknownError");
     }
     return _("UnknownError");
 }
@@ -214,8 +215,11 @@ void DeviceEventRouter::Attach(std::shared_ptr<apc::device::DeviceService> devic
         }
 
         if (fact.Kind == apc::device::DeviceFactKind::OperationFailed) {
+            auto const isAutomaticReconnectTerminalFailure =
+                fact.IsTerminalFailure && fact.Operation == apc::device::DeviceOperationKind::AutomaticReconnect;
             if (session->State == DeviceLifecycleState::Failed && state->callbacks.ConnectionError) {
-                const auto message = winrt::hstring(FailureText(fact.ConnectionResult, fact.IsTerminalFailure));
+                const auto message =
+                    winrt::hstring(FailureText(fact.ConnectionResult, isAutomaticReconnectTerminalFailure));
                 const auto token = state->deviceFactPublicationFence.RecordStatus(
                     fact.DeviceId, apc::app::DeviceFactPublicationFence::Status::Error);
                 static_cast<void>(DeviceEventRouter::Dispatch(state, [state, id, message, token = std::move(token)] {
@@ -226,7 +230,7 @@ void DeviceEventRouter::Attach(std::shared_ptr<apc::device::DeviceService> devic
                     state->callbacks.ConnectionError(id, message);
                 }));
             }
-            if (fact.IsTerminalFailure && state->callbacks.AutoReconnectFailed) {
+            if (isAutomaticReconnectTerminalFailure && state->callbacks.AutoReconnectFailed) {
                 const auto token = state->deviceFactPublicationFence.RecordStatus(
                     fact.DeviceId, apc::app::DeviceFactPublicationFence::Status::Error);
                 static_cast<void>(DeviceEventRouter::Dispatch(state, [state, id, token = std::move(token)] {

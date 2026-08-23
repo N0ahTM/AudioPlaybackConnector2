@@ -397,6 +397,8 @@ void TestIncomingCallbackOrderingAndLossFollowReconnectPolicy() {
 void TestDisablingIncomingClosesEstablishedAndPendingIncomingSessions() {
     {
         Fixture fixture;
+        Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted,
+              "watcher start must establish the incoming-disable fixture");
         fixture.Service.ConfigureIncomingConnections(true);
         fixture.WatcherAccess->LastWatcher->Add(L"incoming-disable", L"Incoming disable");
         auto* const connection = fixture.ConnectionAccess->LastConnection;
@@ -412,16 +414,28 @@ void TestDisablingIncomingClosesEstablishedAndPendingIncomingSessions() {
 
     {
         Fixture fixture;
+        Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted,
+              "watcher start must establish the incoming-pending fixture");
         fixture.Service.ConfigureIncomingConnections(true);
         fixture.WatcherAccess->LastWatcher->Add(L"incoming-pending", L"Incoming pending");
         auto* const connection = fixture.ConnectionAccess->LastConnection;
         connection->Signal(DeviceConnectionState::Opened);
         connection->Signal(DeviceConnectionState::Closed);
         auto* const pendingRetry = fixture.TimerAccess->LastTimer;
+        auto const pendingRetryCallback = pendingRetry->Callback;
         fixture.Service.ConfigureIncomingConnections(false);
-        Check(StateFor(fixture.Service, L"incoming-pending") == DeviceLifecycleState::Idle && pendingRetry->IsCancelled,
-              "disabling incoming connections must cancel a pending incoming reconnect timer");
-        pendingRetry->FireEvenIfCancelled();
+        Check(connection->CloseCalls == 1 &&
+                  StateFor(fixture.Service, L"incoming-pending") == DeviceLifecycleState::Disconnecting,
+              "disabling incoming connections must cancel pending retry and close the retained incoming listener");
+        connection->CompleteClose();
+        auto* const closeCooldown = fixture.TimerAccess->LastTimer;
+        Check(closeCooldown && closeCooldown->Delay == std::chrono::milliseconds(1500),
+              "disabling incoming connections must retain the close barrier until completion");
+        closeCooldown->FireEvenIfCancelled();
+        Check(StateFor(fixture.Service, L"incoming-pending") == DeviceLifecycleState::Idle &&
+                  !SessionFor(fixture.Service, L"incoming-pending").HasConnection,
+              "disabling incoming connections must settle the retained listener after the close barrier");
+        if (pendingRetryCallback) pendingRetryCallback();
         Check(fixture.ConnectionAccess->Connections.size() == 1,
               "a stale pending incoming reconnect timer must not recreate a listener after incoming is disabled");
     }
@@ -474,6 +488,8 @@ void TestRemovingAnIdleDiscoveredDeviceDoesNotPublishTerminalFailure() {
 
 void TestRemovingAnIdleIncomingListenerClosesWithoutTerminalFailure() {
     Fixture fixture;
+    Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted,
+          "watcher start must establish the incoming-removal fixture");
     fixture.Service.ConfigureIncomingConnections(true);
     fixture.WatcherAccess->LastWatcher->Add(L"incoming-removed", L"Incoming removed");
     auto* const listener = fixture.ConnectionAccess->LastConnection;
@@ -769,6 +785,8 @@ void TestIdleDiscoveryResumesForManualConnectAfterPowerTransition() {
 void TestPowerTransitionRecoveryTargetsIncludeIncomingAndPendingReconnectWithoutConnectedSessions() {
     {
         Fixture fixture;
+        Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted,
+              "watcher start must establish the incoming power-recovery fixture");
         fixture.Service.ConfigureIncomingConnections(true);
         fixture.WatcherAccess->LastWatcher->Add(L"power-incoming", L"Power incoming");
         fixture.ConnectionAccess->LastConnection->CompleteStart(DeviceConnectionResult::Success);

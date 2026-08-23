@@ -574,6 +574,7 @@ void TestExplicitDisconnectRestoresIncomingListenerAfterOutgoingRetry() {
     outgoingConnection->Signal(DeviceConnectionState::Closed);
     auto* const retryTimer = fixture.TimerAccess->LastTimer;
     auto const staleRetryCallback = retryTimer->Callback;
+    auto const retryTimerCancellationState = retryTimer->CancellationState;
     auto const connectionCount = fixture.ConnectionAccess->Connections.size();
     Check(StateFor(fixture.Service, L"outgoing-retry") == DeviceLifecycleState::WaitingForReconnect &&
               !SessionFor(fixture.Service, L"outgoing-retry").HasConnection,
@@ -582,7 +583,7 @@ void TestExplicitDisconnectRestoresIncomingListenerAfterOutgoingRetry() {
     Check(fixture.Service.Disconnect(L"outgoing-retry").Kind == DeviceCommandResultKind::Accepted,
           "an explicit disconnect must cancel the pending outgoing retry");
     auto* const incomingListener = fixture.ConnectionAccess->LastConnection;
-    Check(retryTimer->IsCancelled && fixture.ConnectionAccess->Connections.size() == connectionCount + 1 &&
+    Check(*retryTimerCancellationState && fixture.ConnectionAccess->Connections.size() == connectionCount + 1 &&
               incomingListener != outgoingConnection &&
               SessionFor(fixture.Service, L"outgoing-retry").IsReconnectCancelled,
           "disconnecting a waiting outgoing session must retain cancellation while creating the incoming listener");

@@ -1,3 +1,10 @@
+#include <windows.h>
+
+#include <wil/resource.h>
+
+#include <winrt/Windows.System.Threading.h>
+
+#include <app/PowerTransitionCoordinator.hpp>
 #include <app/ResumeReconnectAttemptState.hpp>
 #include <app/UiRefreshCoalescer.hpp>
 
@@ -6,6 +13,7 @@
 #include <barrier>
 #include <cstdint>
 #include <iostream>
+#include <optional>
 #include <string_view>
 #include <thread>
 #include <vector>
@@ -203,6 +211,106 @@ void TestResumeReconnectPreservesPendingTargetsAcrossSuspendCycles() {
     Check(state.Empty(), "clearing resume state must remove all pending targets");
 }
 
+void TestResumeReconnectDeliversOnceWhenBothSchedulersAreUnavailable() {
+    std::atomic_bool exiting = false;
+    PowerTransitionCoordinator coordinator(
+        exiting, PowerTransitionCoordinator::ResumeReconnectSchedulerModeForTesting::BothUnavailable);
+    coordinator.HandleSuspend({}, nullptr);
+    coordinator.AddSuspendedRecoveryTargetsForTesting({L"alpha", L"beta"});
+
+    std::size_t callbackCount = 0;
+    std::vector<std::wstring> deliveredIds;
+    std::optional<std::uint64_t> generation;
+    coordinator.HandleResume(nullptr,
+                             [&](std::vector<std::wstring> deviceIds,
+                                 std::uint64_t callbackGeneration,
+                                 PowerTransitionCoordinator::ResumeReconnectCompleted completed) {
+                                 ++callbackCount;
+                                 deliveredIds = deviceIds;
+                                 generation = callbackGeneration;
+                                 completed(std::move(deviceIds));
+                             });
+
+    Check(callbackCount == 1, "dual scheduler failure must deliver pending resume recovery once immediately");
+    Check(deliveredIds == std::vector<std::wstring>({L"alpha", L"beta"}),
+          "immediate resume recovery must retain every pending target");
+    Check(generation.has_value() && coordinator.IsResumeReconnectGenerationCurrent(*generation),
+          "immediate delivery must retain the active recovery generation until connections acknowledge it");
+
+    coordinator.HandleResume(
+        nullptr, [&](std::vector<std::wstring>, std::uint64_t, PowerTransitionCoordinator::ResumeReconnectCompleted) {
+            ++callbackCount;
+        });
+    Check(callbackCount == 1, "an unavailable scheduler must not create a duplicate resume recovery delivery");
+}
+
+void TestResumeReconnectFallbackRejectsStaleAndCancelledCompletions() {
+    std::atomic_bool exiting = false;
+    PowerTransitionCoordinator coordinator(
+        exiting, PowerTransitionCoordinator::ResumeReconnectSchedulerModeForTesting::BothUnavailable);
+    coordinator.HandleSuspend({}, nullptr);
+    coordinator.AddSuspendedRecoveryTargetsForTesting({L"alpha"});
+
+    std::optional<PowerTransitionCoordinator::ResumeReconnectCompleted> staleCompletion;
+    std::uint64_t staleGeneration = 0;
+    coordinator.HandleResume(nullptr,
+                             [&](std::vector<std::wstring>,
+                                 std::uint64_t generation,
+                                 PowerTransitionCoordinator::ResumeReconnectCompleted completed) {
+                                 staleGeneration = generation;
+                                 staleCompletion = std::move(completed);
+                             });
+    Check(staleCompletion.has_value(), "initial immediate delivery must provide a completion callback");
+
+    coordinator.HandleSuspend({}, nullptr);
+    Check(!coordinator.IsResumeReconnectGenerationCurrent(staleGeneration),
+          "a new suspend cycle must invalidate an earlier fallback generation");
+    (*staleCompletion)({L"alpha", L"alpha", L"alpha", L"alpha", L"alpha", L"alpha"});
+
+    std::optional<PowerTransitionCoordinator::ResumeReconnectCompleted> currentCompletion;
+    std::size_t callbackCount = 0;
+    std::uint64_t currentGeneration = 0;
+    coordinator.HandleResume(nullptr,
+                             [&](std::vector<std::wstring> deviceIds,
+                                 std::uint64_t generation,
+                                 PowerTransitionCoordinator::ResumeReconnectCompleted completed) {
+                                 ++callbackCount;
+                                 currentGeneration = generation;
+                                 Check(deviceIds == std::vector<std::wstring>{L"alpha"},
+                                       "a stale completion must not consume the replacement cycle retry budget");
+                                 currentCompletion = std::move(completed);
+                             });
+    Check(callbackCount == 1, "a replacement generation must receive its own fallback delivery");
+    Check(currentCompletion.has_value(), "the replacement fallback delivery must retain its completion callback");
+
+    coordinator.Cancel();
+    (*currentCompletion)({L"alpha"});
+    Check(!coordinator.IsResumeReconnectGenerationCurrent(currentGeneration),
+          "cancellation must keep a late fallback completion from restoring recovery state");
+}
+
+void TestResumeReconnectFallbackCompletionOutlivesCoordinatorSafely() {
+    std::atomic_bool exiting = false;
+    std::optional<PowerTransitionCoordinator::ResumeReconnectCompleted> retainedCompletion;
+    {
+        PowerTransitionCoordinator coordinator(
+            exiting, PowerTransitionCoordinator::ResumeReconnectSchedulerModeForTesting::BothUnavailable);
+        coordinator.HandleSuspend({}, nullptr);
+        coordinator.AddSuspendedRecoveryTargetsForTesting({L"alpha"});
+        coordinator.HandleResume(nullptr,
+                                 [&](std::vector<std::wstring>,
+                                     std::uint64_t,
+                                     PowerTransitionCoordinator::ResumeReconnectCompleted completed) {
+                                     retainedCompletion = std::move(completed);
+                                 });
+    }
+
+    Check(retainedCompletion.has_value(), "fallback delivery must retain a completion callback for teardown coverage");
+    (*retainedCompletion)({L"alpha"});
+    Check(retainedCompletion.has_value(),
+          "a retained fallback completion must access only shared recovery state after coordinator teardown");
+}
+
 } // namespace
 
 int RunAppWorkCoordinatorTests() {
@@ -216,6 +324,9 @@ int RunAppWorkCoordinatorTests() {
     TestUiRefreshAbandonRetainsDirtyFlagsForANewRequest();
     TestResumeReconnectCountsOnlyActuallyStartedAttempts();
     TestResumeReconnectPreservesPendingTargetsAcrossSuspendCycles();
+    TestResumeReconnectDeliversOnceWhenBothSchedulersAreUnavailable();
+    TestResumeReconnectFallbackRejectsStaleAndCancelledCompletions();
+    TestResumeReconnectFallbackCompletionOutlivesCoordinatorSafely();
     return g_failures;
 }
 

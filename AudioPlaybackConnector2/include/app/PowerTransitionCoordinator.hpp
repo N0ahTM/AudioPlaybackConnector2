@@ -28,6 +28,11 @@ public:
         std::function<void(std::vector<std::wstring>, std::uint64_t, ResumeReconnectCompleted)>;
 
     explicit PowerTransitionCoordinator(std::atomic<bool>& exiting);
+#if defined(APC_POWER_TRANSITION_COORDINATOR_TESTING)
+    enum class ResumeReconnectSchedulerModeForTesting { Normal, BothUnavailable };
+
+    PowerTransitionCoordinator(std::atomic<bool>& exiting, ResumeReconnectSchedulerModeForTesting schedulerMode);
+#endif
     ~PowerTransitionCoordinator();
 
     /*------------------------------------------------------------------------------------------------------------*/
@@ -41,6 +46,9 @@ public:
                       ResumeReconnectCallback reconnectAfterDelay) noexcept;
     void NotifyDeviceConnected(std::wstring_view deviceId) noexcept;
     [[nodiscard]] bool IsResumeReconnectGenerationCurrent(std::uint64_t generation) const noexcept;
+#if defined(APC_POWER_TRANSITION_COORDINATOR_TESTING)
+    void AddSuspendedRecoveryTargetsForTesting(std::vector<std::wstring> deviceIds) noexcept;
+#endif
 
 private:
     struct ResumeState;
@@ -78,4 +86,8 @@ private:
     std::chrono::steady_clock::time_point m_lastResumeHandledAt{};
     winrt::Windows::System::Threading::ThreadPoolTimer m_resumeReconnectTimer{nullptr};
     wil::unique_threadpool_timer m_nativeResumeReconnectTimer;
+#if defined(APC_POWER_TRANSITION_COORDINATOR_TESTING)
+    ResumeReconnectSchedulerModeForTesting m_resumeReconnectSchedulerModeForTesting =
+        ResumeReconnectSchedulerModeForTesting::Normal;
+#endif
 };

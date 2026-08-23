@@ -13,6 +13,7 @@
 #include <app/StartupTaskCoordinator.hpp>
 #include <app/UiRefreshCoalescer.hpp>
 
+#include <core/DeviceService.hpp>
 #include <core/SettingsStore.hpp>
 
 #include <services/CommandLineControlServer.hpp>
@@ -32,7 +33,6 @@
 #include <stop_token>
 #include <string_view>
 
-class DeviceManager;
 class UpdateCoordinator;
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -68,7 +68,7 @@ private:
     void FailStartup(std::wstring_view stage) noexcept;
     void InitializeTray();
     void InitializeNotifications();
-    void InitializeDeviceManager();
+    void InitializeDeviceService();
     void InitializeAppController();
     void InitializeCommandLineControl();
     void InitializeAdaptiveResources() noexcept;
@@ -139,7 +139,7 @@ private:
     HWND m_hwnd = nullptr;
 
     std::shared_ptr<SettingsStore> m_settingsStore;
-    std::shared_ptr<::DeviceManager> m_deviceManager;
+    std::shared_ptr<apc::device::DeviceService> m_deviceService;
     std::shared_ptr<ISettingsController> m_settingsController;
     std::shared_ptr<StartupTaskCoordinator> m_startupTaskCoordinator;
     winrt::Microsoft::UI::Dispatching::DispatcherQueue m_dispatcherQueue{nullptr};

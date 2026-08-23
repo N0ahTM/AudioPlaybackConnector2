@@ -2,7 +2,7 @@
 #include <services/TrayController.hpp>
 #include <core/SettingsStore.hpp>
 #include <core/TrayTooltipBuilder.hpp>
-#include <core/DeviceManager.hpp>
+#include <core/DeviceService.hpp>
 #include <core/StringResources.hpp>
 #include <core/ThemeHelper.hpp>
 #include <ui/FlyoutPresenterStyle.hpp>
@@ -78,8 +78,8 @@ void TrayController::Initialize(HWND hwnd, winrt::Microsoft::UI::Xaml::Window ma
     }
 }
 
-void TrayController::SetDeviceManager(std::shared_ptr<DeviceManager> deviceManager) {
-    m_deviceManager = std::move(deviceManager);
+void TrayController::SetDeviceService(std::shared_ptr<apc::device::DeviceService> deviceService) {
+    m_deviceService = std::move(deviceService);
 }
 
 void TrayController::SetSettingsStore(std::shared_ptr<SettingsStore> settingsStore) {
@@ -638,7 +638,7 @@ bool TrayController::EnsureDevicePickerViewCreated() noexcept {
         auto impl = pickerView.as<winrt::AudioPlaybackConnector2::implementation::DevicePickerView>();
         auto weak = weak_from_this();
         impl->Initialize(
-            m_deviceManager,
+            m_deviceService,
             m_settingsStore,
             [weak]() {
                 auto self = weak.lock();

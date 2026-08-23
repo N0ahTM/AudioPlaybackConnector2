@@ -19,7 +19,7 @@ namespace apc::app {
 
 // Temporary Phase 1 owner for the use cases still implemented by
 // ApplicationHost. The production operation table is filled with weak
-// callbacks by the host; it deliberately contains no DeviceManager,
+// callbacks by the host; it deliberately contains no DeviceService,
 // Settings, WinUI, pipe, JSON, notification, or localization type.
 //
 // Phase 4 deletes this bridge after AppController owns the use cases,

@@ -4,7 +4,7 @@
 #include <DevicePickerView.g.cpp>
 #endif
 
-#include <core/DeviceManager.hpp>
+#include <core/DeviceService.hpp>
 #include <core/StringResources.hpp>
 #include <ui/ButtonHelpers.hpp>
 #include <util/Util.hpp>
@@ -116,7 +116,7 @@ DevicePickerView::DevicePickerView() {
 /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-void DevicePickerView::Initialize(std::shared_ptr<DeviceManager> manager,
+void DevicePickerView::Initialize(std::shared_ptr<apc::device::DeviceService> service,
                                   std::shared_ptr<SettingsStore> settingsStore,
                                   std::function<void()> onClose,
                                   std::function<void(winrt::hstring)> onDeviceSelected,
@@ -126,9 +126,9 @@ void DevicePickerView::Initialize(std::shared_ptr<DeviceManager> manager,
                                   std::function<void()> onReconnectAll) {
     m_preparedForRelease.store(false);
     m_presentationActive.store(false, std::memory_order_release);
-    m_deviceManager = manager;
+    m_deviceService = service;
     m_settingsStore = settingsStore;
-    m_viewModel.SetDeviceManager(manager);
+    m_viewModel.SetDeviceService(service);
     m_viewModel.SetSettingsStore(settingsStore);
     m_onClose = std::move(onClose);
     m_onDeviceSelected = std::move(onDeviceSelected);
@@ -157,7 +157,7 @@ bool DevicePickerView::LoadDevices() {
         return true;
     }
 
-    const bool nativeInventoryComplete = m_viewModel.SynchronizeInventoryFromManager();
+    const bool nativeInventoryComplete = m_viewModel.SynchronizeInventoryFromService();
     if (m_viewModel.HasInventory()) {
         RebuildDeviceListFromCache();
     }
@@ -185,9 +185,9 @@ bool DevicePickerView::LoadDevices() {
         return false;
     }
 
-    auto manager = m_deviceManager.lock();
-    if (!manager) {
-        DebugTrace(L"[DevicePickerView] ERROR: no DeviceManager available for LoadDevices");
+    auto service = m_deviceService.lock();
+    if (!service) {
+        DebugTrace(L"[DevicePickerView] ERROR: no DeviceService available for LoadDevices");
         OnDeviceEnumerationFailed(blockingRefresh, requestId, inventoryGenerationAtStart);
         return false;
     }
@@ -203,7 +203,7 @@ bool DevicePickerView::LoadDevices() {
     CancelRefreshDevicesOperation(previousOp, L"LoadDevices");
 
     try {
-        auto refreshOp = manager->RefreshDevicesAsync();
+        auto refreshOp = service->RefreshDevicesAsync();
         {
             std::lock_guard lock(m_refreshDevicesOpMutex);
             m_refreshDevicesOp = refreshOp;
@@ -370,7 +370,7 @@ void DevicePickerView::PrepareForRelease() noexcept {
     m_onDeviceReconnect = nullptr;
     m_onDisconnectAll = nullptr;
     m_onReconnectAll = nullptr;
-    m_deviceManager.reset();
+    m_deviceService.reset();
     m_settingsStore.reset();
     m_pendingDeviceActions.clear();
     m_pendingGlobalAction = false;
@@ -443,12 +443,12 @@ void DevicePickerView::ApplyDeviceResults(
         const bool inventoryChangedDuringLoad = m_inventoryGeneration->ChangedSince(inventoryGenerationAtStart);
         bool nativeInventoryComplete = false;
         if (!devices) {
-            nativeInventoryComplete = m_viewModel.SynchronizeInventoryFromManager();
+            nativeInventoryComplete = m_viewModel.SynchronizeInventoryFromService();
             if (m_viewModel.HasInventory() || (blockingRefresh && DeviceList().Items().Size() == 0)) {
                 RebuildDeviceListFromCache();
             }
         } else {
-            nativeInventoryComplete = m_viewModel.SynchronizeInventoryFromManager();
+            nativeInventoryComplete = m_viewModel.SynchronizeInventoryFromService();
             if (!m_viewModel.HasInventory()) m_viewModel.SetDevices(devices);
             if (inventoryChangedDuringLoad && !nativeInventoryComplete) m_viewModel.InvalidateInventory();
             RebuildDeviceListFromCache();

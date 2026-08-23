@@ -2,7 +2,7 @@
 
 #include <services/SettingsController.hpp>
 
-#include <core/DeviceManager.hpp>
+#include <core/DeviceService.hpp>
 #include <core/SettingsLimits.hpp>
 #include <core/StringResources.hpp>
 
@@ -17,8 +17,8 @@ namespace {
 } // namespace
 
 SettingsController::SettingsController(std::shared_ptr<SettingsStore> settings,
-                                       std::weak_ptr<DeviceManager> deviceManager)
-    : m_settings(std::move(settings)), m_deviceManager(std::move(deviceManager)) {}
+                                       std::weak_ptr<apc::device::DeviceService> deviceService)
+    : m_settings(std::move(settings)), m_deviceService(std::move(deviceService)) {}
 
 SettingsData SettingsController::Snapshot() const {
     return m_settings ? m_settings->Snapshot().Data : SettingsData{};
@@ -35,12 +35,12 @@ void SettingsController::SetGlobalConnectOnStartup(bool enabled) {
 void SettingsController::SetGlobalReconnectOnConnectionLoss(bool enabled) {
     if (!m_settings || !WasApplied(m_settings->SetGlobalReconnectOnConnectionLoss(enabled))) return;
     const auto snapshot = m_settings->Snapshot();
-    if (auto manager = m_deviceManager.lock()) {
+    if (auto service = m_deviceService.lock()) {
         std::vector<std::wstring> individuallyEnabledDeviceIds;
         for (auto const& device : snapshot.Data.Devices) {
             if (device.ReconnectOnConnectionLoss) individuallyEnabledDeviceIds.push_back(device.Id);
         }
-        manager->ApplyReconnectOnConnectionLossPolicy(snapshot.Data.GlobalReconnectOnConnectionLoss,
+        service->ApplyReconnectOnConnectionLossPolicy(snapshot.Data.GlobalReconnectOnConnectionLoss,
                                                       individuallyEnabledDeviceIds);
     }
 }
@@ -48,8 +48,8 @@ void SettingsController::SetGlobalReconnectOnConnectionLoss(bool enabled) {
 void SettingsController::SetAllowIncomingConnections(bool enabled) {
     if (!m_settings || !WasApplied(m_settings->SetAllowIncomingConnections(enabled))) return;
     const auto snapshot = m_settings->Snapshot();
-    if (auto manager = m_deviceManager.lock())
-        manager->SetIncomingConnectionsEnabled(snapshot.Data.AllowIncomingConnections);
+    if (auto service = m_deviceService.lock())
+        service->SetIncomingConnectionsEnabled(snapshot.Data.AllowIncomingConnections);
 }
 
 void SettingsController::SetStartWithWindows(bool enabled) {
@@ -97,12 +97,11 @@ void SettingsController::SetDeviceReconnectOnConnectionLoss(std::wstring const& 
         !WasApplied(m_settings->SetDeviceReconnectOnConnectionLoss(deviceId, enabled)))
         return;
     const auto snapshot = m_settings->Snapshot();
-    if (auto manager = m_deviceManager.lock()) {
+    if (auto service = m_deviceService.lock()) {
         const auto device = std::ranges::find(snapshot.Data.Devices, deviceId, &DeviceSettings::Id);
         if (device != snapshot.Data.Devices.end()) {
-            manager->SetReconnectOnConnectionLoss(winrt::hstring(deviceId),
-                                                  snapshot.Data.GlobalReconnectOnConnectionLoss ||
-                                                      device->ReconnectOnConnectionLoss);
+            service->SetReconnectOnConnectionLoss(
+                deviceId, snapshot.Data.GlobalReconnectOnConnectionLoss || device->ReconnectOnConnectionLoss);
         }
     }
 }
@@ -132,15 +131,15 @@ bool SettingsController::ClearDefaultDevice() {
 }
 
 std::size_t SettingsController::ConnectedDeviceCount() const {
-    if (auto manager = m_deviceManager.lock()) return manager->GetConnectedDevices().size();
+    if (auto service = m_deviceService.lock()) return service->GetConnectedDevices().size();
     return 0;
 }
 
 void SettingsController::ForgetDevice(std::wstring const& deviceId) {
     if (!m_settings || !IsValidDeviceId(deviceId) || !WasApplied(m_settings->ForgetDevice(deviceId))) return;
     const auto snapshot = m_settings->Snapshot();
-    if (auto manager = m_deviceManager.lock()) {
-        manager->SetReconnectOnConnectionLoss(winrt::hstring(deviceId), snapshot.Data.GlobalReconnectOnConnectionLoss);
+    if (auto service = m_deviceService.lock()) {
+        service->SetReconnectOnConnectionLoss(deviceId, snapshot.Data.GlobalReconnectOnConnectionLoss);
     }
     NotifyPresentationChanged();
 }

@@ -2,7 +2,7 @@
 
 #include <ui/DevicePickerViewModel.hpp>
 
-#include <core/DeviceManager.hpp>
+#include <core/DeviceService.hpp>
 #include <core/SettingsStore.hpp>
 #include <core/StringResources.hpp>
 
@@ -10,8 +10,8 @@
 /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-void DevicePickerViewModel::SetDeviceManager(std::weak_ptr<DeviceManager> manager) {
-    m_manager = std::move(manager);
+void DevicePickerViewModel::SetDeviceService(std::weak_ptr<apc::device::DeviceService> service) {
+    m_service = std::move(service);
 }
 
 void DevicePickerViewModel::SetSettingsStore(std::weak_ptr<SettingsStore> settingsStore) {
@@ -33,19 +33,19 @@ void DevicePickerViewModel::SetDevices(winrt::Windows::Devices::Enumeration::Dev
     m_cache.ReplaceInventory(std::move(inventory), refreshedAt);
 }
 
-bool DevicePickerViewModel::SynchronizeInventoryFromManager(TimePoint refreshedAt) {
-    auto manager = m_manager.lock();
-    if (!manager) return false;
+bool DevicePickerViewModel::SynchronizeInventoryFromService(TimePoint refreshedAt) {
+    auto service = m_service.lock();
+    if (!service) return false;
 
     if (m_sourceInventoryGeneration && m_cache.HasInventory()) {
-        auto inventory = manager->GetDevicePickerInventorySnapshotIfChanged(*m_sourceInventoryGeneration);
+        auto inventory = service->GetDevicePickerInventorySnapshotIfChanged(*m_sourceInventoryGeneration);
         if (!inventory) return m_sourceEnumerationComplete;
 
         m_cache.ReplaceInventory(std::move(inventory->Devices), refreshedAt);
         m_sourceInventoryGeneration = inventory->Generation;
         m_sourceEnumerationComplete = inventory->EnumerationComplete;
     } else {
-        auto inventory = manager->GetDevicePickerInventorySnapshot();
+        auto inventory = service->GetDevicePickerInventorySnapshot();
         m_cache.ReplaceInventory(std::move(inventory.Devices), refreshedAt);
         m_sourceInventoryGeneration = inventory.Generation;
         m_sourceEnumerationComplete = inventory.EnumerationComplete;
@@ -74,8 +74,8 @@ bool DevicePickerViewModel::IsInventoryFresh(TimePoint now) const noexcept {
 
 apc::device_picker::DevicePickerSnapshot const& DevicePickerViewModel::RefreshSnapshot(TimePoint now) {
     apc::device_picker::DeviceActivitySnapshot activity;
-    if (auto manager = m_manager.lock()) {
-        activity = manager->GetDevicePickerActivitySnapshot();
+    if (auto service = m_service.lock()) {
+        activity = service->GetDevicePickerActivitySnapshot();
     }
 
     std::vector<apc::device_picker::DevicePresentationSetting> presentationSettings;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <app/ResumeReconnectAttemptState.hpp>
+#include <core/DeviceService.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -11,8 +12,6 @@
 #include <string>
 #include <string_view>
 #include <vector>
-
-class DeviceManager;
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Power Transition Coordinator //////////////////////////////////////////////////////////////////////*/
@@ -36,8 +35,9 @@ public:
     /*------------------------------------------------------------------------------------------------------------*/
 
     void Cancel() noexcept;
-    void HandleSuspend(std::function<void()> flushSettings, std::shared_ptr<DeviceManager> deviceManager) noexcept;
-    void HandleResume(std::shared_ptr<DeviceManager> deviceManager,
+    void HandleSuspend(std::function<void()> flushSettings,
+                       std::shared_ptr<apc::device::DeviceService> deviceService) noexcept;
+    void HandleResume(std::shared_ptr<apc::device::DeviceService> deviceService,
                       ResumeReconnectCallback reconnectAfterDelay) noexcept;
     void NotifyDeviceConnected(std::wstring_view deviceId) noexcept;
     [[nodiscard]] bool IsResumeReconnectGenerationCurrent(std::uint64_t generation) const noexcept;

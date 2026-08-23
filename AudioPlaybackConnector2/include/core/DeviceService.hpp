@@ -1,13 +1,20 @@
 #pragma once
 
 #include <core/DevicePickerTypes.hpp>
+#include <core/DeviceTrayPresentation.hpp>
 #include <core/DeviceSession.hpp>
 #include <core/DeviceWatcher.hpp>
+
+#include <winrt/Windows.Devices.Enumeration.h>
+#include <winrt/Windows.Foundation.h>
 
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace apc::device {
@@ -88,6 +95,49 @@ public:
     void Resume();
     void Shutdown() noexcept;
     [[nodiscard]] DeviceServiceSnapshot Snapshot() const;
+
+    // Transitional composition entry points. They forward into this owner;
+    // they do not create a second device-state pipeline and are removed when
+    // AppController takes over the application command surface.
+    void StartDeviceWatcher();
+    void StopDeviceWatcher();
+    void ShutdownForProcessExit() noexcept;
+    void SuspendForPowerTransition() noexcept;
+    void ResumeAfterPowerTransition();
+    void SetIncomingConnectionsEnabled(bool enabled);
+    void ApplyReconnectOnConnectionLossPolicy(bool globallyEnabled,
+                                              std::span<const std::wstring> individuallyEnabledDeviceIds);
+    void SetReconnectOnConnectionLoss(std::wstring deviceId, bool enabled);
+    void SetReconnectOnConnectionLoss(winrt::hstring deviceId, bool enabled) {
+        SetReconnectOnConnectionLoss(std::wstring(deviceId), enabled);
+    }
+    winrt::Windows::Foundation::IAsyncAction ConnectAsync(winrt::hstring deviceId);
+    void ConnectDetached(winrt::hstring deviceId);
+    winrt::Windows::Foundation::IAsyncAction ReconnectAsync(winrt::hstring deviceId);
+    void ReconnectDetached(winrt::hstring deviceId);
+    winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
+    RefreshDevicesAsync();
+    [[nodiscard]] std::vector<DeviceSessionSnapshot> GetConnectedDevices() const;
+    [[nodiscard]] std::vector<DeviceSessionSnapshot> GetConnectionSessions() const;
+    [[nodiscard]] bool IsDeviceConnected(std::wstring_view deviceId) const;
+    [[nodiscard]] bool IsDeviceConnected(winrt::hstring const& deviceId) const {
+        return IsDeviceConnected(std::wstring(deviceId));
+    }
+    [[nodiscard]] std::optional<std::wstring> GetConnectionDisplayName(std::wstring_view deviceId) const;
+    [[nodiscard]] std::optional<std::wstring> GetConnectionDisplayName(winrt::hstring const& deviceId) const {
+        return GetConnectionDisplayName(std::wstring(deviceId));
+    }
+    [[nodiscard]] bool HasConnections() const;
+    [[nodiscard]] bool HasBusyOperations() const;
+    [[nodiscard]] bool IsDeviceBusy(std::wstring_view deviceId) const;
+    [[nodiscard]] bool IsDeviceBusy(winrt::hstring const& deviceId) const {
+        return IsDeviceBusy(std::wstring(deviceId));
+    }
+    [[nodiscard]] device_picker::DeviceActivitySnapshot GetDevicePickerActivitySnapshot() const;
+    [[nodiscard]] device_picker::DeviceInventorySnapshot GetDevicePickerInventorySnapshot() const;
+    [[nodiscard]] std::optional<device_picker::DeviceInventorySnapshot>
+    GetDevicePickerInventorySnapshotIfChanged(std::uint64_t knownGeneration) const;
+    [[nodiscard]] DeviceTrayPresentationSnapshot GetTrayPresentationSnapshot() const;
 
 private:
     struct State;

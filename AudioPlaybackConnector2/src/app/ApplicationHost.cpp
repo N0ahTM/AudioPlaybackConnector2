@@ -5,7 +5,7 @@
 #include <MainWindow/MainWindow.xaml.h>
 #include <app/AutoReconnectPlanner.hpp>
 #include <app/StartupUpdateCoordinator.hpp>
-#include <core/DeviceManager.hpp>
+#include <core/DeviceService.hpp>
 #include <core/SettingsLimits.hpp>
 #include <core/SettingsStore.hpp>
 #include <core/StringResources.hpp>
@@ -321,9 +321,9 @@ bool ApplicationHost::PerformTeardown(SettingsShutdownMode settingsShutdownMode)
     if (m_notificationService) {
         m_notificationService->Teardown();
     }
-    if (m_deviceManager) {
-        m_deviceManager->ShutdownForProcessExit();
-        m_deviceManager.reset();
+    if (m_deviceService) {
+        m_deviceService->ShutdownForProcessExit();
+        m_deviceService.reset();
     }
     m_notificationService.reset();
     m_updateCoordinator.reset();
@@ -482,15 +482,21 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept tr
     }
     DebugTrace(L"[App] GDI+ initialized");
 
-    InitializeDeviceManager();
+    InitializeDeviceService();
     InitializeAppController();
     InitializeTray();
     InitializeAdaptiveResources();
     InitializeNotifications();
     SetupDeviceEvents();
     const auto incomingSettingsSnapshot = m_settingsStore->Snapshot();
-    m_deviceManager->SetIncomingConnectionsEnabled(incomingSettingsSnapshot.Data.AllowIncomingConnections);
-    m_deviceManager->StartDeviceWatcher();
+    m_deviceService->SetIncomingConnectionsEnabled(incomingSettingsSnapshot.Data.AllowIncomingConnections);
+    std::vector<std::wstring> individuallyEnabledReconnectIds;
+    for (auto const& device : incomingSettingsSnapshot.Data.Devices) {
+        if (device.ReconnectOnConnectionLoss) individuallyEnabledReconnectIds.push_back(device.Id);
+    }
+    m_deviceService->ApplyReconnectOnConnectionLossPolicy(incomingSettingsSnapshot.Data.GlobalReconnectOnConnectionLoss,
+                                                          individuallyEnabledReconnectIds);
+    m_deviceService->StartDeviceWatcher();
     DebugTrace(L"[App] Device watcher started");
     InitializeCommandLineControl();
     const auto reconnectSettingsSnapshot = m_settingsStore->Snapshot();
@@ -540,7 +546,7 @@ void ApplicationHost::InitializeTray() {
     DebugTrace(L"[App] InitializeTray()");
     m_trayController = std::make_shared<TrayController>();
     m_trayController->Initialize(m_hwnd, m_mainWindow);
-    m_trayController->SetDeviceManager(m_deviceManager);
+    m_trayController->SetDeviceService(m_deviceService);
     m_trayController->SetSettingsStore(m_settingsStore);
     auto weak = weak_from_this();
     if (m_settingsController) {
@@ -646,24 +652,16 @@ void ApplicationHost::InitializeNotifications() {
     DebugTrace(L"[App] Notifications available: {0}", notificationsAvailable);
 }
 
-void ApplicationHost::InitializeDeviceManager() {
-    DebugTrace(L"[App] InitializeDeviceManager()");
-    m_deviceManager = std::make_shared<DeviceManager>();
+void ApplicationHost::InitializeDeviceService() {
+    DebugTrace(L"[App] InitializeDeviceService()");
+    m_deviceService = std::make_shared<apc::device::DeviceService>();
     auto weak = weak_from_this();
-    m_settingsController = std::make_shared<SettingsController>(m_settingsStore, m_deviceManager);
+    m_settingsController = std::make_shared<SettingsController>(m_settingsStore, m_deviceService);
     auto weakSettingsController = std::weak_ptr<ISettingsController>(m_settingsController);
     m_startupTaskCoordinator = std::make_shared<StartupTaskCoordinator>([weakSettingsController](bool enabled) {
         if (auto controller = weakSettingsController.lock()) controller->SetStartWithWindows(enabled);
     });
-    m_deviceManager->SetReconnectOnConnectionLossPredicate([weak](auto id) {
-        auto self = weak.lock();
-        if (!self || self->m_exiting.load() || !self->m_settingsStore) return false;
-        const auto settingsSnapshot = self->m_settingsStore->Snapshot();
-        if (settingsSnapshot.Data.GlobalReconnectOnConnectionLoss) return true;
-        return std::ranges::any_of(settingsSnapshot.Data.Devices,
-                                   [&](const auto& d) { return d.Id == id && d.ReconnectOnConnectionLoss; });
-    });
-    DebugTrace(L"[App] DeviceManager initialized");
+    DebugTrace(L"[App] DeviceService initialized");
 }
 
 void ApplicationHost::InitializeAppController() {
@@ -677,19 +675,31 @@ void ApplicationHost::InitializeAppController() {
     operations.ReadConnectedDevices = [weak]() {
         std::vector<Bridge::DeviceRecord> devices;
         auto self = weak.lock();
-        if (!self || !self->m_deviceManager) return devices;
+        if (!self || !self->m_deviceService) return devices;
 
-        for (auto const& connection : self->m_deviceManager->GetConnectionSessions()) {
-            if (connection.Id.empty()) continue;
-            const auto id = winrt::hstring(connection.Id);
-            const auto isBusy = self->m_deviceManager->IsDeviceBusy(id);
-            devices.push_back({.Id = connection.Id,
-                               .Name = connection.Name,
+        for (auto const& connection : self->m_deviceService->GetConnectionSessions()) {
+            if (connection.DeviceId.empty()) continue;
+            const auto id = winrt::hstring(connection.DeviceId);
+            const auto isBusy = self->m_deviceService->IsDeviceBusy(id);
+            const auto state = [&] {
+                switch (connection.State) {
+                    case apc::device::DeviceLifecycleState::Connected:
+                        return apc::app::DeviceConnectionState::Connected;
+                    case apc::device::DeviceLifecycleState::WaitingForReconnect:
+                        return apc::app::DeviceConnectionState::WaitingForReconnect;
+                    case apc::device::DeviceLifecycleState::Failed: return apc::app::DeviceConnectionState::Failed;
+                    case apc::device::DeviceLifecycleState::Connecting:
+                    case apc::device::DeviceLifecycleState::Disconnecting:
+                        return apc::app::DeviceConnectionState::Connecting;
+                    case apc::device::DeviceLifecycleState::Idle: return apc::app::DeviceConnectionState::Idle;
+                }
+                return apc::app::DeviceConnectionState::Idle;
+            }();
+            devices.push_back({.Id = connection.DeviceId,
+                               .Name = connection.DeviceName,
                                .Alias = {},
-                               .State = connection.IsOpen ? apc::app::DeviceConnectionState::Connected
-                                                          : (isBusy ? apc::app::DeviceConnectionState::Connecting
-                                                                    : apc::app::DeviceConnectionState::Idle),
-                               .IsConnected = connection.IsOpen,
+                               .State = state,
+                               .IsConnected = state == apc::app::DeviceConnectionState::Connected,
                                .IsKnown = true,
                                .IsBusy = isBusy});
         }
@@ -698,10 +708,10 @@ void ApplicationHost::InitializeAppController() {
     operations.Refresh = [weak](apc::app::AppCommandContext const& context) {
         Bridge::RefreshResult result;
         auto self = weak.lock();
-        if (!self || !self->m_deviceManager) return result;
+        if (!self || !self->m_deviceService) return result;
 
         try {
-            auto operation = self->m_deviceManager->RefreshDevicesAsync();
+            auto operation = self->m_deviceService->RefreshDevicesAsync();
             result.Status = WaitForControlAsync(operation, context);
             if (result.Status != OperationStatus::Succeeded) return result;
 
@@ -717,7 +727,7 @@ void ApplicationHost::InitializeAppController() {
                                           .State = apc::app::DeviceConnectionState::Idle,
                                           .IsConnected = false,
                                           .IsKnown = false,
-                                          .IsBusy = self->m_deviceManager->IsDeviceBusy(winrt::hstring(id))});
+                                          .IsBusy = self->m_deviceService->IsDeviceBusy(winrt::hstring(id))});
             }
         } catch (winrt::hresult_error const& ex) {
             util::DebugTraceException(L"[App] Control command device refresh failed", ex);
@@ -734,9 +744,9 @@ void ApplicationHost::InitializeAppController() {
     operations.Connect = [weak](std::wstring_view deviceId, apc::app::AppCommandContext const& context) {
         Bridge::OperationResult result;
         auto self = weak.lock();
-        if (!self || !self->m_deviceManager) return result;
+        if (!self || !self->m_deviceService) return result;
         try {
-            result.Status = WaitForControlAsync(self->m_deviceManager->ConnectAsync(winrt::hstring(deviceId)), context);
+            result.Status = WaitForControlAsync(self->m_deviceService->ConnectAsync(winrt::hstring(deviceId)), context);
         } catch (winrt::hresult_error const& ex) {
             util::DebugTraceException(L"[App] Control command connect failed", ex);
         } catch (std::exception const& ex) {
@@ -747,17 +757,17 @@ void ApplicationHost::InitializeAppController() {
         return result;
     };
     operations.ConnectDetached = [weak](std::wstring_view deviceId) {
-        if (auto self = weak.lock(); self && self->m_deviceManager && !self->m_exiting.load()) {
-            self->m_deviceManager->ConnectDetached(winrt::hstring(deviceId));
+        if (auto self = weak.lock(); self && self->m_deviceService && !self->m_exiting.load()) {
+            self->m_deviceService->ConnectDetached(winrt::hstring(deviceId));
         }
     };
     operations.Reconnect = [weak](std::wstring_view deviceId, apc::app::AppCommandContext const& context) {
         Bridge::OperationResult result;
         auto self = weak.lock();
-        if (!self || !self->m_deviceManager) return result;
+        if (!self || !self->m_deviceService) return result;
         try {
             result.Status =
-                WaitForControlAsync(self->m_deviceManager->ReconnectAsync(winrt::hstring(deviceId)), context);
+                WaitForControlAsync(self->m_deviceService->ReconnectAsync(winrt::hstring(deviceId)), context);
         } catch (winrt::hresult_error const& ex) {
             util::DebugTraceException(L"[App] Control command reconnect failed", ex);
         } catch (std::exception const& ex) {
@@ -768,23 +778,23 @@ void ApplicationHost::InitializeAppController() {
         return result;
     };
     operations.ReconnectDetached = [weak](std::wstring_view deviceId) {
-        if (auto self = weak.lock(); self && self->m_deviceManager && !self->m_exiting.load()) {
-            self->m_deviceManager->ReconnectDetached(winrt::hstring(deviceId));
+        if (auto self = weak.lock(); self && self->m_deviceService && !self->m_exiting.load()) {
+            self->m_deviceService->ReconnectDetached(winrt::hstring(deviceId));
         }
     };
     operations.Disconnect = [weak](std::wstring_view deviceId) {
-        if (auto self = weak.lock(); self && self->m_deviceManager && !self->m_exiting.load()) {
-            self->m_deviceManager->Disconnect(winrt::hstring(deviceId));
+        if (auto self = weak.lock(); self && self->m_deviceService && !self->m_exiting.load()) {
+            static_cast<void>(self->m_deviceService->Disconnect(std::wstring(deviceId)));
         }
     };
     operations.DisconnectAll = [weak]() {
-        if (auto self = weak.lock(); self && self->m_deviceManager && !self->m_exiting.load()) {
-            self->m_deviceManager->DisconnectAll();
+        if (auto self = weak.lock(); self && self->m_deviceService && !self->m_exiting.load()) {
+            static_cast<void>(self->m_deviceService->DisconnectAll());
         }
     };
     operations.ReconnectAllDetached = [weak]() {
-        if (auto self = weak.lock(); self && self->m_deviceManager && !self->m_exiting.load()) {
-            self->m_deviceManager->ReconnectAll();
+        if (auto self = weak.lock(); self && self->m_deviceService && !self->m_exiting.load()) {
+            static_cast<void>(self->m_deviceService->ReconnectAll());
         }
     };
     operations.SetDefaultDevice = [weak](std::wstring_view deviceId) {
@@ -910,14 +920,14 @@ void ApplicationHost::InitializeAppController() {
         return false;
     };
     operations.HasBusy = [weak]() {
-        if (auto self = weak.lock(); self && self->m_deviceManager) {
-            return self->m_deviceManager->HasBusyOperations();
+        if (auto self = weak.lock(); self && self->m_deviceService) {
+            return self->m_deviceService->HasBusyOperations();
         }
         return false;
     };
     operations.DeviceBusy = [weak](std::wstring_view deviceId) {
-        if (auto self = weak.lock(); self && self->m_deviceManager) {
-            return self->m_deviceManager->IsDeviceBusy(winrt::hstring(deviceId));
+        if (auto self = weak.lock(); self && self->m_deviceService) {
+            return self->m_deviceService->IsDeviceBusy(winrt::hstring(deviceId));
         }
         return false;
     };
@@ -1187,7 +1197,7 @@ void ApplicationHost::ExecuteTrayCommand(apc::app::AppCommand command,
 }
 
 void ApplicationHost::TryAutoReconnect() {
-    if (m_exiting.load() || !m_settingsStore || !m_deviceManager) return;
+    if (m_exiting.load() || !m_settingsStore || !m_deviceService) return;
 
     DebugTrace(L"[App] TryAutoReconnect()");
     const auto settingsSnapshot = m_settingsStore->Snapshot();
@@ -1195,7 +1205,7 @@ void ApplicationHost::TryAutoReconnect() {
 
     for (const auto& id : reconnectIds) {
         DebugTrace(L"[App] Auto-reconnecting to: {0}", id);
-        m_deviceManager->ConnectDetached(winrt::hstring(id));
+        m_deviceService->ConnectDetached(winrt::hstring(id));
     }
 }
 
@@ -1208,13 +1218,13 @@ void ApplicationHost::HandlePowerSuspend() {
                 DebugTrace(L"[App] SettingsStore synchronous suspend flush failed after bounded attempts");
             }
         },
-        m_deviceManager);
+        m_deviceService);
 }
 
 void ApplicationHost::HandlePowerResume() {
     auto weak = weak_from_this();
     m_powerTransitionCoordinator.HandleResume(
-        m_deviceManager,
+        m_deviceService,
         [weak](std::vector<std::wstring> deviceIds,
                std::uint64_t generation,
                PowerTransitionCoordinator::ResumeReconnectCompleted completed) {
@@ -1233,16 +1243,16 @@ void ApplicationHost::HandlePowerResume() {
                 std::vector<std::wstring> attemptedIds;
                 auto completionGuard = wil::scope_exit([&]() noexcept { finish(std::move(attemptedIds)); });
                 auto self = weak.lock();
-                if (!self || !self->m_deviceManager ||
+                if (!self || !self->m_deviceService ||
                     !self->m_powerTransitionCoordinator.IsResumeReconnectGenerationCurrent(generation)) {
                     return;
                 }
                 for (auto const& deviceId : deviceIds) {
-                    if (deviceId.empty() || self->m_deviceManager->IsDeviceConnected(winrt::hstring(deviceId)) ||
-                        self->m_deviceManager->IsDeviceBusy(winrt::hstring(deviceId))) {
+                    if (deviceId.empty() || self->m_deviceService->IsDeviceConnected(winrt::hstring(deviceId)) ||
+                        self->m_deviceService->IsDeviceBusy(winrt::hstring(deviceId))) {
                         continue;
                     }
-                    self->m_deviceManager->ConnectDetached(winrt::hstring(deviceId));
+                    self->m_deviceService->ConnectDetached(winrt::hstring(deviceId));
                     attemptedIds.push_back(deviceId);
                 }
             });
@@ -1430,13 +1440,13 @@ ApplicationHost::ControlUiActionResult ApplicationHost::RunControlUiAction(std::
 }
 
 bool ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstring_view reason) {
-    if (m_exiting.load() || !m_trayController || !m_deviceManager) {
+    if (m_exiting.load() || !m_trayController || !m_deviceService) {
         DebugTrace(L"[App] RefreshTrayVisualState skipped reason={0} exiting={1} hasTrayController={2} "
-                   L"hasDeviceManager={3}",
+                   L"hasDeviceService={3}",
                    reason,
                    m_exiting.load(),
                    m_trayController != nullptr,
-                   m_deviceManager != nullptr);
+                   m_deviceService != nullptr);
         return true;
     }
     if (!m_hwnd || !IsWindow(m_hwnd)) {
@@ -1446,7 +1456,7 @@ bool ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstri
         return true;
     }
 
-    auto const presentation = m_deviceManager->GetTrayPresentationSnapshot();
+    auto const presentation = m_deviceService->GetTrayPresentationSnapshot();
     const bool hasBusyOperations = presentation.HasBusyOperations;
     const bool hasConnections = !presentation.ConnectedDevices.empty();
     const auto now = std::chrono::steady_clock::now();
@@ -1626,7 +1636,7 @@ void ApplicationHost::SetupDeviceEvents() {
             // The router rejects superseded queued events. Recheck the authoritative session at
             // publication time too, because DeviceConnected carries a state overlay into the
             // controller snapshot and must never revive a closed session.
-            if (!self->m_deviceManager || !self->m_deviceManager->IsDeviceConnected(id)) return;
+            if (!self->m_deviceService || !self->m_deviceService->IsDeviceConnected(id)) return;
             self->OnDeviceConnected(id);
             self->PublishDeviceFact({.Kind = Bridge::FactKind::DeviceConnected, .Id = std::wstring(id)});
         }
@@ -1660,7 +1670,7 @@ void ApplicationHost::SetupDeviceEvents() {
     callbacks.DeviceStatusChanged = [weak](auto const& id, auto const&, DeviceStatusKind statusKind) {
         auto self = weak.lock();
         if (!self) return;
-        if (!self->m_exiting.load() && self->m_trayController && self->m_deviceManager && self->m_hwnd &&
+        if (!self->m_exiting.load() && self->m_trayController && self->m_deviceService && self->m_hwnd &&
             IsWindow(self->m_hwnd)) {
             self->ScheduleDeviceVisualRefresh(statusKind == DeviceStatusKind::Error);
         }
@@ -1671,7 +1681,7 @@ void ApplicationHost::SetupDeviceEvents() {
     callbacks.DeviceActivityChanged = [weak]() {
         auto self = weak.lock();
         if (!self) return;
-        if (!self->m_exiting.load() && self->m_trayController && self->m_deviceManager && self->m_hwnd &&
+        if (!self->m_exiting.load() && self->m_trayController && self->m_deviceService && self->m_hwnd &&
             IsWindow(self->m_hwnd)) {
             self->ScheduleDeviceVisualRefresh(false);
         }
@@ -1680,7 +1690,7 @@ void ApplicationHost::SetupDeviceEvents() {
     callbacks.DeviceInventoryChanged = [weak]() {
         auto self = weak.lock();
         if (!self) return;
-        if (!self->m_exiting.load() && self->m_trayController && self->m_deviceManager && self->m_hwnd &&
+        if (!self->m_exiting.load() && self->m_trayController && self->m_deviceService && self->m_hwnd &&
             IsWindow(self->m_hwnd)) {
             self->ScheduleDeviceVisualRefresh(false, true, false);
         }
@@ -1688,7 +1698,7 @@ void ApplicationHost::SetupDeviceEvents() {
     };
 
     m_deviceEventRouter.Attach(
-        m_deviceManager,
+        m_deviceService,
         [weak](std::function<void()> work) {
             if (auto self = weak.lock()) {
                 return self->RunOnUIThread(std::move(work));
@@ -1757,17 +1767,17 @@ bool ApplicationHost::CloseMainWindow(std::wstring_view reason) noexcept {
 /*------------------------------------------------------------------------------------------------------------*/
 
 void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
-    if (m_exiting.load() || !m_deviceManager) return;
+    if (m_exiting.load() || !m_deviceService) return;
     DebugTrace(L"[App] OnDeviceConnected: {0}", std::wstring(id));
 
-    if (!m_deviceManager->IsDeviceConnected(id)) {
+    if (!m_deviceService->IsDeviceConnected(id)) {
         return;
     }
     m_powerTransitionCoordinator.NotifyDeviceConnected(std::wstring_view(id));
     if (!m_settingsStore) return;
 
     winrt::hstring rawDeviceName = id;
-    if (auto displayName = m_deviceManager->GetConnectionDisplayName(id)) {
+    if (auto displayName = m_deviceService->GetConnectionDisplayName(id)) {
         rawDeviceName = winrt::hstring(*displayName);
     }
 
@@ -1805,7 +1815,7 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
         if (it != settingsSnapshot.Data.Devices.end()) {
             reconnectOnConnectionLoss = reconnectOnConnectionLoss || it->ReconnectOnConnectionLoss;
         }
-        m_deviceManager->SetReconnectOnConnectionLoss(id, reconnectOnConnectionLoss);
+        m_deviceService->SetReconnectOnConnectionLoss(id, reconnectOnConnectionLoss);
     } catch (winrt::hresult_error const& ex) {
         util::DebugTraceException(L"[App] OnDeviceConnected reconnect-on-loss sync ERROR", ex);
     } catch (std::exception const& ex) {

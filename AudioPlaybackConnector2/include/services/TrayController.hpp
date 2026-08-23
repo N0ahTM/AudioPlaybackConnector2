@@ -1,6 +1,7 @@
 #pragma once
 
 #include <core/DeviceTrayPresentation.hpp>
+#include <core/DeviceService.hpp>
 #include <ui/TrayIcon.hpp>
 #include <ui/TrayContextMenu.hpp>
 #include <ui/TrayPrimaryActivation.hpp>
@@ -13,7 +14,6 @@
 #include <cstdint>
 #include <string_view>
 
-class DeviceManager;
 class SettingsStore;
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -47,7 +47,7 @@ public:
     TrayController& operator=(TrayController&&) = delete;
 
     void Initialize(HWND hwnd, winrt::Microsoft::UI::Xaml::Window mainWindow);
-    void SetDeviceManager(std::shared_ptr<DeviceManager> deviceManager);
+    void SetDeviceService(std::shared_ptr<apc::device::DeviceService> deviceService);
     void SetSettingsStore(std::shared_ptr<SettingsStore> settingsStore);
     void PreloadDevicePicker() noexcept;
     void ReleaseDevicePicker() noexcept;
@@ -115,7 +115,7 @@ private:
 
     HWND m_hwnd = nullptr;
     winrt::Microsoft::UI::Xaml::Window m_mainWindow{nullptr};
-    std::shared_ptr<DeviceManager> m_deviceManager;
+    std::shared_ptr<apc::device::DeviceService> m_deviceService;
     std::shared_ptr<SettingsStore> m_settingsStore;
 
     std::unique_ptr<TrayIcon> m_trayIcon;

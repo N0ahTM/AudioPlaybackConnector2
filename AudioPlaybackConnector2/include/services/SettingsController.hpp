@@ -1,10 +1,9 @@
 #pragma once
 
+#include <core/DeviceService.hpp>
 #include <core/SettingsStore.hpp>
 
 #include <functional>
-
-class DeviceManager;
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Settings Controller ///////////////////////////////////////////////////////////////////////////////*/
@@ -41,7 +40,8 @@ public:
 
 class SettingsController final : public ISettingsController {
 public:
-    SettingsController(std::shared_ptr<SettingsStore> settings, std::weak_ptr<DeviceManager> deviceManager);
+    SettingsController(std::shared_ptr<SettingsStore> settings,
+                       std::weak_ptr<apc::device::DeviceService> deviceService);
 
     SettingsData Snapshot() const override;
     void SetPresentationChangedCallback(PresentationChangedCallback callback) override;
@@ -67,6 +67,6 @@ private:
     void NotifyPresentationChanged(PresentationChangeKind kind = PresentationChangeKind::Content);
 
     std::shared_ptr<SettingsStore> m_settings;
-    std::weak_ptr<DeviceManager> m_deviceManager;
+    std::weak_ptr<apc::device::DeviceService> m_deviceService;
     PresentationChangedCallback m_presentationChanged;
 };

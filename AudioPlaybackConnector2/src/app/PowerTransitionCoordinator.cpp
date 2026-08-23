@@ -2,7 +2,7 @@
 
 #include <app/PowerTransitionCoordinator.hpp>
 
-#include <core/DeviceManager.hpp>
+#include <core/DeviceService.hpp>
 
 namespace {
 constexpr std::chrono::seconds c_resumeReconnectDelay{10};
@@ -39,7 +39,7 @@ void PowerTransitionCoordinator::Cancel() noexcept {
 }
 
 void PowerTransitionCoordinator::HandleSuspend(std::function<void()> flushSettings,
-                                               std::shared_ptr<DeviceManager> deviceManager) noexcept {
+                                               std::shared_ptr<apc::device::DeviceService> deviceService) noexcept {
     try {
         if (m_exiting.load() || m_powerSuspended) return;
         m_powerSuspended = true;
@@ -55,12 +55,12 @@ void PowerTransitionCoordinator::HandleSuspend(std::function<void()> flushSettin
         CancelResumeReconnectTimer();
 
         std::vector<std::wstring> activeDeviceIds;
-        if (deviceManager) {
+        if (deviceService) {
             try {
-                auto connected = deviceManager->GetConnectedDevices();
+                auto connected = deviceService->GetConnectedDevices();
                 activeDeviceIds.reserve(connected.size());
-                for (auto const& connection : connected) {
-                    if (!connection.Id.empty()) activeDeviceIds.push_back(connection.Id);
+                for (auto const& session : connected) {
+                    if (!session.DeviceId.empty()) activeDeviceIds.push_back(session.DeviceId);
                 }
             } catch (...) {
                 DebugTrace(L"[PowerTransitionCoordinator] Failed to capture active devices before suspend");
@@ -77,13 +77,13 @@ void PowerTransitionCoordinator::HandleSuspend(std::function<void()> flushSettin
         }
 
         if (flushSettings) flushSettings();
-        if (deviceManager) deviceManager->SuspendForPowerTransition();
+        if (deviceService) deviceService->SuspendForPowerTransition();
     } catch (...) {
         DebugTrace(L"[PowerTransitionCoordinator] HandleSuspend ERROR: ignored exception");
     }
 }
 
-void PowerTransitionCoordinator::HandleResume(std::shared_ptr<DeviceManager> deviceManager,
+void PowerTransitionCoordinator::HandleResume(std::shared_ptr<apc::device::DeviceService> deviceService,
                                               ResumeReconnectCallback reconnectAfterDelay) noexcept {
     try {
         if (m_exiting.load()) return;
@@ -104,7 +104,7 @@ void PowerTransitionCoordinator::HandleResume(std::shared_ptr<DeviceManager> dev
             DebugTrace(L"[PowerTransitionCoordinator] Power resume detected without prior suspend; running recovery");
         }
 
-        if (deviceManager) deviceManager->ResumeAfterPowerTransition();
+        if (deviceService) deviceService->ResumeAfterPowerTransition();
         if (!matchedSuspend) return;
 
         CancelResumeReconnectTimer();

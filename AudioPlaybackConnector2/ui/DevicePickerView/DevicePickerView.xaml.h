@@ -6,8 +6,11 @@
 #include <mutex>
 #include <unordered_map>
 
-class DeviceManager;
 class SettingsStore;
+
+namespace apc::device {
+class DeviceService;
+}
 
 namespace winrt::Microsoft::UI::Xaml {
 struct RoutedEventArgs;
@@ -24,7 +27,7 @@ struct DeviceInformationCollection;
 namespace winrt::AudioPlaybackConnector2::implementation {
 struct DevicePickerView : DevicePickerViewT<DevicePickerView> {
     DevicePickerView();
-    void Initialize(std::shared_ptr<DeviceManager> manager,
+    void Initialize(std::shared_ptr<apc::device::DeviceService> service,
                     std::shared_ptr<SettingsStore> settingsStore,
                     std::function<void()> onClose,
                     std::function<void(winrt::hstring)> onDeviceSelected,
@@ -77,7 +80,7 @@ private:
     std::function<void(winrt::hstring)> m_onDeviceReconnect;
     std::function<void()> m_onDisconnectAll;
     std::function<void()> m_onReconnectAll;
-    std::weak_ptr<DeviceManager> m_deviceManager;
+    std::weak_ptr<apc::device::DeviceService> m_deviceService;
     std::weak_ptr<SettingsStore> m_settingsStore;
     std::atomic<bool> m_isLoadingDevices = false;
     std::atomic<bool> m_loadDevicesCancelled = false;

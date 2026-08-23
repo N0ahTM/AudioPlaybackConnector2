@@ -1,9 +1,12 @@
 #include <core/DeviceService.hpp>
 
 #include <algorithm>
+#include <condition_variable>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -142,6 +145,7 @@ public:
     void Stop() noexcept override { ++StopCalls; }
     void RevokeCallbacks() noexcept override { ++RevokeCalls; }
     void Add(std::wstring id, std::wstring name) { Callbacks.DeviceAdded({std::move(id), std::move(name)}); }
+    void Remove(std::wstring id) { Callbacks.DeviceRemoved(std::move(id)); }
 
     DeviceWatcherCallbacks Callbacks;
     int StartCalls = 0;
@@ -257,6 +261,29 @@ void TestIncomingConnectionDoesNotOpenUntilThePlatformSignalsOpened() {
           "the recreated incoming listener must return to listening idle state after StartAsync");
 }
 
+void TestDeviceRemovalClosesCurrentSessionAndRejectsLateCallbacks() {
+    Fixture fixture;
+    Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted, "watcher start must be accepted");
+    fixture.WatcherAccess->LastWatcher->Add(L"removed", L"Removed");
+    ConnectSuccessfully(fixture, L"removed");
+    auto* const connection = fixture.ConnectionAccess->LastConnection;
+    const auto connectionCount = fixture.ConnectionAccess->Connections.size();
+
+    fixture.WatcherAccess->LastWatcher->Remove(L"removed");
+    Check(connection->CloseCalls == 1, "device removal must close the retained connection exactly once");
+    connection->CompleteStart(DeviceConnectionResult::Success);
+    connection->Signal(DeviceConnectionState::Opened);
+    Check(fixture.ConnectionAccess->Connections.size() == connectionCount,
+          "late callbacks from a removed device must not create a replacement connection");
+    connection->CompleteClose();
+    Check(StateFor(fixture.Service, L"removed") == DeviceLifecycleState::Idle,
+          "a removed device must settle its session after the close barrier");
+
+    fixture.WatcherAccess->LastWatcher->Add(L"removed", L"Removed Again");
+    Check(SessionFor(fixture.Service, L"removed").DeviceName == L"Removed Again",
+          "reappearing devices must update the retained session snapshot");
+}
+
 void TestRetryTimerAndManualCancellationRejectStaleTimerCallbacks() {
     Fixture fixture;
     ConnectSuccessfully(fixture, L"retry");
@@ -267,7 +294,8 @@ void TestRetryTimerAndManualCancellationRejectStaleTimerCallbacks() {
           "unexpected loss must schedule the bounded reconnect policy");
     Check(timer->Delay == std::chrono::seconds(5) && SessionFor(fixture.Service, L"retry").CompletedRetryAttempts == 0,
           "the initial reconnect timer must be attempt one at five seconds without consuming a completed failure");
-    timer->FireEvenIfCancelled();
+    auto firstTimerCallback = timer->Callback;
+    if (firstTimerCallback) firstTimerCallback();
     auto* const retry = fixture.ConnectionAccess->LastConnection;
     retry->CompleteStart(DeviceConnectionResult::Success);
     retry->CompleteOpen(DeviceConnectionResult::Failed);
@@ -276,11 +304,84 @@ void TestRetryTimerAndManualCancellationRejectStaleTimerCallbacks() {
               SessionFor(fixture.Service, L"retry").CompletedRetryAttempts == 1,
           "only a completed automatic attempt may advance the retry count and backoff");
     timer = fixture.TimerAccess->LastTimer;
+    auto staleTimerCallback = timer->Callback;
     (void)fixture.Service.CancelReconnect(L"retry");
-    timer->FireEvenIfCancelled();
+    if (staleTimerCallback) staleTimerCallback();
     Check(fixture.ConnectionAccess->Connections.size() == 2 &&
               SessionFor(fixture.Service, L"retry").CompletedRetryAttempts == 1,
           "a cancelled pending timer must not create or count another automatic attempt");
+}
+
+void TestReconnectPolicyAndUserCancellationRemainDistinct() {
+    Fixture fixture;
+    ConnectSuccessfully(fixture, L"policy");
+
+    fixture.Service.ConfigureReconnectPolicy(false, {});
+    Check(!SessionFor(fixture.Service, L"policy").IsReconnectEnabled,
+          "disabling reconnect policy must be observable independently of user cancellation");
+    fixture.Service.ConfigureReconnectPolicy(true, {L"policy"});
+    Check(SessionFor(fixture.Service, L"policy").IsReconnectEnabled,
+          "re-enabling reconnect policy must allow later connection-loss retries");
+    Check(!SessionFor(fixture.Service, L"policy").IsReconnectCancelled,
+          "policy changes must not be recorded as user cancellation");
+
+    (void)fixture.Service.CancelReconnect(L"policy");
+    Check(SessionFor(fixture.Service, L"policy").IsReconnectCancelled,
+          "manual reconnect cancellation must remain observable as user state");
+    fixture.Service.ConfigureReconnectPolicy(false, {});
+    fixture.Service.ConfigureReconnectPolicy(true, {L"policy"});
+    Check(SessionFor(fixture.Service, L"policy").IsReconnectCancelled,
+          "policy changes must not erase an explicit user cancellation");
+
+    (void)fixture.Service.Connect(L"policy");
+    Check(!SessionFor(fixture.Service, L"policy").IsReconnectCancelled,
+          "a later manual connect must explicitly clear user cancellation");
+}
+
+void TestConcurrentCommandWaitsForSerializedMutation() {
+    Fixture fixture;
+    std::mutex gateMutex;
+    std::condition_variable gate;
+    bool factSinkEntered = false;
+    bool releaseFactSink = false;
+
+    (void)fixture.Service.Subscribe([&](DeviceFact const& fact) {
+        if (fact.Kind != DeviceFactKind::InventoryChanged) return;
+        std::unique_lock lock(gateMutex);
+        if (factSinkEntered) return;
+        factSinkEntered = true;
+        gate.notify_all();
+        gate.wait(lock, [&] { return releaseFactSink; });
+    });
+
+    apc::device::DeviceCommandResult concurrentResult;
+    std::jthread concurrentCaller([&] {
+        {
+            std::unique_lock lock(gateMutex);
+            gate.wait(lock, [&] { return factSinkEntered; });
+        }
+        concurrentResult = fixture.Service.Connect(L"concurrent");
+    });
+    std::jthread releaseCaller([&] {
+        {
+            std::unique_lock lock(gateMutex);
+            gate.wait(lock, [&] { return factSinkEntered; });
+        }
+        {
+            std::lock_guard lock(gateMutex);
+            releaseFactSink = true;
+        }
+        gate.notify_all();
+    });
+
+    const auto startResult = fixture.Service.Start();
+    concurrentCaller.join();
+    releaseCaller.join();
+
+    Check(startResult.Kind == DeviceCommandResultKind::Accepted,
+          "the first serialized command must complete before a concurrent command");
+    Check(concurrentResult.Kind == DeviceCommandResultKind::Accepted && concurrentResult.DeviceId == L"concurrent",
+          "a concurrent command must wait for the serialized context and receive its actual result");
 }
 
 void TestBulkSuspendResumeAndShutdownCannotResurrectSessions() {
@@ -345,7 +446,10 @@ int RunDeviceServiceTests() {
     TestOperationEpochRejectsStaleCompletion();
     TestReconnectWaitsForCloseAndRevokesTheOldToken();
     TestIncomingConnectionDoesNotOpenUntilThePlatformSignalsOpened();
+    TestDeviceRemovalClosesCurrentSessionAndRejectsLateCallbacks();
     TestRetryTimerAndManualCancellationRejectStaleTimerCallbacks();
+    TestReconnectPolicyAndUserCancellationRemainDistinct();
+    TestConcurrentCommandWaitsForSerializedMutation();
     TestBulkSuspendResumeAndShutdownCannotResurrectSessions();
     TestStopAndShutdownReturnNormalizedTerminalResults();
     TestFactsCarryNormalizedSnapshots();

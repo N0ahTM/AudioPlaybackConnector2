@@ -443,6 +443,29 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
         StartConnection(DeviceOperationKind::AutomaticReconnect, true);
     }
 
+    void CancelAutomaticReconnect() {
+        CancelTimer();
+        RetryEligible = false;
+        bool const cancelsActiveReconnect = Lifecycle == DeviceLifecycleState::WaitingForReconnect ||
+                                            (Lifecycle == DeviceLifecycleState::Connecting &&
+                                             CurrentOperation == DeviceOperationKind::AutomaticReconnect);
+        if (!cancelsActiveReconnect) {
+            Publish(DeviceConnectionResult::Cancelled);
+            return;
+        }
+        ++OperationEpoch;
+        auto const epoch = OperationEpoch;
+        if (Connection) {
+            Lifecycle = DeviceLifecycleState::Disconnecting;
+            RestoreIncomingAfterClose = false;
+            RevokeStateChanged();
+            CloseCurrent(epoch, false);
+            return;
+        }
+        Lifecycle = DeviceLifecycleState::Idle;
+        Publish(DeviceConnectionResult::Cancelled);
+    }
+
     [[nodiscard]] bool IsCurrent(std::uint64_t epoch) const noexcept { return !IsShutdown && epoch == OperationEpoch; }
 
     [[nodiscard]] bool IsCurrentConnection(std::uint64_t epoch,
@@ -538,6 +561,25 @@ void DeviceSession::Rename(std::wstring deviceName) {
     m_state->Publish();
 }
 
+void DeviceSession::HandleDeviceRemoved() {
+    auto const state = m_state;
+    if (!state || state->IsShutdown) return;
+    state->CancelTimer();
+    state->RetryEligible = false;
+    state->RestoreIncomingAfterClose = false;
+    ++state->OperationEpoch;
+    auto const epoch = state->OperationEpoch;
+    if (!state->Connection) {
+        state->Lifecycle = DeviceLifecycleState::Idle;
+        state->Publish(DeviceConnectionResult::Cancelled);
+        return;
+    }
+    state->Lifecycle = DeviceLifecycleState::Disconnecting;
+    state->RevokeStateChanged();
+    state->Publish(DeviceConnectionResult::Cancelled);
+    state->CloseCurrent(epoch, false);
+}
+
 void DeviceSession::Connect(DeviceOperationKind operation, bool openImmediately) {
     if (m_state) m_state->StartConnection(operation, openImmediately);
 }
@@ -565,27 +607,8 @@ void DeviceSession::Disconnect(bool restoreIncoming) {
 void DeviceSession::CancelReconnect() {
     auto const state = m_state;
     if (!state || state->IsShutdown) return;
-    state->CancelTimer();
     state->IsReconnectCancelled = true;
-    state->RetryEligible = false;
-    bool const cancelsActiveReconnect = state->Lifecycle == DeviceLifecycleState::WaitingForReconnect ||
-                                        (state->Lifecycle == DeviceLifecycleState::Connecting &&
-                                         state->CurrentOperation == DeviceOperationKind::AutomaticReconnect);
-    if (!cancelsActiveReconnect) {
-        state->Publish(DeviceConnectionResult::Cancelled);
-        return;
-    }
-    ++state->OperationEpoch;
-    auto const epoch = state->OperationEpoch;
-    if (state->Connection) {
-        state->Lifecycle = DeviceLifecycleState::Disconnecting;
-        state->RestoreIncomingAfterClose = false;
-        state->RevokeStateChanged();
-        state->CloseCurrent(epoch, false);
-        return;
-    }
-    if (state->Lifecycle == DeviceLifecycleState::WaitingForReconnect) state->Lifecycle = DeviceLifecycleState::Idle;
-    state->Publish(DeviceConnectionResult::Cancelled);
+    state->CancelAutomaticReconnect();
 }
 
 void DeviceSession::SetReconnectEnabled(bool enabled) {
@@ -595,7 +618,7 @@ void DeviceSession::SetReconnectEnabled(bool enabled) {
     if (!enabled && (state->Lifecycle == DeviceLifecycleState::WaitingForReconnect ||
                      (state->Lifecycle == DeviceLifecycleState::Connecting &&
                       state->CurrentOperation == DeviceOperationKind::AutomaticReconnect))) {
-        CancelReconnect();
+        state->CancelAutomaticReconnect();
         return;
     }
     state->Publish();

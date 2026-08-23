@@ -71,28 +71,10 @@
     <ClCompile Include="src\core\AudioConnectionService.cpp">
       <Filter>src\core</Filter>
     </ClCompile>
-    <ClCompile Include="src\core\DeviceDiscoveryService.cpp">
-      <Filter>src\core</Filter>
-    </ClCompile>
-    <ClCompile Include="src\core\DeviceManagerDiagnostics.cpp">
-      <Filter>src\core</Filter>
-    </ClCompile>
-    <ClCompile Include="src\core\DeviceOperationCoordinator.cpp">
-      <Filter>src\core</Filter>
-    </ClCompile>
     <ClCompile Include="src\core\DevicePickerSnapshot.cpp">
       <Filter>src\core</Filter>
     </ClCompile>
     <ClCompile Include="src\core\DeviceInventoryGeneration.cpp">
-      <Filter>src\core</Filter>
-    </ClCompile>
-    <ClCompile Include="src\core\DeviceSessionStore.cpp">
-      <Filter>src\core</Filter>
-    </ClCompile>
-    <ClCompile Include="src\core\ReconnectController.cpp">
-      <Filter>src\core</Filter>
-    </ClCompile>
-    <ClCompile Include="src\core\DeviceManager.cpp">
       <Filter>src\core</Filter>
     </ClCompile>
     <ClCompile Include="src\services\NotificationService.cpp">
@@ -238,9 +220,6 @@
     <ClInclude Include="include\core\ThemeHelper.hpp">
       <Filter>include\core</Filter>
     </ClInclude>
-    <ClInclude Include="include\core\LatestServiceLifecycleState.hpp">
-      <Filter>include\core</Filter>
-    </ClInclude>
     <ClInclude Include="include\core\SettingsStore.hpp">
       <Filter>include\core</Filter>
     </ClInclude>
@@ -251,15 +230,6 @@
       <Filter>include\core</Filter>
     </ClInclude>
     <ClInclude Include="include\core\AudioConnectionService.hpp">
-      <Filter>include\core</Filter>
-    </ClInclude>
-    <ClInclude Include="include\core\DeviceDiscoveryService.hpp">
-      <Filter>include\core</Filter>
-    </ClInclude>
-    <ClInclude Include="include\core\DeviceManagerDiagnostics.hpp">
-      <Filter>include\core</Filter>
-    </ClInclude>
-    <ClInclude Include="include\core\DeviceOperationCoordinator.hpp">
       <Filter>include\core</Filter>
     </ClInclude>
     <ClInclude Include="include\core\DevicePickerSnapshot.hpp">
@@ -277,16 +247,7 @@
     <ClInclude Include="include\core\TrayTooltipBuilder.hpp">
       <Filter>include\core</Filter>
     </ClInclude>
-    <ClInclude Include="include\core\DeviceSessionStore.hpp">
-      <Filter>include\core</Filter>
-    </ClInclude>
     <ClInclude Include="include\core\DeviceConnectionInfo.hpp">
-      <Filter>include\core</Filter>
-    </ClInclude>
-    <ClInclude Include="include\core\ReconnectController.hpp">
-      <Filter>include\core</Filter>
-    </ClInclude>
-    <ClInclude Include="include\core\DeviceManager.hpp">
       <Filter>include\core</Filter>
     </ClInclude>
     <ClInclude Include="include\services\NotificationService.hpp">

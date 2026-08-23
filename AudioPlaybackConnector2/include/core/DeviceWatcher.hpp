@@ -2,6 +2,10 @@
 
 #include <core/DevicePickerTypes.hpp>
 
+#include <winrt/Windows.Devices.Enumeration.h>
+#include <winrt/Windows.Foundation.h>
+
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -61,6 +65,8 @@ public:
     [[nodiscard]] bool Start();
     void Stop() noexcept;
     void Shutdown() noexcept;
+    winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
+    RefreshAsync();
 
     [[nodiscard]] device_picker::DeviceInventorySnapshot Snapshot() const;
     [[nodiscard]] bool IsRunning() const noexcept;

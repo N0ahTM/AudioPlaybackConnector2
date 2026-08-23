@@ -9,11 +9,10 @@
 
 namespace apc::app {
 
-// DeviceManager callbacks can arrive on worker threads while their UI dispatch is queued. This
-// fence is the sole owner of the queued-fact generation: producers advance it before dispatch and
-// the UI consumer verifies its token before publishing a typed fact. Equal facts deliberately share
-// a generation so duplicate source notifications retain their current behavior. It never calls user
-// code while holding its mutex.
+// DeviceService facts can arrive while their UI dispatch is queued. This fence is the sole owner of
+// the queued-fact generation: producers advance it before dispatch and the UI consumer verifies its
+// token before publishing a typed fact. Equal facts deliberately share a generation so duplicate
+// source notifications retain their current behavior. It never calls user code while holding its mutex.
 class DeviceFactPublicationFence {
 public:
     enum class Status { None, Ready, Connecting, Reconnecting, Connected, Error, WaitingForReconnect };

@@ -4,8 +4,11 @@
 #include <memory>
 #include <optional>
 
-class DeviceManager;
 class SettingsStore;
+
+namespace apc::device {
+class DeviceService;
+}
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Device Picker View Model //////////////////////////////////////////////////////////////////////////*/
@@ -19,11 +22,11 @@ public:
     /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    void SetDeviceManager(std::weak_ptr<DeviceManager> manager);
+    void SetDeviceService(std::weak_ptr<apc::device::DeviceService> service);
     void SetSettingsStore(std::weak_ptr<SettingsStore> settingsStore);
     void SetDevices(winrt::Windows::Devices::Enumeration::DeviceInformationCollection const& devices,
                     TimePoint refreshedAt = apc::device_picker::DevicePickerSnapshotCache::Clock::now());
-    [[nodiscard]] bool SynchronizeInventoryFromManager(
+    [[nodiscard]] bool SynchronizeInventoryFromService(
         TimePoint refreshedAt = apc::device_picker::DevicePickerSnapshotCache::Clock::now());
     void InvalidateInventory() noexcept;
     void Clear() noexcept;
@@ -40,7 +43,7 @@ private:
     /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    std::weak_ptr<DeviceManager> m_manager;
+    std::weak_ptr<apc::device::DeviceService> m_service;
     std::weak_ptr<SettingsStore> m_settingsStore;
     apc::device_picker::DevicePickerSnapshotCache m_cache;
     std::optional<std::uint64_t> m_sourceInventoryGeneration;

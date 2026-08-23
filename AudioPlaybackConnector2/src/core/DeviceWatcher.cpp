@@ -111,11 +111,11 @@ struct DeviceWatcher::State : std::enable_shared_from_this<DeviceWatcher::State>
     std::unique_ptr<DeviceWatcherPlatform> Platform;
     std::unique_ptr<DeviceWatcherRegistration> Registration;
     std::unordered_map<std::wstring, std::wstring> Devices;
-    std::uint64_t WatcherGeneration = 0;
+    std::atomic_uint64_t WatcherGeneration = 0;
     std::uint64_t InventoryGeneration = 0;
-    bool IsWatcherRunning = false;
+    std::atomic_bool IsWatcherRunning = false;
     bool IsEnumerationComplete = false;
-    bool IsShutdown = false;
+    std::atomic_bool IsShutdown = false;
 
     [[nodiscard]] device_picker::DeviceInventorySnapshot Snapshot() const {
         return BuildSnapshot(InventoryGeneration, IsEnumerationComplete, Devices);
@@ -125,7 +125,7 @@ struct DeviceWatcher::State : std::enable_shared_from_this<DeviceWatcher::State>
         if (!PublishFact) return;
         DeviceWatcherFact fact;
         fact.Kind = kind;
-        fact.WatcherGeneration = WatcherGeneration;
+        fact.WatcherGeneration = WatcherGeneration.load(std::memory_order_acquire);
         fact.Inventory = Snapshot();
         fact.DeviceId = std::move(deviceId);
         fact.DeviceName = std::move(deviceName);
@@ -182,7 +182,8 @@ struct DeviceWatcher::State : std::enable_shared_from_this<DeviceWatcher::State>
     }
 
     [[nodiscard]] bool Accepts(std::uint64_t callbackGeneration) const noexcept {
-        return !IsShutdown && IsWatcherRunning && callbackGeneration == WatcherGeneration;
+        return !IsShutdown.load(std::memory_order_acquire) && IsWatcherRunning.load(std::memory_order_acquire) &&
+               callbackGeneration == WatcherGeneration.load(std::memory_order_acquire);
     }
 
     void StopRegistration() noexcept {
@@ -209,7 +210,10 @@ DeviceWatcher::~DeviceWatcher() {
 
 bool DeviceWatcher::Start() {
     auto const state = m_state;
-    if (!state || state->IsShutdown || state->IsWatcherRunning) return false;
+    if (!state || state->IsShutdown.load(std::memory_order_acquire) ||
+        state->IsWatcherRunning.load(std::memory_order_acquire)) {
+        return false;
+    }
 
     auto const watcherGeneration = ++state->WatcherGeneration;
     state->IsWatcherRunning = true;
@@ -250,7 +254,7 @@ bool DeviceWatcher::Start() {
         util::DebugTraceUnknownException(L"[DeviceWatcher] failed to create or start DeviceInformation watcher");
     }
 
-    if (state->WatcherGeneration == watcherGeneration) {
+    if (state->WatcherGeneration.load(std::memory_order_acquire) == watcherGeneration) {
         state->IsWatcherRunning = false;
         state->IsEnumerationComplete = false;
         ++state->WatcherGeneration;
@@ -265,7 +269,7 @@ bool DeviceWatcher::Start() {
 
 void DeviceWatcher::Stop() noexcept {
     auto const state = m_state;
-    if (!state || !state->IsWatcherRunning) return;
+    if (!state || !state->IsWatcherRunning.load(std::memory_order_acquire)) return;
 
     state->IsWatcherRunning = false;
     state->IsEnumerationComplete = false;
@@ -276,7 +280,7 @@ void DeviceWatcher::Stop() noexcept {
 
 void DeviceWatcher::Shutdown() noexcept {
     auto const state = std::exchange(m_state, {});
-    if (!state || state->IsShutdown) return;
+    if (!state || state->IsShutdown.load(std::memory_order_acquire)) return;
 
     state->IsShutdown = true;
     state->IsWatcherRunning = false;
@@ -285,17 +289,48 @@ void DeviceWatcher::Shutdown() noexcept {
     state->StopRegistration();
 }
 
+winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
+DeviceWatcher::RefreshAsync() {
+    auto const state = m_state;
+    if (!state || state->IsShutdown.load(std::memory_order_acquire)) co_return nullptr;
+
+    const auto watcherGeneration = state->WatcherGeneration.load(std::memory_order_acquire);
+    const auto selector = winrt::Windows::Media::Audio::AudioPlaybackConnection::GetDeviceSelector();
+    auto devices = co_await winrt::Windows::Devices::Enumeration::DeviceInformation::FindAllAsync(selector);
+
+    std::unordered_map<std::wstring, std::wstring> refreshed;
+    refreshed.reserve(static_cast<std::size_t>(devices.Size()));
+    for (auto const& device : devices) {
+        refreshed.insert_or_assign(std::wstring(device.Id()), std::wstring(device.Name()));
+    }
+
+    state->Executor([state, watcherGeneration, refreshed = std::move(refreshed)]() mutable {
+        if (state->IsShutdown.load(std::memory_order_acquire) ||
+            watcherGeneration != state->WatcherGeneration.load(std::memory_order_acquire)) {
+            return;
+        }
+        const bool changed = state->Devices != refreshed || !state->IsEnumerationComplete;
+        if (!changed) return;
+        state->Devices = std::move(refreshed);
+        state->IsEnumerationComplete = true;
+        ++state->InventoryGeneration;
+        state->Publish(DeviceWatcherFactKind::InventoryChanged);
+    });
+
+    co_return devices;
+}
+
 device_picker::DeviceInventorySnapshot DeviceWatcher::Snapshot() const {
     if (!m_state) return {};
     return m_state->Snapshot();
 }
 
 bool DeviceWatcher::IsRunning() const noexcept {
-    return m_state && m_state->IsWatcherRunning;
+    return m_state && m_state->IsWatcherRunning.load(std::memory_order_acquire);
 }
 
 std::uint64_t DeviceWatcher::Generation() const noexcept {
-    return m_state ? m_state->WatcherGeneration : 0;
+    return m_state ? m_state->WatcherGeneration.load(std::memory_order_acquire) : 0;
 }
 
 } // namespace apc::device

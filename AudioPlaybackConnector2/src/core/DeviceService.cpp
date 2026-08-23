@@ -367,6 +367,10 @@ DeviceCommandResult DeviceService::Connect(std::wstring deviceId) {
             return;
         }
         auto session = state->GetOrCreateSession(deviceId);
+        if (session->Snapshot().State == DeviceLifecycleState::Connected) {
+            *result = state->Result(DeviceCommandKind::Connect, DeviceCommandResultKind::Coalesced, deviceId);
+            return;
+        }
         auto const wasBusy = session->IsBusy();
         session->Connect(DeviceOperationKind::ManualConnect, true);
         *result = state->Result(DeviceCommandKind::Connect,

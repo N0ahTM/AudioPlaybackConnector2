@@ -266,6 +266,35 @@ void TestReconnectWaitsForCloseAndRevokesTheOldToken() {
           "the close completion must be the only transition that starts replacement creation");
 }
 
+void TestDuplicateConnectCoalescesWithoutReplacingConnectedSession() {
+    Fixture fixture;
+    ConnectSuccessfully(fixture, L"duplicate-connect");
+    auto* const existingConnection = fixture.ConnectionAccess->LastConnection;
+    auto const connectionCount = fixture.ConnectionAccess->Connections.size();
+    auto const operationEpoch = SessionFor(fixture.Service, L"duplicate-connect").OperationEpoch;
+
+    auto const duplicate = fixture.Service.Connect(L"duplicate-connect");
+    Check(duplicate.Command == DeviceCommandKind::Connect && duplicate.Kind == DeviceCommandResultKind::Coalesced &&
+              duplicate.DeviceId == L"duplicate-connect" && duplicate.OperationEpoch == operationEpoch,
+          "a duplicate connect for an open session must return the coalesced operation without advancing its epoch");
+    Check(fixture.ConnectionAccess->Connections.size() == connectionCount &&
+              fixture.ConnectionAccess->LastConnection == existingConnection && existingConnection->CloseCalls == 0,
+          "a duplicate connect must retain the existing open connection without beginning a replacement");
+    Check(StateFor(fixture.Service, L"duplicate-connect") == DeviceLifecycleState::Connected &&
+              SessionFor(fixture.Service, L"duplicate-connect").HasConnection,
+          "a duplicate connect must preserve the connected session snapshot");
+
+    auto const reconnect = fixture.Service.Reconnect(L"duplicate-connect");
+    Check(reconnect.Command == DeviceCommandKind::Reconnect && reconnect.Kind == DeviceCommandResultKind::Accepted &&
+              existingConnection->CloseCalls == 1,
+          "an explicit reconnect must remain a replacement operation for an open session");
+    existingConnection->CompleteClose();
+    fixture.TimerAccess->LastTimer->FireEvenIfCancelled();
+    Check(fixture.ConnectionAccess->Connections.size() == connectionCount + 1 &&
+              fixture.ConnectionAccess->LastConnection != existingConnection,
+          "an explicit reconnect must create a replacement after the close barrier");
+}
+
 void TestCloseBarrierIsOneShotAndFallsBackAfterBoundedTimeout() {
     Fixture fixture;
     ConnectSuccessfully(fixture, L"close-timeout");
@@ -471,9 +500,12 @@ void TestReconnectPolicyAndUserCancellationRemainDistinct() {
     Check(SessionFor(fixture.Service, L"policy").IsReconnectCancelled,
           "policy changes must not erase an explicit user cancellation");
 
+    auto* const connection = fixture.ConnectionAccess->LastConnection;
+    (void)fixture.Service.Disconnect(L"policy");
+    CompleteCloseAndCooldown(fixture, connection);
     (void)fixture.Service.Connect(L"policy");
     Check(!SessionFor(fixture.Service, L"policy").IsReconnectCancelled,
-          "a later manual connect must explicitly clear user cancellation");
+          "a later manual connect from an idle session must explicitly clear user cancellation");
 }
 
 void TestConcurrentCommandWaitsForSerializedMutation() {
@@ -657,6 +689,7 @@ void TestFactsCarryNormalizedSnapshots() {
 int RunDeviceServiceTests() {
     TestOperationEpochRejectsStaleCompletion();
     TestReconnectWaitsForCloseAndRevokesTheOldToken();
+    TestDuplicateConnectCoalescesWithoutReplacingConnectedSession();
     TestCloseBarrierIsOneShotAndFallsBackAfterBoundedTimeout();
     TestIncomingCallbackOrderingAndLossFollowReconnectPolicy();
     TestDeviceRemovalClosesCurrentSessionAndRejectsLateCallbacks();

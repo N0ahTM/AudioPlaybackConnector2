@@ -1247,13 +1247,9 @@ void ApplicationHost::HandlePowerResume() {
                     !self->m_powerTransitionCoordinator.IsResumeReconnectGenerationCurrent(generation)) {
                     return;
                 }
+                self->m_deviceService->ResumeSuspendedSessions(deviceIds);
                 for (auto const& deviceId : deviceIds) {
-                    if (deviceId.empty() || self->m_deviceService->IsDeviceConnected(winrt::hstring(deviceId)) ||
-                        self->m_deviceService->IsDeviceBusy(winrt::hstring(deviceId))) {
-                        continue;
-                    }
-                    self->m_deviceService->ConnectDetached(winrt::hstring(deviceId));
-                    attemptedIds.push_back(deviceId);
+                    if (!deviceId.empty()) attemptedIds.push_back(deviceId);
                 }
             });
             if (!accepted) finish({});
@@ -1471,12 +1467,7 @@ bool ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstri
 
     TrayIconState desiredState = TrayIconState::Idle;
     bool timersReady = true;
-    if (hasConnections) {
-        desiredState = TrayIconState::Connected;
-        KillTimer(m_hwnd, c_timerAnimation);
-        m_connectingAnimationTimerActive = false;
-        KillTimer(m_hwnd, c_timerTransientTrayError);
-    } else if (hasBusyOperations) {
+    if (hasBusyOperations) {
         desiredState = TrayIconState::Connecting;
         if (!m_connectingAnimationTimerActive) {
             if (SetTimer(m_hwnd, c_timerAnimation, 75, nullptr)) {
@@ -1486,6 +1477,12 @@ bool ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstri
                 DebugTrace(L"[App] Connecting animation timer unavailable: {0}", GetLastError());
             }
         }
+        KillTimer(m_hwnd, c_timerTransientTrayError);
+    } else if (hasConnections) {
+        desiredState = TrayIconState::Connected;
+        KillTimer(m_hwnd, c_timerAnimation);
+        m_connectingAnimationTimerActive = false;
+        KillTimer(m_hwnd, c_timerTransientTrayError);
     } else if (showTransientError) {
         desiredState = TrayIconState::Error;
         KillTimer(m_hwnd, c_timerAnimation);

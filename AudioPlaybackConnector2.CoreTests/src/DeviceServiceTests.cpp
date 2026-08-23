@@ -131,21 +131,21 @@ public:
 
 class FakeTimer final : public DeviceTimer {
 public:
-    FakeTimer(std::chrono::seconds delay, DeviceTimerPlatform::Callback callback)
+    FakeTimer(std::chrono::milliseconds delay, DeviceTimerPlatform::Callback callback)
         : Delay(delay), Callback(std::move(callback)) {}
     void Cancel() noexcept override { IsCancelled = true; }
     void FireEvenIfCancelled() {
         if (Callback) Callback();
     }
 
-    std::chrono::seconds Delay;
+    std::chrono::milliseconds Delay;
     DeviceTimerPlatform::Callback Callback;
     bool IsCancelled = false;
 };
 
 class FakeTimerPlatform final : public DeviceTimerPlatform {
 public:
-    [[nodiscard]] std::unique_ptr<DeviceTimer> Schedule(std::chrono::seconds delay, Callback callback) override {
+    [[nodiscard]] std::unique_ptr<DeviceTimer> Schedule(std::chrono::milliseconds delay, Callback callback) override {
         if (ThrowNextSchedule) {
             ThrowNextSchedule = false;
             throw std::runtime_error("Schedule");
@@ -227,6 +227,12 @@ void ConnectSuccessfully(Fixture& fixture, std::wstring id) {
     fixture.ConnectionAccess->LastConnection->CompleteOpen(DeviceConnectionResult::Success);
 }
 
+void CompleteCloseAndCooldown(Fixture& fixture, FakeConnectionState* connection) {
+    connection->CompleteClose();
+    auto* const cooldown = fixture.TimerAccess->LastTimer;
+    if (cooldown && cooldown->Delay == std::chrono::milliseconds(1500)) cooldown->FireEvenIfCancelled();
+}
+
 void TestOperationEpochRejectsStaleCompletion() {
     Fixture fixture;
     (void)fixture.Service.Connect(L"epoch");
@@ -235,7 +241,7 @@ void TestOperationEpochRejectsStaleCompletion() {
     first->CompleteStart(DeviceConnectionResult::Success);
     Check(StateFor(fixture.Service, L"epoch") == DeviceLifecycleState::Disconnecting,
           "a stale start completion must not reopen a disconnecting session");
-    first->CompleteClose();
+    CompleteCloseAndCooldown(fixture, first);
     Check(StateFor(fixture.Service, L"epoch") == DeviceLifecycleState::Idle,
           "the current close completion must settle the session to idle");
 }
@@ -251,6 +257,11 @@ void TestReconnectWaitsForCloseAndRevokesTheOldToken() {
     Check(fixture.ConnectionAccess->Connections.size() == createCount,
           "a replacement must not be created before the close barrier completes");
     oldConnection->CompleteClose();
+    Check(fixture.ConnectionAccess->Connections.size() == createCount,
+          "a close completion must retain the barrier during the required cooldown");
+    auto* const cooldown = fixture.TimerAccess->LastTimer;
+    Check(cooldown->Delay == std::chrono::milliseconds(1500), "a completed close must retain the cooldown barrier");
+    cooldown->FireEvenIfCancelled();
     Check(fixture.ConnectionAccess->Connections.size() == createCount + 1,
           "the close completion must be the only transition that starts replacement creation");
 }
@@ -324,7 +335,7 @@ void TestDeviceRemovalClosesCurrentSessionAndRejectsLateCallbacks() {
     connection->Signal(DeviceConnectionState::Opened);
     Check(fixture.ConnectionAccess->Connections.size() == connectionCount,
           "late callbacks from a removed device must not create a replacement connection");
-    connection->CompleteClose();
+    CompleteCloseAndCooldown(fixture, connection);
     Check(StateFor(fixture.Service, L"removed") == DeviceLifecycleState::WaitingForReconnect &&
               !SessionFor(fixture.Service, L"removed").IsReconnectCancelled,
           "device removal must preserve loss recovery without recording explicit user cancellation");
@@ -358,7 +369,7 @@ void TestPlatformSetupExceptionsCleanUpAndPublishTerminalFacts() {
         (void)fixture.Service.Connect(L"register-throws");
         auto* const connection = fixture.ConnectionAccess->LastConnection;
         Check(connection->CloseCalls == 1, "handler registration failure must close the created connection once");
-        connection->CompleteClose();
+        CompleteCloseAndCooldown(fixture, connection);
         checkFailure(fixture, L"register-throws", "handler registration failure must publish a terminal failure fact");
     }
     {
@@ -368,7 +379,7 @@ void TestPlatformSetupExceptionsCleanUpAndPublishTerminalFacts() {
         auto* const connection = fixture.ConnectionAccess->LastConnection;
         Check(connection->RevokeCalls == 1 && connection->CloseCalls == 1,
               "Start failure must revoke its token and close the created connection once");
-        connection->CompleteClose();
+        CompleteCloseAndCooldown(fixture, connection);
         checkFailure(fixture, L"start-throws", "Start failure must publish a terminal failure fact");
     }
     {
@@ -379,7 +390,7 @@ void TestPlatformSetupExceptionsCleanUpAndPublishTerminalFacts() {
         connection->CompleteStart(DeviceConnectionResult::Success);
         Check(connection->RevokeCalls == 1 && connection->CloseCalls == 1,
               "Open failure must revoke its token and close the created connection once");
-        connection->CompleteClose();
+        CompleteCloseAndCooldown(fixture, connection);
         checkFailure(fixture, L"open-throws", "Open failure must publish a terminal failure fact");
     }
     {
@@ -426,7 +437,7 @@ void TestRetryTimerAndManualCancellationRejectStaleTimerCallbacks() {
     auto* const retry = fixture.ConnectionAccess->LastConnection;
     retry->CompleteStart(DeviceConnectionResult::Success);
     retry->CompleteOpen(DeviceConnectionResult::Failed);
-    retry->CompleteClose();
+    CompleteCloseAndCooldown(fixture, retry);
     Check(fixture.TimerAccess->LastTimer->Delay == std::chrono::seconds(10) &&
               SessionFor(fixture.Service, L"retry").CompletedRetryAttempts == 1,
           "only a completed automatic attempt may advance the retry count and backoff");
@@ -517,7 +528,7 @@ void TestBulkSuspendResumeAndShutdownCannotResurrectSessions() {
     ConnectSuccessfully(fixture, L"b");
     (void)fixture.Service.DisconnectAll();
     for (auto* connection : fixture.ConnectionAccess->Connections)
-        connection->CompleteClose();
+        CompleteCloseAndCooldown(fixture, connection);
     Check(StateFor(fixture.Service, L"a") == DeviceLifecycleState::Idle &&
               StateFor(fixture.Service, L"b") == DeviceLifecycleState::Idle,
           "bulk disconnect must settle every serialized session");
@@ -530,6 +541,12 @@ void TestBulkSuspendResumeAndShutdownCannotResurrectSessions() {
     Check(fixture.ConnectionAccess->Connections.size() == beforeResume,
           "resume must not create a replacement before the suspend close barrier completes");
     busy->CompleteClose();
+    Check(fixture.ConnectionAccess->Connections.size() == beforeResume,
+          "a suspend close must retain the barrier during the required cooldown");
+    auto* const suspendCooldown = fixture.TimerAccess->LastTimer;
+    Check(suspendCooldown->Delay == std::chrono::milliseconds(1500),
+          "a suspend close must use the retained close cooldown");
+    suspendCooldown->FireEvenIfCancelled();
     Check(fixture.ConnectionAccess->Connections.size() == beforeResume + 1,
           "the current suspend close completion must release the resume replacement");
     busy->CompleteClose();
@@ -542,6 +559,35 @@ void TestBulkSuspendResumeAndShutdownCannotResurrectSessions() {
     late->Signal(DeviceConnectionState::Opened);
     Check(fixture.Service.Snapshot().IsShutdown && fixture.Service.Snapshot().Sessions.empty(),
           "shutdown must release sessions and reject every late platform callback");
+}
+
+void TestStartupPolicyAndDelayedPowerResume() {
+    {
+        Fixture fixture;
+        fixture.Service.ConnectStartupTargets({L"startup"});
+        auto* const connection = fixture.ConnectionAccess->LastConnection;
+        connection->CompleteStart(DeviceConnectionResult::Success);
+        connection->CompleteOpen(DeviceConnectionResult::Success);
+        connection->Signal(DeviceConnectionState::Closed);
+        Check(StateFor(fixture.Service, L"startup") == DeviceLifecycleState::WaitingForReconnect &&
+                  fixture.TimerAccess->LastTimer->Delay == std::chrono::seconds(5),
+              "startup connections must retain the bounded loss-reconnect policy");
+    }
+
+    {
+        Fixture fixture;
+        ConnectSuccessfully(fixture, L"power");
+        auto* const connection = fixture.ConnectionAccess->LastConnection;
+        auto const beforeResume = fixture.ConnectionAccess->Connections.size();
+        fixture.Service.Suspend();
+        fixture.Service.ResumeAfterPowerTransition();
+        fixture.Service.ResumeSuspendedSessions({L"power"});
+        Check(fixture.ConnectionAccess->Connections.size() == beforeResume,
+              "power resume must keep session reconnection delayed until the coordinator delivery");
+        CompleteCloseAndCooldown(fixture, connection);
+        Check(fixture.ConnectionAccess->Connections.size() == beforeResume + 1,
+              "the delayed power-resume delivery must release the suspended session");
+    }
 }
 
 void TestStopAndShutdownReturnNormalizedTerminalResults() {
@@ -580,6 +626,7 @@ int RunDeviceServiceTests() {
     TestReconnectPolicyAndUserCancellationRemainDistinct();
     TestConcurrentCommandWaitsForSerializedMutation();
     TestBulkSuspendResumeAndShutdownCannotResurrectSessions();
+    TestStartupPolicyAndDelayedPowerResume();
     TestStopAndShutdownReturnNormalizedTerminalResults();
     TestFactsCarryNormalizedSnapshots();
     return g_failures;

@@ -63,7 +63,7 @@ public:
     using Callback = std::function<void()>;
 
     virtual ~DeviceTimerPlatform() = default;
-    [[nodiscard]] virtual std::unique_ptr<DeviceTimer> Schedule(std::chrono::seconds delay, Callback callback) = 0;
+    [[nodiscard]] virtual std::unique_ptr<DeviceTimer> Schedule(std::chrono::milliseconds delay, Callback callback) = 0;
 };
 
 [[nodiscard]] std::unique_ptr<DeviceConnectionPlatform> CreateWindowsDeviceConnectionPlatform();

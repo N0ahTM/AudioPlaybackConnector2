@@ -104,6 +104,7 @@ public:
     void ShutdownForProcessExit() noexcept;
     void SuspendForPowerTransition() noexcept;
     void ResumeAfterPowerTransition();
+    void ResumeSuspendedSessions(std::vector<std::wstring> deviceIds);
     void SetIncomingConnectionsEnabled(bool enabled);
     void ApplyReconnectOnConnectionLossPolicy(bool globallyEnabled,
                                               std::span<const std::wstring> individuallyEnabledDeviceIds);

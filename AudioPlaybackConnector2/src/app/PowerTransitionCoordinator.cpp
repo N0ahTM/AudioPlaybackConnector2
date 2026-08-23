@@ -77,7 +77,7 @@ void PowerTransitionCoordinator::HandleSuspend(std::function<void()> flushSettin
         }
 
         if (flushSettings) flushSettings();
-        if (deviceService) deviceService->Suspend();
+        if (deviceService) deviceService->SuspendForPowerTransition();
     } catch (...) {
         DebugTrace(L"[PowerTransitionCoordinator] HandleSuspend ERROR: ignored exception");
     }
@@ -104,7 +104,7 @@ void PowerTransitionCoordinator::HandleResume(std::shared_ptr<apc::device::Devic
             DebugTrace(L"[PowerTransitionCoordinator] Power resume detected without prior suspend; running recovery");
         }
 
-        if (deviceService) deviceService->Resume();
+        if (deviceService) deviceService->ResumeAfterPowerTransition();
         if (!matchedSuspend) return;
 
         CancelResumeReconnectTimer();

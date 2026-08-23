@@ -128,7 +128,7 @@ private:
 
 class WindowsDeviceTimerPlatform final : public DeviceTimerPlatform {
 public:
-    [[nodiscard]] std::unique_ptr<DeviceTimer> Schedule(std::chrono::seconds delay, Callback callback) override {
+    [[nodiscard]] std::unique_ptr<DeviceTimer> Schedule(std::chrono::milliseconds delay, Callback callback) override {
         auto timer = winrt::Windows::System::Threading::ThreadPoolTimer::CreateTimer(
             [callback = std::move(callback)](auto const&) {
                 if (callback) callback();
@@ -152,6 +152,7 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
     enum class CloseContinuation { Idle, Replace, Retry, Suspend };
 
     static constexpr auto CloseBarrierTimeout = ReconnectPolicy::BlockedRetryDelay;
+    static constexpr std::chrono::milliseconds CloseBarrierCooldown{1500};
 
     State(std::wstring deviceId,
           std::wstring deviceName,
@@ -193,6 +194,7 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
     bool IsSuspendClosePending = false;
     std::uint64_t SuspendCloseEpoch = 0;
     bool IsCloseInFlight = false;
+    bool IsCloseCooldown = false;
     CloseContinuation PendingCloseContinuation = CloseContinuation::Idle;
     DeviceConnectionResult PendingCloseFailure = DeviceConnectionResult::Success;
     bool PendingCloseRetryEligible = false;
@@ -456,13 +458,42 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
     }
 
     void CompleteCloseBarrier(std::uint64_t closeBarrierEpoch, bool timedOut) {
-        if (IsShutdown || !IsCloseInFlight || closeBarrierEpoch != CloseBarrierEpoch) return;
+        if (IsShutdown || !IsCloseInFlight || IsCloseCooldown || closeBarrierEpoch != CloseBarrierEpoch) return;
         CancelCloseBarrierTimer();
         ClosingConnection.reset();
-        IsCloseInFlight = false;
         StateChangedToken = 0;
-        if (timedOut) Publish(DeviceConnectionResult::TimedOut, true);
-        ContinueAfterClose(OperationEpoch, timedOut);
+        if (timedOut) {
+            IsCloseInFlight = false;
+            Publish(DeviceConnectionResult::TimedOut, true);
+            ContinueAfterClose(OperationEpoch, true);
+            return;
+        }
+
+        IsCloseCooldown = true;
+        auto weak = weak_from_this();
+        try {
+            CloseBarrierTimer = TimerPlatform.Schedule(CloseBarrierCooldown, [weak, closeBarrierEpoch] {
+                if (auto session = weak.lock()) {
+                    try {
+                        session->Post([weak, closeBarrierEpoch] {
+                            if (auto current = weak.lock()) current->CompleteCloseCooldown(closeBarrierEpoch);
+                        });
+                    } catch (...) {
+                    }
+                }
+            });
+        } catch (...) {
+            CloseBarrierTimer.reset();
+        }
+        if (!CloseBarrierTimer) CompleteCloseCooldown(closeBarrierEpoch);
+    }
+
+    void CompleteCloseCooldown(std::uint64_t closeBarrierEpoch) {
+        if (IsShutdown || !IsCloseInFlight || !IsCloseCooldown || closeBarrierEpoch != CloseBarrierEpoch) return;
+        CancelCloseBarrierTimer();
+        IsCloseCooldown = false;
+        IsCloseInFlight = false;
+        ContinueAfterClose(OperationEpoch, false);
     }
 
     void ContinueAfterClose(std::uint64_t epoch, bool) {
@@ -517,13 +548,16 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
         auto const operationEpoch = OperationEpoch;
         auto weak = weak_from_this();
         try {
-            ReconnectTimer = TimerPlatform.Schedule(decision.Delay, [weak, timerEpoch, operationEpoch] {
-                if (auto session = weak.lock()) {
-                    session->Post([weak, timerEpoch, operationEpoch] {
-                        if (auto current = weak.lock()) current->OnRetryTimer(timerEpoch, operationEpoch);
-                    });
-                }
-            });
+            ReconnectTimer =
+                TimerPlatform.Schedule(std::chrono::duration_cast<std::chrono::milliseconds>(decision.Delay),
+                                       [weak, timerEpoch, operationEpoch] {
+                                           if (auto session = weak.lock()) {
+                                               session->Post([weak, timerEpoch, operationEpoch] {
+                                                   if (auto current = weak.lock())
+                                                       current->OnRetryTimer(timerEpoch, operationEpoch);
+                                               });
+                                           }
+                                       });
         } catch (...) {
             ReconnectTimer.reset();
         }
@@ -581,6 +615,7 @@ struct DeviceSession::State : std::enable_shared_from_this<DeviceSession::State>
         Connection.reset();
         ClosingConnection.reset();
         IsCloseInFlight = false;
+        IsCloseCooldown = false;
         ++CloseBarrierEpoch;
         StateChangedToken = 0;
     }

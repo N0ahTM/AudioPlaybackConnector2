@@ -615,7 +615,37 @@ void DeviceService::SuspendForPowerTransition() noexcept {
 }
 
 void DeviceService::ResumeAfterPowerTransition() {
-    Resume();
+    auto const state = m_state;
+    if (!state) return;
+    static_cast<void>(state->Post([state] {
+        if (state->IsShutdown || !state->IsSuspended) return;
+        state->IsSuspended = false;
+        if (state->IsRunning && state->Watcher) static_cast<void>(state->Watcher->Start());
+        state->Publish(DeviceFactKind::SessionChanged);
+    }));
+}
+
+void DeviceService::ResumeSuspendedSessions(std::vector<std::wstring> deviceIds) {
+    auto const state = m_state;
+    if (!state) return;
+    static_cast<void>(state->Post([state, deviceIds = std::move(deviceIds)] {
+        if (state->IsShutdown || state->IsSuspended) return;
+        std::unordered_set<std::wstring> requested(deviceIds.begin(), deviceIds.end());
+        for (auto const& [id, session] : state->Sessions) {
+            auto const snapshot = session->Snapshot();
+            if (requested.contains(id) || snapshot.IsIncomingEnabled || session->IsBusy()) session->Resume();
+        }
+        for (auto const& id : requested) {
+            if (id.empty()) continue;
+            auto session = state->GetOrCreateSession(id);
+            if (!session) continue;
+            session->Resume();
+            auto const snapshot = session->Snapshot();
+            if (!session->IsBusy() && snapshot.State != DeviceLifecycleState::Connected)
+                session->Connect(DeviceOperationKind::Resume, true);
+        }
+        state->Publish(DeviceFactKind::SessionChanged);
+    }));
 }
 
 void DeviceService::SetIncomingConnectionsEnabled(bool enabled) {

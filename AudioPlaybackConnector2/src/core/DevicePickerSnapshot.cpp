@@ -73,9 +73,19 @@ DevicePickerSnapshot const& DevicePickerSnapshotCache::Refresh(DeviceActivitySna
     next.ConnectedDeviceCount = activity.ConnectedIds.size();
     next.InventoryFresh = IsInventoryFresh(now);
     next.PrivacyModeEnabled = privacyModeEnabled;
-    next.Items.reserve(m_inventory.size());
+    next.Items.reserve(m_inventory.size() + settings.size());
 
-    for (auto const& device : m_inventory) {
+    auto inventory = m_inventory;
+    std::unordered_set<std::wstring_view> inventoryIds;
+    for (auto const& device : m_inventory)
+        inventoryIds.insert(device.Id);
+    std::unordered_set<std::wstring_view> savedIds;
+    for (auto const& setting : settings) {
+        if (setting.Id.empty() || inventoryIds.contains(setting.Id) || !savedIds.insert(setting.Id).second) continue;
+        inventory.push_back({setting.Id, setting.Name});
+    }
+
+    for (auto const& device : inventory) {
         DeviceSnapshotItem item;
         item.Id = device.Id;
         item.Name = device.Name.empty() ? device.Id : device.Name;
@@ -83,6 +93,7 @@ DevicePickerSnapshot const& DevicePickerSnapshotCache::Refresh(DeviceActivitySna
         if (auto setting = settingsById.find(device.Id); setting != settingsById.end()) {
             if (!setting->second->Name.empty()) item.Name = setting->second->Name;
             item.Alias = setting->second->Alias;
+            item.IsDefault = setting->second->IsDefault;
         }
 
         if (!item.Alias.empty()) {
@@ -96,6 +107,7 @@ DevicePickerSnapshot const& DevicePickerSnapshotCache::Refresh(DeviceActivitySna
 
         item.IsConnected = activity.ConnectedIds.contains(item.Id);
         item.IsBusy = activity.BusyIds.contains(item.Id);
+        item.IsAvailable = inventoryIds.contains(item.Id) || item.IsConnected || item.IsBusy;
         next.Items.push_back(std::move(item));
     }
 
@@ -114,7 +126,7 @@ DevicePickerSnapshot const& DevicePickerSnapshotCache::CachedSnapshot() const no
 bool DevicePickerSnapshotCache::CanSelect(std::wstring_view id) const noexcept {
     if (id.empty()) return false;
     auto const item = std::ranges::find(m_snapshot.Items, id, &DeviceSnapshotItem::Id);
-    return item != m_snapshot.Items.end() && !item->IsConnected && !item->IsBusy;
+    return item != m_snapshot.Items.end() && item->IsAvailable && !item->IsConnected && !item->IsBusy;
 }
 
 void DevicePickerSnapshotCache::AdvanceGeneration(std::uint64_t& generation) noexcept {

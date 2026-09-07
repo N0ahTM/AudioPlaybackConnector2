@@ -191,5 +191,18 @@
   "Command_ReconnectFailed": "无法重新连接 {0}。",
   "Command_DisconnectAllSucceeded": "所有已连接设备均已断开连接。",
   "Command_ReconnectAllSucceeded": "所有已连接设备均已重新连接。",
-  "Command_Unsupported": "不支持的命令。"
+  "Command_Unsupported": "不支持的命令。",
+  "Connect": "连接",
+  "DeviceOptions_Title": "设备设置",
+  "DeviceOptions_Back": "返回",
+  "DeviceOptions_Saved": "已保存的设备",
+  "DeviceOptions_Save": "保存名称",
+  "DeviceOptions_ResetName": "重置名称",
+  "DeviceOptions_Name": "显示名称",
+  "DeviceOptions_Startup": "启动应用时连接",
+  "DeviceOptions_Reconnect": "自动重新连接",
+  "DeviceOptions_Forget": "删除已保存的设备设置",
+  "DeviceOptions_GlobalPolicy": "已在应用设置中为所有设备启用。",
+  "DeviceOptions_Unavailable": "不可用",
+  "Settings_Connections": "连接"
 }

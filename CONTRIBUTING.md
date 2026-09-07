@@ -84,7 +84,7 @@ Use the [bug report template](.github/ISSUE_TEMPLATE/bug_report.md). Include:
 - Windows version and build number
 - Steps to reproduce
 - Expected vs. actual behavior
-- Redacted diagnostics and relevant local logs from **Settings > Help**
+- Redacted diagnostics and relevant local logs from the tray menu's **Help** entry (also available through **?** in Settings)
 
 ### Suggesting Features
 

@@ -37,6 +37,8 @@ public:
     ExternalDeviceId(apc::core::DeviceId const& value) : m_value(value.View()) {}
 
     [[nodiscard]] std::wstring_view View() const noexcept { return m_value; }
+    // This conversion deliberately owns its result; View() is the borrowing alternative.
+    // cppcheck-suppress returnByReference
     [[nodiscard]] std::wstring ToString() const { return m_value; }
     [[nodiscard]] std::optional<apc::core::DeviceId> Bounded() const { return apc::core::DeviceId::TryCreate(m_value); }
 

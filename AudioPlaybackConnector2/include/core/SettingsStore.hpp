@@ -108,6 +108,7 @@ public:
     [[nodiscard]] SettingsMutationResult SetPrivacyModeEnabled(bool enabled);
     [[nodiscard]] SettingsMutationResult SetSettingsWindowBounds(std::optional<PersistedWindowBounds> bounds);
     [[nodiscard]] SettingsMutationResult SetDeviceConnectOnStartup(std::wstring_view deviceId, bool enabled);
+    [[nodiscard]] SettingsMutationResult RememberDevice(std::wstring_view deviceId, std::wstring_view deviceName);
     [[nodiscard]] SettingsMutationResult SetDeviceReconnectOnConnectionLoss(std::wstring_view deviceId, bool enabled);
     [[nodiscard]] DeviceAliasResult SetDeviceAlias(std::wstring_view deviceId,
                                                    std::wstring_view alias,

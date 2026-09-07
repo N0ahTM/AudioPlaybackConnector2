@@ -549,6 +549,16 @@ void ApplicationHost::InitializeTray() {
     m_trayController->SetDeviceService(m_deviceService);
     m_trayController->SetSettingsStore(m_settingsStore);
     auto weak = weak_from_this();
+    m_trayController->SetDeviceSettings(m_settingsController, [weak](apc::app::AppCommand command) {
+        if (auto self = weak.lock(); self && !self->m_exiting.load() && self->m_appController) {
+            return self->m_appController->Execute(std::move(command));
+        }
+        apc::app::AppResult result;
+        result.Code = apc::app::AppResultCode::Unavailable;
+        result.Command = command.Kind;
+        result.Reason = apc::app::AppOutcomeReason::NotReady;
+        return result;
+    });
     if (m_settingsController) {
         m_settingsController->SetPresentationChangedCallback([weak](ISettingsController::PresentationChangeKind kind) {
             auto self = weak.lock();
@@ -566,6 +576,13 @@ void ApplicationHost::InitializeTray() {
             self->ScheduleDeviceVisualRefresh(false);
         });
     }
+    m_trayController->SetHelpCallback([weak] {
+        if (auto self = weak.lock(); self && !self->m_exiting.load() && self->m_appController) {
+            auto result =
+                self->m_appController->Execute(apc::app::AppCommand{apc::app::AppCommandKind::ShowSettings, {}, {}});
+            if (result.Succeeded()) static_cast<void>(self->m_settingsWindowPresenter.ShowHelp());
+        }
+    });
     m_trayController->SetCallbacks(
         [weak]() {
             if (auto self = weak.lock()) {
@@ -1719,22 +1736,8 @@ void ApplicationHost::PublishDeviceFact(Bridge::DeviceFact fact) noexcept {
 bool ApplicationHost::ShowSettingsWindow() {
     if (m_exiting.load()) return false;
     DebugTrace(L"[App] ShowSettingsWindow()");
-    auto weak = weak_from_this();
     return m_settingsWindowPresenter.Show(
-        m_settingsController,
-        [weak](apc::app::AppCommand command) {
-            if (auto self = weak.lock(); self && !self->m_exiting.load() && self->m_appController) {
-                return self->m_appController->Execute(std::move(command));
-            }
-            apc::app::AppResult result;
-            result.Code = apc::app::AppResultCode::Unavailable;
-            result.Command = command.Kind;
-            result.Reason = apc::app::AppOutcomeReason::NotReady;
-            return result;
-        },
-        m_startupTaskCoordinator,
-        m_trayController,
-        m_updateCoordinator);
+        m_settingsController, m_startupTaskCoordinator, m_trayController, m_updateCoordinator);
 }
 
 void ApplicationHost::ExitApplication() noexcept {
@@ -1799,7 +1802,6 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
     }
 
     if (record.Mutation.IsApplied()) {
-        if (record.PresentationChanged) m_settingsWindowPresenter.RefreshKnownDevicesIfOpen();
         if (record.AddedDevice) {
             DebugTrace(L"[App] New device added to settings: {0}", std::wstring(rawDeviceName));
         }
@@ -1902,6 +1904,16 @@ LRESULT CALLBACK ApplicationHost::SubclassProc(
     auto* host = reinterpret_cast<ApplicationHost*>(dwRefData);
     if (!host) return DefSubclassProc(hwnd, msg, wParam, lParam);
     if (host->m_exiting.load()) return DefSubclassProc(hwnd, msg, wParam, lParam);
+
+    // Release XAML owners before Windows/Restart Manager destroys the anchor and dispatcher.
+    if (msg == WM_CLOSE) {
+        host->ExitApplication();
+        return 0;
+    }
+    if (msg == WM_ENDSESSION && wParam != FALSE) {
+        static_cast<void>(host->PerformTeardown(SettingsShutdownMode::Flush));
+        return DefSubclassProc(hwnd, msg, wParam, lParam);
+    }
 
     if (host->m_trayController && msg == host->m_trayController->TrayCallbackMessage()) {
         host->m_trayController->HandleTrayMessage(wParam, lParam);

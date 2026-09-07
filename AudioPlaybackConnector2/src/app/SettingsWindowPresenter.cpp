@@ -41,8 +41,18 @@ SettingsWindowPresenter::~SettingsWindowPresenter() {
 /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
+bool SettingsWindowPresenter::ShowHelp() {
+    if (!m_state || !m_state->Current || m_state->Current->Closed || !m_state->Current->Window) return false;
+    try {
+        m_state->Current->Window.as<winrt::AudioPlaybackConnector2::implementation::SettingsWindow>()->ShowHelpPage();
+        return true;
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[SettingsWindowPresenter] Failed to show help");
+        return false;
+    }
+}
+
 bool SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settingsController,
-                                   apc::app::SettingsWindowCommandExecutor::ExecuteCallback executeAppCommand,
                                    std::shared_ptr<StartupTaskCoordinator> startupTaskCoordinator,
                                    std::shared_ptr<TrayController> trayController,
                                    std::shared_ptr<UpdateCoordinator> updateCoordinator) {
@@ -106,7 +116,6 @@ bool SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settings
 
         auto impl = candidate->Window.as<winrt::AudioPlaybackConnector2::implementation::SettingsWindow>();
         impl->SetSettingsController(std::move(settingsController));
-        impl->SetAppCommandExecutor(std::move(executeAppCommand));
         impl->SetStartupTaskCoordinator(std::move(startupTaskCoordinator));
         if (initialSettings) impl->SetInitialSettingsSnapshot(std::move(*initialSettings));
         impl->SetUpdateCoordinator(std::move(updateCoordinator));
@@ -173,29 +182,13 @@ bool SettingsWindowPresenter::Close() noexcept {
     return CloseWindow(owner, owner->Current);
 }
 
-void SettingsWindowPresenter::RefreshKnownDevicesIfOpen() noexcept {
-    auto owner = m_state;
-    if (!owner || !owner->Current || owner->Current->Closed || owner->Current->Closing || !owner->Current->Window) {
-        return;
-    }
-    try {
-        owner->Current->Window.as<winrt::AudioPlaybackConnector2::implementation::SettingsWindow>()
-            ->RefreshKnownDevices();
-    } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[SettingsWindowPresenter] Failed to refresh known devices", ex);
-    } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[SettingsWindowPresenter] Failed to refresh known devices", ex);
-    } catch (...) {
-        util::DebugTraceUnknownException(L"[SettingsWindowPresenter] Failed to refresh known devices");
-    }
-}
-
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Private Implementation ////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
 bool SettingsWindowPresenter::CloseWindow(std::shared_ptr<PresenterState> const& owner,
-                                          std::shared_ptr<WindowState> const& state) noexcept {
+                                          std::shared_ptr<WindowState> state) noexcept {
+    // Closed can synchronously reset owner->Current. Retain our own state while Close is on the stack.
     if (!state || state->Closed || !state->Window) {
         if (owner && owner->Current == state) owner->Current.reset();
         return true;

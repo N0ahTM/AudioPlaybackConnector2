@@ -61,7 +61,7 @@ LegacyAppUseCaseBridge::CallLease::~CallLease() {
     if (m_owner.m_activeCalls == 0) m_owner.m_noActiveCalls.notify_all();
 }
 
-AppResult LegacyAppUseCaseBridge::Execute(AppCommand command, AppCommandContext context) noexcept {
+AppResult LegacyAppUseCaseBridge::Execute(AppCommand const& command, AppCommandContext context) noexcept {
     AppResult preflight;
     preflight.Command = command.Kind;
     if (!command.IsWellFormed()) {

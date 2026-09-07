@@ -61,6 +61,10 @@ void TrayController::Initialize(HWND hwnd, winrt::Microsoft::UI::Xaml::Window ma
                     self->m_showSettingsCallback();
             },
             [weak]() {
+                if (auto self = weak.lock(); self && !self->m_isTearingDown.load() && self->m_showHelpCallback)
+                    self->m_showHelpCallback();
+            },
+            [weak]() {
                 if (auto self = weak.lock(); self && !self->m_isTearingDown.load()) self->LaunchBluetoothSettings();
             },
             [weak]() {
@@ -88,6 +92,12 @@ void TrayController::SetSettingsStore(std::shared_ptr<SettingsStore> settingsSto
         const auto snapshot = m_settingsStore->Snapshot();
         SetSystemBackdropEffectsEnabled(snapshot.Data.UseSystemBackdropEffects);
     }
+}
+
+void TrayController::SetDeviceSettings(std::shared_ptr<ISettingsController> controller,
+                                       apc::app::SettingsWindowCommandExecutor::ExecuteCallback execute) {
+    m_settingsController = std::move(controller);
+    m_executeDeviceSetting = std::move(execute);
 }
 
 void TrayController::ApplyLanguage() {
@@ -167,6 +177,10 @@ void TrayController::Teardown() noexcept try {
         m_themeChangedToken = 0;
     }
     m_showSettingsCallback = nullptr;
+    m_showHelpCallback = nullptr;
+    m_openSettingsAfterPickerClosed = false;
+    m_executeDeviceSetting = nullptr;
+    m_settingsController.reset();
     m_showDevicePickerCallback = nullptr;
     m_exitCallback = nullptr;
     m_connectCallback = nullptr;
@@ -692,6 +706,11 @@ bool TrayController::EnsureDevicePickerViewCreated() noexcept {
                 DebugTrace(L"[TrayController] User reconnected all devices");
                 if (self->m_reconnectAllCallback) self->m_reconnectAllCallback();
             });
+        impl->SetDeviceSettings(m_settingsController, m_executeDeviceSetting, [weak] {
+            if (auto self = weak.lock(); self && !self->m_isTearingDown.load()) {
+                self->ShowSettingsAfterPickerClosed();
+            }
+        });
         m_devicePickerView = std::move(pickerView);
         m_releaseDevicePickerPending = false;
         return true;
@@ -773,6 +792,19 @@ void TrayController::ReleaseDevicePicker() noexcept {
         util::DebugTraceException(L"[TrayController] ERROR: failed to request device picker release", ex);
     } catch (...) {
         util::DebugTraceUnknownException(L"[TrayController] ERROR: failed to request device picker release");
+    }
+}
+
+void TrayController::SetHelpCallback(ShowSettingsCallback callback) {
+    m_showHelpCallback = std::move(callback);
+}
+
+void TrayController::ShowSettingsAfterPickerClosed() {
+    m_openSettingsAfterPickerClosed = true;
+    TryHideDevicePicker();
+    if (m_openSettingsAfterPickerClosed && m_pickerFlyoutState.load() != PickerFlyoutState::Closing) {
+        m_openSettingsAfterPickerClosed = false;
+        if (m_showSettingsCallback) m_showSettingsCallback();
     }
 }
 
@@ -921,6 +953,8 @@ Controls::Flyout TrayController::CreatePickerFlyout() {
             if (self->m_releaseDevicePickerPending) {
                 self->ReleaseDevicePickerOnUIThread();
             }
+            if (std::exchange(self->m_openSettingsAfterPickerClosed, false) && self->m_showSettingsCallback)
+                self->m_showSettingsCallback();
         } catch (winrt::hresult_error const& ex) {
             util::DebugTraceException(L"[TrayController] ERROR: Picker flyout closed handler failed", ex);
         } catch (std::exception const& ex) {

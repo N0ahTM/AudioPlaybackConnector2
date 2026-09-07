@@ -24,6 +24,8 @@ public:
     }
 
     [[nodiscard]] std::wstring_view View() const noexcept { return m_value; }
+    // This conversion deliberately owns its result; View() is the borrowing alternative.
+    // cppcheck-suppress returnByReference
     [[nodiscard]] std::wstring ToString() const { return m_value; }
 
     friend bool operator==(DeviceId const&, DeviceId const&) = default;

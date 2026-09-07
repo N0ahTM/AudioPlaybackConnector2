@@ -434,6 +434,9 @@ void TestDeviceIdValidationRejectsWithoutRevision() {
                                                std::wstring(apc::limits::c_maxDeviceIdCharacters + 1, L'x'),
                                                std::wstring(1, static_cast<wchar_t>(0xD800))};
     for (auto const& id : invalidIds) {
+        const auto remember = store.RememberDevice(id, L"Device");
+        Check(remember.Status == SettingsMutationStatus::Rejected && remember.Revision == initialRevision,
+              "invalid saved-device IDs must be rejected without a revision");
         const auto connect = store.SetDeviceConnectOnStartup(id, true);
         Check(connect.Status == SettingsMutationStatus::Rejected && connect.Revision == initialRevision,
               "invalid connect-on-startup IDs must be rejected without a revision");
@@ -446,6 +449,55 @@ void TestDeviceIdValidationRejectsWithoutRevision() {
     }
     Check(store.Snapshot().Revision == initialRevision, "rejected device IDs must not advance the store revision");
     static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+}
+
+void TestDeviceSettingsBeforeFirstConnection() {
+    auto storage = std::make_shared<ControlledStorage>();
+    SettingsStore store({}, storage);
+    const auto initial = store.Snapshot();
+    Check(store.RememberDevice(L"new", L"Phone").IsApplied(),
+          "a discovered device must be configurable before its first connection");
+    Check(store.SetDeviceConnectOnStartup(L"new", true).IsApplied(),
+          "a never-connected device must accept a startup preference");
+    Check(store.SetDeviceReconnectOnConnectionLoss(L"new", true).IsApplied(),
+          "a never-connected device must accept a reconnect preference");
+    Check(store.SetDeviceAlias(L"new", L"Desk").Mutation.IsApplied(), "an unconnected device must accept an alias");
+    const auto configured = store.Snapshot();
+    Check(configured.Data.LastConnectedIds == initial.Data.LastConnectedIds &&
+              configured.Data.DefaultDevice == initial.Data.DefaultDevice &&
+              configured.Data.DefaultDeviceId == initial.Data.DefaultDeviceId,
+          "configuring a device must not fabricate connection history or change the default target");
+    Check(store.RememberDevice(L"new", L"Changed discovery name").Status == SettingsMutationStatus::Unchanged &&
+              store.Snapshot().Revision == configured.Revision,
+          "remembering an existing device must preserve its settings and revision");
+    const auto invalidName =
+        store.RememberDevice(L"invalid-name", std::wstring(apc::limits::c_maxDeviceNameCharacters + 1, L'x'));
+    Check(invalidName.Status == SettingsMutationStatus::Rejected && invalidName.Revision == configured.Revision,
+          "an oversized saved-device name must be rejected without changing settings");
+    Check(store.FlushNow(2), "preferences for an unconnected device must persist");
+    storage->SetInput(storage->Output());
+    static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+
+    SettingsStore reader({}, storage);
+    reader.Load();
+    auto restored = reader.Snapshot().Data;
+    Check(restored.Devices.size() == 1 && restored.LastConnectedIds.empty(),
+          "reloading a configured device must not turn it into a previously connected device");
+    if (!restored.Devices.empty()) {
+        auto const& device = restored.Devices.front();
+        Check(device.Id == L"new" && device.Name == L"Phone" && device.Alias == L"Desk" && device.ConnectOnStartup &&
+                  device.ReconnectOnConnectionLoss,
+              "all pre-connection preferences must survive persistence");
+    }
+    const auto connection = reader.RecordConnectedDevice(L"new", L"Phone renamed by OS");
+    Check(!connection.AddedDevice && connection.EffectiveReconnectOnConnectionLoss,
+          "the first real connection must reuse configured preferences");
+    restored = reader.Snapshot().Data;
+    Check(restored.Devices.size() == 1 && restored.Devices.front().Alias == L"Desk" &&
+              restored.Devices.front().ConnectOnStartup &&
+              restored.LastConnectedIds == std::vector<std::wstring>{L"new"},
+          "the first connection must preserve settings and record real connection history exactly once");
+    static_cast<void>(reader.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
 }
 
 void TestRecordConnectedDeviceEffectiveReconnectPolicy() {
@@ -481,6 +533,9 @@ void TestRecordConnectedDeviceEffectiveReconnectPolicy() {
     }
     Check(store.Snapshot().Data.Devices.size() == apc::limits::c_maxPersistedDeviceCount,
           "the device table must reach its configured bound");
+    Check(store.RememberDevice(L"settings-overflow", L"Overflow").Status == SettingsMutationStatus::Unchanged &&
+              store.Snapshot().Data.Devices.size() == apc::limits::c_maxPersistedDeviceCount,
+          "configuring an additional device must respect the persisted-device limit");
     Check(store.SetGlobalReconnectOnConnectionLoss(true).IsApplied(),
           "the global reconnect policy must apply before the overflow record");
     const auto overflow = store.RecordConnectedDevice(L"overflow", L"Overflow");
@@ -909,6 +964,7 @@ int RunSettingsStoreTests() {
     TestOversizedInputIsPreserved();
     TestNoOpAndTypedMutationResults();
     TestDeviceIdValidationRejectsWithoutRevision();
+    TestDeviceSettingsBeforeFirstConnection();
     TestRecordConnectedDeviceEffectiveReconnectPolicy();
     TestMutationDuringBlockedWriteAndFinalFlush();
     TestDebouncedWorkerWaitsForSynchronousWriter();

@@ -26,10 +26,22 @@ Public Windows installations may block web links using this protocol. Download t
 
 1. Confirm that the device is paired and available in Windows Bluetooth settings.
 2. Exit AudioPlaybackConnector2 from the tray menu and start it again.
-3. Open **Settings > Help** to copy redacted diagnostics or open the log folder.
+3. Choose **Help** in the tray menu, or **? Help** in Settings, then expand diagnostics to copy the report or open the log folder.
 4. Include the app version, Windows build, installation method, and reproducible steps in a bug report.
 
 Privacy mode redacts device names and IDs. Crash dumps remain local unless you share them and may contain sensitive memory, so review them first.
+
+## A connection drops unexpectedly
+
+Record the time of the drop, whether audio was playing, and whether the phone, Bluetooth adapter, or PC changed power state. Include your Windows build, app version, and whether reconnect is enabled globally or for that device. Copy diagnostics soon after the event; a successful reconnect alone does not identify what caused the loss.
+
+Use the circular-arrow action for an explicit reconnect. Clicking the connected device name disconnects it intentionally. Device-specific policies are under **…** in the picker; an enabled global policy is also shown there and cannot be disabled for only one device.
+
+## Connected, but audio does not resume after a pause
+
+Before reconnecting, note the time, check whether the source's playback position advances, and confirm its selected audio output. Check the Windows output and volume mixer for mute or volume changes, then copy the app diagnostics from **Help**. Include the approximate pause duration and whether the source was locked or either device changed power state.
+
+The connected indicator reports connection state; it does not measure audible playback. A successful retry does not rule out an intermittent failure. Use the circular-arrow action to reconnect after collecting the details. The cause of the reported intermittent pause/resume failure is still under investigation.
 
 ## A2DP Sink audio always plays through the default output device
 

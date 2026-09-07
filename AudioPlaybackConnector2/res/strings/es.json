@@ -191,5 +191,18 @@
   "Command_ReconnectFailed": "No se pudo reconectar {0}.",
   "Command_DisconnectAllSucceeded": "Todos los dispositivos conectados se desconectaron.",
   "Command_ReconnectAllSucceeded": "Todos los dispositivos conectados se reconectaron.",
-  "Command_Unsupported": "Comando no compatible."
+  "Command_Unsupported": "Comando no compatible.",
+  "Connect": "Conectar",
+  "DeviceOptions_Title": "Ajustes del dispositivo",
+  "DeviceOptions_Back": "Atrás",
+  "DeviceOptions_Saved": "Dispositivos guardados",
+  "DeviceOptions_Save": "Guardar nombre",
+  "DeviceOptions_ResetName": "Restablecer nombre",
+  "DeviceOptions_Name": "Nombre visible",
+  "DeviceOptions_Startup": "Conectar al iniciar la app",
+  "DeviceOptions_Reconnect": "Reconectar automáticamente",
+  "DeviceOptions_Forget": "Eliminar los ajustes guardados del dispositivo",
+  "DeviceOptions_GlobalPolicy": "Activado para todos los dispositivos en los ajustes de la app.",
+  "DeviceOptions_Unavailable": "No disponible",
+  "Settings_Connections": "Conexiones"
 }

@@ -191,5 +191,18 @@
   "Command_ReconnectFailed": "{0} konnte nicht erneut verbunden werden.",
   "Command_DisconnectAllSucceeded": "Alle verbundenen Geräte wurden getrennt.",
   "Command_ReconnectAllSucceeded": "Alle verbundenen Geräte wurden erneut verbunden.",
-  "Command_Unsupported": "Nicht unterstützter Befehl."
+  "Command_Unsupported": "Nicht unterstützter Befehl.",
+  "Connect": "Verbinden",
+  "DeviceOptions_Title": "Geräteeinstellungen",
+  "DeviceOptions_Back": "Zurück",
+  "DeviceOptions_Saved": "Gespeicherte Geräte",
+  "DeviceOptions_Save": "Name speichern",
+  "DeviceOptions_ResetName": "Name zurücksetzen",
+  "DeviceOptions_Name": "Anzeigename",
+  "DeviceOptions_Startup": "Beim App-Start verbinden",
+  "DeviceOptions_Reconnect": "Automatisch neu verbinden",
+  "DeviceOptions_Forget": "Gespeicherte Geräteeinstellungen entfernen",
+  "DeviceOptions_GlobalPolicy": "In den App-Einstellungen für alle Geräte aktiviert.",
+  "DeviceOptions_Unavailable": "Nicht verfügbar",
+  "Settings_Connections": "Verbindungen"
 }

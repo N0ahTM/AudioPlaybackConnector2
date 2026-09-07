@@ -164,6 +164,9 @@ artifacts/
 
 # Local-only benchmark, diagnostic, and installer test harnesses
 /tools/
+/validation-logs/
+/validation-probes/
+/validation-tools/
 /docs/performance/
 /docs/PERFORMANCE_BENCHMARKS.md
 /docs/assets/

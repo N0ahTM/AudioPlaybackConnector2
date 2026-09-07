@@ -147,7 +147,7 @@ public:
     LegacyAppUseCaseBridge& operator=(LegacyAppUseCaseBridge&&) = delete;
     ~LegacyAppUseCaseBridge() = default;
 
-    [[nodiscard]] AppResult Execute(AppCommand command, AppCommandContext context = {}) noexcept;
+    [[nodiscard]] AppResult Execute(AppCommand const& command, AppCommandContext context = {}) noexcept;
     [[nodiscard]] AppSnapshot Snapshot() const noexcept;
 
     // Normalize one legacy fact, update bridge-owned state, and return the

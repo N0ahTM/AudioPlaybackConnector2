@@ -105,6 +105,56 @@ void TestConsistentPresentationSnapshot() {
           "connected, busy, and unknown rows must not be selectable");
 }
 
+void TestSavedDevicesRemainConfigurable() {
+    DevicePickerSnapshotCache cache;
+    cache.ReplaceInventory({DeviceIdentity{L"a", L"Available"}}, At(0s));
+    DeviceActivitySnapshot activity;
+    std::vector settings{
+        DevicePresentationSetting{L"a", L"Available", L""},
+        DevicePresentationSetting{L"b", L"Saved", L"Desk", true},
+        DevicePresentationSetting{L"b", L"Duplicate", L"Ignored"},
+        DevicePresentationSetting{L"", L"Invalid", L""},
+    };
+
+    auto first = cache.Refresh(activity, settings, false, L"Private", At(1s));
+    Check(first.Items.size() == 2, "saved and discovered devices must share one deduplicated list");
+    Check(first.Items[0].IsAvailable && cache.CanSelect(L"a"), "discovered idle devices must remain connectable");
+    Check(!first.Items[1].IsAvailable && !cache.CanSelect(L"b"),
+          "an unavailable saved device must remain listed without offering a connection");
+    Check(first.Items[1].DisplayName == L"Desk" && first.Items[1].IsDefault,
+          "saved devices must retain their alias and default marker");
+    Check(cache.Refresh(activity, settings, false, L"Private", At(2s)).Generation == first.Generation,
+          "an unchanged saved-device list must not trigger another render");
+
+    cache.ReplaceInventory({}, At(3s));
+    auto missing = cache.Refresh(activity, settings, true, L"Private", At(3s));
+    Check(missing.Items.size() == 2 && !missing.Items[0].IsAvailable && !missing.Items[1].IsAvailable,
+          "an empty discovery result must not hide saved settings");
+    Check(missing.Items[0].DisplayName == L"Private" && missing.Items[1].DisplayName == L"Desk",
+          "saved unavailable devices must obey the same privacy rules as discovered devices");
+
+    activity.ConnectedIds.insert(L"b");
+    auto connected = cache.Refresh(activity, settings, false, L"Private", At(4s));
+    Check(connected.Items[1].IsAvailable && connected.Items[1].IsConnected && !cache.CanSelect(L"b"),
+          "a live saved connection must remain visible even while discovery is empty");
+    activity.ConnectedIds.clear();
+    activity.BusyIds.insert(L"b");
+    auto busy = cache.Refresh(activity, settings, false, L"Private", At(5s));
+    Check(busy.Items[1].IsAvailable && busy.Items[1].IsBusy && !cache.CanSelect(L"b"),
+          "an in-progress saved connection must stay visible without allowing a duplicate action");
+    activity.BusyIds.clear();
+    cache.ReplaceInventory({DeviceIdentity{L"b", L"Rediscovered"}}, At(6s));
+    auto rediscovered = cache.Refresh(activity, settings, false, L"Private", At(6s));
+    Check(rediscovered.Items.size() == 2 && rediscovered.Items[0].Id == L"b" && cache.CanSelect(L"b"),
+          "rediscovery must promote the existing saved row to an available row without duplicating it");
+    settings[0].IsDefault = true;
+    settings[1].IsDefault = false;
+    auto changedDefault = cache.Refresh(activity, settings, false, L"Private", At(7s));
+    Check(changedDefault.Generation > rediscovered.Generation && !changedDefault.Items[0].IsDefault &&
+              changedDefault.Items[1].IsDefault,
+          "moving the default marker must update both rows and invalidate the presentation");
+}
+
 void TestPrivacyAndSnapshotGeneration() {
     DevicePickerSnapshotCache cache;
     cache.ReplaceInventory({DeviceIdentity{L"a", L"Headphones"}, DeviceIdentity{L"b", L"Speaker"}}, At(0s));
@@ -146,6 +196,7 @@ int RunDevicePickerSnapshotTests() {
     TestConcurrentInventoryGeneration();
     TestLateInventoryCallbackAfterRelease();
     TestConsistentPresentationSnapshot();
+    TestSavedDevicesRemainConfigurable();
     TestPrivacyAndSnapshotGeneration();
     return g_failures;
 }

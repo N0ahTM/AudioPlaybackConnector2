@@ -64,6 +64,7 @@ public:
     void ForgetDevice(std::wstring const& deviceId) override;
 
 private:
+    [[nodiscard]] bool RememberKnownDevice(std::wstring const& deviceId);
     void NotifyPresentationChanged(PresentationChangeKind kind = PresentationChangeKind::Content);
 
     std::shared_ptr<SettingsStore> m_settings;

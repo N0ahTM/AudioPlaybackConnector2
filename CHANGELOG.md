@@ -7,13 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-07
+
+### Added
+- Added compact per-device options in the picker for aliases, default selection, startup connection, and automatic reconnection.
+- Added a direct Help entry to the tray menu.
+- Added an updated animated README demonstration, hosted as a GitHub attachment outside the source repository.
+
 ### Changed
+- Consolidated general preferences into a compact Settings page and retained Help in the same window.
+- Kept device selection and device options at a shared localized width, with short transitions that respect Windows animation preferences.
+- Added disconnect feedback on device hover and keyboard focus, and clarified the separate reconnect action.
+- Open Settings after the picker has closed and focus the back button when entering device options.
+- Made snapshot lifetimes explicit for static analysis while retaining owned string conversions.
+- Reworked device session ownership, serialized operations, retry cancellation, and suspend/resume handling with native regression coverage.
 - Consolidated the installation, troubleshooting, contributor, and installer documentation.
 - Simplified the bootstrapper source layout and reused the application icon directly.
 
+### Fixed
+- Align the window-placement reset action with the Settings switches.
+- Derive disconnect hover feedback from the button's actual pointer/focus state and remove the competing device-name tooltip.
+- Handle Windows close/end-session messages before the hidden host window and XAML dispatcher are destroyed.
+- Retain the settings-window state through synchronous close callbacks, fixing a null dereference reproduced during a package update with Settings open.
+- Replace the narrow Settings navigation pane reported to truncate Chinese labels with the compact Settings/Help layout (issue #19).
+
 ### Removed
+- Removed the duplicate device-management page from Settings and the outdated README preview.
 - Removed repository-tracked performance benchmark harnesses, archived benchmark results, and Windows Sandbox installer helpers. Local experiments are now ignored.
 - Removed unused developer helpers and generated documentation and installer image assets.
+
+### Known limitations
+- A connected device may occasionally produce no audio, including after a playback pause. Use the circular-arrow Reconnect action to recover. This remains under investigation; 0.9.0 does not claim to fix it ([#1](https://github.com/N0ahTM/AudioPlaybackConnector2/issues/1)).
+- Windows may ignore per-app output routing for A2DP sink audio. The app does not provide an output-device selector ([#13](https://github.com/N0ahTM/AudioPlaybackConnector2/issues/13)).
 
 ## [0.8.1] - 2026-08-21
 

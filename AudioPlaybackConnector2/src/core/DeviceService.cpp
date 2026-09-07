@@ -581,7 +581,8 @@ void DeviceService::ConfigureIncomingConnections(bool enabled) {
             session->SetIncomingEnabled(enabled);
         }
         if (enabled && state->Watcher) {
-            for (auto const& device : state->Watcher->Snapshot().Devices) {
+            auto const inventory = state->Watcher->Snapshot();
+            for (auto const& device : inventory.Devices) {
                 state->GetOrCreateSession(device.Id)->SetIncomingEnabled(true);
             }
         }
@@ -802,7 +803,8 @@ DeviceService::RefreshDevicesAsync() {
 
 std::vector<DeviceSessionSnapshot> DeviceService::GetConnectedDevices() const {
     std::vector<DeviceSessionSnapshot> result;
-    for (auto const& session : Snapshot().Sessions) {
+    auto const snapshot = Snapshot();
+    for (auto const& session : snapshot.Sessions) {
         if (session.State == DeviceLifecycleState::Connected) result.push_back(session);
     }
     return result;
@@ -814,7 +816,8 @@ std::vector<DeviceSessionSnapshot> DeviceService::GetConnectionSessions() const 
 
 std::vector<std::wstring> DeviceService::GetPowerTransitionRecoveryDeviceIds() const {
     std::vector<std::wstring> result;
-    for (auto const& session : Snapshot().Sessions) {
+    auto const snapshot = Snapshot();
+    for (auto const& session : snapshot.Sessions) {
         if (State::RequiresPowerTransitionRecovery(session) && !session.DeviceId.empty())
             result.push_back(session.DeviceId);
     }
@@ -856,7 +859,8 @@ bool DeviceService::IsDeviceBusy(std::wstring_view deviceId) const {
 
 device_picker::DeviceActivitySnapshot DeviceService::GetDevicePickerActivitySnapshot() const {
     device_picker::DeviceActivitySnapshot result;
-    for (auto const& session : Snapshot().Sessions) {
+    auto const snapshot = Snapshot();
+    for (auto const& session : snapshot.Sessions) {
         if (session.State == DeviceLifecycleState::Connected) result.ConnectedIds.insert(session.DeviceId);
         if (session.State == DeviceLifecycleState::Connecting || session.State == DeviceLifecycleState::Disconnecting ||
             session.State == DeviceLifecycleState::WaitingForReconnect) {

@@ -899,6 +899,19 @@ SettingsMutationResult SettingsStore::SetSettingsWindowBounds(std::optional<Pers
         return std::exchange(data.SettingsWindowBounds, bounds) != bounds;
     });
 }
+SettingsMutationResult SettingsStore::RememberDevice(std::wstring_view deviceId, std::wstring_view deviceName) {
+    if (deviceId.empty() || !apc::limits::IsBoundedUtf16(deviceId, apc::limits::c_maxDeviceIdCharacters) ||
+        !apc::limits::IsBoundedUtf16(deviceName, apc::limits::c_maxDeviceNameCharacters))
+        return {SettingsMutationStatus::Rejected, Snapshot().Revision};
+    return m_impl->Commit([deviceId = std::wstring(deviceId), deviceName = std::wstring(deviceName)](auto& data) {
+        if (FindDevice(data, deviceId) || data.Devices.size() == apc::limits::c_maxPersistedDeviceCount) return false;
+        // Configuring a discovered device must not mark it as connected or change the last-device target.
+        data.Devices.push_back(
+            {deviceId, deviceName, L"", data.GlobalConnectOnStartup, data.GlobalReconnectOnConnectionLoss});
+        return true;
+    });
+}
+
 SettingsMutationResult SettingsStore::SetDeviceConnectOnStartup(std::wstring_view deviceId, bool enabled) {
     if (deviceId.empty() || !apc::limits::IsBoundedUtf16(deviceId, apc::limits::c_maxDeviceIdCharacters))
         return {SettingsMutationStatus::Rejected, Snapshot().Revision};

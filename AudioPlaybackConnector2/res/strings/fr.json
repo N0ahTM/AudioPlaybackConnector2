@@ -191,5 +191,18 @@
   "Command_ReconnectFailed": "Impossible de reconnecter {0}.",
   "Command_DisconnectAllSucceeded": "Tous les appareils connectés ont été déconnectés.",
   "Command_ReconnectAllSucceeded": "Tous les appareils connectés ont été reconnectés.",
-  "Command_Unsupported": "Commande non prise en charge."
+  "Command_Unsupported": "Commande non prise en charge.",
+  "Connect": "Connecter",
+  "DeviceOptions_Title": "Paramètres de l’appareil",
+  "DeviceOptions_Back": "Retour",
+  "DeviceOptions_Saved": "Appareils enregistrés",
+  "DeviceOptions_Save": "Enregistrer le nom",
+  "DeviceOptions_ResetName": "Réinitialiser le nom",
+  "DeviceOptions_Name": "Nom affiché",
+  "DeviceOptions_Startup": "Connecter au démarrage",
+  "DeviceOptions_Reconnect": "Reconnecter automatiquement",
+  "DeviceOptions_Forget": "Supprimer les paramètres enregistrés de l’appareil",
+  "DeviceOptions_GlobalPolicy": "Activé pour tous les appareils dans les paramètres de l’application.",
+  "DeviceOptions_Unavailable": "Indisponible",
+  "Settings_Connections": "Connexions"
 }

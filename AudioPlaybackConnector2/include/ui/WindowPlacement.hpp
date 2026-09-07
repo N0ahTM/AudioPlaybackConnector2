@@ -8,9 +8,9 @@
 #include <limits>
 #include <optional>
 
-inline constexpr int32_t c_settingsWindowPreferredWidthDip = 900;
-inline constexpr int32_t c_settingsWindowPreferredHeightDip = 560;
-inline constexpr int32_t c_settingsWindowMinWidthDip = 660;
+inline constexpr int32_t c_settingsWindowPreferredWidthDip = 480;
+inline constexpr int32_t c_settingsWindowPreferredHeightDip = 420;
+inline constexpr int32_t c_settingsWindowMinWidthDip = 480;
 inline constexpr int32_t c_settingsWindowMinHeightDip = 360;
 inline constexpr int32_t c_settingsWindowEdgeMarginDip = 16;
 

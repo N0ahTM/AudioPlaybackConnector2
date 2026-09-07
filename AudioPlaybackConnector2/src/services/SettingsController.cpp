@@ -29,7 +29,7 @@ void SettingsController::SetPresentationChangedCallback(PresentationChangedCallb
 }
 
 void SettingsController::SetGlobalConnectOnStartup(bool enabled) {
-    if (m_settings) static_cast<void>(m_settings->SetGlobalConnectOnStartup(enabled));
+    if (m_settings && WasApplied(m_settings->SetGlobalConnectOnStartup(enabled))) NotifyPresentationChanged();
 }
 
 void SettingsController::SetGlobalReconnectOnConnectionLoss(bool enabled) {
@@ -43,6 +43,7 @@ void SettingsController::SetGlobalReconnectOnConnectionLoss(bool enabled) {
         service->ApplyReconnectOnConnectionLossPolicy(snapshot.Data.GlobalReconnectOnConnectionLoss,
                                                       individuallyEnabledDeviceIds);
     }
+    NotifyPresentationChanged();
 }
 
 void SettingsController::SetAllowIncomingConnections(bool enabled) {
@@ -88,12 +89,12 @@ bool SettingsController::ClearSettingsWindowBounds() {
 }
 
 void SettingsController::SetDeviceConnectOnStartup(std::wstring const& deviceId, bool enabled) {
-    if (m_settings && IsValidDeviceId(deviceId))
-        static_cast<void>(m_settings->SetDeviceConnectOnStartup(deviceId, enabled));
+    if (RememberKnownDevice(deviceId) && WasApplied(m_settings->SetDeviceConnectOnStartup(deviceId, enabled)))
+        NotifyPresentationChanged();
 }
 
 void SettingsController::SetDeviceReconnectOnConnectionLoss(std::wstring const& deviceId, bool enabled) {
-    if (!m_settings || !IsValidDeviceId(deviceId) ||
+    if (!RememberKnownDevice(deviceId) ||
         !WasApplied(m_settings->SetDeviceReconnectOnConnectionLoss(deviceId, enabled)))
         return;
     const auto snapshot = m_settings->Snapshot();
@@ -104,6 +105,7 @@ void SettingsController::SetDeviceReconnectOnConnectionLoss(std::wstring const& 
                 deviceId, snapshot.Data.GlobalReconnectOnConnectionLoss || device->ReconnectOnConnectionLoss);
         }
     }
+    NotifyPresentationChanged();
 }
 
 bool SettingsController::SetDeviceAlias(std::wstring const& deviceId,
@@ -118,6 +120,7 @@ bool SettingsController::SetDeviceAlias(std::wstring const& deviceId,
 
 bool SettingsController::SetDefaultDeviceId(std::wstring const& deviceId) {
     if (!m_settings) return false;
+    if (!deviceId.empty() && !RememberKnownDevice(deviceId)) return false;
     const auto result = deviceId.empty() ? m_settings->ClearDefaultDevice() : m_settings->SetDefaultDevice(deviceId);
     if (WasApplied(result)) NotifyPresentationChanged();
     return result.Status != SettingsMutationStatus::Rejected;
@@ -146,4 +149,20 @@ void SettingsController::ForgetDevice(std::wstring const& deviceId) {
 
 void SettingsController::NotifyPresentationChanged(PresentationChangeKind kind) {
     if (m_presentationChanged) m_presentationChanged(kind);
+}
+
+bool SettingsController::RememberKnownDevice(std::wstring const& deviceId) {
+    if (!m_settings || !IsValidDeviceId(deviceId)) return false;
+    const auto settings = m_settings->Snapshot();
+    if (std::ranges::find(settings.Data.Devices, deviceId, &DeviceSettings::Id) != settings.Data.Devices.end())
+        return true;
+    auto service = m_deviceService.lock();
+    if (!service) return false;
+    const auto inventory = service->GetDevicePickerInventorySnapshot();
+    const auto device = std::ranges::find(inventory.Devices, deviceId, &apc::device_picker::DeviceIdentity::Id);
+    if (device == inventory.Devices.end()) return false;
+    static_cast<void>(m_settings->RememberDevice(
+        deviceId, apc::limits::TruncateUtf16(device->Name, apc::limits::c_maxDeviceNameCharacters)));
+    const auto updated = m_settings->Snapshot();
+    return std::ranges::find(updated.Data.Devices, deviceId, &DeviceSettings::Id) != updated.Data.Devices.end();
 }

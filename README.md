@@ -5,15 +5,15 @@
 [![License](https://img.shields.io/github/license/N0ahTM/AudioPlaybackConnector2)](LICENSE)
 [![C++](https://img.shields.io/badge/C%2B%2B-23-00599C?logo=c%2B%2B)](https://en.cppreference.com/)
 
-AudioPlaybackConnector2 is a small Windows tray app for connecting paired Bluetooth audio devices as Windows playback outputs. It uses the Windows `AudioPlaybackConnection` API so you can connect, disconnect, and reconnect A2DP devices without opening Windows Settings.
-
-<img width="90%" alt="AudioPlaybackConnector2 device picker" src="https://github.com/user-attachments/assets/e0e2724a-82d3-40e7-849c-e6a870c0eeca" />
+AudioPlaybackConnector2 is a small Windows tray app that lets you play audio from a paired Bluetooth source, such as a phone, through your PC. It uses the Windows [AudioPlaybackConnection API](https://learn.microsoft.com/windows/apps/develop/media-playback/enable-remote-audio-playback) to manage A2DP sink connections from the tray.
 
 Built with **WinUI 3 Desktop** and **C++/WinRT** and distributed as a per-user Windows package.
 
+![Tray device picker, compact device options, and settings](https://github.com/user-attachments/assets/b530f478-8266-496c-9686-61714ecf16ef)
+
 ## Quick Start
 
-1. Pair your Bluetooth speaker, headset, or other A2DP audio device in Windows.
+1. Pair your phone or another compatible Bluetooth audio source with your Windows PC.
 2. Download `AudioPlaybackConnector2-WebSetup.exe` from the [latest release](https://github.com/N0ahTM/AudioPlaybackConnector2/releases/latest).
 3. Run the setup. It installs the app and its signing certificate for the current user.
 4. Launch AudioPlaybackConnector2 and use the tray icon to manage devices.
@@ -26,7 +26,8 @@ For commands and certificate-store options, see [Installation](docs/INSTALLATION
 - Fast device picker on left-click.
 - Connect, reconnect, and disconnect devices from the picker.
 - Double-click the tray icon to toggle the configured default device, or the most recently connected device.
-- Disconnect or reconnect all active devices from the tray menu.
+- Disconnect or reconnect all active devices from the picker when multiple devices are connected.
+- Compact device options behind each device's **…** button, with an alias, default-device selection, and connection policies.
 - Separate global and per-device policies for connecting on app startup and reconnecting after an unexpected connection loss.
 - Optional incoming-connection mode that keeps the Windows A2DP sink ready, so a paired phone can connect and disconnect from its Bluetooth menu.
 - Device aliases for cleaner picker, notification, and command-line labels.
@@ -41,18 +42,27 @@ For commands and certificate-store options, see [Installation](docs/INSTALLATION
 - Local crash reports and minidumps for troubleshooting.
 - Localized UI in eight languages.
 
+## Known limitations
+
+- Audio can occasionally remain silent even while the device appears connected, including after a playback pause. Use the circular-arrow **Reconnect** action to restore playback. The cause is still under investigation in [issue #1](https://github.com/N0ahTM/AudioPlaybackConnector2/issues/1).
+- Windows may keep A2DP sink audio on the default output despite a per-app choice in Volume Mixer. See [issue #13](https://github.com/N0ahTM/AudioPlaybackConnector2/issues/13) and [Troubleshooting](docs/TROUBLESHOOTING.md).
+
 ## Requirements
 
 - Windows 10 version 2004 (build 19041) or newer.
 - A Bluetooth adapter with A2DP support.
-- A paired Bluetooth audio playback device.
+- A paired Bluetooth audio source that supports sending A2DP audio to Windows.
 
 ## Usage
 
 - **Open device picker:** Left-click the tray icon.
 - **Open tray menu:** Right-click the tray icon.
-- **Quick toggle:** Double-click the tray icon to connect or disconnect the last connected device.
-- **Settings:** Open from the tray menu to configure language, startup behavior, reconnect behavior, notifications, and update checks.
+- **Connect or disconnect:** Click a device name. A connected device shows a disconnect symbol when hovered or focused with the keyboard.
+- **Reconnect:** Use the circular-arrow button beside a connected device.
+- **Device options:** Click **…** beside a device. Use the back arrow to return to the list.
+- **Quick toggle:** Double-click the tray icon to toggle the default device, falling back to the last connected device.
+- **Settings:** Use the gear in the picker or the tray menu for language, startup, connection policies, notifications, privacy, and window placement.
+- **Help and updates:** Choose **Help** in the tray menu or **? Help** in Settings. Diagnostics are grouped in an expandable section; the update button sits beside the version.
 - **Command line:** Use `apc2ctl.exe` from PowerShell, MacroPads, or scripts:
 
 ```powershell
@@ -84,6 +94,7 @@ The MSIX package is currently signed with a self-signed certificate; the setup e
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)
+- [Next release validation and demo recording](docs/RELEASE-0.9-CHECKLIST.md)
 
 ## Privacy and Crash Reports
 

@@ -22,6 +22,7 @@ struct DevicePresentationSetting {
     std::wstring Id;
     std::wstring Name;
     std::wstring Alias;
+    bool IsDefault = false;
 };
 
 struct DeviceActivitySnapshot {
@@ -36,6 +37,8 @@ struct DeviceSnapshotItem {
     std::wstring DisplayName;
     bool IsConnected = false;
     bool IsBusy = false;
+    bool IsAvailable = true;
+    bool IsDefault = false;
 
     bool operator==(DeviceSnapshotItem const&) const = default;
 };

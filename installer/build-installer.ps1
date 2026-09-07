@@ -107,7 +107,12 @@ try {
         "/DStageDir=$stage",
         "/O$OutputDir"
     )
-    if ($Mode -eq 'Web') { $isccArgs += '/DWEBBOOT=1' }
+    if ($Mode -eq 'Web') {
+        $isccArgs += '/DWEBBOOT=1'
+    } else {
+        # Embed exactly the payload validated above, including dual-architecture MSIX bundles.
+        $isccArgs += "/DPackageFileName=$packageName"
+    }
     & $iscc @isccArgs (Join-Path $repoRoot 'installer\setup.iss')
     if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
 

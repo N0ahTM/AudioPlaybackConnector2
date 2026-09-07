@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Simplified the bootstrapper source layout and reused the application icon directly.
 
 ### Fixed
+- Embed the validated MSIX bundle in the offline installer instead of requiring a single-architecture `.msix` file.
 - Align the window-placement reset action with the Settings switches.
 - Derive disconnect hover feedback from the button's actual pointer/focus state and remove the competing device-name tooltip.
 - Handle Windows close/end-session messages before the hidden host window and XAML dispatcher are destroyed.

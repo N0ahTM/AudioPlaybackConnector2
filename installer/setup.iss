@@ -19,6 +19,9 @@
   #define BaseName AppName + "-WebSetup"
 #else
   #define BaseName AppName + "-Setup-" + AppVersion
+  #ifndef PackageFileName
+    #error PackageFileName is required; use installer/build-installer.ps1 to stage and validate the payload.
+  #endif
 #endif
 
 [Setup]
@@ -55,7 +58,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Source: "{#StageDir}\install-app.ps1"; DestDir: "{tmp}\pkg"; Flags: ignoreversion
 Source: "{#StageDir}\AudioPlaybackConnector2.cer"; DestDir: "{tmp}\pkg"; Flags: ignoreversion
 #ifndef WEBBOOT
-Source: "{#StageDir}\*.msix"; DestDir: "{tmp}\pkg"; Flags: ignoreversion
+Source: "{#StageDir}\{#PackageFileName}"; DestDir: "{tmp}\pkg"; Flags: ignoreversion
 Source: "{#StageDir}\Dependencies\*"; DestDir: "{tmp}\pkg\Dependencies"; Flags: ignoreversion recursesubdirs skipifsourcedoesntexist
 #endif
 

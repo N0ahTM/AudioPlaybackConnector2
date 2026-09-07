@@ -24,6 +24,14 @@ The dry-run requires a matching changelog heading. The approved candidate now ha
 
 The detailed acceptance matrix is in [architecture verification](architecture-rework/verification.md). Missing hardware or visual coverage remains pending, rather than being inferred from a successful build.
 
+## Release validation — 2026-09-07
+
+Application/UI candidate 377f6507761913945758d82ee2088a467a5a37da passed fresh local restore, Debug x64, Release x64 and Release ARM64 rebuilds; both runnable x64 CoreTests configurations; formatting; cppcheck 2.19; localization/XAML checks; and the boundary-verifier self-test. GitHub Build and CodeQL also passed for this candidate.
+
+The first hosted Release Dry Run built and verified the signed bundle and passed CoreTests, but failed while compiling the offline installer: its file list still required `*.msix` while the validated payload was a `.msixbundle`. The corrected builder passes the exact validated payload filename to Inno Setup. Local compiler checks cover offline bundle embedding, web mode and rejection of a missing payload. These narrow compiler probes are not installable release artifacts. The corrected hosted release pipeline must pass before publication.
+
+The external README GIF is publicly accessible by an anonymous GET and renders on GitHub. Its SHA-256 matches the supplied recording: `46B53CEF9DF88BFAE241C991DDD890516B339B410C310A409379E20A03EEBF5D`.
+
 ## Local evidence — 2026-09-06
 
 Local preview 0.8.1.9 includes the final fixes. Release x64 and ARM64 were rebuilt, then the final UI/shutdown changes were compiled in x64 Debug, ARM64 Release, and the final x64 package. All completed with zero compiler warnings/errors. Release and Debug CoreTests passed; cppcheck 2.19's CI invocation returned zero; formatting, localization/XAML checks, and positive/negative CoreRuntime boundary tests passed.

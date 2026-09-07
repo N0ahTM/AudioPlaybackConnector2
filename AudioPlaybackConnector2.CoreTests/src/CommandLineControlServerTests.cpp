@@ -1,5 +1,6 @@
 #include <control/CommandPipeSecurity.hpp>
 #include <control/CommandProtocol.hpp>
+#include <app/LegacyAppUseCaseBridge.hpp>
 #include <services/CommandLineControlServer.hpp>
 
 #include <aclapi.h>
@@ -22,6 +23,7 @@
 
 namespace {
 using namespace std::chrono_literals;
+using apc::app::LegacyAppUseCaseBridge;
 
 int g_failures = 0;
 std::atomic_uint64_t g_pipeSequence = 0;
@@ -463,6 +465,98 @@ void TestMalformedTimeoutOversizeAndRecovery() {
     server.Stop();
 }
 
+void TestRequestStopCancelsLeasedBridgeWorkBeforeBridgeDrain() {
+    auto options = TestOptions(L"request-stop-bridge-drain", 1);
+    const auto pipeName = options.PipeName;
+
+    SettingsData settings;
+    settings.Devices.push_back(DeviceSettings{L"device-id", L"Device", {}, false, false});
+    std::mutex operationMutex;
+    std::condition_variable operationChanged;
+    Event operationEntered;
+    std::atomic_bool cancellationObserved = false;
+    std::atomic_bool releaseForFailedTest = false;
+    std::atomic_int mutations = 0;
+    std::atomic_int settingsUiCalls = 0;
+    const SettingsSnapshot settingsSnapshot{settings, 1, false};
+    LegacyAppUseCaseBridge::Operations operations;
+    operations.ReadSettings = [&] { return settingsSnapshot; };
+    operations.ReadConnectedDevices = [] {
+        return std::vector<LegacyAppUseCaseBridge::DeviceRecord>{
+            {L"device-id", L"Device", {}, apc::app::DeviceConnectionState::Idle, false, true, false}};
+    };
+    operations.Connect = [&](std::wstring_view, apc::app::AppCommandContext const& context) {
+        operationEntered.Signal();
+        std::stop_callback cancellationWake{context.StopToken, [&] { operationChanged.notify_all(); }};
+        std::unique_lock lock(operationMutex);
+        operationChanged.wait(lock, [&] {
+            return context.IsCancellationRequested() || releaseForFailedTest.load(std::memory_order_acquire);
+        });
+        if (context.IsCancellationRequested()) {
+            cancellationObserved = true;
+            return LegacyAppUseCaseBridge::OperationResult{LegacyAppUseCaseBridge::OperationStatus::Cancelled};
+        }
+        ++mutations;
+        return LegacyAppUseCaseBridge::OperationResult{LegacyAppUseCaseBridge::OperationStatus::Failed};
+    };
+    operations.ShowSettings = [&](apc::app::AppCommandContext const&) {
+        ++settingsUiCalls;
+        return LegacyAppUseCaseBridge::UiActionResult{LegacyAppUseCaseBridge::OperationStatus::Succeeded, std::nullopt};
+    };
+    LegacyAppUseCaseBridge bridge(std::move(operations));
+
+    CommandLineControlServer server(std::move(options));
+    server.Start([&](apc::control::Request const& request, std::stop_token stopToken, std::uint64_t) {
+        apc::app::AppCommandContext context;
+        context.StopToken = stopToken;
+        const auto result = bridge.Execute(
+            apc::app::AppCommand{apc::app::AppCommandKind::Connect, apc::app::DeviceSelector::ById(request.Payload)},
+            context);
+        return apc::control::Response{result.Code == apc::app::AppResultCode::Cancelled
+                                          ? apc::control::ExitCode::Indeterminate
+                                          : apc::control::ExitCode::OperationFailed,
+                                      L""};
+    });
+
+    auto client = OpenClient(pipeName);
+    auto request = MakeRequest(61, apc::control::CommandType::Connect);
+    request.Target = apc::control::TargetKind::Id;
+    request.Payload = L"device-id";
+    Check(client && WriteRequest(client.Get(), request), "leased request must reach the control handler");
+    Check(operationEntered.Wait(1000), "bridge operation must begin before teardown requests cancellation");
+
+    Event teardownReturned;
+    std::jthread teardown([&] {
+        // This is the production ordering in ApplicationHost::PerformTeardown:
+        // first signal the P01 handler, then wait for bridge admission to drain.
+        server.RequestStop();
+        bridge.SetRunning(false);
+        teardownReturned.Signal();
+    });
+    const bool teardownCompleted = teardownReturned.Wait(1000);
+    Check(teardownCompleted,
+          "request-stop cancellation must release the admitted bridge lease before teardown can drain it");
+    if (!teardownCompleted) {
+        releaseForFailedTest.store(true, std::memory_order_release);
+        operationChanged.notify_all();
+    }
+    teardown.join();
+
+    Check(cancellationObserved.load() && mutations.load() == 0,
+          "a cancelled leased operation must not mutate state after teardown begins");
+    Check(!server.IsRunning(), "RequestStop must close P01 admission before bridge teardown");
+    const auto lateFact = bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceStatusChanged,
+                                          L"device-id",
+                                          apc::app::DeviceConnectionState::Connecting,
+                                          apc::app::AppResultCode::OperationFailed});
+    const auto lateUi = bridge.Execute(apc::app::AppCommand{apc::app::AppCommandKind::ShowSettings});
+    Check(!lateFact && lateUi.Code == apc::app::AppResultCode::Unavailable && settingsUiCalls.load() == 0,
+          "after bridge drain no late fact, mutation, or UI callback may run");
+
+    client.Reset();
+    server.Stop();
+}
+
 void TestStopLifecycleAndRearmRetry() {
     {
         auto options = TestOptions(L"stop-silent", 1);
@@ -893,6 +987,7 @@ int RunCommandLineControlServerTests() {
     TestDisconnectAfterResponseBeforeAckRetriesExactlyOnce();
     TestParallelDuplicatesAndCorrelationConflict();
     TestMalformedTimeoutOversizeAndRecovery();
+    TestRequestStopCancelsLeasedBridgeWorkBeforeBridgeDrain();
     TestStopLifecycleAndRearmRetry();
     TestStartupSquattingAndSecurityDescriptor();
     TestStartStopHandleStability();

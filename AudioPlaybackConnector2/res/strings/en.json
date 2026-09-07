@@ -191,5 +191,18 @@
   "Command_ReconnectFailed": "Could not reconnect {0}.",
   "Command_DisconnectAllSucceeded": "All connected devices were disconnected.",
   "Command_ReconnectAllSucceeded": "All connected devices were reconnected.",
-  "Command_Unsupported": "Unsupported command."
+  "Command_Unsupported": "Unsupported command.",
+  "Connect": "Connect",
+  "DeviceOptions_Title": "Device settings",
+  "DeviceOptions_Back": "Back",
+  "DeviceOptions_Saved": "Saved devices",
+  "DeviceOptions_Save": "Save name",
+  "DeviceOptions_ResetName": "Reset name",
+  "DeviceOptions_Name": "Display name",
+  "DeviceOptions_Startup": "Connect at app startup",
+  "DeviceOptions_Reconnect": "Reconnect automatically",
+  "DeviceOptions_Forget": "Remove saved device settings",
+  "DeviceOptions_GlobalPolicy": "Enabled for all devices in App settings.",
+  "DeviceOptions_Unavailable": "Not available",
+  "Settings_Connections": "Connections"
 }

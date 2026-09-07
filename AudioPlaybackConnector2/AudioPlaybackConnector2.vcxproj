@@ -29,17 +29,13 @@
     <ApplicationType>Windows Store</ApplicationType>
     <ApplicationTypeRevision>10.0</ApplicationTypeRevision>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
-    <WindowsTargetPlatformMinVersion>10.0.17763.0</WindowsTargetPlatformMinVersion>
+    <WindowsTargetPlatformMinVersion>10.0.19041.0</WindowsTargetPlatformMinVersion>
     <UseWinUI>true</UseWinUI>
     <WinUISDKReferences>false</WinUISDKReferences>
     <WindowsAppSDKVerifyTransitiveDependencies>false</WindowsAppSDKVerifyTransitiveDependencies>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <ItemGroup Label="ProjectConfigurations">
-    <ProjectConfiguration Include="Debug|Win32">
-      <Configuration>Debug</Configuration>
-      <Platform>Win32</Platform>
-    </ProjectConfiguration>
     <ProjectConfiguration Include="Debug|x64">
       <Configuration>Debug</Configuration>
       <Platform>x64</Platform>
@@ -47,10 +43,6 @@
     <ProjectConfiguration Include="Debug|ARM64">
       <Configuration>Debug</Configuration>
       <Platform>ARM64</Platform>
-    </ProjectConfiguration>
-    <ProjectConfiguration Include="Release|Win32">
-      <Configuration>Release</Configuration>
-      <Platform>Win32</Platform>
     </ProjectConfiguration>
     <ProjectConfiguration Include="Release|x64">
       <Configuration>Release</Configuration>
@@ -106,6 +98,9 @@
     <Link>
       <AdditionalDependencies>shell32.lib;gdiplus.lib;gdi32.lib;comctl32.lib;shlwapi.lib;dwmapi.lib;shcore.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <ResourceCompile>
+      <AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
     <ClCompile>
@@ -127,20 +122,23 @@
   <ItemGroup>
     <ClInclude Include="include\pch.h" />
     <ClInclude Include="include\app\ApplicationHost.hpp" />
-    <ClInclude Include="include\app\DeferredSettingsSaver.hpp" />
+    <ClInclude Include="include\app\AppController.hpp" />
+    <ClInclude Include="include\app\AppModels.hpp" />
+    <ClInclude Include="include\app\LegacyAppUseCaseBridge.hpp" />
     <ClInclude Include="include\app\AdaptiveActionRetryBackoff.hpp" />
     <ClInclude Include="include\app\AdaptiveResourceDiagnostics.hpp" />
     <ClInclude Include="include\app\AdaptiveResourcePolicy.hpp" />
     <ClInclude Include="include\app\AdaptiveScheduleState.hpp" />
     <ClInclude Include="include\app\ControlUiActionGate.hpp" />
-    <ClInclude Include="include\app\DeferredSaveCoordinator.hpp" />
     <ClInclude Include="include\app\ResourcePressureMonitor.hpp" />
     <ClInclude Include="include\app\ResourcePressureState.hpp" />
     <ClInclude Include="include\app\AutoReconnectPlanner.hpp" />
+    <ClInclude Include="include\app\DeviceFactPublicationFence.hpp" />
     <ClInclude Include="include\app\DeviceEventRouter.hpp" />
     <ClInclude Include="include\app\PowerTransitionCoordinator.hpp" />
     <ClInclude Include="include\app\ResumeReconnectAttemptState.hpp" />
     <ClInclude Include="include\app\SettingsWindowPresenter.hpp" />
+    <ClInclude Include="include\app\SettingsWindowCommandExecutor.hpp" />
     <ClInclude Include="include\app\SingleInstanceGuard.hpp" />
     <ClInclude Include="include\app\StartupUpdateCoordinator.hpp" />
     <ClInclude Include="include\app\LatestStartupTaskRequestState.hpp" />
@@ -155,27 +153,26 @@
     <ClInclude Include="include\core\StringResources.hpp" />
     <ClInclude Include="include\core\TrayTooltipBuilder.hpp" />
     <ClInclude Include="include\core\ThemeHelper.hpp" />
-    <ClInclude Include="include\core\Settings.hpp" />
+    <ClInclude Include="include\core\SettingsStore.hpp" />
     <ClInclude Include="include\core\SettingsData.hpp" />
     <ClInclude Include="include\core\SettingsLimits.hpp" />
     <ClInclude Include="include\core\AudioConnectionService.hpp" />
     <ClInclude Include="include\core\DeviceConnectionInfo.hpp" />
-    <ClInclude Include="include\core\DeviceDiscoveryService.hpp" />
-    <ClInclude Include="include\core\DeviceManagerDiagnostics.hpp" />
-    <ClInclude Include="include\core\LatestServiceLifecycleState.hpp" />
-    <ClInclude Include="include\core\DeviceOperationCoordinator.hpp" />
+    <ClInclude Include="include\core\DeviceId.hpp" />
     <ClInclude Include="include\core\DeviceInventoryGeneration.hpp" />
     <ClInclude Include="include\core\DevicePickerSnapshot.hpp" />
     <ClInclude Include="include\core\DevicePickerTypes.hpp" />
-    <ClInclude Include="include\core\DeviceSessionStore.hpp" />
+    <ClInclude Include="include\core\DeviceService.hpp" />
+    <ClInclude Include="include\core\DeviceSession.hpp" />
     <ClInclude Include="include\core\DeviceTrayPresentation.hpp" />
-    <ClInclude Include="include\core\ReconnectController.hpp" />
-    <ClInclude Include="include\core\DeviceManager.hpp" />
+    <ClInclude Include="include\core\DeviceWatcher.hpp" />
+    <ClInclude Include="include\core\ReconnectPolicy.hpp" />
     <ClInclude Include="include\services\NotificationService.hpp" />
     <ClInclude Include="include\services\AutomaticUpdateWindow.hpp" />
     <ClInclude Include="include\services\UpdateCoordinator.hpp" />
     <ClInclude Include="include\services\SettingsController.hpp" />
     <ClInclude Include="include\control\ControlTargetMatcher.hpp" />
+    <ClInclude Include="include\control\ControlCommandAdapter.hpp" />
     <ClInclude Include="include\services\StartupTaskController.hpp" />
     <ClInclude Include="include\services\CommandLineControlServer.hpp" />
     <ClInclude Include="include\services\ToastContentBuilder.hpp" />
@@ -221,7 +218,6 @@
     </ClCompile>
     <ClCompile Include="src\app\ApplicationHost.cpp" />
     <ClCompile Include="src\app\ApplicationHostVisualRefreshRetry.cpp" />
-    <ClCompile Include="src\app\DeferredSettingsSaver.cpp" />
     <ClCompile Include="src\app\SettingsWindowPresenter.cpp" />
     <ClCompile Include="src\app\StartupUpdateCoordinator.cpp" />
     <ClCompile Include="src\core\ThemeHelper.cpp" />
@@ -270,6 +266,20 @@
   <ItemGroup>
     <None Include="packages.config" />
   </ItemGroup>
+  <Target Name="GeneratePackageVersionResource" BeforeTargets="ResourceCompile">
+    <Error Condition="'$(_ApcPackageVersionFormatValid)' != 'true'"
+           Text="PackageVersion must contain four numeric components, for example 1.2.3.0." />
+    <Error Condition="$(_ApcPackageVersionMajor) &gt; 65535 or $(_ApcPackageVersionMinor) &gt; 65535 or $(_ApcPackageVersionBuild) &gt; 65535 or $(_ApcPackageVersionRevision) &gt; 65535"
+           Text="Every PackageVersion component must be between 0 and 65535." />
+    <ItemGroup>
+      <_PackageVersionResourceLine Include="#define APC_PACKAGE_VERSION $([System.Text.RegularExpressions.Regex]::Replace('$(PackageVersion)', '\.', ','))" />
+      <_PackageVersionResourceLine Include="#define APC_PACKAGE_VERSION_STRING &quot;$(PackageVersion)&quot;" />
+    </ItemGroup>
+    <WriteLinesToFile File="$(IntDir)PackageVersion.rcinc"
+                      Lines="@(_PackageVersionResourceLine)"
+                      Overwrite="true"
+                      Encoding="UTF-8" />
+  </Target>
   <ItemGroup>
     <ProjectReference Include="..\AudioPlaybackConnector2.CoreRuntime\AudioPlaybackConnector2.CoreRuntime.vcxproj">
       <Project>{A7031B3F-1284-4EC5-A9B3-B7F6BCF82613}</Project>

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <core/Settings.hpp>
+#include <core/SettingsData.hpp>
 #include <ui/SettingsDeviceViewModel.hpp>
 
 #include <vector>

@@ -18,6 +18,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
+$stage = $null
 Push-Location $repoRoot
 try {
     if ($Mode -eq 'Web') {
@@ -29,7 +30,6 @@ try {
             $Version = $release.tag_name.TrimStart('v')
         }
         $CertPath = (Resolve-Path $CertPath).Path
-        $packageArchitecture = 'x64'
         Write-Host "Building web bootstrapper version $Version"
     } else {
         if (-not $MsixPath) { throw '-MsixPath is required in Bundle mode.' }
@@ -39,11 +39,16 @@ try {
             $candidate = Join-Path (Split-Path $MsixPath) 'Dependencies'
             if (Test-Path $candidate) { $DependenciesDir = $candidate }
         }
-        if ((Split-Path $MsixPath -Leaf) -notmatch '_(\d+\.\d+\.\d+)(?:\.\d+)?_(x86|x64|arm64)\.msix$') {
-            throw 'Could not parse package version and architecture from MSIX filename.'
+        $packageName = Split-Path $MsixPath -Leaf
+        if ($packageName -match '_(\d+\.\d+\.\d+)(?:\.\d+)?_x64_ARM64\.msixbundle$') {
+            $packageVersion = $Matches[1]
+            $packageArchitectures = @('x64', 'arm64')
+        } elseif ($packageName -match '_(\d+\.\d+\.\d+)(?:\.\d+)?_(x64|arm64)\.msix$') {
+            $packageVersion = $Matches[1]
+            $packageArchitectures = @($Matches[2])
+        } else {
+            throw 'Could not parse package version and architecture from MSIX bundle filename.'
         }
-        $packageVersion = $Matches[1]
-        $packageArchitecture = $Matches[2]
         if (-not $Version) {
             $Version = $packageVersion
         } elseif ($Version -ne $packageVersion) {
@@ -51,16 +56,12 @@ try {
         }
         Write-Host "Building bundle bootstrapper for version $Version"
     }
-    if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version must use SemVer format, for example 0.8.1: $Version" }
-    if ($packageArchitecture -ne 'x64') { throw "Only the x64 application package is currently supported: $packageArchitecture" }
+    if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version must use SemVer format, for example 1.2.3: $Version" }
 
-    $stage = Join-Path $repoRoot 'installer\stage'
-    # Staged payloads from a previous build must not leak into this one.
-    Get-ChildItem $stage -Recurse -File |
-        Where-Object Name -ne 'install-app.ps1' |
-        Remove-Item -Force
-    Get-ChildItem $stage -Directory | Remove-Item -Recurse -Force
-
+    $stageName = 'AudioPlaybackConnector2-installer-' + [guid]::NewGuid().ToString('N')
+    $stage = Join-Path ([IO.Path]::GetTempPath()) $stageName
+    New-Item -ItemType Directory -Path $stage | Out-Null
+    Copy-Item (Join-Path $PSScriptRoot 'stage\install-app.ps1') (Join-Path $stage 'install-app.ps1')
     Copy-Item $CertPath (Join-Path $stage 'AudioPlaybackConnector2.cer')
     if ($Mode -eq 'Bundle') {
         Copy-Item $MsixPath $stage
@@ -70,12 +71,16 @@ try {
             Write-Warning 'No Dependencies directory found; MSIX must carry all dependencies.'
         }
         $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-        & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass `
-            -File (Join-Path $stage 'install-app.ps1') `
-            -Step validate `
-            -PackageDir $stage `
-            -PackageArchitecture $packageArchitecture
-        if ($LASTEXITCODE -ne 0) { throw 'Staged installer payload validation failed.' }
+        foreach ($architecture in $packageArchitectures) {
+            & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass `
+                -File (Join-Path $stage 'install-app.ps1') `
+                -Step validate `
+                -PackageDir $stage `
+                -PackageArchitecture $architecture
+            if ($LASTEXITCODE -ne 0) {
+                throw "Staged installer payload validation failed for $architecture."
+            }
+        }
     }
 
     $iscc = Get-Command ISCC.exe -ErrorAction SilentlyContinue
@@ -97,8 +102,17 @@ try {
     if (-not [IO.Path]::IsPathRooted($OutputDir)) { $OutputDir = Join-Path $repoRoot $OutputDir }
     $OutputDir = [IO.Path]::GetFullPath($OutputDir)
     $null = New-Item -ItemType Directory -Path $OutputDir -Force
-    $isccArgs = @("/DAppVersion=$Version", "/DPackageArchitecture=$packageArchitecture", "/O$OutputDir")
-    if ($Mode -eq 'Web') { $isccArgs += '/DWEBBOOT=1' }
+    $isccArgs = @(
+        "/DAppVersion=$Version",
+        "/DStageDir=$stage",
+        "/O$OutputDir"
+    )
+    if ($Mode -eq 'Web') {
+        $isccArgs += '/DWEBBOOT=1'
+    } else {
+        # Embed exactly the payload validated above, including dual-architecture MSIX bundles.
+        $isccArgs += "/DPackageFileName=$packageName"
+    }
     & $iscc @isccArgs (Join-Path $repoRoot 'installer\setup.iss')
     if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
 
@@ -108,5 +122,17 @@ try {
     if (-not (Test-Path $setup)) { throw "Expected output missing: $setup" }
     Write-Host "Done: $((Resolve-Path $setup).Path)"
 } finally {
-    Pop-Location
+    try {
+        if ($stage -and (Test-Path -LiteralPath $stage)) {
+            $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+            $resolvedStage = [IO.Path]::GetFullPath($stage)
+            if (-not $resolvedStage.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase) -or
+                [IO.Path]::GetFileName($resolvedStage) -notlike 'AudioPlaybackConnector2-installer-*') {
+                throw "Refusing to remove unexpected staging path: $resolvedStage"
+            }
+            Remove-Item -LiteralPath $resolvedStage -Recurse -Force
+        }
+    } finally {
+        Pop-Location
+    }
 }

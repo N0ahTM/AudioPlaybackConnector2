@@ -1,10 +1,11 @@
 #include <pch.h>
+#include <winrt/Windows.UI.ViewManagement.h>
 #include <ui/SettingsWindow/SettingsWindow.xaml.h>
 #if __has_include("SettingsWindow.g.cpp")
 #include <SettingsWindow.g.cpp>
 #endif
 
-#include <core/Settings.hpp>
+#include <core/SettingsData.hpp>
 #include <core/SettingsLimits.hpp>
 #include <core/StringResources.hpp>
 #include <services/UpdateCoordinator.hpp>
@@ -33,19 +34,17 @@ namespace xaml_automation = winrt::Microsoft::UI::Xaml::Automation;
 
 namespace {
 constexpr auto c_placementSaveDelay = std::chrono::seconds(3);
-constexpr auto c_aliasSavedFeedbackDelay = std::chrono::seconds(2);
 constexpr std::wstring_view c_repositoryUrl = L"https://github.com/N0ahTM/AudioPlaybackConnector2";
 constexpr std::wstring_view c_bugReportUrl = L"https://github.com/N0ahTM/AudioPlaybackConnector2/issues/new?labels=bug";
 constexpr std::wstring_view c_featureRequestUrl =
     L"https://github.com/N0ahTM/AudioPlaybackConnector2/issues/new?labels=enhancement";
 constexpr std::wstring_view c_troubleshootingUrl =
     L"https://github.com/N0ahTM/AudioPlaybackConnector2/blob/main/docs/TROUBLESHOOTING.md";
-constexpr double c_navigationPaneMinLengthDip = 116.0;
-constexpr double c_navigationPaneChromeDip = 90.0;
-constexpr double c_settingsContentMinWidthDip = 480.0;
-constexpr double c_settingsContentMaxWidthDip = 680.0;
+constexpr double c_settingsContentMinWidthDip = 420.0;
+constexpr double c_settingsContentMaxWidthDip = 520.0;
 constexpr double c_settingsContentWidthStepDip = 20.0;
 constexpr double c_settingsTitleBarHeightDip = 32.0;
+constexpr double c_settingsNavigationHeightDip = 36.0;
 constexpr double c_settingsMeasureInfinityDip = 100000.0;
 constexpr double c_settingsContentRightSafetyDip = 10.0;
 
@@ -59,25 +58,6 @@ int32_t DipToPixelCeil(double value, UINT dpi) {
     return std::max<int32_t>(1,
                              static_cast<int32_t>(std::ceil(value * static_cast<double>(dpi) /
                                                             static_cast<double>(USER_DEFAULT_SCREEN_DPI))));
-}
-
-double MeasureTextWidth(std::wstring_view text, double fontSize) {
-    auto probe = TextBlock();
-    probe.Text(winrt::hstring(text));
-    probe.FontSize(fontSize);
-    probe.TextWrapping(TextWrapping::NoWrap);
-    probe.Measure({static_cast<float>(c_settingsMeasureInfinityDip), static_cast<float>(c_settingsMeasureInfinityDip)});
-    return probe.DesiredSize().Width;
-}
-
-std::wstring NavigationItemText(NavigationViewItem const& item) {
-    auto content = item.Content();
-    if (!content) return {};
-
-    if (auto textBlock = content.try_as<TextBlock>()) {
-        return std::wstring(textBlock.Text());
-    }
-    return std::wstring(winrt::unbox_value_or<winrt::hstring>(content, L""));
 }
 
 std::wstring PercentEncode(std::wstring_view value) {
@@ -101,15 +81,6 @@ std::wstring PercentEncode(std::wstring_view value) {
 
 void SetAutomationName(DependencyObject const& element, std::wstring_view name) {
     xaml_automation::AutomationProperties::SetName(element, winrt::hstring(name));
-}
-
-std::wstring TrimWhitespace(std::wstring value) {
-    auto first = std::ranges::find_if_not(value, [](wchar_t ch) { return std::iswspace(ch) != 0; });
-    auto last = std::ranges::find_if_not(value.rbegin(), value.rend(), [](wchar_t ch) {
-                    return std::iswspace(ch) != 0;
-                }).base();
-    if (first >= last) return {};
-    return std::wstring(first, last);
 }
 
 void SetItemContent(ComboBoxItem const& item, std::wstring_view text) {
@@ -155,6 +126,7 @@ SettingsWindow::SettingsWindow() {
 }
 
 SettingsWindow::~SettingsWindow() {
+    StopPageTransition();
     if (m_startupTaskCoordinator && m_startupTaskHandlerToken != 0) {
         m_startupTaskCoordinator->Unsubscribe(std::exchange(m_startupTaskHandlerToken, 0));
     }
@@ -179,6 +151,7 @@ LRESULT CALLBACK SettingsWindow::SettingsWindowSubclassProc(
     }
 
     if (self && msg == WM_CLOSE) {
+        self->StopPageTransition();
         self->StopPlacementSaveTimer();
         (void)self->StoreCurrentPlacement();
     } else if (self && msg == WM_EXITSIZEMOVE) {
@@ -218,17 +191,13 @@ void SettingsWindow::RootGrid_Loaded(IInspectable const&, RoutedEventArgs const&
         LocalizeSettingsText();
 
         InitializeSettingsContent();
-        m_suppressNavigationSelection = true;
-        SettingsNavigation().SelectedItem(DevicesNavItem());
-        m_suppressNavigationSelection = false;
-        ShowSettingsPage(SettingsPage::Devices);
+        const auto requestedPage = m_currentPage;
+        ShowSettingsPage(SettingsPage::App);
 
         if (!m_hadPersistedPlacement) {
             ApplyAdaptiveLayout();
-        } else {
-            SettingsNavigation().OpenPaneLength(CalculateNavigationPaneLength());
         }
-        m_adaptiveLayoutReady = true;
+        ShowSettingsPage(requestedPage);
 
         this->ExtendsContentIntoTitleBar(true);
         this->SetTitleBar(TitleBarArea());
@@ -299,23 +268,22 @@ void SettingsWindow::CloseAfterInitializationFailure() noexcept {
 
 void SettingsWindow::LocalizeSettingsText() {
     this->Title(winrt::hstring(_("Settings_Title")));
-    SetItemContent(DevicesNavItem(), _("Settings_Devices"));
-    SetItemContent(AppNavItem(), _("Settings_App"));
-    SetItemContent(PrivacyNavItem(), _("Settings_Privacy"));
-    SetItemContent(HelpNavItem(), _("Settings_Help"));
-    SetItemContent(InfoNavItem(), _("Settings_About"));
+    apc::ui::SetButtonLabel(SettingsHelpButton(), winrt::hstring(_("Settings_Help")));
+    SettingsHelpText().Text(winrt::hstring(_("Settings_Help")));
+    apc::ui::SetButtonLabel(SettingsBackButton(), winrt::hstring(_("DeviceOptions_Back")));
+    DiagnosticsExpander().Header(box_value(winrt::hstring(_("Settings_Diagnostics"))));
+    SettingsPageTitle().Text(
+        winrt::hstring(m_currentPage == SettingsPage::App ? _("Settings_Title") : _("Settings_Help")));
+    ConnectionGroupText().Text(winrt::hstring(_("Settings_Connections")));
 
-    DefaultDeviceLabel().Text(winrt::hstring(_("Settings_DefaultDevice")));
-    DefaultDeviceDesc().Text(winrt::hstring(_("Settings_DefaultDevice_Desc")));
-    apc::ui::SetButtonLabel(DefaultLastConnectedButton(),
-                            DefaultLastConnectedButtonText(),
-                            winrt::hstring(_("Settings_DefaultDevice_LastConnected")));
     ConnectOnStartupLabel().Text(winrt::hstring(_("Settings_ConnectOnStartup")));
-    ConnectOnStartupDesc().Text(winrt::hstring(_("Settings_ConnectOnStartup_Desc")));
+    apc::ui::SetTooltipText(ConnectOnStartupLabel(), winrt::hstring(_("Settings_ConnectOnStartup_Desc")));
     ReconnectOnConnectionLossLabel().Text(winrt::hstring(_("Settings_ReconnectOnConnectionLoss")));
-    ReconnectOnConnectionLossDesc().Text(winrt::hstring(_("Settings_ReconnectOnConnectionLoss_Desc")));
+    apc::ui::SetTooltipText(ReconnectOnConnectionLossLabel(),
+                            winrt::hstring(_("Settings_ReconnectOnConnectionLoss_Desc")));
     AllowIncomingConnectionsLabel().Text(winrt::hstring(_("Settings_AllowIncomingConnections")));
-    AllowIncomingConnectionsDesc().Text(winrt::hstring(_("Settings_AllowIncomingConnections_Desc")));
+    apc::ui::SetTooltipText(AllowIncomingConnectionsLabel(),
+                            winrt::hstring(_("Settings_AllowIncomingConnections_Desc")));
 
     LanguageLabel().Text(winrt::hstring(_("Settings_Language")));
     SetItemContent(LanguageSystemItem(), _("Settings_System"));
@@ -328,19 +296,19 @@ void SettingsWindow::LocalizeSettingsText() {
     SetItemContent(LanguageChineseSimplifiedItem(), _("Language_ChineseSimplified"));
     SetItemContent(LanguageChineseTraditionalItem(), _("Language_ChineseTraditional"));
     StartWithWindowsLabel().Text(winrt::hstring(_("Settings_StartWithWindows")));
-    StartWithWindowsDesc().Text(winrt::hstring(_("Settings_StartWithWindows_Desc")));
+    apc::ui::SetTooltipText(StartWithWindowsLabel(), winrt::hstring(_("Settings_StartWithWindows_Desc")));
     ShowNotificationsLabel().Text(winrt::hstring(_("Settings_ShowNotifications")));
-    ShowNotificationsDesc().Text(winrt::hstring(_("Settings_ShowNotifications_Desc")));
+    apc::ui::SetTooltipText(ShowNotificationsLabel(), winrt::hstring(_("Settings_ShowNotifications_Desc")));
     SystemBackdropEffectsLabel().Text(winrt::hstring(_("Settings_SystemBackdropEffects")));
-    SystemBackdropEffectsDesc().Text(winrt::hstring(_("Settings_SystemBackdropEffects_Desc")));
+    apc::ui::SetTooltipText(SystemBackdropEffectsLabel(), winrt::hstring(_("Settings_SystemBackdropEffects_Desc")));
     WindowPlacementLabel().Text(winrt::hstring(_("Settings_WindowPlacement")));
-    WindowPlacementDesc().Text(winrt::hstring(_("Settings_WindowPlacement_Desc")));
-    apc::ui::SetButtonLabel(ResetWindowPlacementButton(),
-                            ResetWindowPlacementButtonText(),
-                            winrt::hstring(_("Settings_WindowPlacement_Reset")));
+    apc::ui::SetTooltipText(WindowPlacementLabel(), winrt::hstring(_("Settings_WindowPlacement_Desc")));
+    apc::ui::SetButtonLabel(ResetWindowPlacementButton(), winrt::hstring(_("Settings_WindowPlacement_Reset")));
 
     PrivacyModeLabel().Text(winrt::hstring(_("Settings_PrivacyMode")));
-    PrivacyModeDesc().Text(winrt::hstring(_("Settings_PrivacyMode_Desc")));
+    apc::ui::SetTooltipText(PrivacyModeLabel(), winrt::hstring(_("Settings_PrivacyMode_Desc")));
+    xaml_automation::AutomationProperties::SetHelpText(PrivacyModeToggle(),
+                                                       winrt::hstring(_("Settings_PrivacyMode_Desc")));
 
     DiagnosticsPrivacyText().Text(winrt::hstring(_("Settings_Diagnostics_PrivacyNote")));
     apc::ui::SetButtonLabel(
@@ -359,10 +327,8 @@ void SettingsWindow::LocalizeSettingsText() {
     VersionText().Text(winrt::hstring(BuildVersionText()));
     CopyrightText().Text(winrt::hstring(_("About_Copyright")));
     apc::ui::SetButtonLabel(RepositoryButton(), RepositoryButtonText(), winrt::hstring(_("Settings_Repository")));
-    CheckForUpdatesLabel().Text(winrt::hstring(_("Settings_CheckForUpdates")));
-    CheckForUpdatesDesc().Text(winrt::hstring(_("Settings_CheckForUpdates_Desc")));
-    apc::ui::SetButtonLabel(
-        CheckForUpdatesButton(), CheckForUpdatesButtonText(), winrt::hstring(_("Settings_CheckForUpdates_Button")));
+    apc::ui::SetTooltipText(CheckForUpdatesButton(), winrt::hstring(_("Settings_CheckForUpdates_Desc")));
+    apc::ui::SetButtonLabel(CheckForUpdatesButton(), winrt::hstring(_("Settings_CheckForUpdates")));
     apc::ui::SetButtonLabel(
         OpenAppInstallerButton(), OpenAppInstallerButtonText(), winrt::hstring(_("Settings_OpenAppInstaller")));
 
@@ -395,7 +361,7 @@ void SettingsWindow::QueuePlacementSave() {
             m_placementSaveTimer.IsRepeating(false);
             auto weak = get_weak();
             m_placementSaveTimer.Tick([weak](auto const&, auto const&) noexcept {
-                if (auto self = weak.get()) self->SavePlacementNow();
+                if (auto self = weak.get()) self->CommitPlacementNow();
             });
         }
 
@@ -430,16 +396,15 @@ void SettingsWindow::ApplySystemBackdropEffects(bool enabled) noexcept try {
     util::DebugTraceUnknownException(L"[SettingsWindow] failed to apply backdrop setting");
 }
 
-void SettingsWindow::SavePlacementNow() noexcept {
+void SettingsWindow::CommitPlacementNow() noexcept {
     try {
         if (!StoreCurrentPlacement()) return;
-        if (auto controller = m_settingsController) controller->Save();
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] SavePlacementNow failed", ex);
+        util::DebugTraceException(L"[SettingsWindow] CommitPlacementNow failed", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] SavePlacementNow failed", ex);
+        util::DebugTraceException(L"[SettingsWindow] CommitPlacementNow failed", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[SettingsWindow] SavePlacementNow failed");
+        util::DebugTraceUnknownException(L"[SettingsWindow] CommitPlacementNow failed");
     }
 }
 
@@ -447,28 +412,6 @@ void SettingsWindow::StopPlacementSaveTimer() noexcept {
     try {
         if (m_placementSaveTimer) m_placementSaveTimer.Stop();
     } catch (...) {
-    }
-}
-
-winrt::fire_and_forget SettingsWindow::ClearAliasSavedAfterDelayAsync(uint64_t requestId) {
-    auto weak = get_weak();
-    try {
-        winrt::apartment_context uiThread;
-        co_await winrt::resume_after(c_aliasSavedFeedbackDelay);
-        co_await uiThread;
-
-        auto self = weak.get();
-        if (!self || requestId != self->m_aliasSavedRequestId.load()) co_return;
-        self->m_aliasSavedDeviceId.clear();
-        self->m_renderedAliasSavedDeviceId.clear();
-        if (self->m_aliasSavedIndicator) self->m_aliasSavedIndicator.Visibility(Visibility::Collapsed);
-        self->m_aliasSavedIndicator = nullptr;
-    } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] ClearAliasSavedAfterDelayAsync failed", ex);
-    } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] ClearAliasSavedAfterDelayAsync failed", ex);
-    } catch (...) {
-        util::DebugTraceUnknownException(L"[SettingsWindow] ClearAliasSavedAfterDelayAsync failed");
     }
 }
 
@@ -515,13 +458,6 @@ void SettingsWindow::OpenAppInstallerButton_Click(IInspectable const&, RoutedEve
 
 void SettingsWindow::ResetWindowPlacementButton_Click(IInspectable const&, RoutedEventArgs const&) {
     ResetWindowPlacement();
-}
-
-void SettingsWindow::DefaultLastConnectedButton_Click(IInspectable const&, RoutedEventArgs const&) {
-    if (auto controller = m_settingsController) {
-        controller->ClearDefaultDevice();
-    }
-    RequestDeviceListRebuild();
 }
 
 void SettingsWindow::RepositoryButton_Click(IInspectable const&, RoutedEventArgs const&) {
@@ -584,27 +520,14 @@ void SettingsWindow::ReportBugButton_Click(IInspectable const&, RoutedEventArgs 
     LaunchUri(BuildReportBugUri());
 }
 
-void SettingsWindow::SettingsNavigation_SelectionChanged(IInspectable const&,
-                                                         NavigationViewSelectionChangedEventArgs const& args) {
-    if (m_suppressNavigationSelection) return;
+void SettingsWindow::SettingsHelpButton_Click(IInspectable const&, RoutedEventArgs const&) {
+    ShowSettingsPage(SettingsPage::Help);
+    SettingsBackButton().Focus(FocusState::Programmatic);
+}
 
-    auto selected = args.SelectedItem().try_as<NavigationViewItem>();
-    if (!selected) return;
-
-    auto tag = winrt::unbox_value_or<winrt::hstring>(selected.Tag(), L"");
-    if (tag == L"devices") {
-        ShowSettingsPage(SettingsPage::Devices);
-    } else if (tag == L"app") {
-        ShowSettingsPage(SettingsPage::App);
-    } else if (tag == L"privacy") {
-        ShowSettingsPage(SettingsPage::Privacy);
-    } else if (tag == L"help") {
-        ShowSettingsPage(SettingsPage::Help);
-    } else if (tag == L"about") {
-        ShowSettingsPage(SettingsPage::About);
-    }
-
-    if (m_adaptiveLayoutReady) ApplyAdaptiveLayout();
+void SettingsWindow::SettingsBackButton_Click(IInspectable const&, RoutedEventArgs const&) {
+    ShowSettingsPage(SettingsPage::App);
+    SettingsHelpButton().Focus(FocusState::Programmatic);
 }
 
 void SettingsWindow::SettingsContentHost_SizeChanged(IInspectable const&, SizeChangedEventArgs const&) {
@@ -623,8 +546,7 @@ void SettingsWindow::LanguageComboBox_SelectionChanged(IInspectable const&, Sele
     }
     LocalizeSettingsText();
     ShowSettingsPage(m_currentPage);
-    RequestDeviceListRebuild(true);
-    if (m_currentPage != SettingsPage::Devices) ApplyAdaptiveLayout();
+    UpdateContentPanelWidth();
 }
 
 void SettingsWindow::ResetWindowPlacement() {
@@ -632,9 +554,7 @@ void SettingsWindow::ResetWindowPlacement() {
     m_capturePlacementChanges = false;
 
     if (auto controller = m_settingsController) {
-        if (controller->ClearSettingsWindowBounds()) {
-            controller->Save();
-        }
+        static_cast<void>(controller->ClearSettingsWindowBounds());
     }
 
     ApplyAdaptiveLayout();
@@ -678,11 +598,8 @@ util::SettingsWindowPlacement SettingsWindow::CalculateAdaptivePlacement() {
         minWindowHeightDip,
         std::min(workHeightDip * 0.90, workHeightDip - static_cast<double>(c_settingsWindowEdgeMarginDip * 2)));
 
-    auto const navigationWidth = CalculateNavigationPaneLength();
-    SettingsNavigation().OpenPaneLength(navigationWidth);
-
     auto const padding = SettingsContentHost().Padding();
-    auto const contentChromeWidth = navigationWidth + padding.Left + padding.Right + c_settingsContentRightSafetyDip;
+    auto const contentChromeWidth = padding.Left + padding.Right + c_settingsContentRightSafetyDip;
     auto const minContentWidth = std::max(320.0, minWindowWidthDip - contentChromeWidth);
     auto const maxContentWidth = std::max(minContentWidth, maxWindowWidthDip - contentChromeWidth);
     auto const lowerContentWidth = std::clamp(c_settingsContentMinWidthDip, minContentWidth, maxContentWidth);
@@ -695,14 +612,16 @@ util::SettingsWindowPlacement SettingsWindow::CalculateAdaptivePlacement() {
         auto const contentHeight = MeasureVisibleContentHeight(contentWidth);
         chosenContentWidth = contentWidth;
         chosenContentHeight = contentHeight;
-        auto const windowHeight = c_settingsTitleBarHeightDip + padding.Top + padding.Bottom + contentHeight;
+        auto const windowHeight =
+            c_settingsTitleBarHeightDip + c_settingsNavigationHeightDip + padding.Top + padding.Bottom + contentHeight;
         if (windowHeight <= maxWindowHeightDip) {
             break;
         }
     }
 
     auto const measuredWindowWidth = contentChromeWidth + chosenContentWidth;
-    auto const measuredWindowHeight = c_settingsTitleBarHeightDip + padding.Top + padding.Bottom + chosenContentHeight;
+    auto const measuredWindowHeight = c_settingsTitleBarHeightDip + c_settingsNavigationHeightDip + padding.Top +
+                                      padding.Bottom + chosenContentHeight;
     auto const windowWidthDip = std::clamp(measuredWindowWidth, minWindowWidthDip, maxWindowWidthDip);
     auto const windowHeightDip = std::clamp(measuredWindowHeight, minWindowHeightDip, maxWindowHeightDip);
     auto const finalContentWidth = std::max(320.0, windowWidthDip - contentChromeWidth);
@@ -710,17 +629,6 @@ util::SettingsWindowPlacement SettingsWindow::CalculateAdaptivePlacement() {
 
     SIZE desiredSize{DipToPixelCeil(windowWidthDip, dpi), DipToPixelCeil(windowHeightDip, dpi)};
     return util::CalculateSettingsWindowPlacementFromSize(desiredSize, dpi, basePlacement);
-}
-
-double SettingsWindow::CalculateNavigationPaneLength() {
-    std::array<NavigationViewItem, 5> items{
-        DevicesNavItem(), AppNavItem(), PrivacyNavItem(), HelpNavItem(), InfoNavItem()};
-
-    auto maxLabelWidth = 0.0;
-    for (auto const& item : items) {
-        maxLabelWidth = std::max(maxLabelWidth, MeasureTextWidth(NavigationItemText(item), 14.0));
-    }
-    return std::max(c_navigationPaneMinLengthDip, std::ceil(maxLabelWidth + c_navigationPaneChromeDip));
 }
 
 double SettingsWindow::MeasureVisibleContentHeight(double contentWidth) {
@@ -758,7 +666,6 @@ void SettingsWindow::InitializeSettingsContent() {
             if (auto settingsController = self->m_settingsController) {
                 settingsController->SetGlobalConnectOnStartup(s.template as<ToggleSwitch>().IsOn());
             }
-            self->RequestDeviceListRebuild();
         }
     });
 
@@ -767,7 +674,6 @@ void SettingsWindow::InitializeSettingsContent() {
             if (auto settingsController = self->m_settingsController) {
                 settingsController->SetGlobalReconnectOnConnectionLoss(s.template as<ToggleSwitch>().IsOn());
             }
-            self->RequestDeviceListRebuild();
         }
     });
 
@@ -784,7 +690,6 @@ void SettingsWindow::InitializeSettingsContent() {
             if (auto settingsController = self->m_settingsController) {
                 settingsController->SetPrivacyMode(s.template as<ToggleSwitch>().IsOn());
             }
-            self->RequestDeviceListRebuild();
         }
     });
 
@@ -844,8 +749,6 @@ void SettingsWindow::InitializeSettingsContent() {
             }
         }
     });
-
-    RebuildDeviceList(true);
 }
 
 void SettingsWindow::ShowDiagnosticsInfo(InfoBarSeverity severity, std::wstring_view title, std::wstring_view message) {
@@ -930,45 +833,6 @@ bool SettingsWindow::CopyTextToClipboard(std::wstring_view text) {
     return false;
 }
 
-void SettingsWindow::ShowSettingsPage(SettingsPage page) {
-    m_currentPage = page;
-
-    DevicesSection().Visibility(page == SettingsPage::Devices ? Visibility::Visible : Visibility::Collapsed);
-    AppSection().Visibility(page == SettingsPage::App ? Visibility::Visible : Visibility::Collapsed);
-    PrivacySection().Visibility(page == SettingsPage::Privacy ? Visibility::Visible : Visibility::Collapsed);
-    HelpSection().Visibility(page == SettingsPage::Help ? Visibility::Visible : Visibility::Collapsed);
-    InfoSection().Visibility(page == SettingsPage::About ? Visibility::Visible : Visibility::Collapsed);
-
-    if (page == SettingsPage::Devices && m_contentInitialized && m_deviceListRebuildPending) {
-        RequestDeviceListRebuild();
-    }
-
-    switch (page) {
-        case SettingsPage::Devices:
-            TitleText().Text(winrt::hstring(_("Settings_Devices")));
-            SubtitleText().Text(winrt::hstring(_("Settings_Devices_Intro")));
-            break;
-        case SettingsPage::App:
-            TitleText().Text(winrt::hstring(_("Settings_App")));
-            SubtitleText().Text(winrt::hstring(_("Settings_App_Intro")));
-            break;
-        case SettingsPage::Privacy:
-            TitleText().Text(winrt::hstring(_("Settings_Privacy")));
-            SubtitleText().Text(winrt::hstring(_("Settings_Privacy_Intro")));
-            break;
-        case SettingsPage::Help:
-            TitleText().Text(winrt::hstring(_("Settings_Help")));
-            SubtitleText().Text(winrt::hstring(_("Settings_Help_Intro")));
-            break;
-        case SettingsPage::About:
-            TitleText().Text(winrt::hstring(_("Settings_About")));
-            SubtitleText().Text(winrt::hstring(_("Settings_About_Intro")));
-            break;
-    }
-
-    TitleText().StartBringIntoView();
-}
-
 void SettingsWindow::UpdateContentPanelWidth() {
     auto const hostWidth = SettingsContentHost().ActualWidth();
     auto const padding = SettingsContentHost().Padding();
@@ -1002,27 +866,6 @@ void SettingsWindow::SelectLanguage(std::wstring_view language) {
 
     LanguageComboBox().SelectedItem(LanguageSystemItem());
     m_suppressLanguageSelection = false;
-}
-
-void SettingsWindow::CommitAlias(std::wstring const& deviceId, TextBox const& textBox) {
-    auto alias = TrimWhitespace(std::wstring(textBox.Text()));
-    textBox.Text(winrt::hstring(alias));
-
-    auto previousAlias = std::wstring(winrt::unbox_value_or<winrt::hstring>(textBox.Tag(), L""));
-    if (alias == previousAlias) return;
-
-    if (auto settingsController = m_settingsController) {
-        if (!settingsController->SetDeviceAlias(deviceId, alias)) {
-            ShowDiagnosticsInfo(
-                InfoBarSeverity::Error, _("Settings_ActionFailed_Title"), _("Settings_ActionFailed_Message"));
-            return;
-        }
-    }
-    textBox.Tag(winrt::box_value(winrt::hstring(alias)));
-    m_aliasSavedDeviceId = deviceId;
-    auto requestId = ++m_aliasSavedRequestId;
-    RequestDeviceListRebuild();
-    ClearAliasSavedAfterDelayAsync(requestId);
 }
 
 std::wstring SettingsWindow::BuildReportBugUri() const {
@@ -1207,391 +1050,6 @@ winrt::fire_and_forget SettingsWindow::CopyDiagnosticsAsync(winrt::weak_ref<Sett
 /*//////// Private Implementation ////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-void SettingsWindow::RequestDeviceListRebuild(bool force) {
-    m_deviceListRebuildPending = true;
-    m_forceDeviceListRebuildPending = m_forceDeviceListRebuildPending || force;
-    if (m_currentPage != SettingsPage::Devices) return;
-    if (m_deviceListRebuildQueued) return;
-
-    m_deviceListRebuildQueued = true;
-    auto weak = get_weak();
-    try {
-        if (DispatcherQueue().TryEnqueue([weak]() noexcept {
-                if (auto self = weak.get()) self->ProcessPendingDeviceListRebuild();
-            })) {
-            return;
-        }
-    } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] Device list rebuild enqueue failed", ex);
-    } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] Device list rebuild enqueue failed", ex);
-    } catch (...) {
-        util::DebugTraceUnknownException(L"[SettingsWindow] Device list rebuild enqueue failed");
-    }
-
-    m_deviceListRebuildQueued = false;
-    ProcessPendingDeviceListRebuild();
-}
-
-void SettingsWindow::ProcessPendingDeviceListRebuild() noexcept {
-    m_deviceListRebuildQueued = false;
-    if (!m_deviceListRebuildPending || m_currentPage != SettingsPage::Devices) return;
-
-    auto forceRebuild = std::exchange(m_forceDeviceListRebuildPending, false);
-    m_deviceListRebuildPending = false;
-    try {
-        RebuildDeviceList(forceRebuild);
-        if (forceRebuild && m_adaptiveLayoutReady) ApplyAdaptiveLayout();
-    } catch (winrt::hresult_error const& ex) {
-        m_deviceListRebuildPending = true;
-        m_forceDeviceListRebuildPending = m_forceDeviceListRebuildPending || forceRebuild;
-        util::DebugTraceException(L"[SettingsWindow] Device list rebuild failed", ex);
-    } catch (std::exception const& ex) {
-        m_deviceListRebuildPending = true;
-        m_forceDeviceListRebuildPending = m_forceDeviceListRebuildPending || forceRebuild;
-        util::DebugTraceException(L"[SettingsWindow] Device list rebuild failed", ex);
-    } catch (...) {
-        m_deviceListRebuildPending = true;
-        m_forceDeviceListRebuildPending = m_forceDeviceListRebuildPending || forceRebuild;
-        util::DebugTraceUnknownException(L"[SettingsWindow] Device list rebuild failed");
-    }
-}
-
-void SettingsWindow::RebuildDeviceList(bool force) {
-    auto controller = m_settingsController;
-    if (!controller) return;
-
-    // Snapshot settings through the controller, then build UI without holding any settings lock.
-    auto snapshot = controller->Snapshot();
-    auto devices = SettingsViewModel::BuildDeviceItems(snapshot);
-    bool globalConnectOnStartup = snapshot.GlobalConnectOnStartup;
-    bool globalReconnectOnConnectionLoss = snapshot.GlobalReconnectOnConnectionLoss;
-    bool defaultLastConnectedEnabled = snapshot.DefaultDevice != DefaultDeviceMode::LastConnected;
-    if (!force && m_hasDeviceListRenderState && devices == m_renderedDeviceItems &&
-        globalConnectOnStartup == m_renderedGlobalConnectOnStartup &&
-        globalReconnectOnConnectionLoss == m_renderedGlobalReconnectOnConnectionLoss &&
-        defaultLastConnectedEnabled == m_renderedDefaultLastConnectedEnabled &&
-        m_aliasSavedDeviceId == m_renderedAliasSavedDeviceId) {
-        return;
-    }
-
-    auto secondaryBrush =
-        apc::ui::ThemeBrushOrFallback(L"TextFillColorSecondaryBrush", winrt::Windows::UI::Colors::Gray());
-    m_hasDeviceListRenderState = false;
-    m_aliasSavedIndicator = nullptr;
-    DevicesPanel().Children().Clear();
-    DefaultLastConnectedButton().IsEnabled(defaultLastConnectedEnabled);
-
-    auto commitRenderState = [&]() {
-        m_renderedDeviceItems = std::move(devices);
-        m_renderedGlobalConnectOnStartup = globalConnectOnStartup;
-        m_renderedGlobalReconnectOnConnectionLoss = globalReconnectOnConnectionLoss;
-        m_renderedDefaultLastConnectedEnabled = defaultLastConnectedEnabled;
-        m_renderedAliasSavedDeviceId = m_aliasSavedDeviceId;
-        m_hasDeviceListRenderState = true;
-    };
-
-    if (devices.empty()) {
-        auto emptyPanel = StackPanel();
-        emptyPanel.Spacing(8);
-
-        auto noDevices = TextBlock();
-        noDevices.Text(winrt::hstring(_("Settings_NoDevices")));
-        noDevices.Foreground(secondaryBrush);
-        noDevices.FontSize(12);
-        noDevices.TextWrapping(TextWrapping::Wrap);
-        emptyPanel.Children().Append(noDevices);
-
-        auto noDevicesDesc = TextBlock();
-        noDevicesDesc.Text(winrt::hstring(_("Settings_NoDevices_Desc")));
-        noDevicesDesc.Foreground(secondaryBrush);
-        noDevicesDesc.FontSize(12);
-        noDevicesDesc.TextWrapping(TextWrapping::Wrap);
-        emptyPanel.Children().Append(noDevicesDesc);
-
-        auto emptyActions = StackPanel();
-        emptyActions.Orientation(Orientation::Vertical);
-        emptyActions.HorizontalAlignment(HorizontalAlignment::Stretch);
-        emptyActions.Spacing(8);
-
-        auto bluetoothContent = StackPanel();
-        bluetoothContent.Orientation(Orientation::Horizontal);
-        bluetoothContent.Spacing(6);
-        auto icon = FontIcon();
-        icon.FontSize(14);
-        icon.Glyph(L"\xE702");
-        bluetoothContent.Children().Append(icon);
-        auto label = TextBlock();
-        label.Text(winrt::hstring(_("Settings_OpenBluetoothSettings")));
-        label.TextWrapping(TextWrapping::WrapWholeWords);
-        label.MaxWidth(420);
-        bluetoothContent.Children().Append(label);
-
-        auto bluetoothButton = Button();
-        bluetoothButton.HorizontalAlignment(HorizontalAlignment::Stretch);
-        bluetoothButton.Content(bluetoothContent);
-        auto weak = get_weak();
-        bluetoothButton.Click([weak](auto, auto) {
-            if (auto self = weak.get()) {
-                self->LaunchUri(L"ms-settings:bluetooth");
-            }
-        });
-        emptyActions.Children().Append(bluetoothButton);
-
-        auto troubleshootingContent = StackPanel();
-        troubleshootingContent.Orientation(Orientation::Horizontal);
-        troubleshootingContent.Spacing(6);
-        auto troubleshootingIcon = FontIcon();
-        troubleshootingIcon.FontSize(14);
-        troubleshootingIcon.Glyph(L"\xE946");
-        troubleshootingContent.Children().Append(troubleshootingIcon);
-        auto troubleshootingLabel = TextBlock();
-        troubleshootingLabel.Text(winrt::hstring(_("Settings_Troubleshooting")));
-        troubleshootingLabel.TextWrapping(TextWrapping::WrapWholeWords);
-        troubleshootingLabel.MaxWidth(420);
-        troubleshootingContent.Children().Append(troubleshootingLabel);
-
-        auto troubleshootingButton = Button();
-        troubleshootingButton.HorizontalAlignment(HorizontalAlignment::Stretch);
-        troubleshootingButton.Content(troubleshootingContent);
-        troubleshootingButton.Click([weak](auto, auto) {
-            if (auto self = weak.get()) {
-                self->LaunchUri(c_troubleshootingUrl);
-            }
-        });
-        emptyActions.Children().Append(troubleshootingButton);
-        emptyPanel.Children().Append(emptyActions);
-        DevicesPanel().Children().Append(emptyPanel);
-        commitRenderState();
-        return;
-    }
-
-    for (auto& dev : devices) {
-        auto item = Grid();
-        item.Margin({0, 8, 0, 8});
-        item.HorizontalAlignment(HorizontalAlignment::Stretch);
-        item.RowSpacing(8);
-        auto nameRow = RowDefinition();
-        nameRow.Height(GridLengthHelper::Auto());
-        auto aliasRow = RowDefinition();
-        aliasRow.Height(GridLengthHelper::Auto());
-        auto policyRow = RowDefinition();
-        policyRow.Height(GridLengthHelper::Auto());
-        auto actionsRow = RowDefinition();
-        actionsRow.Height(GridLengthHelper::Auto());
-        item.RowDefinitions().Append(nameRow);
-        item.RowDefinitions().Append(aliasRow);
-        item.RowDefinitions().Append(policyRow);
-        item.RowDefinitions().Append(actionsRow);
-
-        auto namePanel = StackPanel();
-        namePanel.MinWidth(0);
-        namePanel.VerticalAlignment(VerticalAlignment::Center);
-        auto name = TextBlock();
-        name.Text(dev.DisplayName);
-        name.TextWrapping(TextWrapping::Wrap);
-        name.TextTrimming(TextTrimming::CharacterEllipsis);
-        name.MaxLines(2);
-        apc::ui::SetTooltipText(name, winrt::hstring(dev.DisplayName));
-        namePanel.Children().Append(name);
-
-        auto subtitle = TextBlock();
-        if (dev.IsDefaultDevice) {
-            subtitle.Text(winrt::hstring(_("Settings_DefaultDevice_Current")));
-        } else {
-            subtitle.Text(winrt::hstring(_("Settings_PairedDevice")));
-        }
-        subtitle.Foreground(secondaryBrush);
-        subtitle.FontSize(12);
-        subtitle.TextWrapping(TextWrapping::Wrap);
-        namePanel.Children().Append(subtitle);
-
-        if (m_aliasSavedDeviceId == dev.Id) {
-            auto savedStatus = TextBlock();
-            savedStatus.Text(winrt::hstring(_("Settings_AliasSaved")));
-            savedStatus.Foreground(
-                apc::ui::ThemeBrushOrFallback(L"AccentTextFillColorPrimaryBrush", winrt::Windows::UI::Colors::Green()));
-            savedStatus.FontSize(12);
-            savedStatus.TextWrapping(TextWrapping::Wrap);
-            namePanel.Children().Append(savedStatus);
-            m_aliasSavedIndicator = savedStatus;
-        }
-
-        Grid::SetRow(namePanel, 0);
-
-        auto actionPanel = StackPanel();
-        actionPanel.Orientation(Orientation::Horizontal);
-        actionPanel.VerticalAlignment(VerticalAlignment::Center);
-        actionPanel.Spacing(8);
-        Grid::SetRow(actionPanel, 3);
-
-        auto aliasBox = TextBox();
-        aliasBox.HorizontalAlignment(HorizontalAlignment::Stretch);
-        aliasBox.MinWidth(0);
-        aliasBox.MaxLength(static_cast<int32_t>(apc::limits::c_maxDeviceAliasCharacters));
-        aliasBox.PlaceholderText(winrt::hstring(_("Settings_DeviceAliasPlaceholder")));
-        aliasBox.Text(winrt::hstring(dev.Alias));
-        aliasBox.Tag(winrt::box_value(winrt::hstring(dev.Alias)));
-        apc::ui::SetTooltipText(aliasBox, winrt::hstring(_("Settings_DeviceAlias")));
-        auto weak = get_weak();
-        aliasBox.LostFocus([id = dev.Id, weak](auto const& s, auto) {
-            if (auto self = weak.get()) {
-                auto textBox = s.template as<TextBox>();
-                self->CommitAlias(id, textBox);
-            }
-        });
-        aliasBox.KeyDown([id = dev.Id, weak](auto const& s, auto const& e) {
-            auto key = e.Key();
-            auto textBox = s.template as<TextBox>();
-            if (key == winrt::Windows::System::VirtualKey::Enter) {
-                if (auto self = weak.get()) {
-                    self->CommitAlias(id, textBox);
-                }
-                e.Handled(true);
-            } else if (key == winrt::Windows::System::VirtualKey::Escape) {
-                textBox.Text(winrt::unbox_value_or<winrt::hstring>(textBox.Tag(), L""));
-                e.Handled(true);
-            }
-        });
-        Grid::SetRow(aliasBox, 1);
-
-        apc::ui::IconButtonOptions defaultOptions;
-        defaultOptions.Width = 36;
-        defaultOptions.Height = 32;
-        defaultOptions.IconFontSize = 14;
-        defaultOptions.TransparentBackground = false;
-        defaultOptions.Borderless = false;
-        auto defaultText =
-            winrt::hstring(dev.IsDefaultDevice ? _("Settings_DefaultDevice_Current") : _("Settings_DefaultDevice_Set"));
-        auto defaultBtn =
-            apc::ui::CreateIconButton(dev.IsDefaultDevice ? L"\xE73E" : L"\xE8AB", defaultText, defaultOptions);
-        defaultBtn.IsEnabled(!dev.IsDefaultDevice);
-        defaultBtn.Click([id = dev.Id, weak](auto, auto) {
-            if (auto self = weak.get()) {
-                if (auto settingsController = self->m_settingsController) {
-                    settingsController->SetDefaultDeviceId(id);
-                }
-                self->RequestDeviceListRebuild();
-            }
-        });
-
-        apc::ui::IconButtonOptions clearAliasOptions;
-        clearAliasOptions.Width = 36;
-        clearAliasOptions.Height = 32;
-        clearAliasOptions.IconFontSize = 14;
-        clearAliasOptions.TransparentBackground = false;
-        clearAliasOptions.Borderless = false;
-        auto clearAliasBtn =
-            apc::ui::CreateIconButton(L"\xE894", winrt::hstring(_("Settings_DeviceAlias_Clear")), clearAliasOptions);
-        clearAliasBtn.IsEnabled(!dev.Alias.empty());
-        clearAliasBtn.Click([id = dev.Id, weak](auto, auto) {
-            if (auto self = weak.get()) {
-                if (auto settingsController = self->m_settingsController) {
-                    settingsController->SetDeviceAlias(id, L"");
-                }
-                self->m_aliasSavedDeviceId = id;
-                auto requestId = ++self->m_aliasSavedRequestId;
-                self->RequestDeviceListRebuild();
-                self->ClearAliasSavedAfterDelayAsync(requestId);
-            }
-        });
-
-        auto policyPanel = StackPanel();
-        policyPanel.Spacing(6);
-        Grid::SetRow(policyPanel, 2);
-
-        auto startupPolicy = Grid();
-        startupPolicy.ColumnSpacing(12);
-        auto startupLabelColumn = ColumnDefinition();
-        startupLabelColumn.Width(GridLengthHelper::FromValueAndType(1, GridUnitType::Star));
-        auto startupToggleColumn = ColumnDefinition();
-        startupToggleColumn.Width(GridLengthHelper::Auto());
-        startupPolicy.ColumnDefinitions().Append(startupLabelColumn);
-        startupPolicy.ColumnDefinitions().Append(startupToggleColumn);
-        auto startupLabel = TextBlock();
-        startupLabel.Text(winrt::hstring(_("Device_ConnectOnStartup")));
-        startupLabel.FontSize(12);
-        startupLabel.TextWrapping(TextWrapping::Wrap);
-        auto startupToggle = ToggleSwitch();
-        startupToggle.IsOn(globalConnectOnStartup || dev.ConnectOnStartup);
-        startupToggle.IsEnabled(!globalConnectOnStartup);
-        startupToggle.MinWidth(64);
-        startupToggle.OffContent(box_value(L""));
-        startupToggle.OnContent(box_value(L""));
-        SetAutomationName(startupToggle, _("Device_ConnectOnStartup"));
-        Grid::SetColumn(startupToggle, 1);
-        startupToggle.Toggled([id = dev.Id, weak](auto const& s, auto) {
-            if (auto self = weak.get()) {
-                if (auto settingsController = self->m_settingsController) {
-                    settingsController->SetDeviceConnectOnStartup(id, s.template as<ToggleSwitch>().IsOn());
-                }
-            }
-        });
-        startupPolicy.Children().Append(startupLabel);
-        startupPolicy.Children().Append(startupToggle);
-        policyPanel.Children().Append(startupPolicy);
-
-        auto reconnectPolicy = Grid();
-        reconnectPolicy.ColumnSpacing(12);
-        auto reconnectLabelColumn = ColumnDefinition();
-        reconnectLabelColumn.Width(GridLengthHelper::FromValueAndType(1, GridUnitType::Star));
-        auto reconnectToggleColumn = ColumnDefinition();
-        reconnectToggleColumn.Width(GridLengthHelper::Auto());
-        reconnectPolicy.ColumnDefinitions().Append(reconnectLabelColumn);
-        reconnectPolicy.ColumnDefinitions().Append(reconnectToggleColumn);
-        auto reconnectLabel = TextBlock();
-        reconnectLabel.Text(winrt::hstring(_("Device_ReconnectOnConnectionLoss")));
-        reconnectLabel.FontSize(12);
-        reconnectLabel.TextWrapping(TextWrapping::Wrap);
-        auto reconnectToggle = ToggleSwitch();
-        reconnectToggle.IsOn(globalReconnectOnConnectionLoss || dev.ReconnectOnConnectionLoss);
-        reconnectToggle.IsEnabled(!globalReconnectOnConnectionLoss);
-        reconnectToggle.MinWidth(64);
-        reconnectToggle.OffContent(box_value(L""));
-        reconnectToggle.OnContent(box_value(L""));
-        SetAutomationName(reconnectToggle, _("Device_ReconnectOnConnectionLoss"));
-        Grid::SetColumn(reconnectToggle, 1);
-        reconnectToggle.Toggled([id = dev.Id, weak](auto const& s, auto) {
-            if (auto self = weak.get()) {
-                if (auto settingsController = self->m_settingsController) {
-                    settingsController->SetDeviceReconnectOnConnectionLoss(id, s.template as<ToggleSwitch>().IsOn());
-                }
-            }
-        });
-        reconnectPolicy.Children().Append(reconnectLabel);
-        reconnectPolicy.Children().Append(reconnectToggle);
-        policyPanel.Children().Append(reconnectPolicy);
-
-        apc::ui::IconButtonOptions forgetOptions;
-        forgetOptions.Width = 36;
-        forgetOptions.Height = 32;
-        forgetOptions.IconFontSize = 14;
-        forgetOptions.Foreground = apc::ui::TryThemeBrush(L"SystemFillColorCriticalBrush");
-        forgetOptions.TransparentBackground = false;
-        forgetOptions.Borderless = false;
-        auto forgetText = winrt::hstring(_("Device_Forget"));
-        auto forgetBtn = apc::ui::CreateIconButton(L"\xE74D", forgetText, forgetOptions);
-        forgetBtn.Click([id = dev.Id, weak](auto, auto) {
-            if (auto self = weak.get()) {
-                if (auto settingsController = self->m_settingsController) {
-                    settingsController->ForgetDevice(id);
-                }
-                self->RequestDeviceListRebuild();
-            }
-        });
-
-        item.Children().Append(namePanel);
-        item.Children().Append(aliasBox);
-        item.Children().Append(policyPanel);
-        actionPanel.Children().Append(defaultBtn);
-        actionPanel.Children().Append(clearAliasBtn);
-        actionPanel.Children().Append(forgetBtn);
-        item.Children().Append(actionPanel);
-        DevicesPanel().Children().Append(item);
-    }
-    commitRenderState();
-}
-
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
@@ -1621,8 +1079,56 @@ void SettingsWindow::SetTargetPlacement(util::SettingsWindowPlacement placement)
     m_targetPlacement = placement;
 }
 
-void SettingsWindow::RefreshKnownDevices() {
-    if (m_contentInitialized) RequestDeviceListRebuild();
-}
+} // namespace winrt::AudioPlaybackConnector2::implementation
 
+namespace winrt::AudioPlaybackConnector2::implementation {
+void SettingsWindow::ShowSettingsPage(SettingsPage page) {
+    const bool changed = m_currentPage != page;
+    StopPageTransition();
+    m_currentPage = page;
+    AppSection().Visibility(page == SettingsPage::App ? Visibility::Visible : Visibility::Collapsed);
+    SettingsBackButton().Visibility(page == SettingsPage::Help ? Visibility::Visible : Visibility::Collapsed);
+    SettingsHelpButton().Visibility(page == SettingsPage::App ? Visibility::Visible : Visibility::Collapsed);
+    SettingsPageTitle().Text(winrt::hstring(page == SettingsPage::App ? _("Settings_Title") : _("Settings_Help")));
+    HelpSection().Visibility(page == SettingsPage::Help ? Visibility::Visible : Visibility::Collapsed);
+    SettingsContentHost().ChangeView(nullptr, 0.0, nullptr);
+    UpdateContentPanelWidth();
+    if (changed && InitializationStatus() == InitializationState::Succeeded) {
+        try {
+            if (!winrt::Windows::UI::ViewManagement::UISettings().AnimationsEnabled()) return;
+            using namespace winrt::Microsoft::UI::Xaml::Media::Animation;
+            DoubleAnimation fade;
+            fade.From(0.2);
+            fade.To(1.0);
+            fade.Duration(DurationHelper::FromTimeSpan(std::chrono::milliseconds(150)));
+            fade.FillBehavior(FillBehavior::Stop);
+            Storyboard::SetTarget(fade,
+                                  page == SettingsPage::App ? AppSection().as<FrameworkElement>()
+                                                            : HelpSection().as<FrameworkElement>());
+            Storyboard::SetTargetProperty(fade, L"Opacity");
+            m_pageTransition = Storyboard();
+            m_pageTransition.Children().Append(fade);
+            m_pageTransition.Begin();
+        } catch (...) {
+            util::DebugTraceUnknownException(L"[SettingsWindow] Page transition failed");
+            StopPageTransition();
+        }
+    }
+}
+void SettingsWindow::StopPageTransition() noexcept {
+    try {
+        auto animation = std::exchange(m_pageTransition, nullptr);
+        if (animation) animation.Stop();
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[SettingsWindow] Failed to stop page transition");
+    }
+}
+void SettingsWindow::ShowHelpPage() {
+    if (!m_loaded) {
+        m_currentPage = SettingsPage::Help;
+        return;
+    }
+    ShowSettingsPage(SettingsPage::Help);
+    SettingsBackButton().Focus(FocusState::Programmatic);
+}
 } // namespace winrt::AudioPlaybackConnector2::implementation

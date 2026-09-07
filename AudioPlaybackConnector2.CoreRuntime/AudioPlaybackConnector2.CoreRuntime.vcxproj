@@ -3,10 +3,8 @@
   <Import Project="..\packages\Microsoft.Windows.SDK.BuildTools.10.0.28000.1839\build\Microsoft.Windows.SDK.BuildTools.props" Condition="Exists('..\packages\Microsoft.Windows.SDK.BuildTools.10.0.28000.1839\build\Microsoft.Windows.SDK.BuildTools.props')" />
   <Import Project="..\packages\Microsoft.Windows.CppWinRT.2.0.250303.1\build\native\Microsoft.Windows.CppWinRT.props" Condition="Exists('..\packages\Microsoft.Windows.CppWinRT.2.0.250303.1\build\native\Microsoft.Windows.CppWinRT.props')" />
   <ItemGroup Label="ProjectConfigurations">
-    <ProjectConfiguration Include="Debug|Win32"><Configuration>Debug</Configuration><Platform>Win32</Platform></ProjectConfiguration>
     <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
     <ProjectConfiguration Include="Debug|ARM64"><Configuration>Debug</Configuration><Platform>ARM64</Platform></ProjectConfiguration>
-    <ProjectConfiguration Include="Release|Win32"><Configuration>Release</Configuration><Platform>Win32</Platform></ProjectConfiguration>
     <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
     <ProjectConfiguration Include="Release|ARM64"><Configuration>Release</Configuration><Platform>ARM64</Platform></ProjectConfiguration>
   </ItemGroup>
@@ -16,7 +14,7 @@
     <Keyword>Win32Proj</Keyword>
     <RootNamespace>AudioPlaybackConnector2CoreRuntime</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
-    <WindowsTargetPlatformMinVersion>10.0.17763.0</WindowsTargetPlatformMinVersion>
+    <WindowsTargetPlatformMinVersion>10.0.19041.0</WindowsTargetPlatformMinVersion>
     <UseWinUI>false</UseWinUI>
     <WinUISDKReferences>false</WinUISDKReferences>
     <CppWinRTGenerateWindowsMetadata>false</CppWinRTGenerateWindowsMetadata>
@@ -41,9 +39,7 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup>
-    <PlatformOutputDirectory Condition="'$(Platform)'=='Win32'">x86</PlatformOutputDirectory>
-    <PlatformOutputDirectory Condition="'$(Platform)'!='Win32'">$(Platform)</PlatformOutputDirectory>
-    <OutDir>$(MSBuildProjectDirectory)\..\$(PlatformOutputDirectory)\$(Configuration)\</OutDir>
+    <OutDir>$(MSBuildProjectDirectory)\..\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
   </PropertyGroup>
   <ItemDefinitionGroup>
@@ -78,10 +74,15 @@
   <ItemGroup>
     <ClInclude Include="include\pch.h" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveResourcePolicy.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppController.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppModels.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\LegacyAppUseCaseBridge.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\control\ControlCommandAdapter.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveActionRetryBackoff.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveScheduleState.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AutoReconnectPlanner.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ControlUiActionGate.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\DeviceFactPublicationFence.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\DeviceEventRouter.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\LatestStartupTaskRequestState.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\PowerTransitionCoordinator.hpp" />
@@ -95,18 +96,16 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\ControlTargetMatcher.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\AudioConnectionService.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceConnectionInfo.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceDiscoveryService.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceManager.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceManagerDiagnostics.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\core\LatestServiceLifecycleState.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceOperationCoordinator.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceId.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceInventoryGeneration.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DevicePickerSnapshot.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DevicePickerTypes.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceSessionStore.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceService.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceSession.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceTrayPresentation.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\core\ReconnectController.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\core\Settings.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceWatcher.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\ReconnectPolicy.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsStore.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsData.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsLimits.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\StringResources.hpp" />
@@ -128,26 +127,29 @@
   <ItemGroup>
     <ClCompile Include="src\pch.cpp"><PrecompiledHeader>Create</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveResourcePolicy.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\AppController.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\LegacyAppUseCaseBridge.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\control\ControlCommandAdapter.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveActionRetryBackoff.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveScheduleState.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AutoReconnectPlanner.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\DeviceEventRouter.cpp" />
-    <ClCompile Include="..\AudioPlaybackConnector2\src\app\PowerTransitionCoordinator.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\PowerTransitionCoordinator.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\ResourcePressureMonitor.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\ResourcePressureState.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\SingleInstanceGuard.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\control\CommandClient.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\AudioConnectionService.cpp" />
-    <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceDiscoveryService.cpp" />
-    <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceManager.cpp" />
-    <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceManagerDiagnostics.cpp" />
-    <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceOperationCoordinator.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\DevicePickerSnapshot.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceInventoryGeneration.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
-    <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceSessionStore.cpp" />
-    <ClCompile Include="..\AudioPlaybackConnector2\src\core\ReconnectController.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceService.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceSession.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceWatcher.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\ReconnectPolicy.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\TrayTooltipBuilder.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
-    <ClCompile Include="..\AudioPlaybackConnector2\src\core\Settings.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\SettingsStore.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\StringResources.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\CommandLineControlServer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\SettingsController.cpp" />
@@ -162,14 +164,16 @@
   <ItemGroup><None Include="packages.config" /></ItemGroup>
   <Target Name="VerifyCoreRuntimeBoundary"
           BeforeTargets="ClCompile"
-          Inputs="@(ClCompile);@(ClInclude);$(MSBuildProjectFullPath);$(MSBuildProjectDirectory)\packages.config;$(MSBuildProjectDirectory)\..\scripts\verify-core-runtime-boundary.ps1;$(MSBuildProjectDirectory)\..\scripts\test-core-runtime-boundary.ps1"
+          Inputs="@(ClCompile);@(ClInclude);$(MSBuildProjectFullPath);$(MSBuildProjectDirectory)\packages.config;$(MSBuildProjectDirectory)\..\scripts\verify-core-runtime-boundary.ps1"
           Outputs="$(IntDir)CoreRuntimeBoundary.verified">
     <Error Condition="'$(UseWinUI)'=='true'" Text="CoreRuntime must never enable UseWinUI." />
     <Error Condition="$([System.Text.RegularExpressions.Regex]::IsMatch('@(Reference);@(ReferencePath)', '(?i)(Microsoft.WindowsAppSDK.WinUI|Microsoft.UI.Xaml)'))"
            Text="CoreRuntime resolved a forbidden WinUI/XAML reference." />
     <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\scripts\verify-core-runtime-boundary.ps1&quot; -ProjectPath &quot;$(MSBuildProjectFullPath)&quot;" />
-    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\scripts\test-core-runtime-boundary.ps1&quot; -VerifierPath &quot;$(MSBuildProjectDirectory)\..\scripts\verify-core-runtime-boundary.ps1&quot;" />
     <Touch Files="$(IntDir)CoreRuntimeBoundary.verified" AlwaysCreate="true" />
+  </Target>
+  <Target Name="TestCoreRuntimeBoundaryVerifier">
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\scripts\test-core-runtime-boundary.ps1&quot; -VerifierPath &quot;$(MSBuildProjectDirectory)\..\scripts\verify-core-runtime-boundary.ps1&quot;" />
   </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -7,364 +7,206 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to publish, for example v0.8.0.
+        description: Existing release tag to publish, for example v1.2.3.
         required: true
         type: string
-
-env:
-  APPINSTALLER_URL: https://n0ahtm.github.io/AudioPlaybackConnector2/AudioPlaybackConnector2.appinstaller
 
 concurrency:
   group: audioplaybackconnector2-production-release
   cancel-in-progress: false
 
 jobs:
-  build-release:
-    runs-on: windows-2022
-    permissions:
-      contents: write
-      pages: write
+  version:
+    runs-on: ubuntu-24.04
     outputs:
-      semver: ${{ steps.version.outputs.SEMVER }}
-      tag: ${{ steps.version.outputs.TAG }}
-      version: ${{ steps.version.outputs.VERSION }}
-      msix_name: ${{ steps.msix.outputs.NAME }}
-      web_setup_name: ${{ steps.installers.outputs.WEB_NAME }}
-      bundle_setup_name: ${{ steps.installers.outputs.BUNDLE_NAME }}
-
+      source_ref: ${{ steps.version.outputs.source_ref }}
+      semver: ${{ steps.version.outputs.semver }}
+      tag: ${{ steps.version.outputs.tag }}
+      package_version: ${{ steps.version.outputs.package_version }}
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+    - name: Checkout release tag
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       with:
         ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
         fetch-depth: 0
 
-    - name: Extract version from tag
+    - name: Validate tag and exact checkout
       id: version
       shell: pwsh
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        INPUT_TAG: ${{ inputs.tag }}
+        REF_NAME: ${{ github.ref_name }}
       run: |
-        $tag = if ($env:EVENT_NAME -eq "workflow_dispatch") {
+        $tag = if ($env:EVENT_NAME -eq 'workflow_dispatch') {
           $env:INPUT_TAG
         } else {
           $env:REF_NAME
         }
         if ($tag -notmatch '^v\d+\.\d+\.\d+$') {
-          throw "Release tag must look like v0.8.0."
+          throw 'Release tag must look like v1.2.3.'
         }
-
-        $semver = $tag.TrimStart('v')
-        $quad = "$semver.0"
-        "TAG=$tag" >> $env:GITHUB_OUTPUT
-        "SEMVER=$semver" >> $env:GITHUB_OUTPUT
-        "VERSION=$quad" >> $env:GITHUB_OUTPUT
-      env:
-        EVENT_NAME: ${{ github.event_name }}
-        INPUT_TAG: ${{ inputs.tag }}
-        REF_NAME: ${{ github.ref_name }}
-
-    - name: Verify exact tagged source checkout
-      shell: pwsh
-      run: |
-        $tag = '${{ steps.version.outputs.TAG }}'
         $head = (git rev-parse HEAD).Trim()
         $tagCommit = (git rev-parse "$tag^{commit}").Trim()
         if ($head -ne $tagCommit) {
           throw "Checked out commit $head does not match $tag ($tagCommit)."
         }
-
-    - name: Patch version into package metadata
-      shell: pwsh
-      run: ./scripts/release/update-package-version.ps1 -Version '${{ steps.version.outputs.VERSION }}'
-
-    - name: Decode signing certificate
-      id: cert
-      shell: pwsh
-      run: |
-        $certPath = "$env:TEMP\AudioPlaybackConnector2.pfx"
-        $bytes = [Convert]::FromBase64String("${{ secrets.SIGNING_CERTIFICATE_PFX }}")
-        [IO.File]::WriteAllBytes($certPath, $bytes)
-        "CERT_PATH=$certPath" >> $env:GITHUB_OUTPUT
-
-    - name: Add MSBuild to PATH
-      uses: microsoft/setup-msbuild@v2
-
-    - name: Restore NuGet packages
-      run: msbuild AudioPlaybackConnector2.slnx -t:restore -p:RestorePackagesConfig=true
-
-    - name: Build signed MSIX (Release, x64)
-      run: >
-        msbuild AudioPlaybackConnector2.slnx
-        /p:Configuration=Release
-        /p:Platform=x64
-        /p:AppxPackageSigningEnabled=true
-        /p:PackageCertificateKeyFile=${{ steps.cert.outputs.CERT_PATH }}
-        /p:PackageCertificatePassword=${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
-        /p:UapAppxPackageBuildMode=SideloadOnly
-        /p:AppxBundle=Never
-        /t:Rebuild
-
-    - name: Locate MSIX
-      id: msix
-      shell: pwsh
-      run: ./scripts/release/locate-msix.ps1 -Version '${{ steps.version.outputs.VERSION }}' -Configuration Release -Architecture x64
-
-    - name: Verify built MSIX metadata and payload
-      id: package
-      shell: pwsh
-      run: >
-        ./scripts/release/verify-msix-package.ps1
-        -MsixPath '${{ steps.msix.outputs.PATH }}'
-        -ExpectedPackageVersion '${{ steps.version.outputs.VERSION }}'
-        -ExpectedProcessorArchitecture x64
-        -ExpectedName N0ahTM.AudioPlaybackConnector2
-        -ExpectedPublisher 'CN=AudioPlaybackConnector2'
-        -RequiredEntries AudioPlaybackConnector2.exe,AudioPlaybackConnector2.Control/AudioPlaybackConnector2.Control.exe
-        -UniqueEntries AudioPlaybackConnector2.exe,AudioPlaybackConnector2.Control/AudioPlaybackConnector2.Control.exe
-        -RequireSignature
-        -WriteGitHubOutput
-
-    - name: Run native regression tests
-      run: .\x64\Release\tests\AudioPlaybackConnector2.CoreTests.exe
-
-    - name: Collect dependencies
-      id: deps
-      shell: pwsh
-      run: |
-        $depsDir = '${{ steps.msix.outputs.DEPS_DIR }}'
-        if (-not $depsDir -or -not (Test-Path $depsDir)) {
-          Write-Host "No dependencies directory found."
-          exit 0
+        $semver = $tag.TrimStart('v')
+        foreach ($part in $semver.Split('.')) {
+          if ([uint32]$part -gt [uint16]::MaxValue) {
+            throw 'A release version component exceeds 65535.'
+          }
         }
-        $staging = Join-Path $env:RUNNER_TEMP 'dependencies'
-        New-Item -ItemType Directory -Path $staging -Force | Out-Null
-        $files = Get-ChildItem -Path $depsDir -Recurse -Include @("*.appx", "*.msix")
-        foreach ($f in $files) {
-          Copy-Item -LiteralPath $f.FullName -Destination $staging -Force
-        }
-        "DIR=$staging" >> $env:GITHUB_OUTPUT
-        Get-ChildItem -Path $staging | ForEach-Object { Write-Host "Dependency: $($_.Name)" }
+        "source_ref=$tag" >> $env:GITHUB_OUTPUT
+        "semver=$semver" >> $env:GITHUB_OUTPUT
+        "tag=$tag" >> $env:GITHUB_OUTPUT
+        "package_version=$semver.0" >> $env:GITHUB_OUTPUT
 
-    - name: Extract changelog
-      id: changelog
-      shell: pwsh
-      run: ./scripts/release/extract-changelog.ps1 -Version '${{ steps.version.outputs.TAG }}'
+  build-artifacts:
+    needs: version
+    uses: ./.github/workflows/build-release-artifacts.yml
+    with:
+      source_ref: ${{ needs.version.outputs.source_ref }}
+      tag: ${{ needs.version.outputs.tag }}
+      semver: ${{ needs.version.outputs.semver }}
+      package_version: ${{ needs.version.outputs.package_version }}
+      run_static_analysis: false
+    secrets:
+      SIGNING_CERTIFICATE_PFX: ${{ secrets.SIGNING_CERTIFICATE_PFX }}
+      SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
 
-    - name: Generate App Installer feed
-      id: appinstaller
-      shell: pwsh
-      run: |
-        $msixUrl = "https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.TAG }}/${{ steps.msix.outputs.NAME }}"
-        $depBaseUrl = "https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.TAG }}"
-        $outputPath = Join-Path $env:RUNNER_TEMP 'AudioPlaybackConnector2.appinstaller'
-        $depsDir = '${{ steps.deps.outputs.DIR }}'
-        $params = @{
-          MsixUrl = $msixUrl
-          AppInstallerUrl = $env:APPINSTALLER_URL
-          MsixPath = '${{ steps.msix.outputs.PATH }}'
-          OutputPath = $outputPath
-          ExpectedPackageVersion = '${{ steps.version.outputs.VERSION }}'
-          ProcessorArchitecture = 'x64'
-        }
-        if ($depsDir -and (Test-Path $depsDir)) {
-          $params['DependenciesDirectory'] = $depsDir
-          $params['DependencyBaseUrl'] = $depBaseUrl
-        }
-        ./scripts/release/generate-appinstaller.ps1 @params
-        "PATH=$outputPath" >> $env:GITHUB_OUTPUT
-
-    - name: Install Inno Setup
-      run: choco install innosetup -y --no-progress
-
-    - name: Build bootstrapper installers
-      id: installers
-      shell: pwsh
-      run: |
-        $outputDir = Join-Path $env:RUNNER_TEMP 'installers'
-        $bundleParams = @{
-          Mode = 'Bundle'
-          MsixPath = '${{ steps.msix.outputs.PATH }}'
-          CertPath = 'certs/AudioPlaybackConnector2.cer'
-          Version = '${{ steps.version.outputs.SEMVER }}'
-          OutputDir = $outputDir
-        }
-        $depsDir = '${{ steps.deps.outputs.DIR }}'
-        if ($depsDir -and (Test-Path $depsDir)) {
-          $bundleParams['DependenciesDir'] = $depsDir
-        }
-        ./installer/build-installer.ps1 @bundleParams
-        ./installer/build-installer.ps1 `
-          -Mode Web `
-          -CertPath 'certs/AudioPlaybackConnector2.cer' `
-          -Version '${{ steps.version.outputs.SEMVER }}' `
-          -OutputDir $outputDir
-
-        $bundlePath = Join-Path $outputDir 'AudioPlaybackConnector2-Setup-${{ steps.version.outputs.SEMVER }}.exe'
-        $webPath = Join-Path $outputDir 'AudioPlaybackConnector2-WebSetup.exe'
-        if (-not (Test-Path $bundlePath) -or -not (Test-Path $webPath)) {
-          throw 'One or more bootstrapper installers were not created.'
-        }
-        "BUNDLE_PATH=$bundlePath" >> $env:GITHUB_OUTPUT
-        "WEB_PATH=$webPath" >> $env:GITHUB_OUTPUT
-        "BUNDLE_NAME=$([IO.Path]::GetFileName($bundlePath))" >> $env:GITHUB_OUTPUT
-        "WEB_NAME=$([IO.Path]::GetFileName($webPath))" >> $env:GITHUB_OUTPUT
-
-    - name: Reject App Installer feed downgrades
-      shell: pwsh
-      run: >
-        ./scripts/release/assert-appinstaller-monotonic.ps1
-        -AppInstallerUrl '${{ env.APPINSTALLER_URL }}'
-        -CandidateVersion '${{ steps.version.outputs.VERSION }}'
+  create-draft:
+    runs-on: ubuntu-24.04
+    needs:
+      - version
+      - build-artifacts
+    permissions:
+      contents: write
+    steps:
+    - name: Download release artifacts
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      with:
+        name: ${{ needs.build-artifacts.outputs.artifact_name }}
+        path: release-artifacts
 
     - name: Build release body
-      id: body
       shell: pwsh
       run: |
-        $changelog = @'
-        ${{ steps.changelog.outputs.BODY }}
-        '@
+        $changelog = [IO.File]::ReadAllText('release-artifacts/RELEASE_NOTES.md').Trim()
         $footer = @'
 
         ---
 
-        **Recommended installation:** Download and run `AudioPlaybackConnector2-WebSetup.exe`.
+        ## Installation
 
-        The versioned `AudioPlaybackConnector2-Setup-${{ steps.version.outputs.SEMVER }}.exe` contains the complete package for offline installation. Both setup variants install per-user without administrator rights. Windows SmartScreen may warn because the setup executable is not yet code-signed.
+        **Recommended:** Download and run `AudioPlaybackConnector2-WebSetup.exe`.
 
-        The `.appinstaller`, `.msix`, certificate, and dependency assets remain available for manual installation and the existing App Installer update feed.
+        For offline installation on x64 or ARM64, use the versioned `AudioPlaybackConnector2-Setup-${{ needs.version.outputs.semver }}.exe`.
 
-        ```powershell
-        Import-Certificate -FilePath ".\AudioPlaybackConnector2.cer" -CertStoreLocation "Cert:\CurrentUser\TrustedPeople"
-        $installer = Join-Path $env:TEMP "AudioPlaybackConnector2.appinstaller"
-        Invoke-WebRequest -Uri "${{ env.APPINSTALLER_URL }}" -OutFile $installer
-        Start-Process $installer
-        ```
+        Both installers work per-user without administrator rights. Windows SmartScreen may warn because the setup executables are not yet code-signed.
 
-        Direct MSIX sideloading remains available, but installing through the `.appinstaller` file enables Windows App Installer update checks.
+        For App Installer, direct MSIX bundle installation, certificates, and dependency packages, see the [installation guide](https://github.com/N0ahTM/AudioPlaybackConnector2/blob/${{ needs.version.outputs.tag }}/docs/INSTALLATION.md).
 
-        > Releases are signed with a self-signed certificate. A free open-source code-signing certificate has been requested but approval may take some time.
+        > The MSIX bundle is signed with a self-signed certificate. The setup executables are not yet code-signed.
         '@
-        $fullBody = ($changelog.Trim() + "`n" + $footer).Trim()
-        $bodyPath = Join-Path $env:RUNNER_TEMP 'release-body.md'
-        [System.IO.File]::WriteAllText($bodyPath, $fullBody)
-        "PATH=$bodyPath" >> $env:GITHUB_OUTPUT
+        [IO.File]::WriteAllText('release-body.md', ($changelog + "`n" + $footer).Trim())
 
     - name: Create draft GitHub Release
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
       with:
-        tag_name: ${{ steps.version.outputs.TAG }}
-        name: v${{ steps.version.outputs.SEMVER }}
+        tag_name: ${{ needs.version.outputs.tag }}
+        name: v${{ needs.version.outputs.semver }}
         draft: true
         overwrite_files: true
-        body_path: ${{ steps.body.outputs.PATH }}
+        body_path: release-body.md
         files: |
-          ${{ steps.msix.outputs.PATH }}
-          ${{ steps.appinstaller.outputs.PATH }}
-          ${{ steps.installers.outputs.WEB_PATH }}
-          ${{ steps.installers.outputs.BUNDLE_PATH }}
-          certs/AudioPlaybackConnector2.cer
+          release-artifacts/*.msixbundle
+          release-artifacts/*.appinstaller
+          release-artifacts/*.exe
+          release-artifacts/*.cer
+          release-artifacts/Dependencies/**/*.appx
+          release-artifacts/Dependencies/**/*.msix
         fail_on_unmatched_files: true
 
-    - name: Upload dependency assets
-      if: steps.deps.outputs.DIR != ''
-      shell: pwsh
-      run: |
-        $deps = Get-ChildItem -Path '${{ steps.deps.outputs.DIR }}' -File
-        foreach ($dep in $deps) {
-          gh release upload "${{ steps.version.outputs.TAG }}" $dep.FullName --repo "${{ github.repository }}" --clobber
-        }
-      env:
-        GH_TOKEN: ${{ github.token }}
-
-    - name: Stage App Installer feed for GitHub Pages
-      shell: pwsh
-      run: |
-        New-Item -ItemType Directory -Path pages -Force | Out-Null
-        Copy-Item -LiteralPath '${{ steps.appinstaller.outputs.PATH }}' -Destination 'pages/AudioPlaybackConnector2.appinstaller' -Force
-
-    - name: Configure GitHub Pages
-      uses: actions/configure-pages@v5
-
-    - name: Upload GitHub Pages artifact
-      uses: actions/upload-pages-artifact@v3
-      with:
-        path: pages
-
   publish-release:
-    runs-on: ubuntu-latest
-    needs: build-release
+    runs-on: ubuntu-24.04
+    needs:
+      - version
+      - build-artifacts
+      - create-draft
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     permissions:
       contents: write
-
+    environment:
+      name: production-release
     steps:
     - name: Publish GitHub Release
       env:
         GH_TOKEN: ${{ github.token }}
-      run: gh release edit "${{ needs.build-release.outputs.tag }}" --repo "${{ github.repository }}" --draft=false
+      run: gh release edit '${{ needs.version.outputs.tag }}' --repo '${{ github.repository }}' --draft=false
 
     - name: Verify public release assets
-      shell: bash
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
-        assets=(
-          "${{ needs.build-release.outputs.msix_name }}"
-          "${{ needs.build-release.outputs.web_setup_name }}"
-          "${{ needs.build-release.outputs.bundle_setup_name }}"
+        $release = gh release view '${{ needs.version.outputs.tag }}' --repo '${{ github.repository }}' --json assets,isDraft,isPrerelease | ConvertFrom-Json
+        if ($release.isDraft -or $release.isPrerelease) {
+          throw 'Release is not public and stable.'
+        }
+        $required = @(
+          '${{ needs.build-artifacts.outputs.bundle_name }}',
+          '${{ needs.build-artifacts.outputs.web_setup_name }}',
+          '${{ needs.build-artifacts.outputs.offline_setup_name }}',
+          'AudioPlaybackConnector2.appinstaller',
+          'AudioPlaybackConnector2.cer'
         )
-        for asset in "${assets[@]}"; do
-          asset_url="https://github.com/${{ github.repository }}/releases/download/${{ needs.build-release.outputs.tag }}/$asset"
-          verified=false
-          for attempt in {1..6}; do
-            if curl --fail --location --silent --show-error --head "$asset_url" > /dev/null; then
-              echo "Public asset verified: $asset_url"
-              verified=true
+        $publishedNames = @($release.assets | ForEach-Object name)
+        foreach ($name in $required) {
+          if ($publishedNames -notcontains $name) { throw "Required release asset is missing: $name" }
+        }
+        foreach ($asset in $release.assets) {
+          $reachable = $false
+          for ($attempt = 1; $attempt -le 6; $attempt++) {
+            try {
+              Invoke-WebRequest -Uri $asset.url -Method Head -TimeoutSec 30 -ErrorAction Stop | Out-Null
+              $reachable = $true
               break
-            fi
-            if [ "$attempt" -lt 6 ]; then sleep 10; fi
-          done
-          if [ "$verified" != true ]; then
-            echo "Release asset did not become publicly reachable: $asset_url" >&2
-            exit 1
-          fi
-        done
+            } catch {
+              if ($attempt -eq 6) { throw }
+              Start-Sleep -Seconds 10
+            }
+          }
+          if (-not $reachable) { throw "Release asset is not publicly reachable: $($asset.name)" }
+        }
 
-  deploy-pages:
-    runs-on: ubuntu-latest
+  deploy-appinstaller:
     needs:
-      - build-release
+      - version
       - publish-release
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     permissions:
+      contents: write
       pages: write
       id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+    uses: ./.github/workflows/deploy-appinstaller.yml
+    with:
+      tag: ${{ needs.version.outputs.tag }}
+      package_version: ${{ needs.version.outputs.package_version }}
 
-    steps:
-    - name: Deploy GitHub Pages
-      id: deployment
-      uses: actions/deploy-pages@v4
-
-  verify-release:
-    runs-on: ubuntu-latest
+  rollback-release:
+    runs-on: ubuntu-24.04
     needs:
-      - build-release
-      - deploy-pages
+      - version
+      - publish-release
+      - deploy-appinstaller
+    if: ${{ always() && needs.publish-release.result == 'success' && needs.deploy-appinstaller.result != 'success' }}
     permissions:
-      contents: read
-
+      contents: write
     steps:
-    - name: Checkout exact release tag
-      uses: actions/checkout@v4
-      with:
-        ref: ${{ needs.build-release.outputs.tag }}
-
-    - name: Verify published App Installer feed
-      shell: pwsh
-      run: >
-        ./scripts/release/verify-appinstaller-feed.ps1
-        -AppInstallerUrl '${{ env.APPINSTALLER_URL }}'
-        -ExpectedPackageVersion '${{ needs.build-release.outputs.version }}'
-        -ExpectedPackageName N0ahTM.AudioPlaybackConnector2
-        -ExpectedPublisher 'CN=AudioPlaybackConnector2'
-        -ExpectedProcessorArchitecture x64
-        -ExpectedPackageUri 'https://github.com/${{ github.repository }}/releases/download/${{ needs.build-release.outputs.tag }}/${{ needs.build-release.outputs.msix_name }}'
-        -VerifyPackageUri
+    - name: Return GitHub Release to draft
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        gh release edit '${{ needs.version.outputs.tag }}' --repo '${{ github.repository }}' --draft=true
+        test "$(gh release view '${{ needs.version.outputs.tag }}' --repo '${{ github.repository }}' --json isDraft --jq .isDraft)" = true

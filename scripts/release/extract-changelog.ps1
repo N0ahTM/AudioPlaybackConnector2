@@ -2,7 +2,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Version,
 
-    [string]$ChangelogPath = "CHANGELOG.md"
+    [string]$ChangelogPath = "CHANGELOG.md",
+
+    [string]$OutputPath = ''
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,11 +22,18 @@ if (-not $match.Success) {
 
 $body = $match.Groups[1].Value.Trim()
 
+if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
+    $outputDirectory = Split-Path -Parent $OutputPath
+    if (-not [string]::IsNullOrWhiteSpace($outputDirectory)) {
+        New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
+    }
+    [System.IO.File]::WriteAllText($OutputPath, $body, [System.Text.UTF8Encoding]::new($false))
+}
+
 if ($env:GITHUB_OUTPUT) {
-    $delimiter = "CHANGELOG_EOF_" + [Guid]::NewGuid().ToString("N")
-    "BODY<<$delimiter" >> $env:GITHUB_OUTPUT
-    $body >> $env:GITHUB_OUTPUT
-    "$delimiter" >> $env:GITHUB_OUTPUT
+    if (-not [string]::IsNullOrWhiteSpace($OutputPath)) {
+        "PATH=$([System.IO.Path]::GetFullPath($OutputPath))" >> $env:GITHUB_OUTPUT
+    }
 }
 
 $body

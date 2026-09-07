@@ -1,8 +1,24 @@
+#if defined(APC_POWER_TRANSITION_COORDINATOR_TESTING)
+#include <windows.h>
+
+#include <wil/resource.h>
+
+#include <winrt/Windows.System.Threading.h>
+
+#include <utility>
+#else
 #include <pch.h>
+#endif
 
 #include <app/PowerTransitionCoordinator.hpp>
 
-#include <core/DeviceManager.hpp>
+#include <core/DeviceService.hpp>
+
+#if defined(APC_POWER_TRANSITION_COORDINATOR_TESTING)
+void DebugTrace(std::wstring_view) noexcept;
+
+template <typename... Args> void DebugTrace(std::wstring_view, Args&&...) noexcept {}
+#endif
 
 namespace {
 constexpr std::chrono::seconds c_resumeReconnectDelay{10};
@@ -16,6 +32,13 @@ constexpr unsigned int c_maxResumeReconnectAttempts = 6;
 
 PowerTransitionCoordinator::PowerTransitionCoordinator(std::atomic<bool>& exiting)
     : m_exiting(exiting), m_resumeState(std::make_shared<ResumeState>()) {}
+
+#if defined(APC_POWER_TRANSITION_COORDINATOR_TESTING)
+PowerTransitionCoordinator::PowerTransitionCoordinator(std::atomic<bool>& exiting,
+                                                       ResumeReconnectSchedulerModeForTesting schedulerMode)
+    : m_exiting(exiting), m_resumeState(std::make_shared<ResumeState>()),
+      m_resumeReconnectSchedulerModeForTesting(schedulerMode) {}
+#endif
 
 PowerTransitionCoordinator::~PowerTransitionCoordinator() {
     Cancel();
@@ -39,7 +62,7 @@ void PowerTransitionCoordinator::Cancel() noexcept {
 }
 
 void PowerTransitionCoordinator::HandleSuspend(std::function<void()> flushSettings,
-                                               std::shared_ptr<DeviceManager> deviceManager) noexcept {
+                                               std::shared_ptr<apc::device::DeviceService> deviceService) noexcept {
     try {
         if (m_exiting.load() || m_powerSuspended) return;
         m_powerSuspended = true;
@@ -54,16 +77,14 @@ void PowerTransitionCoordinator::HandleSuspend(std::function<void()> flushSettin
         }
         CancelResumeReconnectTimer();
 
+        if (flushSettings) flushSettings();
+
         std::vector<std::wstring> activeDeviceIds;
-        if (deviceManager) {
+        if (deviceService) {
             try {
-                auto connected = deviceManager->GetConnectedDevices();
-                activeDeviceIds.reserve(connected.size());
-                for (auto const& connection : connected) {
-                    if (!connection.Id.empty()) activeDeviceIds.push_back(connection.Id);
-                }
+                activeDeviceIds = deviceService->SuspendForPowerTransition();
             } catch (...) {
-                DebugTrace(L"[PowerTransitionCoordinator] Failed to capture active devices before suspend");
+                DebugTrace(L"[PowerTransitionCoordinator] Failed to capture recovery intent while suspending devices");
             }
         }
 
@@ -75,15 +96,12 @@ void PowerTransitionCoordinator::HandleSuspend(std::function<void()> flushSettin
             state->DeliveryInFlight = false;
             state->Attempts.BeginCycle(std::move(activeDeviceIds));
         }
-
-        if (flushSettings) flushSettings();
-        if (deviceManager) deviceManager->SuspendForPowerTransition();
     } catch (...) {
         DebugTrace(L"[PowerTransitionCoordinator] HandleSuspend ERROR: ignored exception");
     }
 }
 
-void PowerTransitionCoordinator::HandleResume(std::shared_ptr<DeviceManager> deviceManager,
+void PowerTransitionCoordinator::HandleResume(std::shared_ptr<apc::device::DeviceService> deviceService,
                                               ResumeReconnectCallback reconnectAfterDelay) noexcept {
     try {
         if (m_exiting.load()) return;
@@ -104,7 +122,7 @@ void PowerTransitionCoordinator::HandleResume(std::shared_ptr<DeviceManager> dev
             DebugTrace(L"[PowerTransitionCoordinator] Power resume detected without prior suspend; running recovery");
         }
 
-        if (deviceManager) deviceManager->ResumeAfterPowerTransition();
+        if (deviceService) deviceService->ResumeAfterPowerTransition();
         if (!matchedSuspend) return;
 
         CancelResumeReconnectTimer();
@@ -121,6 +139,11 @@ void PowerTransitionCoordinator::HandleResume(std::shared_ptr<DeviceManager> dev
         }
 
         try {
+#if defined(APC_POWER_TRANSITION_COORDINATOR_TESTING)
+            if (m_resumeReconnectSchedulerModeForTesting == ResumeReconnectSchedulerModeForTesting::BothUnavailable) {
+                throw winrt::hresult_error(E_FAIL);
+            }
+#endif
             m_resumeReconnectTimer = winrt::Windows::System::Threading::ThreadPoolTimer::CreatePeriodicTimer(
                 [state, generation](auto const& timer) noexcept {
                     if (DeliverResumeReconnect(state, generation) != DeliveryResult::Stop) return;
@@ -132,8 +155,15 @@ void PowerTransitionCoordinator::HandleResume(std::shared_ptr<DeviceManager> dev
                 c_resumeReconnectDelay);
         } catch (...) {
             DebugTrace(L"[PowerTransitionCoordinator] WinRT resume timer unavailable; using native timer");
-            m_nativeResumeReconnectTimer.reset(
-                CreateThreadpoolTimer(NativeResumeReconnectTimerCallback, this, nullptr));
+            PTP_TIMER nativeTimer = nullptr;
+#if defined(APC_POWER_TRANSITION_COORDINATOR_TESTING)
+            if (m_resumeReconnectSchedulerModeForTesting != ResumeReconnectSchedulerModeForTesting::BothUnavailable) {
+                nativeTimer = CreateThreadpoolTimer(NativeResumeReconnectTimerCallback, this, nullptr);
+            }
+#else
+            nativeTimer = CreateThreadpoolTimer(NativeResumeReconnectTimerCallback, this, nullptr);
+#endif
+            m_nativeResumeReconnectTimer.reset(nativeTimer);
             if (m_nativeResumeReconnectTimer) {
                 LARGE_INTEGER relative{};
                 relative.QuadPart = -static_cast<LONGLONG>(c_resumeReconnectDelay.count()) * 10'000'000LL;
@@ -145,7 +175,9 @@ void PowerTransitionCoordinator::HandleResume(std::shared_ptr<DeviceManager> dev
                         std::chrono::duration_cast<std::chrono::milliseconds>(c_resumeReconnectDelay).count()),
                     0);
             } else {
-                DebugTrace(L"[PowerTransitionCoordinator] Resume reconnect timer unavailable");
+                DebugTrace(
+                    L"[PowerTransitionCoordinator] Resume reconnect timers unavailable; delivering once immediately");
+                static_cast<void>(DeliverResumeReconnect(state, generation));
             }
         }
     } catch (...) {
@@ -173,6 +205,15 @@ bool PowerTransitionCoordinator::IsResumeReconnectGenerationCurrent(std::uint64_
     std::scoped_lock lock(state->Mutex);
     return !state->Cancelled && state->Generation == generation && !state->Attempts.Empty();
 }
+
+#if defined(APC_POWER_TRANSITION_COORDINATOR_TESTING)
+void PowerTransitionCoordinator::AddSuspendedRecoveryTargetsForTesting(std::vector<std::wstring> deviceIds) noexcept {
+    auto state = m_resumeState;
+    if (!state) return;
+    std::scoped_lock lock(state->Mutex);
+    state->Attempts.BeginCycle(std::move(deviceIds));
+}
+#endif
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Helpers ///////////////////////////////////////////////////////////////////////////////////////////*/

@@ -252,7 +252,8 @@ void CommandLineControlServer::Start(Handler handler) noexcept {
     try {
         {
             std::unique_lock lifecycleLock(m_lifecycleMutex);
-            m_lifecycleChanged.wait(lifecycleLock, [this] { return !m_stopping && !m_deferredStopRequested.load(); });
+            m_lifecycleChanged.wait(
+                lifecycleLock, [this] { return !m_stopping && !m_deferredStopRequested.load() && !m_stopRequested; });
             if (m_running.load() || m_desiredRunning) return;
             if (!EnsureControlCallbacksLocked()) {
                 Trace(L"thread-pool control objects unavailable");
@@ -364,11 +365,32 @@ void CommandLineControlServer::ScheduleStartRetryLocked() noexcept {
     SetThreadpoolTimer(m_startRetryTimer, &due, 0, 0);
 }
 
-void CommandLineControlServer::Stop() noexcept {
-    if (g_activeHandlerServer == this) {
+void CommandLineControlServer::RequestStopLocked() noexcept {
+    m_desiredRunning = false;
+    m_accepting = false;
+    m_running = false;
+    m_stopRequested = true;
+    m_stopSource.request_stop();
+    if (m_startRetryTimer) SetThreadpoolTimer(m_startRetryTimer, nullptr, 0, 0);
+}
+
+void CommandLineControlServer::RequestStop() noexcept {
+    try {
+        std::lock_guard lifecycleLock(m_lifecycleMutex);
+        if (!m_stopRequested && !m_desiredRunning && !m_running.load() && !m_starting) return;
+        RequestStopLocked();
+    } catch (...) {
+        // stop_source remains independently safe to signal even if a platform
+        // synchronization failure prevents the lifecycle state update.
         m_accepting = false;
         m_running = false;
         m_stopSource.request_stop();
+    }
+}
+
+void CommandLineControlServer::Stop() noexcept {
+    if (g_activeHandlerServer == this) {
+        RequestStop();
         if (!m_deferredStopRequested.exchange(true) && m_deferredStopWork) {
             SubmitThreadpoolWork(m_deferredStopWork);
         }
@@ -383,14 +405,10 @@ void CommandLineControlServer::Stop() noexcept {
                 m_lifecycleChanged.wait(lifecycleLock, [this] { return !m_stopping; });
                 return;
             }
-            if (!m_desiredRunning && !m_running.load() && !m_starting) return;
+            if (!m_stopRequested && !m_desiredRunning && !m_running.load() && !m_starting) return;
 
-            m_desiredRunning = false;
-            m_accepting = false;
+            RequestStopLocked();
             m_stopping = true;
-            m_running = false;
-            m_stopSource.request_stop();
-            if (m_startRetryTimer) SetThreadpoolTimer(m_startRetryTimer, nullptr, 0, 0);
             instances.swap(m_instances);
         }
 
@@ -434,6 +452,7 @@ void CommandLineControlServer::Stop() noexcept {
             m_handler = nullptr;
             m_starting = false;
             m_stopping = false;
+            m_stopRequested = false;
             m_deferredStopRequested = false;
         }
         Trace(L"server stopped");
@@ -446,6 +465,7 @@ void CommandLineControlServer::Stop() noexcept {
             m_running = false;
             m_starting = false;
             m_stopping = false;
+            m_stopRequested = false;
             m_deferredStopRequested = false;
         }
         m_lifecycleChanged.notify_all();

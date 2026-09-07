@@ -1,6 +1,5 @@
 #pragma once
 
-#include <functional>
 #include <memory>
 
 class ISettingsController;
@@ -24,10 +23,9 @@ public:
     [[nodiscard]] bool Show(std::shared_ptr<ISettingsController> settingsController,
                             std::shared_ptr<StartupTaskCoordinator> startupTaskCoordinator,
                             std::shared_ptr<TrayController> trayController,
-                            std::shared_ptr<UpdateCoordinator> updateCoordinator,
-                            std::function<void()> saveSettings);
-    void RefreshKnownDevicesIfOpen() noexcept;
-    [[nodiscard]] bool Close(bool saveOnClose = true) noexcept;
+                            std::shared_ptr<UpdateCoordinator> updateCoordinator);
+    [[nodiscard]] bool Close() noexcept;
+    [[nodiscard]] bool ShowHelp();
 
 private:
     /*------------------------------------------------------------------------------------------------------------*/
@@ -37,9 +35,7 @@ private:
     struct PresenterState;
     struct WindowState;
 
-    static bool CloseWindow(std::shared_ptr<PresenterState> const& owner,
-                            std::shared_ptr<WindowState> const& state,
-                            bool saveOnClose) noexcept;
+    static bool CloseWindow(std::shared_ptr<PresenterState> const& owner, std::shared_ptr<WindowState> state) noexcept;
     static void HandleWindowClosed(std::shared_ptr<PresenterState> const& owner,
                                    std::shared_ptr<WindowState> const& state,
                                    winrt::Microsoft::UI::Xaml::Window const& closedWindow) noexcept;

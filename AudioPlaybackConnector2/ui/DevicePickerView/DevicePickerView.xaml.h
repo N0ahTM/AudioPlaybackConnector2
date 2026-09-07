@@ -2,12 +2,16 @@
 
 #include <DevicePickerView.g.h>
 #include <ui/DevicePickerViewModel.hpp>
+#include <winrt/Microsoft.UI.Xaml.Media.Animation.h>
 #include <chrono>
 #include <mutex>
 #include <unordered_map>
 
-class DeviceManager;
-class Settings;
+class SettingsStore;
+
+namespace apc::device {
+class DeviceService;
+}
 
 namespace winrt::Microsoft::UI::Xaml {
 struct RoutedEventArgs;
@@ -24,8 +28,8 @@ struct DeviceInformationCollection;
 namespace winrt::AudioPlaybackConnector2::implementation {
 struct DevicePickerView : DevicePickerViewT<DevicePickerView> {
     DevicePickerView();
-    void Initialize(std::shared_ptr<DeviceManager> manager,
-                    std::shared_ptr<Settings> settings,
+    void Initialize(std::shared_ptr<apc::device::DeviceService> service,
+                    std::shared_ptr<SettingsStore> settingsStore,
                     std::function<void()> onClose,
                     std::function<void(winrt::hstring)> onDeviceSelected,
                     std::function<void(winrt::hstring)> onDeviceDisconnect = nullptr,
@@ -39,12 +43,21 @@ struct DevicePickerView : DevicePickerViewT<DevicePickerView> {
     void ApplyLanguage();
     [[nodiscard]] bool InvalidateDeviceInventory();
     void SetPresentationActive(bool active) noexcept;
+    void SetDeviceSettings(std::shared_ptr<ISettingsController> controller,
+                           apc::app::SettingsWindowCommandExecutor::ExecuteCallback execute,
+                           std::function<void()> showSettings);
 
 private:
     void OnCloseClicked(winrt::Windows::Foundation::IInspectable const&,
                         winrt::Microsoft::UI::Xaml::RoutedEventArgs const&);
-    void OnDeviceSelected(winrt::Windows::Foundation::IInspectable const&,
-                          winrt::Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const&);
+    void OnDeviceToggle(winrt::hstring const& id);
+    void ShowDeviceOptions(std::wstring const& id);
+    void ReturnToDeviceList();
+    void AnimateNavigation(double previousHeight) noexcept;
+    void StopNavigationAnimation() noexcept;
+    void RefreshDeviceOptions(bool resetAlias = false);
+    [[nodiscard]] bool SaveDeviceAlias();
+    void ShowDeviceOptionsError();
     void OnDisconnectAllClicked(winrt::Windows::Foundation::IInspectable const&,
                                 winrt::Microsoft::UI::Xaml::RoutedEventArgs const&);
     void OnReconnectAllClicked(winrt::Windows::Foundation::IInspectable const&,
@@ -77,11 +90,17 @@ private:
     std::function<void(winrt::hstring)> m_onDeviceReconnect;
     std::function<void()> m_onDisconnectAll;
     std::function<void()> m_onReconnectAll;
-    std::weak_ptr<DeviceManager> m_deviceManager;
-    std::weak_ptr<Settings> m_settings;
+    std::function<void()> m_onShowSettings;
+    std::wstring m_optionsDeviceId;
+    std::wstring m_savedAlias;
+    bool m_updatingDeviceOptions = false;
+    bool m_savedDevicesExpanded = false;
+    winrt::Microsoft::UI::Xaml::Media::Animation::Storyboard m_navigationAnimation{nullptr};
+    std::uint64_t m_navigationAnimationGeneration = 0;
+    std::weak_ptr<apc::device::DeviceService> m_deviceService;
+    std::weak_ptr<SettingsStore> m_settingsStore;
     std::atomic<bool> m_isLoadingDevices = false;
     std::atomic<bool> m_loadDevicesCancelled = false;
-    std::atomic<bool> m_suppressSelectionChanged = false;
     std::atomic<uint64_t> m_loadDevicesRequestId = 0;
     std::atomic<uint64_t> m_activeLoadRequestId = 0;
     std::shared_ptr<apc::device_picker::DeviceInventoryGeneration> m_inventoryGeneration =

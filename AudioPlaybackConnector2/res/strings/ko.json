@@ -191,5 +191,18 @@
   "Command_ReconnectFailed": "{0}에 다시 연결할 수 없습니다.",
   "Command_DisconnectAllSucceeded": "연결된 모든 디바이스의 연결이 해제되었습니다.",
   "Command_ReconnectAllSucceeded": "연결된 모든 디바이스가 다시 연결되었습니다.",
-  "Command_Unsupported": "지원되지 않는 명령입니다."
+  "Command_Unsupported": "지원되지 않는 명령입니다.",
+  "Connect": "연결",
+  "DeviceOptions_Title": "기기 설정",
+  "DeviceOptions_Back": "뒤로",
+  "DeviceOptions_Saved": "저장된 기기",
+  "DeviceOptions_Save": "이름 저장",
+  "DeviceOptions_ResetName": "이름 초기화",
+  "DeviceOptions_Name": "표시 이름",
+  "DeviceOptions_Startup": "앱 시작 시 연결",
+  "DeviceOptions_Reconnect": "자동으로 다시 연결",
+  "DeviceOptions_Forget": "저장된 기기 설정 삭제",
+  "DeviceOptions_GlobalPolicy": "앱 설정에서 모든 기기에 대해 활성화되어 있습니다.",
+  "DeviceOptions_Unavailable": "사용할 수 없음",
+  "Settings_Connections": "연결"
 }

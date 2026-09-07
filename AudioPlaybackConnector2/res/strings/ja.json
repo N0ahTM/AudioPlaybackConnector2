@@ -191,5 +191,18 @@
   "Command_ReconnectFailed": "{0} を再接続できませんでした。",
   "Command_DisconnectAllSucceeded": "接続済みのすべてのデバイスを切断しました。",
   "Command_ReconnectAllSucceeded": "接続済みのすべてのデバイスを再接続しました。",
-  "Command_Unsupported": "サポートされていないコマンドです。"
+  "Command_Unsupported": "サポートされていないコマンドです。",
+  "Connect": "接続",
+  "DeviceOptions_Title": "デバイス設定",
+  "DeviceOptions_Back": "戻る",
+  "DeviceOptions_Saved": "保存済みデバイス",
+  "DeviceOptions_Save": "名前を保存",
+  "DeviceOptions_ResetName": "名前をリセット",
+  "DeviceOptions_Name": "表示名",
+  "DeviceOptions_Startup": "アプリ起動時に接続",
+  "DeviceOptions_Reconnect": "自動的に再接続",
+  "DeviceOptions_Forget": "保存したデバイス設定を削除",
+  "DeviceOptions_GlobalPolicy": "アプリ設定ですべてのデバイスに対して有効になっています。",
+  "DeviceOptions_Unavailable": "利用不可",
+  "Settings_Connections": "接続"
 }

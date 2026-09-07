@@ -1,89 +1,51 @@
 # Troubleshooting
 
-## `DEP0840` / missing WinAppRuntime packages
+## SmartScreen warns about the setup executable
 
-If you installed via `.appinstaller`, the required framework dependencies (including the Windows App SDK runtime)
-should be installed automatically. If you still see `DEP0840` mentioning missing packages such as
-`MicrosoftCorporationII.WinAppRuntime.Main.2` or `MicrosoftCorporationII.WinAppRuntime.Singleton`, install them manually:
+The setup `.exe` is not yet code-signed. Download it only from the [official release page](https://github.com/N0ahTM/AudioPlaybackConnector2/releases/latest), verify the filename, and use **More info > Run anyway** if you trust the download. The MSIX inside the setup is signed separately.
 
-1. [WinAppRuntime.Singleton](https://apps.microsoft.com/detail/9p5z076k079h)
-2. [Windows App SDK 2.0 runtime](https://learn.microsoft.com/en-us/windows/apps/windows-app-sdk/downloads#windows-app-sdk-20)
+## Setup fails
 
-Then retry install/launch.
+Open `%LOCALAPPDATA%\AudioPlaybackConnector2\install.log`. Retry after closing AudioPlaybackConnector2. If Web Setup could not download the release, check the connection or use the versioned offline setup. The manual App Installer path in [Installation](INSTALLATION.md) is also available.
 
-> This usually only happens when installing the raw `.msix` directly without the `.appinstaller` flow, or when the
-> framework packages were removed from the system after the app was installed.
+## Windows reports an untrusted publisher
 
-## App Installer protocol is disabled
+The releases currently use a self-signed certificate. Web Setup and offline Setup install the pinned certificate for the current user. For a manual MSIX installation, import the `.cer` file from the same release into `Cert:\CurrentUser\TrustedPeople`, then retry. Do not trust a certificate obtained from another website.
 
-Windows can report that the `ms-appinstaller:` protocol is disabled if a web install link is used:
+## A framework package is missing
 
-```powershell
-Start-Process "ms-appinstaller:?source=https://n0ahtm.github.io/AudioPlaybackConnector2/AudioPlaybackConnector2.appinstaller"
-```
+This usually occurs after installing the raw `.msix`. Prefer Web Setup, offline Setup, or the `.appinstaller`, which also install the required VCLibs and Windows App SDK packages.
 
-This is not specific to AudioPlaybackConnector2 and is not controlled by the MSIX package manifest. Microsoft disabled
-the protocol by default on consumer devices in December 2023 after it was abused to distribute malicious MSIX packages.
-Enterprise administrators can re-enable it with the `EnableMSAppInstallerProtocol` policy, but public GitHub releases
-should avoid depending on that protocol.
+If Windows mentions `MicrosoftCorporationII.WinAppRuntime.Main.2` or `MicrosoftCorporationII.WinAppRuntime.Singleton`, install the current [Windows App SDK runtime](https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads) and retry.
 
-Download the `.appinstaller` file and open the local file instead:
+## The `ms-appinstaller:` protocol is disabled
 
-```powershell
-$installer = Join-Path $env:TEMP "AudioPlaybackConnector2.appinstaller"
-Invoke-WebRequest -Uri "https://n0ahtm.github.io/AudioPlaybackConnector2/AudioPlaybackConnector2.appinstaller" -OutFile $installer
-Start-Process $installer
-```
+Public Windows installations may block web links using this protocol. Download the `.appinstaller` file locally and open it instead; the command is documented in [Installation](INSTALLATION.md). No policy change is required.
 
-Microsoft references:
+## The app or a Bluetooth connection fails
 
-- [Installing Windows apps from a web page](https://learn.microsoft.com/windows/msix/app-installer/installing-windows10-apps-web)
-- [Financially motivated threat actors misusing App Installer](https://www.microsoft.com/security/blog/2023/12/28/financially-motivated-threat-actors-misusing-app-installer/)
-- [DesktopAppInstaller policy CSP](https://learn.microsoft.com/windows/client-management/mdm/policy-csp-desktopappinstaller)
+1. Confirm that the device is paired and available in Windows Bluetooth settings.
+2. Exit AudioPlaybackConnector2 from the tray menu and start it again.
+3. Choose **Help** in the tray menu, or **? Help** in Settings, then expand diagnostics to copy the report or open the log folder.
+4. Include the app version, Windows build, installation method, and reproducible steps in a bug report.
 
-## Certificate trust errors during MSIX install
+Privacy mode redacts device names and IDs. Crash dumps remain local unless you share them and may contain sensitive memory, so review them first.
 
-If Windows reports an untrusted publisher:
+## A connection drops unexpectedly
 
-1. Install the `.cer` from the release.
-2. Use either machine-wide trust (`Cert:\LocalMachine\Root`) or per-user trust (`Cert:\CurrentUser\TrustedPeople`).
-3. Retry installing the `.msix` or `.appinstaller`.
+Record the time of the drop, whether audio was playing, and whether the phone, Bluetooth adapter, or PC changed power state. Include your Windows build, app version, and whether reconnect is enabled globally or for that device. Copy diagnostics soon after the event; a successful reconnect alone does not identify what caused the loss.
 
-See [Installation](INSTALLATION.md) for commands.
+Use the circular-arrow action for an explicit reconnect. Clicking the connected device name disconnects it intentionally. Device-specific policies are under **…** in the picker; an enabled global policy is also shown there and cannot be disabled for only one device.
+
+## Connected, but audio does not resume after a pause
+
+Before reconnecting, note the time, check whether the source's playback position advances, and confirm its selected audio output. Check the Windows output and volume mixer for mute or volume changes, then copy the app diagnostics from **Help**. Include the approximate pause duration and whether the source was locked or either device changed power state.
+
+The connected indicator reports connection state; it does not measure audible playback. A successful retry does not rule out an intermittent failure. Use the circular-arrow action to reconnect after collecting the details. The cause of the reported intermittent pause/resume failure is still under investigation.
 
 ## A2DP Sink audio always plays through the default output device
 
 Windows may ignore the per-app output device selected in **Settings > System > Sound > Volume mixer** for an
 `A2DP Sink` entry. In that case the Bluetooth source audio keeps playing through the current default playback device.
 
-AudioPlaybackConnector2 uses Windows' `AudioPlaybackConnection` API, which does not expose a supported output-device
-selector. The most reliable workaround is to make the A2DP Sink visible as a recording device, then use the legacy
-Sound control panel:
-
-1. Open Registry Editor.
-2. Go to `HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture`.
-3. Find the capture endpoint whose `Properties` include the Bluetooth device name.
-4. Back up the endpoint key before changing it.
-5. Under that endpoint's `Properties`, delete the value named `{9c119480-ddc2-4954-a150-5bd240d454ad},6`.
-6. Open `control mmsys.cpl sounds`, then switch to the **Recording** tab.
-7. Open the A2DP Sink device properties, switch to **Listen**, enable **Listen to this device**, and select the target
-   playback device.
-
-Be careful when editing `HKLM`; deleting the wrong value can break device configuration for the current Windows
-install. If you use Voicemeeter or similar routing software, route the newly visible recording endpoint there and
-avoid enabling **Listen to this device** at the same time, otherwise Windows may play the audio twice.
-
-Reference: [Microsoft Answers workaround](https://learn.microsoft.com/en-us/answers/questions/4123061/bluetooth-a2dp-snk-device-not-showing-up-in-sound).
-
-## Packaging fails because certificate thumbprint is invalid
-
-In Visual Studio:
-
-1. Open `Package.appxmanifest`.
-2. Go to **Packaging**.
-3. Create/select a local test certificate.
-4. Update `PackageCertificateThumbprint` in `AudioPlaybackConnector2 (Package)`.
-
-## C++23 compile issues in Visual Studio
-
-If the compiler does not accept required C++ features, set language standard to `/std:c++latest` and rebuild.
+`AudioPlaybackConnection` does not expose a supported output-device selector. Windows may therefore ignore a per-app output selected for an A2DP Sink. AudioPlaybackConnector2 does not recommend registry modifications to change this unsupported Windows behavior.

@@ -191,5 +191,18 @@
   "Command_ReconnectFailed": "無法重新連線 {0}。",
   "Command_DisconnectAllSucceeded": "所有已連線裝置均已中斷連線。",
   "Command_ReconnectAllSucceeded": "所有已連線裝置均已重新連線。",
-  "Command_Unsupported": "不支援的命令。"
+  "Command_Unsupported": "不支援的命令。",
+  "Connect": "連線",
+  "DeviceOptions_Title": "裝置設定",
+  "DeviceOptions_Back": "返回",
+  "DeviceOptions_Saved": "已儲存的裝置",
+  "DeviceOptions_Save": "儲存名稱",
+  "DeviceOptions_ResetName": "重設名稱",
+  "DeviceOptions_Name": "顯示名稱",
+  "DeviceOptions_Startup": "啟動應用程式時連線",
+  "DeviceOptions_Reconnect": "自動重新連線",
+  "DeviceOptions_Forget": "刪除已儲存的裝置設定",
+  "DeviceOptions_GlobalPolicy": "已在應用程式設定中為所有裝置啟用。",
+  "DeviceOptions_Unavailable": "無法使用",
+  "Settings_Connections": "連線"
 }

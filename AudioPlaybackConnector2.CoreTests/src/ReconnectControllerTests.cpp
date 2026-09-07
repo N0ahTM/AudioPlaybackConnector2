@@ -1,8 +1,6 @@
-#include <core/ReconnectController.hpp>
 #include <control/CommandProtocol.hpp>
 #include <services/ToastXmlSanitizer.hpp>
 
-#include <array>
 #include <atomic>
 #include <iostream>
 #include <string_view>
@@ -17,202 +15,6 @@ void Check(bool condition, std::string_view message) {
     if (condition) return;
     ++g_failures;
     std::cerr << "FAILED: " << message << '\n';
-}
-
-void TestFullBackoffSequence() {
-    constexpr std::wstring_view id = L"device-a";
-    constexpr std::array expectedDelays{5, 10, 20, 40, 60, 60, 60, 60, 60, 60};
-    ReconnectController controller;
-
-    for (std::size_t index = 0; index < expectedDelays.size(); ++index) {
-        auto decision = controller.PrepareSchedule(id, false);
-        Check(decision.ShouldSchedule, "each incomplete attempt must schedule");
-        Check(decision.Attempt == index + 1, "attempt number must advance only after a completed failure");
-        Check(decision.Delay == std::chrono::seconds(expectedDelays[index]), "backoff delay must be deterministic");
-        Check(controller.HasPendingTimer(id), "scheduled timer must be reported as pending");
-        Check(!controller.PrepareSchedule(id, false).ShouldSchedule, "a device may have only one pending timer");
-        Check(controller.ClaimTimer(decision.Token), "the current timer token must be claimable exactly once");
-        Check(!controller.ClaimTimer(decision.Token), "a claimed timer token must not be claimable twice");
-
-        auto completion = controller.CompleteAttemptFailed(decision.Token);
-        Check(completion.AttemptCompleted, "a claimed attempt failure must be accepted");
-        Check(completion.NotifyFailed == (index + 1 == expectedDelays.size()),
-              "terminal failure must be notified exactly on attempt ten");
-        Check(controller.Attempts(id) == index + 1, "only completed attempts count toward the limit");
-    }
-
-    auto terminal = controller.PrepareSchedule(id, false);
-    Check(!terminal.ShouldSchedule, "no timer may be scheduled after the terminal attempt");
-    Check(!terminal.NotifyFailed, "terminal failure notification must be one-shot");
-}
-
-void TestSuccessAndStaleTokens() {
-    constexpr std::wstring_view id = L"device-b";
-    ReconnectController controller;
-
-    auto first = controller.PrepareSchedule(id, false);
-    Check(controller.ClaimTimer(first.Token), "first timer must be claimable");
-    auto firstFailure = controller.CompleteAttemptFailed(first.Token);
-    Check(firstFailure.AttemptCompleted, "first failure must complete");
-
-    auto second = controller.PrepareSchedule(id, false);
-    Check(controller.ClaimTimer(second.Token), "second timer must be claimable");
-    controller.CompleteAttemptSucceeded(second.Token);
-    Check(controller.Attempts(id) == 0, "success must reset attempts");
-    Check(!controller.HasPendingTimer(id), "success must clear busy reconnect state");
-    Check(!controller.CompleteAttemptFailed(second.Token).AttemptCompleted,
-          "a success-invalidated token must not mutate state later");
-
-    auto stale = controller.PrepareSchedule(id, false);
-    controller.BeginManualOperation(id);
-    Check(!controller.ClaimTimer(stale.Token), "manual operations must invalidate older automatic timers");
-}
-
-void TestCancellationAndTimerCreationFailure() {
-    constexpr std::wstring_view id = L"device-c";
-    ReconnectController controller;
-
-    auto pending = controller.PrepareSchedule(id, false);
-    controller.CancelDevice(id);
-    Check(!controller.ClaimTimer(pending.Token), "device cancellation must invalidate a pending timer");
-    Check(controller.IsCancelled(id), "device cancellation must remain observable");
-    Check(!controller.PrepareSchedule(id, false).ShouldSchedule, "cancelled devices must not silently restart");
-
-    controller.BeginManualOperation(id);
-    auto retryable = controller.PrepareSchedule(id, false);
-    Check(controller.HandleTimerCreateFailed(retryable.Token),
-          "timer creation failure must report that pending activity changed");
-    Check(!controller.HandleTimerCreateFailed(retryable.Token),
-          "a stale timer creation failure must not report a second activity change");
-    auto replacement = controller.PrepareSchedule(id, false);
-    Check(replacement.ShouldSchedule, "timer creation failure must release the pending slot");
-    Check(replacement.Attempt == 1, "timer creation failure must not consume an attempt");
-
-    controller.CancelPendingReconnects();
-    Check(!controller.ClaimTimer(replacement.Token), "global cancellation must invalidate every timer token");
-    Check(controller.AllReconnectsCancelled(), "global cancellation must remain observable");
-    Check(!controller.PrepareSchedule(id, false).ShouldSchedule, "global cancellation must block new timers");
-}
-
-void TestObservedConnectionInvalidatesAttempt() {
-    constexpr std::wstring_view id = L"device-d";
-    ReconnectController controller;
-
-    auto decision = controller.PrepareSchedule(id, false);
-    Check(controller.ClaimTimer(decision.Token), "timer must be claimable before observed success");
-    controller.CompleteConnectionSucceeded(id);
-    Check(!controller.CompleteAttemptFailed(decision.Token).AttemptCompleted,
-          "an observed connection must invalidate a late failure completion");
-    Check(controller.Attempts(id) == 0, "an observed connection must reset attempts");
-}
-
-void TestUnknownConnectionSuccessDoesNotCreateState() {
-    constexpr std::wstring_view id = L"device-unknown-success";
-    ReconnectController controller;
-
-    controller.CompleteConnectionSucceeded(id);
-    controller.CancelPendingReconnects();
-    Check(!controller.IsCancelled(id), "observing an untracked success must not allocate persistent reconnect state");
-}
-
-void TestBlockedTimerDoesNotRemainPending() {
-    constexpr std::wstring_view id = L"device-blocked";
-    ReconnectController controller;
-
-    auto blocked = controller.PrepareSchedule(id, false);
-    Check(controller.RetireTimer(blocked.Token), "a blocked current timer must be retired");
-    Check(!controller.HasPendingTimer(id), "a fired blocked timer must release its pending slot");
-    auto replacement = controller.PrepareSchedule(id, false);
-    Check(replacement.ShouldSchedule, "a later connection loss must be able to schedule after a blocked timer");
-    Check(replacement.Attempt == blocked.Attempt, "retiring a blocked timer must not consume an attempt");
-    Check(replacement.Token.DeviceGeneration != blocked.Token.DeviceGeneration,
-          "a replacement timer must not reuse the retired token generation");
-    Check(!controller.ClaimTimer(blocked.Token), "a retired callback must not claim its replacement timer");
-    Check(controller.ClaimTimer(replacement.Token), "the replacement timer must remain claimable");
-}
-
-void TestBusyTimerDeferralPreservesReconnect() {
-    constexpr std::wstring_view id = L"device-deferred";
-    ReconnectController controller;
-
-    auto original = controller.PrepareSchedule(id, false);
-    auto deferred = controller.DeferTimer(original.Token);
-    Check(deferred.ShouldSchedule, "a current timer blocked by another operation must be deferred");
-    Check(deferred.Attempt == original.Attempt, "deferral must not consume a reconnect attempt");
-    Check(deferred.Token.DeviceGeneration != original.Token.DeviceGeneration,
-          "deferral must invalidate the original callback token");
-    Check(controller.HasPendingTimer(id), "a deferred reconnect must remain observably pending");
-    Check(!controller.ClaimTimer(original.Token), "the original callback must be stale after deferral");
-    Check(controller.ClaimTimer(deferred.Token), "the deferred callback must remain claimable");
-
-    auto next = controller.PrepareSchedule(L"device-deferred-stale", false);
-    auto replacement = controller.DeferTimer(next.Token);
-    Check(!controller.DeferTimer(next.Token).ShouldSchedule,
-          "a stale callback must not replace a newer deferred timer");
-    Check(controller.ClaimTimer(replacement.Token), "stale deferral must leave the newer timer intact");
-}
-
-void TestAbortReleasesClaimedAttempt() {
-    constexpr std::wstring_view id = L"device-aborted-attempt";
-    ReconnectController controller;
-
-    auto claimed = controller.PrepareSchedule(id, false);
-    Check(controller.ClaimTimer(claimed.Token), "the timer must be claimed before aborting its attempt");
-    Check(controller.HasAttemptInProgress(id), "a claimed timer must expose an active attempt");
-    Check(controller.AbortTimerOrAttempt(claimed.Token), "the current claimed attempt must be abortable");
-    Check(!controller.HasAttemptInProgress(id), "aborting a claimed attempt must clear active reconnect state");
-    Check(!controller.HasPendingTimer(id), "aborting a claimed attempt must not leave a pending timer");
-    Check(!controller.AbortTimerOrAttempt(claimed.Token), "an aborted token must become stale immediately");
-
-    auto replacement = controller.PrepareSchedule(id, false);
-    Check(replacement.ShouldSchedule, "an exception-aborted attempt must remain retryable");
-    Check(replacement.Attempt == claimed.Attempt, "an exception-aborted attempt must not consume an attempt");
-    Check(replacement.Token.DeviceGeneration != claimed.Token.DeviceGeneration,
-          "an exception-aborted attempt must not reuse its token generation");
-}
-
-void TestAbortDoesNotMutateNewerTimer() {
-    constexpr std::wstring_view id = L"device-abort-stale";
-    ReconnectController controller;
-
-    auto original = controller.PrepareSchedule(id, false);
-    Check(controller.RetireTimer(original.Token), "the original timer must be retired before replacement");
-    auto replacement = controller.PrepareSchedule(id, false);
-    Check(replacement.ShouldSchedule, "a replacement timer must be schedulable");
-    Check(!controller.AbortTimerOrAttempt(original.Token), "a stale abort must not affect a replacement timer");
-    Check(controller.HasPendingTimer(id), "a stale abort must leave the replacement pending");
-    Check(controller.ClaimTimer(replacement.Token), "the replacement timer must remain claimable");
-}
-
-void TestReconnectPolicyDoesNotBecomeUserCancellation() {
-    constexpr std::wstring_view id = L"device-policy";
-    ReconnectController controller;
-
-    auto pending = controller.PrepareSchedule(id, false);
-    controller.SetPolicyEnabled(id, false);
-    Check(!controller.ClaimTimer(pending.Token), "disabling policy must invalidate a pending timer");
-    Check(!controller.IsCancelled(id), "policy disable must not be recorded as a user cancellation");
-    Check(!controller.PrepareSchedule(id, false).ShouldSchedule, "disabled policy must block reconnect scheduling");
-
-    controller.SetPolicyEnabled(id, true);
-    Check(controller.PrepareSchedule(id, false).ShouldSchedule,
-          "re-enabling policy must permit a later connection-loss reconnect");
-}
-
-void TestReconnectPolicyDoesNotClearUserCancellation() {
-    constexpr std::wstring_view id = L"device-user-cancelled";
-    ReconnectController controller;
-
-    controller.CancelDevice(id);
-    controller.SetPolicyEnabled(id, false);
-    controller.SetPolicyEnabled(id, true);
-    Check(controller.IsCancelled(id), "policy changes must not erase an explicit user cancellation");
-    Check(!controller.PrepareSchedule(id, false).ShouldSchedule,
-          "a user-cancelled device must remain blocked until a manual operation");
-
-    controller.BeginManualOperation(id);
-    Check(controller.PrepareSchedule(id, false).ShouldSchedule,
-          "a later manual operation must explicitly clear user cancellation");
 }
 
 class UniqueHandle {
@@ -445,19 +247,25 @@ void TestToastXmlSanitization() {
 
 int RunAdaptiveResourceDiagnosticsTests();
 int RunAdaptiveResourcePolicyTests();
+int RunAppControllerTests();
+int RunAppModelsTests();
+int RunControlCommandAdapterTests();
 int RunAppWorkCoordinatorTests();
 int RunAutoReconnectPlannerTests();
 int RunCommandClientTests();
 int RunCommandLineControlServerTests();
 int RunControlUiActionGateTests();
 int RunControlTargetMatcherTests();
-int RunDeviceOperationCoordinatorTests();
+int RunDeviceServiceTests();
+int RunDeviceWatcherTests();
 int RunDiagnosticsLogCollectorTests();
 int RunEventTests();
 int RunSettingsDiagnosticsReportBuilderTests();
+int RunSettingsStoreTests();
 int RunDevicePickerSnapshotTests();
 int RunLatestStartupTaskRequestStateTests();
-int RunLatestServiceLifecycleStateTests();
+int RunLegacyAppUseCaseBridgeTests();
+int RunReconnectPolicyTests();
 int RunResourcePressureMonitorTests();
 int RunRuntimeApartmentTests();
 int RunSettingsLimitsTests();
@@ -467,17 +275,6 @@ int RunTrayTooltipBuilderTests();
 int RunUpdateCoordinatorTests();
 
 int main() {
-    TestFullBackoffSequence();
-    TestSuccessAndStaleTokens();
-    TestCancellationAndTimerCreationFailure();
-    TestObservedConnectionInvalidatesAttempt();
-    TestUnknownConnectionSuccessDoesNotCreateState();
-    TestBlockedTimerDoesNotRemainPending();
-    TestBusyTimerDeferralPreservesReconnect();
-    TestAbortReleasesClaimedAttempt();
-    TestAbortDoesNotMutateNewerTimer();
-    TestReconnectPolicyDoesNotBecomeUserCancellation();
-    TestReconnectPolicyDoesNotClearUserCancellation();
     TestCommandProtocolRoundTrip();
     TestCommandProtocolDelayedResponseReader();
     TestCommandProtocolStrictValidation();
@@ -486,19 +283,25 @@ int main() {
     TestToastXmlSanitization();
     g_failures += RunAdaptiveResourceDiagnosticsTests();
     g_failures += RunAdaptiveResourcePolicyTests();
+    g_failures += RunAppControllerTests();
+    g_failures += RunAppModelsTests();
+    g_failures += RunControlCommandAdapterTests();
     g_failures += RunAppWorkCoordinatorTests();
     g_failures += RunAutoReconnectPlannerTests();
     g_failures += RunCommandClientTests();
     g_failures += RunCommandLineControlServerTests();
     g_failures += RunControlUiActionGateTests();
     g_failures += RunControlTargetMatcherTests();
-    g_failures += RunDeviceOperationCoordinatorTests();
+    g_failures += RunDeviceServiceTests();
+    g_failures += RunDeviceWatcherTests();
     g_failures += RunDiagnosticsLogCollectorTests();
     g_failures += RunEventTests();
     g_failures += RunSettingsDiagnosticsReportBuilderTests();
+    g_failures += RunSettingsStoreTests();
     g_failures += RunDevicePickerSnapshotTests();
     g_failures += RunLatestStartupTaskRequestStateTests();
-    g_failures += RunLatestServiceLifecycleStateTests();
+    g_failures += RunLegacyAppUseCaseBridgeTests();
+    g_failures += RunReconnectPolicyTests();
     g_failures += RunResourcePressureMonitorTests();
     g_failures += RunRuntimeApartmentTests();
     g_failures += RunSettingsLimitsTests();

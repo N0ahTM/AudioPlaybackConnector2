@@ -15,13 +15,13 @@
 #ifndef StageDir
   #define StageDir "stage"
 #endif
-#ifndef PackageArchitecture
-  #define PackageArchitecture "x64"
-#endif
 #ifdef WEBBOOT
   #define BaseName AppName + "-WebSetup"
 #else
   #define BaseName AppName + "-Setup-" + AppVersion
+  #ifndef PackageFileName
+    #error PackageFileName is required; use installer/build-installer.ps1 to stage and validate the payload.
+  #endif
 #endif
 
 [Setup]
@@ -33,13 +33,12 @@ AppPublisherURL=https://github.com/N0ahTM/AudioPlaybackConnector2
 AppSupportURL=https://github.com/N0ahTM/AudioPlaybackConnector2/issues
 DefaultDirName={localappdata}\{#AppName}
 PrivilegesRequired=lowest
-ArchitecturesAllowed=x64compatible
+ArchitecturesAllowed=x64compatible or arm64
+ArchitecturesInstallIn64BitMode=x64compatible or arm64
 MinVersion=10.0.19041
 OutputDir=..\dist\installer
 OutputBaseFilename={#BaseName}
-SetupIconFile=assets\setup.ico
-WizardImageFile=assets\wizard.bmp
-WizardSmallImageFile=assets\wizard-small.bmp
+SetupIconFile=..\AudioPlaybackConnector2\res\app.ico
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
@@ -47,10 +46,10 @@ DisableWelcomePage=yes
 DisableDirPage=yes
 DisableProgramGroupPage=yes
 DisableReadyPage=yes
-; The real payload is the MSIX; the app dir only holds a readme. No uninstaller
-; entry: uninstall is offered by this bootstrapper itself and via Windows Settings.
+; The bootstrapper only registers the MSIX and does not install files into {app}.
+; Uninstall is offered by this bootstrapper itself and via Windows Settings.
 Uninstallable=no
-CreateAppDir=yes
+CreateAppDir=no
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -59,10 +58,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Source: "{#StageDir}\install-app.ps1"; DestDir: "{tmp}\pkg"; Flags: ignoreversion
 Source: "{#StageDir}\AudioPlaybackConnector2.cer"; DestDir: "{tmp}\pkg"; Flags: ignoreversion
 #ifndef WEBBOOT
-Source: "{#StageDir}\*.msix"; DestDir: "{tmp}\pkg"; Flags: ignoreversion
+Source: "{#StageDir}\{#PackageFileName}"; DestDir: "{tmp}\pkg"; Flags: ignoreversion
 Source: "{#StageDir}\Dependencies\*"; DestDir: "{tmp}\pkg\Dependencies"; Flags: ignoreversion recursesubdirs skipifsourcedoesntexist
 #endif
-Source: "README-INSTALL.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Code]
 var
@@ -115,7 +113,15 @@ function PsExe: String;
 { Full path: bare "powershell.exe" depends on the caller's PATH, which is
   unreliable when setup is launched from non-standard shells. }
 begin
-  Result := ExpandConstant('{syswow64}\WindowsPowerShell\v1.0\powershell.exe');
+  Result := ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe');
+end;
+
+function NativePackageArchitecture: String;
+begin
+  if IsArm64 then
+    Result := 'arm64'
+  else
+    Result := 'x64';
 end;
 
 procedure RunVersionCheck;
@@ -293,18 +299,20 @@ var
   Arch, Cmd: String;
 begin
   Result := False;
-  Arch := '{#PackageArchitecture}';
+  Arch := NativePackageArchitecture;
   Cmd := '-NoProfile -ExecutionPolicy Bypass -Command "' +
     '[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; ' +
     '$r = Invoke-RestMethod ''https://api.github.com/repos/N0ahTM/AudioPlaybackConnector2/releases/latest'' ' +
     '-Headers @{ ''User-Agent'' = ''apc2-setup'' } -TimeoutSec 30; ' +
-    '$packages = @($r.assets | Where-Object { $_.Name -match ''^AudioPlaybackConnector2_[\d.]+_' + Arch + '\.msix$'' }); ' +
+    '$resolvedVersion = ($r.tag_name.TrimStart(''v'')) + ''.0''; ' +
+    'if (''' + LatestVersion + ''' -ne '''' -and $resolvedVersion -ne ''' + LatestVersion + ''') { exit 3 }; ' +
+    '$packages = @($r.assets | Where-Object { $_.Name -match ''^AudioPlaybackConnector2_[\d.]+_x64_ARM64\.msixbundle$'' }); ' +
     'if ($packages.Count -ne 1) { exit 2 }; $out = @(); ' +
     '$out += @($packages | ' +
     'ForEach-Object { $_.browser_download_url + ''|'' + $_.Name }); ' +
     '$out += @($r.assets | Where-Object { ($_.Name -match ''\.(msix|appx)$'') -and ' +
     '($_.Name -notmatch ''^AudioPlaybackConnector2_'') -and ' +
-    '(($_.Name -match ''\.' + Arch + '\.'') -or ($_.Name -notmatch ''\.(x86|x64|arm64)\.'')) } | ' +
+    '(($_.Name -match ''\.' + Arch + '\.'') -or ($_.Name -notmatch ''\.(x64|arm64)\.'')) } | ' +
     'ForEach-Object { $_.browser_download_url + ''|'' + $_.Name }); ' +
     '[IO.File]::WriteAllLines(''' + ListFile + ''', $out)"';
   if Exec(PsExe, Cmd, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and
@@ -379,9 +387,10 @@ begin
   { cmd /c so console output lands in a file the memo can display. }
   Params := '/c ""' + PsExe + '" -NoProfile -ExecutionPolicy Bypass -File "' +
             ExpandConstant('{tmp}\pkg\install-app.ps1') + '" -Step ' + StepName +
-            ' -PackageArchitecture {#PackageArchitecture}';
-  if StepName <> 'verify' then
-    Params := Params + ' -PackageDir "' + ExpandConstant('{tmp}\pkg') + '"';
+            ' -PackageArchitecture ' + NativePackageArchitecture;
+  Params := Params + ' -PackageDir "' + ExpandConstant('{tmp}\pkg') + '"';
+  if (StepName = 'validate') and (LatestVersion <> '') then
+    Params := Params + ' -ExpectedPackageVersion "' + LatestVersion + '"';
   if (StepName = 'verify') and (not WizardSilent) then
     Params := Params + ' -Launch';
   Params := Params + ' > "' + OutFile + '" 2>&1"';
@@ -416,6 +425,7 @@ begin
     end
     else
     begin
+      RunStep('validate', 'Validating the downloaded package ...');
       RunStep('cert', 'Trusting the signing certificate ...');
       RunStep('install', 'Installing the app package ...');
       RunStep('verify', 'Verifying and launching ...');

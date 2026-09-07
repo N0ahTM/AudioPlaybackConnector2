@@ -4,32 +4,27 @@ on:
   workflow_dispatch:
     inputs:
       semver:
-        description: Release version to dry-run, for example 0.7.0.
+        description: Release version to dry-run, for example 1.2.3.
         required: true
-        default: 0.7.0
         type: string
 
-env:
-  APPINSTALLER_URL: https://n0ahtm.github.io/AudioPlaybackConnector2/AudioPlaybackConnector2.appinstaller
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
-  release-dry-run:
-    runs-on: windows-2022
-    permissions:
-      contents: read
-
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      semver: ${{ steps.version.outputs.semver }}
+      tag: ${{ steps.version.outputs.tag }}
+      package_version: ${{ steps.version.outputs.package_version }}
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
-
-    - name: Extract version
+    - name: Validate version
       id: version
       shell: pwsh
+      env:
+        INPUT_SEMVER: ${{ inputs.semver }}
       run: |
         $semver = $env:INPUT_SEMVER
         if ($semver -notmatch '^\d+\.\d+\.\d+$') {
-          throw "Version must look like 0.6.0."
+          throw 'Version must look like 1.2.3.'
         }
         foreach ($part in $semver.Split('.')) {
           [uint64]$component = 0
@@ -37,242 +32,49 @@ jobs:
             throw 'Version contains an invalid MSIX component.'
           }
         }
-        "TAG=v$semver" >> $env:GITHUB_OUTPUT
-        "SEMVER=$semver" >> $env:GITHUB_OUTPUT
-        "VERSION=$semver.0" >> $env:GITHUB_OUTPUT
-      env:
-        INPUT_SEMVER: ${{ inputs.semver }}
+        "semver=$semver" >> $env:GITHUB_OUTPUT
+        "tag=v$semver" >> $env:GITHUB_OUTPUT
+        "package_version=$semver.0" >> $env:GITHUB_OUTPUT
 
-    - name: Patch version into package metadata
-      shell: pwsh
-      run: ./scripts/release/update-package-version.ps1 -Version '${{ steps.version.outputs.VERSION }}'
+  build-artifacts:
+    needs: version
+    uses: ./.github/workflows/build-release-artifacts.yml
+    with:
+      source_ref: ${{ github.sha }}
+      tag: ${{ needs.version.outputs.tag }}
+      semver: ${{ needs.version.outputs.semver }}
+      package_version: ${{ needs.version.outputs.package_version }}
+      run_static_analysis: true
+    secrets:
+      SIGNING_CERTIFICATE_PFX: ${{ secrets.SIGNING_CERTIFICATE_PFX }}
+      SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
 
-    - name: Add MSBuild to PATH
-      uses: microsoft/setup-msbuild@v2
+  report:
+    runs-on: ubuntu-24.04
+    needs:
+      - version
+      - build-artifacts
+    permissions:
+      contents: read
+    steps:
+    - name: Download release artifacts
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      with:
+        name: ${{ needs.build-artifacts.outputs.artifact_name }}
+        path: release-artifacts
 
-    - name: Install static analysis tools
-      shell: pwsh
-      run: |
-        choco install llvm cppcheck -y --no-progress
-        "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-        "C:\Program Files\Cppcheck" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-    - name: Check formatting
-      shell: pwsh
-      run: |
-        $files = git ls-files '*.cpp' '*.h' '*.hpp' '*.cxx' '*.cc' '*.ixx'
-        clang-format --dry-run --Werror $files
-
-    - name: Run CppCheck
-      shell: pwsh
-      run: |
-        $files = git ls-files 'AudioPlaybackConnector2/src/*.cpp' 'AudioPlaybackConnector2/ui/*.cpp'
-        cppcheck `
-          --enable=warning,performance,portability `
-          --std=c++20 `
-          --language=c++ `
-          --platform=win64 `
-          --inline-suppr `
-          -IAudioPlaybackConnector2/include `
-          -IAudioPlaybackConnector2/res `
-          -IAudioPlaybackConnector2/ui `
-          -IAudioPlaybackConnector2/ui/App `
-          -IAudioPlaybackConnector2/ui/MainWindow `
-          -IAudioPlaybackConnector2/ui/DevicePickerView `
-          -IAudioPlaybackConnector2/ui/SettingsWindow `
-          --error-exitcode=1 `
-          --template=gcc `
-          $files
-
-    - name: Decode signing certificate
-      id: cert
+    - name: Report artifact sizes
       shell: pwsh
       run: |
-        $certPath = "$env:TEMP\AudioPlaybackConnector2.pfx"
-        $bytes = [Convert]::FromBase64String("${{ secrets.SIGNING_CERTIFICATE_PFX }}")
-        [IO.File]::WriteAllBytes($certPath, $bytes)
-        "CERT_PATH=$certPath" >> $env:GITHUB_OUTPUT
-
-    - name: Restore NuGet packages
-      run: msbuild AudioPlaybackConnector2.slnx -t:restore -p:RestorePackagesConfig=true
-
-    - name: Build signed MSIX (Release, x64)
-      run: >
-        msbuild AudioPlaybackConnector2.slnx
-        /p:Configuration=Release
-        /p:Platform=x64
-        /p:AppxPackageSigningEnabled=true
-        /p:PackageCertificateKeyFile=${{ steps.cert.outputs.CERT_PATH }}
-        /p:PackageCertificatePassword=${{ secrets.SIGNING_CERTIFICATE_PASSWORD }}
-        /p:UapAppxPackageBuildMode=SideloadOnly
-        /p:AppxBundle=Never
-        /t:Rebuild
-
-    - name: Locate MSIX
-      id: msix
-      shell: pwsh
-      run: ./scripts/release/locate-msix.ps1 -Version '${{ steps.version.outputs.VERSION }}' -Configuration Release -Architecture x64
-
-    - name: Verify built MSIX metadata and payload
-      id: package
-      shell: pwsh
-      run: >
-        ./scripts/release/verify-msix-package.ps1
-        -MsixPath '${{ steps.msix.outputs.PATH }}'
-        -ExpectedPackageVersion '${{ steps.version.outputs.VERSION }}'
-        -ExpectedProcessorArchitecture x64
-        -ExpectedName N0ahTM.AudioPlaybackConnector2
-        -ExpectedPublisher 'CN=AudioPlaybackConnector2'
-        -RequiredEntries AudioPlaybackConnector2.exe,AudioPlaybackConnector2.Control/AudioPlaybackConnector2.Control.exe
-        -UniqueEntries AudioPlaybackConnector2.exe,AudioPlaybackConnector2.Control/AudioPlaybackConnector2.Control.exe
-        -RequireSignature
-        -WriteGitHubOutput
-
-    - name: Run native regression tests
-      run: .\x64\Release\tests\AudioPlaybackConnector2.CoreTests.exe
-
-    - name: Collect dependencies
-      id: deps
-      shell: pwsh
-      run: |
-        $depsDir = '${{ steps.msix.outputs.DEPS_DIR }}'
-        if (-not $depsDir -or -not (Test-Path $depsDir)) {
-          Write-Host "No dependencies directory found."
-          exit 0
-        }
-        $staging = Join-Path $env:RUNNER_TEMP 'dependencies'
-        New-Item -ItemType Directory -Path $staging -Force | Out-Null
-        $files = Get-ChildItem -Path $depsDir -Recurse -Include @("*.appx", "*.msix")
-        foreach ($f in $files) {
-          Copy-Item -LiteralPath $f.FullName -Destination $staging -Force
-        }
-        "DIR=$staging" >> $env:GITHUB_OUTPUT
-        Get-ChildItem -Path $staging | ForEach-Object { Write-Host "Dependency: $($_.Name)" }
-
-    - name: Extract changelog
-      id: changelog
-      shell: pwsh
-      run: ./scripts/release/extract-changelog.ps1 -Version '${{ steps.version.outputs.TAG }}'
-
-    - name: Generate App Installer feed
-      id: appinstaller
-      shell: pwsh
-      run: |
-        $msixUrl = "https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.TAG }}/${{ steps.msix.outputs.NAME }}"
-        $depBaseUrl = "https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.TAG }}"
-        $outputPath = Join-Path $env:RUNNER_TEMP 'AudioPlaybackConnector2.appinstaller'
-        $depsDir = '${{ steps.deps.outputs.DIR }}'
-        $params = @{
-          MsixUrl = $msixUrl
-          AppInstallerUrl = $env:APPINSTALLER_URL
-          MsixPath = '${{ steps.msix.outputs.PATH }}'
-          OutputPath = $outputPath
-          ExpectedPackageVersion = '${{ steps.version.outputs.VERSION }}'
-          ProcessorArchitecture = 'x64'
-        }
-        if ($depsDir -and (Test-Path $depsDir)) {
-          $params['DependenciesDirectory'] = $depsDir
-          $params['DependencyBaseUrl'] = $depBaseUrl
-        }
-        ./scripts/release/generate-appinstaller.ps1 @params
-        "PATH=$outputPath" >> $env:GITHUB_OUTPUT
-
-    - name: Install Inno Setup
-      run: choco install innosetup -y --no-progress
-
-    - name: Build bootstrapper installers
-      id: installers
-      shell: pwsh
-      run: |
-        $outputDir = Join-Path $env:RUNNER_TEMP 'installers'
-        $bundleParams = @{
-          Mode = 'Bundle'
-          MsixPath = '${{ steps.msix.outputs.PATH }}'
-          CertPath = 'certs/AudioPlaybackConnector2.cer'
-          Version = '${{ steps.version.outputs.SEMVER }}'
-          OutputDir = $outputDir
-        }
-        $depsDir = '${{ steps.deps.outputs.DIR }}'
-        if ($depsDir -and (Test-Path $depsDir)) {
-          $bundleParams['DependenciesDir'] = $depsDir
-        }
-        ./installer/build-installer.ps1 @bundleParams
-        ./installer/build-installer.ps1 `
-          -Mode Web `
-          -CertPath 'certs/AudioPlaybackConnector2.cer' `
-          -Version '${{ steps.version.outputs.SEMVER }}' `
-          -OutputDir $outputDir
-
-        $bundlePath = Join-Path $outputDir 'AudioPlaybackConnector2-Setup-${{ steps.version.outputs.SEMVER }}.exe'
-        $webPath = Join-Path $outputDir 'AudioPlaybackConnector2-WebSetup.exe'
-        if (-not (Test-Path $bundlePath) -or -not (Test-Path $webPath)) {
-          throw 'One or more bootstrapper installers were not created.'
-        }
-        "BUNDLE_PATH=$bundlePath" >> $env:GITHUB_OUTPUT
-        "WEB_PATH=$webPath" >> $env:GITHUB_OUTPUT
-
-    - name: Stage dry-run artifacts and report sizes
-      id: report
-      shell: pwsh
-      run: |
-        $staging = Join-Path $env:RUNNER_TEMP 'release-dry-run'
-        $depsTarget = Join-Path $staging 'dependencies'
-        New-Item -ItemType Directory -Path $staging -Force | Out-Null
-
-        Copy-Item -LiteralPath '${{ steps.msix.outputs.PATH }}' -Destination $staging -Force
-        Copy-Item -LiteralPath '${{ steps.appinstaller.outputs.PATH }}' -Destination $staging -Force
-        Copy-Item -LiteralPath '${{ steps.installers.outputs.WEB_PATH }}' -Destination $staging -Force
-        Copy-Item -LiteralPath '${{ steps.installers.outputs.BUNDLE_PATH }}' -Destination $staging -Force
-        Copy-Item -LiteralPath 'certs/AudioPlaybackConnector2.cer' -Destination $staging -Force
-
-        $releaseNotes = Join-Path $staging 'RELEASE_NOTES.md'
-        $releaseBody = @'
-        ${{ steps.changelog.outputs.BODY }}
-        '@
-        $releaseBody.Trim() | Set-Content -Path $releaseNotes -Encoding utf8
-
-        $depsDir = '${{ steps.deps.outputs.DIR }}'
-        if ($depsDir -and (Test-Path $depsDir)) {
-          New-Item -ItemType Directory -Path $depsTarget -Force | Out-Null
-          Copy-Item -Path (Join-Path $depsDir '*') -Destination $depsTarget -Force
-        }
-
-        $manifestJson = Join-Path $staging 'msix-manifest.json'
-        [pscustomobject]@{
-          Name = '${{ steps.package.outputs.NAME }}'
-          Publisher = '${{ steps.package.outputs.PUBLISHER }}'
-          Version = '${{ steps.package.outputs.VERSION }}'
-          ProcessorArchitecture = '${{ steps.package.outputs.ARCHITECTURE }}'
-        } | ConvertTo-Json | Set-Content -Path $manifestJson -Encoding utf8
-
-        $sizes = Get-ChildItem -Path $staging -Recurse -File |
-          Sort-Object FullName |
-          ForEach-Object {
-            [pscustomobject]@{
-              Path = $_.FullName.Substring($staging.Length + 1)
-              Bytes = $_.Length
-              MiB = [math]::Round($_.Length / 1MB, 2)
-            }
-          }
-        $sizes | ConvertTo-Json | Set-Content -Path (Join-Path $staging 'file-sizes.json') -Encoding utf8
-        $sizes | Format-Table -AutoSize
-
-        $summary = @()
-        $summary += "## Release dry run v${{ steps.version.outputs.SEMVER }}"
-        $summary += ""
-        $summary += "| File | Bytes | MiB |"
-        $summary += "| --- | ---: | ---: |"
-        foreach ($item in $sizes) {
-          $summary += "| $($item.Path) | $($item.Bytes) | $($item.MiB) |"
+        $files = Get-ChildItem release-artifacts -Recurse -File | Sort-Object FullName
+        $summary = @(
+          '## Release dry run v${{ needs.version.outputs.semver }}',
+          '',
+          '| File | Bytes | MiB |',
+          '| --- | ---: | ---: |'
+        )
+        foreach ($file in $files) {
+          $relative = [IO.Path]::GetRelativePath((Resolve-Path release-artifacts), $file.FullName)
+          $summary += "| $relative | $($file.Length) | $([math]::Round($file.Length / 1MB, 2)) |"
         }
         $summary -join "`n" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-
-        "DIR=$staging" >> $env:GITHUB_OUTPUT
-
-    - name: Upload release dry-run artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: AudioPlaybackConnector2-release-dry-run-${{ steps.version.outputs.VERSION }}-x64
-        path: ${{ steps.report.outputs.DIR }}
-        if-no-files-found: error
-        retention-days: 7

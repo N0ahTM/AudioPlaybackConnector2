@@ -4,6 +4,11 @@ param(
 
     [string]$AppInstallerUrl = "",
     [string]$ExistingFeedPath = "",
+    [string]$CandidatePackageUri = "",
+    [string]$CandidatePackageName = "",
+    [string]$CandidatePublisher = "",
+    [string]$CandidateProcessorArchitecture = "",
+    [string]$BackupPath = "",
     [int]$Attempts = 3,
     [int]$DelaySeconds = 5,
     [int]$TimeoutSeconds = 30
@@ -79,9 +84,12 @@ if (-not [string]::IsNullOrWhiteSpace($ExistingFeedPath)) {
 
 [xml]$feed = $feedContent
 $rootVersion = $feed.DocumentElement.GetAttribute("Version")
-$packageNode = $feed.DocumentElement.GetElementsByTagName("MainPackage", $feed.DocumentElement.NamespaceURI)[0]
+$packageNode = $feed.DocumentElement.GetElementsByTagName("MainBundle", $feed.DocumentElement.NamespaceURI)[0]
 if (-not $packageNode) {
-    throw "Existing App Installer feed has no MainPackage element."
+    $packageNode = $feed.DocumentElement.GetElementsByTagName("MainPackage", $feed.DocumentElement.NamespaceURI)[0]
+}
+if (-not $packageNode) {
+    throw "Existing App Installer feed has no MainBundle or MainPackage element."
 }
 $packageVersion = $packageNode.GetAttribute("Version")
 if ($rootVersion -ne $packageVersion) {
@@ -89,8 +97,39 @@ if ($rootVersion -ne $packageVersion) {
 }
 
 $current = Convert-PackageVersion -Value $packageVersion
-if ((Compare-PackageVersion -Left $candidate -Right $current) -lt 0) {
+$comparison = Compare-PackageVersion -Left $candidate -Right $current
+if ($comparison -lt 0) {
     throw "Refusing to replace App Installer version $packageVersion with older version $CandidateVersion."
+}
+if ($comparison -eq 0) {
+    $existingPackageUri = $packageNode.GetAttribute('Uri')
+    if ([string]::IsNullOrWhiteSpace($CandidatePackageUri)) {
+        throw 'CandidatePackageUri is required when replacing an existing App Installer version.'
+    }
+    if (-not [string]::Equals($existingPackageUri, $CandidatePackageUri, [System.StringComparison]::Ordinal)) {
+        throw "Refusing to replace App Installer version $packageVersion with a different package URI."
+    }
+    $equalVersionExpectations = @(
+        @{ Attribute = 'Name'; Expected = $CandidatePackageName },
+        @{ Attribute = 'Publisher'; Expected = $CandidatePublisher },
+        @{ Attribute = 'ProcessorArchitecture'; Expected = $CandidateProcessorArchitecture }
+    )
+    foreach ($expectation in $equalVersionExpectations) {
+        if (-not [string]::IsNullOrWhiteSpace($expectation.Expected) -and
+            -not [string]::Equals($packageNode.GetAttribute($expectation.Attribute), $expectation.Expected,
+                [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to replace App Installer version $packageVersion with a different $($expectation.Attribute)."
+        }
+    }
+}
+
+if (-not [string]::IsNullOrWhiteSpace($BackupPath)) {
+    $backupDirectory = Split-Path -Parent $BackupPath
+    if (-not [string]::IsNullOrWhiteSpace($backupDirectory)) {
+        New-Item -ItemType Directory -Path $backupDirectory -Force | Out-Null
+    }
+    [System.IO.File]::WriteAllText($BackupPath, $feedContent, [System.Text.UTF8Encoding]::new($false))
+    Write-Host "Existing App Installer feed backed up to '$BackupPath'."
 }
 
 Write-Host "App Installer version is monotonic: $packageVersion -> $CandidateVersion"

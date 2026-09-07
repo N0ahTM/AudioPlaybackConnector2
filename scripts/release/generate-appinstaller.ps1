@@ -1,12 +1,14 @@
 param(
     [Parameter(Mandatory = $true)]
-    [string]$MsixUrl,
+    [Alias('MsixUrl')]
+    [string]$PackageUrl,
 
     [Parameter(Mandatory = $true)]
     [string]$AppInstallerUrl,
 
     [Parameter(Mandatory = $true)]
-    [string]$MsixPath,
+    [Alias('MsixPath')]
+    [string]$PackagePath,
 
     [string]$PackageProjectPath = "AudioPlaybackConnector2 (Package)/AudioPlaybackConnector2 (Package).wapproj",
     [string]$OutputPath = (Join-Path ([System.IO.Path]::GetTempPath()) "AudioPlaybackConnector2.appinstaller"),
@@ -19,7 +21,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-Add-Type -AssemblyName System.IO.Compression.FileSystem
+Import-Module (Join-Path $PSScriptRoot 'PackageVerification.psm1') -Force
 
 function Get-HoursBetweenUpdateChecks {
     param([string]$Path)
@@ -40,42 +42,23 @@ function Get-HoursBetweenUpdateChecks {
     return "24"
 }
 
-function Get-PackageMetadata {
-    param([string]$PackagePath)
-
-    $zip = [System.IO.Compression.ZipFile]::OpenRead($PackagePath)
-    try {
-        $entry = $zip.GetEntry("AppxManifest.xml")
-        if (-not $entry) {
-            throw "No AppxManifest.xml found in $PackagePath"
-        }
-        $stream = $entry.Open()
-        $reader = [System.IO.StreamReader]::new($stream)
-        $xmlText = $reader.ReadToEnd()
-        $reader.Close()
-        $stream.Close()
-
-        [xml]$manifest = $xmlText
-        $identity = $manifest.Package.Identity
-        return [pscustomobject]@{
-            Name                  = $identity.Name
-            Publisher             = $identity.Publisher
-            Version               = $identity.Version
-            ProcessorArchitecture = $identity.ProcessorArchitecture
-        }
-    } finally {
-        $zip.Dispose()
+$isBundle = [System.IO.Path]::GetExtension($PackagePath) -ieq '.msixbundle'
+if ($isBundle) {
+    $metadataParams = @{ BundlePath = $PackagePath }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedPackageVersion)) {
+        $metadataParams['ExpectedPackageVersion'] = $ExpectedPackageVersion
     }
+    $identity = & (Join-Path $PSScriptRoot 'verify-msix-bundle.ps1') @metadataParams
+} else {
+    $metadataParams = @{ MsixPath = $PackagePath }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedPackageVersion)) {
+        $metadataParams['ExpectedPackageVersion'] = $ExpectedPackageVersion
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ProcessorArchitecture)) {
+        $metadataParams['ExpectedProcessorArchitecture'] = $ProcessorArchitecture
+    }
+    $identity = & (Join-Path $PSScriptRoot 'verify-msix-package.ps1') @metadataParams
 }
-
-$metadataParams = @{ MsixPath = $MsixPath }
-if (-not [string]::IsNullOrWhiteSpace($ExpectedPackageVersion)) {
-    $metadataParams["ExpectedPackageVersion"] = $ExpectedPackageVersion
-}
-if (-not [string]::IsNullOrWhiteSpace($ProcessorArchitecture)) {
-    $metadataParams["ExpectedProcessorArchitecture"] = $ProcessorArchitecture
-}
-$identity = & (Join-Path $PSScriptRoot "verify-msix-package.ps1") @metadataParams
 $hoursBetweenUpdateChecks = Get-HoursBetweenUpdateChecks -Path $PackageProjectPath
 
 $outputDirectory = Split-Path -Parent $OutputPath
@@ -95,20 +78,24 @@ try {
     $writer.WriteAttributeString("Version", $identity.Version)
     $writer.WriteAttributeString("Uri", $AppInstallerUrl)
 
-    $writer.WriteStartElement("MainPackage", $appInstallerNs)
+    $mainElementName = if ($isBundle) { 'MainBundle' } else { 'MainPackage' }
+    $writer.WriteStartElement($mainElementName, $appInstallerNs)
     $writer.WriteAttributeString("Name", $identity.Name)
     $writer.WriteAttributeString("Publisher", $identity.Publisher)
     $writer.WriteAttributeString("Version", $identity.Version)
-    $writer.WriteAttributeString("ProcessorArchitecture", $identity.ProcessorArchitecture)
-    $writer.WriteAttributeString("Uri", $MsixUrl)
+    if (-not $isBundle) {
+        $writer.WriteAttributeString("ProcessorArchitecture", $identity.ProcessorArchitecture)
+    }
+    $writer.WriteAttributeString("Uri", $PackageUrl)
     $writer.WriteEndElement()
 
     if (-not [string]::IsNullOrWhiteSpace($DependenciesDirectory) -and (Test-Path $DependenciesDirectory)) {
-        $deps = Get-ChildItem -Path $DependenciesDirectory -Recurse -Include @("*.appx", "*.msix")
+        $deps = Get-ChildItem -Path $DependenciesDirectory -Recurse -Include @("*.appx", "*.msix") |
+            Sort-Object Name
         if ($deps) {
             $writer.WriteStartElement("Dependencies", $appInstallerNs)
             foreach ($dep in $deps) {
-                $meta = Get-PackageMetadata -PackagePath $dep.FullName
+                $meta = (Read-AppPackage -Path $dep.FullName).Metadata
                 $depUrl = if (-not [string]::IsNullOrWhiteSpace($DependencyBaseUrl)) {
                     "$($DependencyBaseUrl.TrimEnd('/'))/$($dep.Name)"
                 } else {
@@ -149,6 +136,7 @@ if ($env:GITHUB_OUTPUT) {
     Name                     = $identity.Name
     Publisher                = $identity.Publisher
     HoursBetweenUpdateChecks = $hoursBetweenUpdateChecks
-    MsixUrl                  = $MsixUrl
+    PackageUrl               = $PackageUrl
+    PackageType              = if ($isBundle) { 'MainBundle' } else { 'MainPackage' }
     AppInstallerUrl          = $AppInstallerUrl
 }

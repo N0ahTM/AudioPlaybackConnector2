@@ -4,10 +4,15 @@
 #include <DevicePickerView.g.cpp>
 #endif
 
-#include <core/DeviceManager.hpp>
+#include <core/DeviceService.hpp>
 #include <core/StringResources.hpp>
+#include <core/SettingsLimits.hpp>
 #include <ui/ButtonHelpers.hpp>
 #include <util/Util.hpp>
+#include <winrt/Microsoft.UI.Xaml.Automation.h>
+#include <winrt/Microsoft.UI.Xaml.Input.h>
+#include <winrt/Windows.UI.ViewManagement.h>
+#include <cwctype>
 
 using namespace winrt;
 using namespace winrt::Microsoft::UI::Xaml;
@@ -17,8 +22,6 @@ namespace {
 constexpr auto c_pendingActionFallbackTimeout = std::chrono::seconds(2);
 constexpr double c_pickerMinWidth = 260.0;
 constexpr double c_pickerMaxWidth = 520.0;
-constexpr double c_pickerHorizontalChromeWidth = 64.0;
-constexpr double c_connectedActionsWidth = 68.0;
 constexpr double c_globalActionsChromeWidth = 82.0;
 
 void CancelRefreshDevicesOperation(winrt::Windows::Foundation::IAsyncOperation<
@@ -44,24 +47,21 @@ void CancelRefreshDevicesOperation(winrt::Windows::Foundation::IAsyncOperation<
 
 class DevicePickerSizer final {
 public:
-    [[nodiscard]] static double WidthFor(std::vector<apc::device_picker::DeviceSnapshotItem> const& items,
-                                         bool showGlobalActions) {
-        double maxNameWidth = 0.0;
-        bool hasConnectedActions = false;
-        for (auto const& item : items) {
-            maxNameWidth = std::max(maxNameWidth, MeasureTextWidth(item.DisplayName));
-            hasConnectedActions = hasConnectedActions || item.IsConnected;
-        }
-
-        double desiredWidth = maxNameWidth + c_pickerHorizontalChromeWidth;
-        if (hasConnectedActions) {
-            desiredWidth += c_connectedActionsWidth;
-        }
+    [[nodiscard]] static double WidthFor(bool showGlobalActions) {
+        // Both pages share a width based on localized controls; long names use their full tooltip.
+        double desiredWidth = OptionsWidth();
         if (showGlobalActions) {
             desiredWidth = std::max(desiredWidth, GlobalActionsWidth());
         }
 
         return std::clamp(desiredWidth, c_pickerMinWidth, c_pickerMaxWidth);
+    }
+
+    [[nodiscard]] static double OptionsWidth() {
+        auto labelWidth = std::max({MeasureTextWidth(_("Settings_DefaultDevice")),
+                                    MeasureTextWidth(_("DeviceOptions_Startup")),
+                                    MeasureTextWidth(_("DeviceOptions_Reconnect"))});
+        return std::clamp(labelWidth + 100.0, 280.0, c_pickerMaxWidth);
     }
 
 private:
@@ -77,7 +77,7 @@ private:
     [[nodiscard]] static double GlobalActionsWidth() {
         auto disconnectAll = MeasureTextWidth(winrt::hstring(_("DisconnectAll")), 12.0);
         auto reconnectAll = MeasureTextWidth(winrt::hstring(_("ReconnectAll")), 12.0);
-        return disconnectAll + reconnectAll + c_globalActionsChromeWidth;
+        return 2.0 * std::max(disconnectAll, reconnectAll) + c_globalActionsChromeWidth;
     }
 };
 } // namespace
@@ -90,6 +90,13 @@ namespace winrt::AudioPlaybackConnector2::implementation {
 DevicePickerView::DevicePickerView() {
     InitializeComponent();
     auto weak = get_weak();
+    RootGrid().SizeChanged([weak](auto const&, SizeChangedEventArgs const& args) {
+        if (auto self = weak.get(); self && self->m_navigationAnimation) {
+            Media::RectangleGeometry clip;
+            clip.Rect({0, 0, args.NewSize().Width, args.NewSize().Height});
+            self->RootGrid().Clip(clip);
+        }
+    });
     CloseButton().Click([weak](auto const& sender, auto const& args) {
         if (auto self = weak.get()) {
             self->OnCloseClicked(sender, args);
@@ -105,9 +112,70 @@ DevicePickerView::DevicePickerView() {
             self->OnReconnectAllClicked(sender, args);
         }
     });
-    DeviceList().SelectionChanged([weak](auto const& sender, auto const& args) {
+    BackButton().Click([weak](auto const&, auto const&) {
+        if (auto self = weak.get()) self->ReturnToDeviceList();
+    });
+    SettingsButton().Click([weak](auto const&, auto const&) {
+        if (auto self = weak.get(); self && self->SaveDeviceAlias() && self->m_onShowSettings) self->m_onShowSettings();
+    });
+    SavedDevicesButton().Click([weak](auto const&, auto const&) {
         if (auto self = weak.get()) {
-            self->OnDeviceSelected(sender, args);
+            self->m_savedDevicesExpanded = !self->m_savedDevicesExpanded;
+            self->RebuildDeviceListFromCache(false, true);
+        }
+    });
+    DeviceAliasBox().MaxLength(static_cast<int32_t>(apc::limits::c_maxDeviceAliasCharacters));
+    DeviceAliasBox().LostFocus([weak](auto const&, auto const&) {
+        if (auto self = weak.get(); self && !self->m_updatingDeviceOptions) static_cast<void>(self->SaveDeviceAlias());
+    });
+    DeviceAliasBox().KeyDown([weak](auto const&, Input::KeyRoutedEventArgs const& args) {
+        if (args.Key() == winrt::Windows::System::VirtualKey::Enter) {
+            args.Handled(true);
+            if (auto self = weak.get()) static_cast<void>(self->SaveDeviceAlias());
+        }
+    });
+    ClearAliasButton().Click([weak](auto const&, auto const&) {
+        if (auto self = weak.get()) {
+            if (!self->m_viewModel.SetAlias(self->m_optionsDeviceId, L"")) {
+                self->ShowDeviceOptionsError();
+                return;
+            }
+            self->DeviceOptionsError().IsOpen(false);
+            self->RefreshDeviceOptions(true);
+            self->RebuildDeviceListFromCache(false, true);
+        }
+    });
+    DefaultDeviceToggle().Toggled([weak](auto const&, auto const&) {
+        if (auto self = weak.get(); self && !self->m_updatingDeviceOptions) {
+            if (!self->m_viewModel.SetDefault(self->m_optionsDeviceId, self->DefaultDeviceToggle().IsOn()))
+                self->ShowDeviceOptionsError();
+            self->RefreshDeviceOptions();
+            self->RebuildDeviceListFromCache(false, true);
+        }
+    });
+    DeviceStartupToggle().Toggled([weak](auto const&, auto const&) {
+        if (auto self = weak.get(); self && !self->m_updatingDeviceOptions) {
+            if (!self->m_viewModel.SetConnectOnStartup(self->m_optionsDeviceId, self->DeviceStartupToggle().IsOn()))
+                self->ShowDeviceOptionsError();
+            self->RefreshDeviceOptions();
+        }
+    });
+    DeviceReconnectToggle().Toggled([weak](auto const&, auto const&) {
+        if (auto self = weak.get(); self && !self->m_updatingDeviceOptions) {
+            if (!self->m_viewModel.SetReconnectOnConnectionLoss(self->m_optionsDeviceId,
+                                                                self->DeviceReconnectToggle().IsOn()))
+                self->ShowDeviceOptionsError();
+            self->RefreshDeviceOptions();
+        }
+    });
+    ForgetDeviceButton().Click([weak](auto const&, auto const&) {
+        if (auto self = weak.get()) {
+            if (!self->m_viewModel.ForgetDevice(self->m_optionsDeviceId)) {
+                self->ShowDeviceOptionsError();
+                return;
+            }
+            self->m_savedAlias = std::wstring(self->DeviceAliasBox().Text());
+            self->ReturnToDeviceList();
         }
     });
 }
@@ -116,8 +184,8 @@ DevicePickerView::DevicePickerView() {
 /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-void DevicePickerView::Initialize(std::shared_ptr<DeviceManager> manager,
-                                  std::shared_ptr<Settings> settings,
+void DevicePickerView::Initialize(std::shared_ptr<apc::device::DeviceService> service,
+                                  std::shared_ptr<SettingsStore> settingsStore,
                                   std::function<void()> onClose,
                                   std::function<void(winrt::hstring)> onDeviceSelected,
                                   std::function<void(winrt::hstring)> onDeviceDisconnect,
@@ -126,10 +194,10 @@ void DevicePickerView::Initialize(std::shared_ptr<DeviceManager> manager,
                                   std::function<void()> onReconnectAll) {
     m_preparedForRelease.store(false);
     m_presentationActive.store(false, std::memory_order_release);
-    m_deviceManager = manager;
-    m_settings = settings;
-    m_viewModel.SetDeviceManager(manager);
-    m_viewModel.SetSettings(settings);
+    m_deviceService = service;
+    m_settingsStore = settingsStore;
+    m_viewModel.SetDeviceService(service);
+    m_viewModel.SetSettingsStore(settingsStore);
     m_onClose = std::move(onClose);
     m_onDeviceSelected = std::move(onDeviceSelected);
     m_onDeviceDisconnect = std::move(onDeviceDisconnect);
@@ -145,6 +213,14 @@ void DevicePickerView::Initialize(std::shared_ptr<DeviceManager> manager,
     ReconnectAllText().Text(reconnectAllText);
     apc::ui::SetButtonLabel(DisconnectAllButton(), disconnectAllText);
     apc::ui::SetButtonLabel(ReconnectAllButton(), reconnectAllText);
+    ApplyLanguage();
+}
+
+void DevicePickerView::SetDeviceSettings(std::shared_ptr<ISettingsController> controller,
+                                         apc::app::SettingsWindowCommandExecutor::ExecuteCallback execute,
+                                         std::function<void()> showSettings) {
+    m_viewModel.SetDeviceSettings(std::move(controller), std::move(execute));
+    m_onShowSettings = std::move(showSettings);
 }
 
 bool DevicePickerView::LoadDevices() {
@@ -157,7 +233,7 @@ bool DevicePickerView::LoadDevices() {
         return true;
     }
 
-    const bool nativeInventoryComplete = m_viewModel.SynchronizeInventoryFromManager();
+    const bool nativeInventoryComplete = m_viewModel.SynchronizeInventoryFromService();
     if (m_viewModel.HasInventory()) {
         RebuildDeviceListFromCache();
     }
@@ -185,9 +261,9 @@ bool DevicePickerView::LoadDevices() {
         return false;
     }
 
-    auto manager = m_deviceManager.lock();
-    if (!manager) {
-        DebugTrace(L"[DevicePickerView] ERROR: no DeviceManager available for LoadDevices");
+    auto service = m_deviceService.lock();
+    if (!service) {
+        DebugTrace(L"[DevicePickerView] ERROR: no DeviceService available for LoadDevices");
         OnDeviceEnumerationFailed(blockingRefresh, requestId, inventoryGenerationAtStart);
         return false;
     }
@@ -203,7 +279,7 @@ bool DevicePickerView::LoadDevices() {
     CancelRefreshDevicesOperation(previousOp, L"LoadDevices");
 
     try {
-        auto refreshOp = manager->RefreshDevicesAsync();
+        auto refreshOp = service->RefreshDevicesAsync();
         {
             std::lock_guard lock(m_refreshDevicesOpMutex);
             m_refreshDevicesOp = refreshOp;
@@ -353,6 +429,7 @@ void DevicePickerView::PrepareForRelease() noexcept {
 
         m_preparedForRelease.store(true);
         m_presentationActive.store(false, std::memory_order_release);
+        StopNavigationAnimation();
         StopPendingActionTimer();
         m_inventoryGeneration->Deactivate();
         CancelLoadDevices();
@@ -370,8 +447,10 @@ void DevicePickerView::PrepareForRelease() noexcept {
     m_onDeviceReconnect = nullptr;
     m_onDisconnectAll = nullptr;
     m_onReconnectAll = nullptr;
-    m_deviceManager.reset();
-    m_settings.reset();
+    m_onShowSettings = nullptr;
+    m_optionsDeviceId.clear();
+    m_deviceService.reset();
+    m_settingsStore.reset();
     m_pendingDeviceActions.clear();
     m_pendingGlobalAction = false;
     m_renderedSnapshotGeneration = 0;
@@ -380,7 +459,6 @@ void DevicePickerView::PrepareForRelease() noexcept {
 }
 
 void DevicePickerView::RefreshDeviceStates() {
-    if (!m_viewModel.HasInventory()) return;
     RebuildDeviceListFromCache();
 }
 
@@ -395,7 +473,182 @@ void DevicePickerView::ApplyLanguage() {
     ReconnectAllText().Text(reconnectAllText);
     apc::ui::SetButtonLabel(DisconnectAllButton(), disconnectAllText);
     apc::ui::SetButtonLabel(ReconnectAllButton(), reconnectAllText);
-    if (m_viewModel.HasInventory()) RebuildDeviceListFromCache(false, true);
+    apc::ui::SetButtonLabel(BackButton(), winrt::hstring(_("DeviceOptions_Back")));
+    apc::ui::SetButtonLabel(SettingsButton(), winrt::hstring(_("Settings_Title")));
+    apc::ui::SetButtonLabel(SavedDevicesButton(), SavedDevicesText(), winrt::hstring(_("DeviceOptions_Saved")));
+    apc::ui::SetButtonLabel(ClearAliasButton(), winrt::hstring(_("DeviceOptions_ResetName")));
+    apc::ui::SetButtonLabel(ForgetDeviceButton(), winrt::hstring(_("DeviceOptions_Forget")));
+    DeviceAliasLabel().Text(winrt::hstring(_("DeviceOptions_Name")));
+    DefaultDeviceText().Text(winrt::hstring(_("Settings_DefaultDevice")));
+    DeviceStartupText().Text(winrt::hstring(_("DeviceOptions_Startup")));
+    DeviceReconnectText().Text(winrt::hstring(_("DeviceOptions_Reconnect")));
+    Automation::AutomationProperties::SetName(DeviceAliasBox(), winrt::hstring(_("DeviceOptions_Name")));
+    Automation::AutomationProperties::SetName(DefaultDeviceToggle(), winrt::hstring(_("Settings_DefaultDevice")));
+    Automation::AutomationProperties::SetName(DeviceStartupToggle(), winrt::hstring(_("DeviceOptions_Startup")));
+    Automation::AutomationProperties::SetName(DeviceReconnectToggle(), winrt::hstring(_("DeviceOptions_Reconnect")));
+    for (auto const& toggle : {DefaultDeviceToggle(), DeviceStartupToggle(), DeviceReconnectToggle()}) {
+        toggle.OnContent(box_value(L""));
+        toggle.OffContent(box_value(L""));
+    }
+    RebuildDeviceListFromCache(false, true);
+}
+
+void DevicePickerView::ShowDeviceOptions(std::wstring const& id) {
+    if (!m_viewModel.DeviceOptions(id)) return;
+    const auto previousHeight = RootGrid().ActualHeight();
+    StopNavigationAnimation();
+    m_optionsDeviceId = id;
+    DeviceOptionsError().IsOpen(false);
+    DeviceListPanel().Visibility(Visibility::Collapsed);
+    DeviceOptionsPanel().Visibility(Visibility::Visible);
+    BackButton().Visibility(Visibility::Visible);
+    RefreshDeviceOptions(true);
+    BackButton().Focus(FocusState::Programmatic);
+    AnimateNavigation(previousHeight);
+}
+
+void DevicePickerView::ReturnToDeviceList() {
+    if (!SaveDeviceAlias()) return;
+    const auto previousHeight = RootGrid().ActualHeight();
+    StopNavigationAnimation();
+    auto id = std::exchange(m_optionsDeviceId, {});
+    DeviceOptionsPanel().Visibility(Visibility::Collapsed);
+    DeviceListPanel().Visibility(Visibility::Visible);
+    BackButton().Visibility(Visibility::Collapsed);
+    TitleText().Text(winrt::hstring(_("TrayMenu_SelectDevice")));
+    apc::ui::SetTooltipText(TitleText(), winrt::hstring(_("TrayMenu_SelectDevice")));
+    RebuildDeviceListFromCache(false, true);
+    AnimateNavigation(previousHeight);
+    for (auto const& entry : DeviceList().Items()) {
+        auto item = entry.try_as<ListViewItem>();
+        if (!item || unbox_value_or<winrt::hstring>(item.Tag(), L"") != id) continue;
+        auto row = item.Content().as<Grid>();
+        row.Children().GetAt(row.Children().Size() - 1).as<Button>().Focus(FocusState::Programmatic);
+        return;
+    }
+    DeviceList().Focus(FocusState::Programmatic);
+}
+
+void DevicePickerView::StopNavigationAnimation() noexcept {
+    ++m_navigationAnimationGeneration;
+    try {
+        auto animation = std::exchange(m_navigationAnimation, nullptr);
+        if (animation) animation.Stop();
+        RootGrid().Clip(nullptr);
+    } catch (...) {
+    }
+}
+
+void DevicePickerView::AnimateNavigation(double previousHeight) noexcept {
+    try {
+        if (!m_presentationActive.load() || previousHeight <= 0 ||
+            !winrt::Windows::UI::ViewManagement::UISettings().AnimationsEnabled())
+            return;
+        using namespace winrt::Microsoft::UI::Xaml::Media::Animation;
+        ContentPanel().Measure({static_cast<float>(RootGrid().Width()), 10000.0f});
+        const auto targetHeight = ContentPanel().DesiredSize().Height;
+        if (targetHeight <= 0) return;
+        Storyboard storyboard;
+        DoubleAnimation resize;
+        resize.From(previousHeight);
+        resize.To(targetHeight);
+        resize.Duration(DurationHelper::FromTimeSpan(std::chrono::milliseconds(180)));
+        resize.EnableDependentAnimation(true);
+        resize.FillBehavior(FillBehavior::Stop);
+        CubicEase easing;
+        easing.EasingMode(EasingMode::EaseOut);
+        resize.EasingFunction(easing);
+        Storyboard::SetTarget(resize, RootGrid());
+        Storyboard::SetTargetProperty(resize, L"Height");
+        storyboard.Children().Append(resize);
+        DoubleAnimation fade;
+        fade.From(0.2);
+        fade.To(1.0);
+        fade.Duration(DurationHelper::FromTimeSpan(std::chrono::milliseconds(150)));
+        fade.FillBehavior(FillBehavior::Stop);
+        Storyboard::SetTarget(fade,
+                              m_optionsDeviceId.empty() ? DeviceListPanel().as<FrameworkElement>()
+                                                        : DeviceOptionsPanel().as<FrameworkElement>());
+        Storyboard::SetTargetProperty(fade, L"Opacity");
+        storyboard.Children().Append(fade);
+        Media::RectangleGeometry clip;
+        clip.Rect({0, 0, static_cast<float>(RootGrid().Width()), static_cast<float>(previousHeight)});
+        RootGrid().Clip(clip);
+        const auto generation = ++m_navigationAnimationGeneration;
+        storyboard.Completed([weak = get_weak(), generation](auto const&, auto const&) {
+            if (auto self = weak.get(); self && self->m_navigationAnimationGeneration == generation)
+                self->StopNavigationAnimation();
+        });
+        m_navigationAnimation = storyboard;
+        storyboard.Begin();
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[DevicePickerView] Navigation animation failed");
+        StopNavigationAnimation();
+    }
+}
+
+void DevicePickerView::RefreshDeviceOptions(bool resetAlias) {
+    if (m_optionsDeviceId.empty()) return;
+    const auto options = m_viewModel.DeviceOptions(m_optionsDeviceId);
+    if (!options) {
+        m_optionsDeviceId.clear();
+        ReturnToDeviceList();
+        return;
+    }
+    m_updatingDeviceOptions = true;
+    auto restoreUpdates = wil::scope_exit([this] { m_updatingDeviceOptions = false; });
+    auto const& device = options->Device;
+    TitleText().Text(winrt::hstring(device.DisplayName));
+    apc::ui::SetTooltipText(TitleText(), winrt::hstring(device.DisplayName));
+    RootGrid().Width(DevicePickerSizer::WidthFor(m_viewModel.CachedSnapshot().ConnectedDeviceCount > 1));
+    if (resetAlias || std::wstring(DeviceAliasBox().Text()) == m_savedAlias) {
+        m_savedAlias = device.Alias;
+        DeviceAliasBox().Text(winrt::hstring(device.Alias));
+    }
+    DeviceAliasBox().PlaceholderText(winrt::hstring(device.DisplayName));
+    ClearAliasButton().Visibility(device.Alias.empty() ? Visibility::Collapsed : Visibility::Visible);
+    DefaultDeviceToggle().IsOn(device.IsDefaultDevice);
+    DeviceStartupToggle().IsOn(options->GlobalConnectOnStartup || device.ConnectOnStartup);
+    DeviceStartupToggle().IsEnabled(!options->GlobalConnectOnStartup);
+    DeviceReconnectToggle().IsOn(options->GlobalReconnectOnConnectionLoss || device.ReconnectOnConnectionLoss);
+    DeviceReconnectToggle().IsEnabled(!options->GlobalReconnectOnConnectionLoss);
+    auto startupHelp = winrt::hstring(options->GlobalConnectOnStartup ? _("DeviceOptions_GlobalPolicy") : L"");
+    auto reconnectHelp =
+        winrt::hstring(options->GlobalReconnectOnConnectionLoss ? _("DeviceOptions_GlobalPolicy") : L"");
+    apc::ui::SetTooltipText(DeviceStartupText(), startupHelp);
+    apc::ui::SetTooltipText(DeviceReconnectText(), reconnectHelp);
+    Automation::AutomationProperties::SetHelpText(DeviceStartupToggle(), startupHelp);
+    Automation::AutomationProperties::SetHelpText(DeviceReconnectToggle(), reconnectHelp);
+    ForgetDeviceButton().IsEnabled(options->CanForget);
+}
+
+bool DevicePickerView::SaveDeviceAlias() {
+    if (m_preparedForRelease.load() || m_optionsDeviceId.empty() || m_updatingDeviceOptions) return true;
+    auto alias = std::wstring(DeviceAliasBox().Text());
+    auto first = std::ranges::find_if_not(alias, [](wchar_t value) { return std::iswspace(value) != 0; });
+    auto last = std::ranges::find_if_not(alias.rbegin(), alias.rend(), [](wchar_t value) {
+                    return std::iswspace(value) != 0;
+                }).base();
+    alias = first < last ? std::wstring(first, last) : std::wstring{};
+    if (alias == m_savedAlias) {
+        DeviceAliasBox().Text(winrt::hstring(alias));
+        return true;
+    }
+    if (!m_viewModel.SetAlias(m_optionsDeviceId, alias)) {
+        ShowDeviceOptionsError();
+        return false;
+    }
+    m_savedAlias = alias;
+    DeviceAliasBox().Text(winrt::hstring(alias));
+    DeviceOptionsError().IsOpen(false);
+    RefreshDeviceOptions();
+    return true;
+}
+
+void DevicePickerView::ShowDeviceOptionsError() {
+    DeviceOptionsError().Title(winrt::hstring(_("Settings_ActionFailed_Title")));
+    DeviceOptionsError().Message(winrt::hstring(_("Settings_ActionFailed_Message")));
+    DeviceOptionsError().IsOpen(true);
 }
 
 bool DevicePickerView::InvalidateDeviceInventory() {
@@ -411,6 +664,7 @@ void DevicePickerView::SetPresentationActive(bool active) noexcept {
     if (active) {
         SchedulePendingActionExpiry();
     } else {
+        StopNavigationAnimation();
         StopPendingActionTimer();
     }
 }
@@ -443,12 +697,12 @@ void DevicePickerView::ApplyDeviceResults(
         const bool inventoryChangedDuringLoad = m_inventoryGeneration->ChangedSince(inventoryGenerationAtStart);
         bool nativeInventoryComplete = false;
         if (!devices) {
-            nativeInventoryComplete = m_viewModel.SynchronizeInventoryFromManager();
+            nativeInventoryComplete = m_viewModel.SynchronizeInventoryFromService();
             if (m_viewModel.HasInventory() || (blockingRefresh && DeviceList().Items().Size() == 0)) {
                 RebuildDeviceListFromCache();
             }
         } else {
-            nativeInventoryComplete = m_viewModel.SynchronizeInventoryFromManager();
+            nativeInventoryComplete = m_viewModel.SynchronizeInventoryFromService();
             if (!m_viewModel.HasInventory()) m_viewModel.SetDevices(devices);
             if (inventoryChangedDuringLoad && !nativeInventoryComplete) m_viewModel.InvalidateInventory();
             RebuildDeviceListFromCache();
@@ -499,6 +753,7 @@ void DevicePickerView::OnDeviceEnumerationFailed(bool blockingRefresh,
 }
 
 void DevicePickerView::RebuildDeviceListFromCache(bool reconcilePendingActions, bool forceRender) {
+    RefreshDeviceOptions();
     auto const& snapshot = m_viewModel.RefreshSnapshot();
     auto const& items = snapshot.Items;
     const auto connectedCount = snapshot.ConnectedDeviceCount;
@@ -515,8 +770,6 @@ void DevicePickerView::RebuildDeviceListFromCache(bool reconcilePendingActions, 
         return;
     }
 
-    m_suppressSelectionChanged.store(true);
-    DeviceList().SelectedItem(nullptr);
     DeviceList().Items().Clear();
 
     const bool anyBusy = std::any_of(items.begin(), items.end(), [](auto const& item) { return item.IsBusy; });
@@ -531,22 +784,28 @@ void DevicePickerView::RebuildDeviceListFromCache(bool reconcilePendingActions, 
                busyItemCount,
                m_pendingGlobalAction);
     ApplyGlobalActionState(connectedCount > 1, !anyBusy && !m_pendingGlobalAction);
-    RootGrid().Width(DevicePickerSizer::WidthFor(items, connectedCount > 1));
+    std::vector<apc::device_picker::DeviceSnapshotItem> visibleItems;
+    for (auto const& device : items) {
+        if (device.IsAvailable || m_savedDevicesExpanded) visibleItems.push_back(device);
+    }
+    if (m_optionsDeviceId.empty()) RootGrid().Width(DevicePickerSizer::WidthFor(connectedCount > 1));
+    const bool hasSavedDevices = std::ranges::any_of(items, [](auto const& device) { return !device.IsAvailable; });
+    SavedDevicesButton().Visibility(hasSavedDevices ? Visibility::Visible : Visibility::Collapsed);
+    SavedDevicesChevron().Glyph(m_savedDevicesExpanded ? L"\xE70E" : L"\xE70D");
 
-    if (items.empty()) {
+    if (visibleItems.empty()) {
         auto emptyMsg = TextBlock();
         emptyMsg.Text(winrt::hstring(_("TrayMenu_NoDevices")));
         emptyMsg.Foreground(
             apc::ui::ThemeBrushOrFallback(L"TextFillColorSecondaryBrush", winrt::Windows::UI::Colors::Gray()));
+        emptyMsg.TextWrapping(TextWrapping::Wrap);
         DeviceList().Items().Append(emptyMsg);
     } else {
-        for (auto const& device : items) {
+        for (auto const& device : visibleItems) {
             DeviceList().Items().Append(BuildDeviceListItem(device));
         }
     }
 
-    DeviceList().SelectedItem(nullptr);
-    m_suppressSelectionChanged.store(false);
     m_renderedSnapshotGeneration = snapshot.Generation;
     m_hasRenderedSnapshot = true;
     SchedulePendingActionExpiry();
@@ -555,14 +814,85 @@ void DevicePickerView::RebuildDeviceListFromCache(bool reconcilePendingActions, 
 ListViewItem DevicePickerView::BuildDeviceListItem(apc::device_picker::DeviceSnapshotItem const& device) {
     auto item = ListViewItem();
     item.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+    item.IsTabStop(false);
+    item.Padding({0, 0, 0, 0});
     const bool isBusy = device.IsBusy || m_pendingGlobalAction || IsDeviceActionPending(winrt::hstring(device.Id));
 
     auto grid = Grid();
     grid.HorizontalAlignment(HorizontalAlignment::Stretch);
-    grid.ColumnSpacing(8);
+    grid.ColumnSpacing(2);
     grid.ColumnDefinitions().Append(ColumnDefinition());
     grid.ColumnDefinitions().Append(ColumnDefinition());
     grid.ColumnDefinitions().GetAt(1).Width(GridLengthHelper::Auto());
+    grid.ColumnDefinitions().Append(ColumnDefinition());
+    grid.ColumnDefinitions().GetAt(2).Width(GridLengthHelper::Auto());
+
+    auto weak = get_weak();
+    auto id = winrt::hstring(device.Id);
+    auto primary = Button();
+    primary.HorizontalAlignment(HorizontalAlignment::Stretch);
+    primary.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+    primary.Background(Media::SolidColorBrush(winrt::Windows::UI::Colors::Transparent()));
+    primary.BorderThickness({0, 0, 0, 0});
+    primary.Padding({8, 6, 8, 6});
+    primary.MinHeight(36);
+    primary.IsEnabled(device.IsAvailable && !isBusy);
+    apc::ui::SetButtonLabel(primary,
+                            winrt::hstring(std::format(L"{}: {}",
+                                                       device.DisplayName,
+                                                       device.IsConnected   ? _("Disconnect")
+                                                       : device.IsAvailable ? _("Connect")
+                                                                            : _("DeviceOptions_Unavailable"))));
+    primary.Click([weak, id](auto const&, auto const&) {
+        if (auto self = weak.get()) self->OnDeviceToggle(id);
+    });
+
+    auto primaryContent = Grid();
+    primaryContent.ColumnSpacing(8);
+    primaryContent.ColumnDefinitions().Append(ColumnDefinition());
+    primaryContent.ColumnDefinitions().GetAt(0).Width(GridLengthHelper::Auto());
+    primaryContent.ColumnDefinitions().Append(ColumnDefinition());
+    primaryContent.ColumnDefinitions().Append(ColumnDefinition());
+    primaryContent.ColumnDefinitions().GetAt(2).Width(GridLengthHelper::Auto());
+    if (isBusy) {
+        auto busyRing = ProgressRing();
+        busyRing.Width(14);
+        busyRing.Height(14);
+        busyRing.IsActive(true);
+        primaryContent.Children().Append(busyRing);
+    } else {
+        auto statusIcon = FontIcon();
+        statusIcon.Glyph(L"\xE702");
+        statusIcon.FontSize(14);
+        statusIcon.Foreground(apc::ui::TryThemeBrush(device.IsConnected ? L"SystemFillColorSuccessBrush"
+                                                                        : L"TextFillColorSecondaryBrush"));
+        primaryContent.Children().Append(statusIcon);
+        if (device.IsConnected) {
+            auto update = [](Button const& owner) {
+                auto content = owner.Content().try_as<Grid>();
+                if (!content || content.Children().Size() == 0) return;
+                auto current = content.Children().GetAt(0).try_as<FontIcon>();
+                if (!current) return;
+                const bool action = owner.IsPointerOver() || owner.FocusState() != FocusState::Unfocused;
+                const winrt::hstring glyph = action ? L"\xE711" : L"\xE702";
+                if (current.Glyph() == glyph) return;
+                current.Glyph(glyph);
+                current.Foreground(
+                    apc::ui::TryThemeBrush(action ? L"SystemFillColorCriticalBrush" : L"SystemFillColorSuccessBrush"));
+                DebugTrace(L"[DevicePickerView] Device action icon updated: disconnect={0}", action);
+            };
+            // Resolve the live visual from the event sender, rather than retaining weak projected peers.
+            primary.RegisterPropertyChangedCallback(
+                Primitives::ButtonBase::IsPointerOverProperty(),
+                [update](auto const& sender, auto const&) { update(sender.template as<Button>()); });
+            primary.RegisterPropertyChangedCallback(
+                UIElement::FocusStateProperty(),
+                [update](auto const& sender, auto const&) { update(sender.template as<Button>()); });
+            primary.Loaded([update](auto const& sender, auto const&) { update(sender.template as<Button>()); });
+            // Also synchronize when moving over a row recreated under a stationary pointer.
+            primary.PointerMoved([update](auto const& sender, auto const&) { update(sender.template as<Button>()); });
+        }
+    }
 
     auto nameTb = TextBlock();
     nameTb.Text(winrt::hstring(device.DisplayName));
@@ -571,54 +901,44 @@ ListViewItem DevicePickerView::BuildDeviceListItem(apc::device_picker::DeviceSna
     nameTb.TextTrimming(TextTrimming::CharacterEllipsis);
     nameTb.TextWrapping(TextWrapping::NoWrap);
     nameTb.MaxLines(1);
-    apc::ui::SetTooltipText(nameTb, winrt::hstring(device.DisplayName));
-    Grid::SetColumn(nameTb, 0);
-
-    auto infoPanel = StackPanel();
-    infoPanel.Orientation(Orientation::Horizontal);
-    infoPanel.HorizontalAlignment(HorizontalAlignment::Right);
-    infoPanel.VerticalAlignment(VerticalAlignment::Center);
-    infoPanel.Spacing(6);
-    Grid::SetColumn(infoPanel, 1);
-
-    if (isBusy) {
-        item.IsEnabled(false);
-        item.Opacity(0.6);
-
-        auto busyRing = ProgressRing();
-        busyRing.Width(14);
-        busyRing.Height(14);
-        busyRing.IsActive(true);
-        busyRing.VerticalAlignment(VerticalAlignment::Center);
-        infoPanel.Children().Append(busyRing);
+    Grid::SetColumn(nameTb, 1);
+    primaryContent.Children().Append(nameTb);
+    if (device.IsDefault) {
+        auto star = FontIcon();
+        star.Glyph(L"\xE735");
+        star.FontSize(12);
+        star.Foreground(apc::ui::TryThemeBrush(L"AccentTextFillColorPrimaryBrush"));
+        apc::ui::SetTooltipText(star, winrt::hstring(_("Settings_DefaultDevice_Current")));
+        Grid::SetColumn(star, 2);
+        primaryContent.Children().Append(star);
     }
+    primary.Content(primaryContent);
+    grid.Children().Append(primary);
 
     if (device.IsConnected) {
-        auto devId = winrt::hstring(device.Id);
-
         apc::ui::IconButtonOptions reconnectOptions;
-        reconnectOptions.Foreground = apc::ui::TryThemeBrush(L"AccentFillColorDefaultBrush");
+        reconnectOptions.Width = 32;
+        reconnectOptions.Height = 32;
+        reconnectOptions.Foreground = apc::ui::TryThemeBrush(L"TextFillColorPrimaryBrush");
         auto reconnectBtn = apc::ui::CreateIconButton(L"\xE72C", winrt::hstring(_("Reconnect")), reconnectOptions);
         reconnectBtn.IsEnabled(!isBusy);
-        auto weak = get_weak();
-        reconnectBtn.Click([weak, devId](auto const&, auto const&) {
-            if (auto self = weak.get()) self->OnDeviceReconnectClicked(devId);
+        reconnectBtn.Click([weak, id](auto const&, auto const&) {
+            if (auto self = weak.get()) self->OnDeviceReconnectClicked(id);
         });
-
-        apc::ui::IconButtonOptions disconnectOptions;
-        disconnectOptions.Foreground = apc::ui::TryThemeBrush(L"SystemFillColorCriticalBrush");
-        auto disconnectBtn = apc::ui::CreateIconButton(L"\xE711", winrt::hstring(_("Disconnect")), disconnectOptions);
-        disconnectBtn.IsEnabled(!isBusy);
-        disconnectBtn.Click([weak, devId](auto const&, auto const&) {
-            if (auto self = weak.get()) self->OnDeviceDisconnectClicked(devId);
-        });
-
-        infoPanel.Children().Append(reconnectBtn);
-        infoPanel.Children().Append(disconnectBtn);
+        Grid::SetColumn(reconnectBtn, 1);
+        grid.Children().Append(reconnectBtn);
     }
 
-    grid.Children().Append(nameTb);
-    grid.Children().Append(infoPanel);
+    apc::ui::IconButtonOptions options;
+    options.Width = 32;
+    options.Height = 32;
+    auto optionsButton = apc::ui::CreateIconButton(
+        L"\xE712", winrt::hstring(std::format(L"{}: {}", _("DeviceOptions_Title"), device.DisplayName)), options);
+    optionsButton.Click([weak, id](auto const&, auto const&) {
+        if (auto self = weak.get()) self->ShowDeviceOptions(std::wstring(id));
+    });
+    Grid::SetColumn(optionsButton, 2);
+    grid.Children().Append(optionsButton);
     item.Content(grid);
     item.Tag(box_value(winrt::hstring(device.Id)));
     return item;
@@ -746,24 +1066,19 @@ void DevicePickerView::SetRefreshIndicators(bool refreshing, bool blockingRefres
 
 void DevicePickerView::OnCloseClicked(winrt::Windows::Foundation::IInspectable const&,
                                       winrt::Microsoft::UI::Xaml::RoutedEventArgs const&) {
+    if (!SaveDeviceAlias()) return;
     m_loadDevicesCancelled.store(true);
     if (m_onClose) m_onClose();
 }
 
-void DevicePickerView::OnDeviceSelected(winrt::Windows::Foundation::IInspectable const&,
-                                        winrt::Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const&) {
-    if (m_suppressSelectionChanged.load()) return;
-    auto selected = DeviceList().SelectedItem();
-    if (!selected) return;
-
-    auto lvi = selected.try_as<ListViewItem>();
-    if (!lvi) return;
-
-    auto tag = lvi.Tag();
-    if (!tag) return;
-    auto id = unbox_value<winrt::hstring>(tag);
-    if (id.empty()) return;
-
+void DevicePickerView::OnDeviceToggle(winrt::hstring const& id) {
+    auto const& items = m_viewModel.RefreshSnapshot().Items;
+    auto const device = std::ranges::find(items, std::wstring_view(id), &apc::device_picker::DeviceSnapshotItem::Id);
+    if (device == items.end() || !device->IsAvailable || device->IsBusy) return;
+    if (device->IsConnected) {
+        OnDeviceDisconnectClicked(id);
+        return;
+    }
     if (!m_viewModel.CanSelect(id)) return;
     if (!BeginPendingDeviceAction(id)) return;
 

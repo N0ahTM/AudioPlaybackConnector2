@@ -1,8 +1,8 @@
 #include <pch.h>
 #include <services/TrayController.hpp>
-#include <core/Settings.hpp>
+#include <core/SettingsStore.hpp>
 #include <core/TrayTooltipBuilder.hpp>
-#include <core/DeviceManager.hpp>
+#include <core/DeviceService.hpp>
 #include <core/StringResources.hpp>
 #include <core/ThemeHelper.hpp>
 #include <ui/FlyoutPresenterStyle.hpp>
@@ -61,6 +61,10 @@ void TrayController::Initialize(HWND hwnd, winrt::Microsoft::UI::Xaml::Window ma
                     self->m_showSettingsCallback();
             },
             [weak]() {
+                if (auto self = weak.lock(); self && !self->m_isTearingDown.load() && self->m_showHelpCallback)
+                    self->m_showHelpCallback();
+            },
+            [weak]() {
                 if (auto self = weak.lock(); self && !self->m_isTearingDown.load()) self->LaunchBluetoothSettings();
             },
             [weak]() {
@@ -78,16 +82,22 @@ void TrayController::Initialize(HWND hwnd, winrt::Microsoft::UI::Xaml::Window ma
     }
 }
 
-void TrayController::SetDeviceManager(std::shared_ptr<DeviceManager> deviceManager) {
-    m_deviceManager = std::move(deviceManager);
+void TrayController::SetDeviceService(std::shared_ptr<apc::device::DeviceService> deviceService) {
+    m_deviceService = std::move(deviceService);
 }
 
-void TrayController::SetSettings(std::shared_ptr<Settings> settings) {
-    m_settings = std::move(settings);
-    if (m_settings) {
-        auto locked = m_settings->LockSharedData();
-        SetSystemBackdropEffectsEnabled(locked->UseSystemBackdropEffects);
+void TrayController::SetSettingsStore(std::shared_ptr<SettingsStore> settingsStore) {
+    m_settingsStore = std::move(settingsStore);
+    if (m_settingsStore) {
+        const auto snapshot = m_settingsStore->Snapshot();
+        SetSystemBackdropEffectsEnabled(snapshot.Data.UseSystemBackdropEffects);
     }
+}
+
+void TrayController::SetDeviceSettings(std::shared_ptr<ISettingsController> controller,
+                                       apc::app::SettingsWindowCommandExecutor::ExecuteCallback execute) {
+    m_settingsController = std::move(controller);
+    m_executeDeviceSetting = std::move(execute);
 }
 
 void TrayController::ApplyLanguage() {
@@ -167,6 +177,11 @@ void TrayController::Teardown() noexcept try {
         m_themeChangedToken = 0;
     }
     m_showSettingsCallback = nullptr;
+    m_showHelpCallback = nullptr;
+    m_openSettingsAfterPickerClosed = false;
+    m_executeDeviceSetting = nullptr;
+    m_settingsController.reset();
+    m_showDevicePickerCallback = nullptr;
     m_exitCallback = nullptr;
     m_connectCallback = nullptr;
     m_disconnectCallback = nullptr;
@@ -205,6 +220,7 @@ void TrayController::Teardown() noexcept try {
 /*------------------------------------------------------------------------------------------------------------*/
 
 void TrayController::SetCallbacks(ShowSettingsCallback showSettings,
+                                  ShowDevicePickerCallback showDevicePicker,
                                   ExitCallback exit,
                                   DeviceActionCallback connect,
                                   DeviceActionCallback disconnect,
@@ -213,6 +229,7 @@ void TrayController::SetCallbacks(ShowSettingsCallback showSettings,
                                   BulkDeviceActionCallback disconnectAll,
                                   BulkDeviceActionCallback reconnectAll) {
     m_showSettingsCallback = std::move(showSettings);
+    m_showDevicePickerCallback = std::move(showDevicePicker);
     m_exitCallback = std::move(exit);
     m_connectCallback = std::move(connect);
     m_disconnectCallback = std::move(disconnect);
@@ -426,17 +443,14 @@ void TrayController::UpdateTooltipFromConnections(std::vector<DeviceTrayPresenta
     if (!m_trayIcon) return;
     auto const appName = std::wstring(_("AppName"));
     auto const redactedDeviceName = std::wstring(_("Privacy_RedactedDevice"));
-    if (!m_settings) {
+    if (!m_settingsStore) {
         m_trayIcon->SetTooltip(apc::tray::BuildTooltip(appName, redactedDeviceName, connected, {}, false));
         return;
     }
 
-    std::wstring tooltip;
-    {
-        auto locked = m_settings->LockSharedData();
-        tooltip = apc::tray::BuildTooltip(
-            appName, redactedDeviceName, connected, locked->Devices, locked->PrivacyModeEnabled);
-    }
+    const auto snapshot = m_settingsStore->Snapshot();
+    const auto tooltip = apc::tray::BuildTooltip(
+        appName, redactedDeviceName, connected, snapshot.Data.Devices, snapshot.Data.PrivacyModeEnabled);
     m_trayIcon->SetTooltip(tooltip);
 }
 
@@ -573,7 +587,11 @@ void TrayController::HandleTrayMessage([[maybe_unused]] WPARAM wParam, LPARAM lP
                 break;
             }
             if (shouldProcess(m_lastLeftClickTick, c_clickDebounceMs)) {
-                (void)ShowDevicePicker();
+                if (m_showDevicePickerCallback) {
+                    m_showDevicePickerCallback();
+                } else {
+                    DebugTrace(L"[TrayController] ERROR: primary activation callback is not configured");
+                }
             }
             break;
 
@@ -634,8 +652,8 @@ bool TrayController::EnsureDevicePickerViewCreated() noexcept {
         auto impl = pickerView.as<winrt::AudioPlaybackConnector2::implementation::DevicePickerView>();
         auto weak = weak_from_this();
         impl->Initialize(
-            m_deviceManager,
-            m_settings,
+            m_deviceService,
+            m_settingsStore,
             [weak]() {
                 auto self = weak.lock();
                 if (self && !self->m_isTearingDown.load()) self->TryHideDevicePicker();
@@ -688,6 +706,11 @@ bool TrayController::EnsureDevicePickerViewCreated() noexcept {
                 DebugTrace(L"[TrayController] User reconnected all devices");
                 if (self->m_reconnectAllCallback) self->m_reconnectAllCallback();
             });
+        impl->SetDeviceSettings(m_settingsController, m_executeDeviceSetting, [weak] {
+            if (auto self = weak.lock(); self && !self->m_isTearingDown.load()) {
+                self->ShowSettingsAfterPickerClosed();
+            }
+        });
         m_devicePickerView = std::move(pickerView);
         m_releaseDevicePickerPending = false;
         return true;
@@ -769,6 +792,19 @@ void TrayController::ReleaseDevicePicker() noexcept {
         util::DebugTraceException(L"[TrayController] ERROR: failed to request device picker release", ex);
     } catch (...) {
         util::DebugTraceUnknownException(L"[TrayController] ERROR: failed to request device picker release");
+    }
+}
+
+void TrayController::SetHelpCallback(ShowSettingsCallback callback) {
+    m_showHelpCallback = std::move(callback);
+}
+
+void TrayController::ShowSettingsAfterPickerClosed() {
+    m_openSettingsAfterPickerClosed = true;
+    TryHideDevicePicker();
+    if (m_openSettingsAfterPickerClosed && m_pickerFlyoutState.load() != PickerFlyoutState::Closing) {
+        m_openSettingsAfterPickerClosed = false;
+        if (m_showSettingsCallback) m_showSettingsCallback();
     }
 }
 
@@ -917,6 +953,8 @@ Controls::Flyout TrayController::CreatePickerFlyout() {
             if (self->m_releaseDevicePickerPending) {
                 self->ReleaseDevicePickerOnUIThread();
             }
+            if (std::exchange(self->m_openSettingsAfterPickerClosed, false) && self->m_showSettingsCallback)
+                self->m_showSettingsCallback();
         } catch (winrt::hresult_error const& ex) {
             util::DebugTraceException(L"[TrayController] ERROR: Picker flyout closed handler failed", ex);
         } catch (std::exception const& ex) {

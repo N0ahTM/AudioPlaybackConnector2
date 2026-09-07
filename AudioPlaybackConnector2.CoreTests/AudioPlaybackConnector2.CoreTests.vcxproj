@@ -1,14 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
-    <ProjectConfiguration Include="Debug|x86">
-      <Configuration>Debug</Configuration>
-      <Platform>x86</Platform>
-    </ProjectConfiguration>
-    <ProjectConfiguration Include="Debug|Win32">
-      <Configuration>Debug</Configuration>
-      <Platform>Win32</Platform>
-    </ProjectConfiguration>
     <ProjectConfiguration Include="Debug|x64">
       <Configuration>Debug</Configuration>
       <Platform>x64</Platform>
@@ -16,14 +8,6 @@
     <ProjectConfiguration Include="Debug|ARM64">
       <Configuration>Debug</Configuration>
       <Platform>ARM64</Platform>
-    </ProjectConfiguration>
-    <ProjectConfiguration Include="Release|x86">
-      <Configuration>Release</Configuration>
-      <Platform>x86</Platform>
-    </ProjectConfiguration>
-    <ProjectConfiguration Include="Release|Win32">
-      <Configuration>Release</Configuration>
-      <Platform>Win32</Platform>
     </ProjectConfiguration>
     <ProjectConfiguration Include="Release|x64">
       <Configuration>Release</Configuration>
@@ -69,7 +53,7 @@
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp23</LanguageStandard>
       <AdditionalIncludeDirectories>..\AudioPlaybackConnector2\include;..\packages\Microsoft.Windows.ImplementationLibrary.1.0.260126.7\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>APC_ALLOW_UNPACKAGED_CONTROL;APC_AUTO_RECONNECT_PLANNER_STANDALONE;APC_COMMAND_PIPE_SERVER_STANDALONE;APC_COMMAND_PIPE_SERVER_TESTING;APC_DEVICE_OPERATION_COORDINATOR_STANDALONE;APC_DEVICE_OPERATION_COORDINATOR_TESTING;APC_DEVICE_PICKER_SNAPSHOT_STANDALONE;APC_RECONNECT_CONTROLLER_STANDALONE;APC_SINGLE_INSTANCE_GUARD_STANDALONE;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>APC_ALLOW_UNPACKAGED_CONTROL;APC_AUTO_RECONNECT_PLANNER_STANDALONE;APC_COMMAND_PIPE_SERVER_STANDALONE;APC_COMMAND_PIPE_SERVER_TESTING;APC_DEVICE_OPERATION_COORDINATOR_STANDALONE;APC_DEVICE_OPERATION_COORDINATOR_TESTING;APC_DEVICE_PICKER_SNAPSHOT_STANDALONE;APC_POWER_TRANSITION_COORDINATOR_TESTING;APC_RECONNECT_CONTROLLER_STANDALONE;APC_SETTINGS_STORE_TESTING;APC_SINGLE_INSTANCE_GUARD_STANDALONE;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
     <Link>
@@ -97,20 +81,26 @@
   <ItemGroup>
     <ClCompile Include="src\AdaptiveResourceDiagnosticsTests.cpp" />
     <ClCompile Include="src\AdaptiveResourcePolicyTests.cpp" />
+    <ClCompile Include="src\AppControllerTests.cpp" />
+    <ClCompile Include="src\ControlCommandAdapterTests.cpp" />
+    <ClCompile Include="src\AppModelsTests.cpp" />
     <ClCompile Include="src\AppWorkCoordinatorTests.cpp" />
     <ClCompile Include="src\AutoReconnectPlannerTests.cpp" />
     <ClCompile Include="src\CommandLineControlServerTests.cpp" />
     <ClCompile Include="src\CommandClientTests.cpp" />
     <ClCompile Include="src\ControlUiActionGateTests.cpp" />
     <ClCompile Include="src\ControlTargetMatcherTests.cpp" />
-    <ClCompile Include="src\DeviceOperationCoordinatorTests.cpp" />
+    <ClCompile Include="src\DeviceServiceTests.cpp" />
+    <ClCompile Include="src\DeviceWatcherTests.cpp" />
     <ClCompile Include="src\DiagnosticsLogCollectorTests.cpp" />
     <ClCompile Include="src\EventTests.cpp" />
     <ClCompile Include="src\SettingsDiagnosticsReportBuilderTests.cpp" />
+    <ClCompile Include="src\SettingsStoreTests.cpp" />
     <ClCompile Include="src\DevicePickerSnapshotTests.cpp" />
     <ClCompile Include="src\LatestStartupTaskRequestStateTests.cpp" />
-    <ClCompile Include="src\LatestServiceLifecycleStateTests.cpp" />
+    <ClCompile Include="src\LegacyAppUseCaseBridgeTests.cpp" />
     <ClCompile Include="src\ReconnectControllerTests.cpp" />
+    <ClCompile Include="src\ReconnectPolicyTests.cpp" />
     <ClCompile Include="src\ResourcePressureMonitorTests.cpp" />
     <ClCompile Include="src\RuntimeApartmentTests.cpp" />
     <ClCompile Include="src\SettingsLimitsTests.cpp" />
@@ -119,9 +109,19 @@
     <ClCompile Include="src\TrayTooltipBuilderTests.cpp" />
     <ClCompile Include="src\UpdateCoordinatorTests.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveResourcePolicy.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\LegacyAppUseCaseBridge.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\AppController.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\control\ControlCommandAdapter.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveActionRetryBackoff.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveScheduleState.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AutoReconnectPlanner.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\PowerTransitionCoordinator.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\control\CommandClient.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\ResourcePressureMonitor.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\ResourcePressureState.cpp" />
@@ -129,24 +129,42 @@
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\StartupTaskCoordinator.cpp">
       <AdditionalIncludeDirectories>..\AudioPlaybackConnector2.CoreRuntime\include;..\AudioPlaybackConnector2\res;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
-    <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceOperationCoordinator.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceService.cpp">
+      <AdditionalIncludeDirectories>..\AudioPlaybackConnector2.CoreRuntime\include;..\AudioPlaybackConnector2\res;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\AudioConnectionService.cpp">
+      <AdditionalIncludeDirectories>..\AudioPlaybackConnector2.CoreRuntime\include;..\AudioPlaybackConnector2\res;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceSession.cpp">
+      <AdditionalIncludeDirectories>..\AudioPlaybackConnector2.CoreRuntime\include;..\AudioPlaybackConnector2\res;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceWatcher.cpp">
+      <AdditionalIncludeDirectories>..\AudioPlaybackConnector2.CoreRuntime\include;..\AudioPlaybackConnector2\res;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\ReconnectPolicy.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\ui\DiagnosticsLogCollector.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\ui\SettingsDiagnosticsReportBuilder.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\UpdateCoordinator.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\AutomaticUpdateWindow.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\DevicePickerSnapshot.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceInventoryGeneration.cpp" />
-    <ClCompile Include="..\AudioPlaybackConnector2\src\core\ReconnectController.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\SettingsStore.cpp">
+      <AdditionalIncludeDirectories>..\AudioPlaybackConnector2.CoreRuntime\include;..\AudioPlaybackConnector2\res;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\TrayTooltipBuilder.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\CommandLineControlServer.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveResourceDiagnostics.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppController.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\DeviceFactPublicationFence.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\LegacyAppUseCaseBridge.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppModels.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\SettingsWindowCommandExecutor.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveResourcePolicy.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveActionRetryBackoff.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveScheduleState.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AutoReconnectPlanner.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\app\DeferredSaveCoordinator.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\LatestStartupTaskRequestState.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResumeReconnectAttemptState.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ControlUiActionGate.hpp" />
@@ -154,12 +172,16 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandPipeSecurity.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandProtocol.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\ControlTargetMatcher.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceOperationCoordinator.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\core\LatestServiceLifecycleState.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceService.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceSession.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceId.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceWatcher.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\ui\DiagnosticsLogCollector.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\ui\TrayPrimaryActivation.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceInventoryGeneration.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DevicePickerTypes.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsLimits.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsStore.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceTrayPresentation.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\TrayTooltipBuilder.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResourcePressureMonitor.hpp" />
@@ -170,7 +192,7 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\UpdateCoordinator.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\AutomaticUpdateWindow.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DevicePickerSnapshot.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\core\ReconnectController.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\ReconnectPolicy.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\util\Event.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\util\RuntimeApartment.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\ToastXmlSanitizer.hpp" />

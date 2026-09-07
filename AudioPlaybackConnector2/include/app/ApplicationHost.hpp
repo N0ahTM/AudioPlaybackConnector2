@@ -2,9 +2,10 @@
 
 #include <app/AdaptiveResourcePolicy.hpp>
 #include <app/AdaptiveResourceDiagnostics.hpp>
+#include <app/AppController.hpp>
 #include <app/ControlUiActionGate.hpp>
-#include <app/DeferredSettingsSaver.hpp>
 #include <app/DeviceEventRouter.hpp>
+#include <app/LegacyAppUseCaseBridge.hpp>
 #include <app/PowerTransitionCoordinator.hpp>
 #include <app/ResourcePressureMonitor.hpp>
 #include <app/SettingsWindowPresenter.hpp>
@@ -12,10 +13,15 @@
 #include <app/StartupTaskCoordinator.hpp>
 #include <app/UiRefreshCoalescer.hpp>
 
+#include <core/DeviceService.hpp>
+#include <core/SettingsStore.hpp>
+
 #include <services/CommandLineControlServer.hpp>
 #include <services/NotificationService.hpp>
 #include <services/SettingsController.hpp>
 #include <services/TrayController.hpp>
+
+#include <control/ControlCommandAdapter.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -27,8 +33,6 @@
 #include <stop_token>
 #include <string_view>
 
-class DeviceManager;
-class Settings;
 class UpdateCoordinator;
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -64,7 +68,8 @@ private:
     void FailStartup(std::wstring_view stage) noexcept;
     void InitializeTray();
     void InitializeNotifications();
-    void InitializeDeviceManager();
+    void InitializeDeviceService();
+    void InitializeAppController();
     void InitializeCommandLineControl();
     void InitializeAdaptiveResources() noexcept;
     void SetupDeviceEvents();
@@ -73,7 +78,9 @@ private:
     winrt::fire_and_forget CheckForUpdatesOnStartupAsync();
     void HandlePowerSuspend();
     void HandlePowerResume();
-    void ToggleLastConnectedDeviceFromTray();
+    void ExecuteTrayCommand(
+        apc::app::AppCommand command,
+        apc::app::AppCommandContext::CompletionMode completion = apc::app::AppCommandContext::CompletionMode::Detached);
     [[nodiscard]] bool RefreshTrayVisualState(bool forceErrorWhenIdle = false,
                                               std::wstring_view reason = L"unspecified");
     void ScheduleDeviceVisualRefresh(bool forceErrorWhenIdle = false,
@@ -87,7 +94,6 @@ private:
     void EvaluateAdaptiveResources(bool userInteraction, std::wstring_view reason) noexcept;
     void ScheduleAdaptiveResourceEvaluation(std::optional<AdaptiveResourcePolicy::TimePoint> reevaluateAt) noexcept;
     [[nodiscard]] winrt::hstring ResolveKnownDeviceName(winrt::hstring const& id) const;
-    [[nodiscard]] std::optional<std::wstring> ResolveDefaultDeviceId() const;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Actions ///////////////////////////////////////////////////////////////////////////////////////////*/
@@ -96,21 +102,20 @@ private:
     [[nodiscard]] bool ShowSettingsWindow();
     void ExitApplication() noexcept;
     [[nodiscard]] bool CloseMainWindow(std::wstring_view reason) noexcept;
-    apc::control::Response
-    HandleControlCommand(apc::control::Request const& request, std::stop_token stopToken, std::uint64_t deadline);
-    [[nodiscard]] bool PerformTeardown(bool saveSettings) noexcept;
+    [[nodiscard]] bool PerformTeardown(SettingsShutdownMode settingsShutdownMode) noexcept;
     [[nodiscard]] bool RunOnUIThread(std::function<void()> work) noexcept;
     [[nodiscard]] bool QueueUiFallbackWork(std::function<void()> work) noexcept;
     void DrainUiFallbackWork() noexcept;
-    ControlUiActionResult
-    RunControlUiAction(std::function<bool()> work, std::stop_token stopToken, std::uint64_t deadline);
+    ControlUiActionResult RunControlUiAction(std::function<bool()> work, apc::app::AppCommandContext const& context);
+
+    void PublishDeviceFact(apc::app::LegacyAppUseCaseBridge::DeviceFact fact) noexcept;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Device Event Handlers /////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
     void OnDeviceConnected(winrt::hstring const& id);
-    void OnDeviceDisconnected(winrt::hstring const& id);
+    void OnDeviceDisconnected(winrt::hstring const& id, apc::device::DeviceDisconnectReason reason);
     void OnConnectionError(winrt::hstring const& id, winrt::hstring msg);
     void OnAutoReconnectTriggered(winrt::hstring const& id);
     void OnAutoReconnectFailed(winrt::hstring const& id);
@@ -133,8 +138,8 @@ private:
     winrt::event_token m_mainWindowLoadedToken{};
     HWND m_hwnd = nullptr;
 
-    std::shared_ptr<::Settings> m_settings;
-    std::shared_ptr<::DeviceManager> m_deviceManager;
+    std::shared_ptr<SettingsStore> m_settingsStore;
+    std::shared_ptr<apc::device::DeviceService> m_deviceService;
     std::shared_ptr<ISettingsController> m_settingsController;
     std::shared_ptr<StartupTaskCoordinator> m_startupTaskCoordinator;
     winrt::Microsoft::UI::Dispatching::DispatcherQueue m_dispatcherQueue{nullptr};
@@ -143,8 +148,10 @@ private:
     std::shared_ptr<NotificationService> m_notificationService;
     std::shared_ptr<UpdateCoordinator> m_updateCoordinator;
     std::shared_ptr<TrayController> m_trayController;
+    std::shared_ptr<apc::app::LegacyAppUseCaseBridge> m_appBridge;
+    std::unique_ptr<apc::app::AppController> m_appController;
+    std::unique_ptr<apc::control::ControlCommandAdapter> m_controlCommandAdapter;
     CommandLineControlServer m_commandLineControlServer;
-    std::mutex m_controlMutationMutex;
     std::mutex m_uiFallbackWorkMutex;
     std::deque<std::function<void()>> m_uiFallbackWork;
     bool m_uiFallbackMessagePending = false;
@@ -181,7 +188,6 @@ private:
     std::atomic<bool> m_started = false;
     std::atomic<bool> m_teardownWindowCloseSucceeded = true;
     bool m_windowSubclassInstalled = false;
-    DeferredSettingsSaver m_settingsSaver{m_exiting};
     UiRefreshCoalescer m_deviceVisualRefreshCoalescer;
     unsigned int m_deviceVisualRefreshConsecutiveFailures = 0;
     std::mutex m_deviceVisualRefreshRetryTimerMutex;

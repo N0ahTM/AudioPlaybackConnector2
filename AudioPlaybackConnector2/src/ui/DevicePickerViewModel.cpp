@@ -2,20 +2,96 @@
 
 #include <ui/DevicePickerViewModel.hpp>
 
-#include <core/DeviceManager.hpp>
-#include <core/Settings.hpp>
+#include <core/DeviceService.hpp>
+#include <core/SettingsStore.hpp>
 #include <core/StringResources.hpp>
+#include <services/SettingsController.hpp>
+#include <ui/SettingsViewModel.hpp>
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-void DevicePickerViewModel::SetDeviceManager(std::weak_ptr<DeviceManager> manager) {
-    m_manager = std::move(manager);
+void DevicePickerViewModel::SetDeviceService(std::weak_ptr<apc::device::DeviceService> service) {
+    m_service = std::move(service);
 }
 
-void DevicePickerViewModel::SetSettings(std::weak_ptr<Settings> settings) {
-    m_settings = std::move(settings);
+void DevicePickerViewModel::SetSettingsStore(std::weak_ptr<SettingsStore> settingsStore) {
+    m_settingsStore = std::move(settingsStore);
+}
+
+void DevicePickerViewModel::SetDeviceSettings(std::weak_ptr<ISettingsController> controller,
+                                              apc::app::SettingsWindowCommandExecutor::ExecuteCallback execute) {
+    m_settingsController = std::move(controller);
+    m_deviceCommands.emplace(std::move(execute));
+}
+
+std::optional<DeviceOptionsViewModel> DevicePickerViewModel::DeviceOptions(std::wstring_view id) const {
+    auto controller = m_settingsController.lock();
+    if (!controller || id.empty()) return std::nullopt;
+    const auto settings = controller->Snapshot();
+    auto devices = SettingsViewModel::BuildDeviceItems(settings);
+    auto const saved = std::ranges::find(devices, id, &SettingsDeviceViewModel::Id);
+    auto const& items = m_cache.CachedSnapshot().Items;
+    auto const discovered = std::ranges::find(items, id, &apc::device_picker::DeviceSnapshotItem::Id);
+    if (saved == devices.end() && discovered == items.end()) return std::nullopt;
+
+    DeviceOptionsViewModel result;
+    if (saved != devices.end())
+        result.Device = *saved;
+    else {
+        result.Device.Id = discovered->Id;
+        result.Device.DisplayName = discovered->DisplayName;
+        result.Device.IsDefaultDevice =
+            settings.DefaultDevice == DefaultDeviceMode::SpecificDevice && settings.DefaultDeviceId == id;
+    }
+    result.GlobalConnectOnStartup = settings.GlobalConnectOnStartup;
+    result.GlobalReconnectOnConnectionLoss = settings.GlobalReconnectOnConnectionLoss;
+    if (auto service = m_service.lock()) {
+        const auto activity = service->GetDevicePickerActivitySnapshot();
+        result.CanForget = saved != devices.end() && !activity.ConnectedIds.contains(result.Device.Id) &&
+                           !activity.BusyIds.contains(result.Device.Id);
+    }
+    return result;
+}
+
+bool DevicePickerViewModel::SetAlias(std::wstring_view id, std::wstring_view alias) const {
+    return m_deviceCommands && m_deviceCommands->SetAlias(id, alias).Succeeded();
+}
+
+bool DevicePickerViewModel::SetDefault(std::wstring_view id, bool enabled) const {
+    if (!m_deviceCommands) return false;
+    if (!enabled) {
+        const auto options = DeviceOptions(id);
+        if (!options) return false;
+        if (!options->Device.IsDefaultDevice) return true;
+    }
+    return (enabled ? m_deviceCommands->SetDefault(id) : m_deviceCommands->ClearDefault()).Succeeded();
+}
+
+bool DevicePickerViewModel::SetConnectOnStartup(std::wstring const& id, bool enabled) const {
+    auto controller = m_settingsController.lock();
+    if (!controller) return false;
+    controller->SetDeviceConnectOnStartup(id, enabled);
+    const auto options = DeviceOptions(id);
+    return options && options->Device.ConnectOnStartup == enabled;
+}
+
+bool DevicePickerViewModel::SetReconnectOnConnectionLoss(std::wstring const& id, bool enabled) const {
+    auto controller = m_settingsController.lock();
+    if (!controller) return false;
+    controller->SetDeviceReconnectOnConnectionLoss(id, enabled);
+    const auto options = DeviceOptions(id);
+    return options && options->Device.ReconnectOnConnectionLoss == enabled;
+}
+
+bool DevicePickerViewModel::ForgetDevice(std::wstring const& id) const {
+    auto controller = m_settingsController.lock();
+    const auto options = DeviceOptions(id);
+    if (!controller || !options || !options->CanForget) return false;
+    controller->ForgetDevice(id);
+    const auto settings = controller->Snapshot();
+    return std::ranges::find(settings.Devices, id, &DeviceSettings::Id) == settings.Devices.end();
 }
 
 void DevicePickerViewModel::SetDevices(winrt::Windows::Devices::Enumeration::DeviceInformationCollection const& devices,
@@ -33,19 +109,19 @@ void DevicePickerViewModel::SetDevices(winrt::Windows::Devices::Enumeration::Dev
     m_cache.ReplaceInventory(std::move(inventory), refreshedAt);
 }
 
-bool DevicePickerViewModel::SynchronizeInventoryFromManager(TimePoint refreshedAt) {
-    auto manager = m_manager.lock();
-    if (!manager) return false;
+bool DevicePickerViewModel::SynchronizeInventoryFromService(TimePoint refreshedAt) {
+    auto service = m_service.lock();
+    if (!service) return false;
 
     if (m_sourceInventoryGeneration && m_cache.HasInventory()) {
-        auto inventory = manager->GetDevicePickerInventorySnapshotIfChanged(*m_sourceInventoryGeneration);
+        auto inventory = service->GetDevicePickerInventorySnapshotIfChanged(*m_sourceInventoryGeneration);
         if (!inventory) return m_sourceEnumerationComplete;
 
         m_cache.ReplaceInventory(std::move(inventory->Devices), refreshedAt);
         m_sourceInventoryGeneration = inventory->Generation;
         m_sourceEnumerationComplete = inventory->EnumerationComplete;
     } else {
-        auto inventory = manager->GetDevicePickerInventorySnapshot();
+        auto inventory = service->GetDevicePickerInventorySnapshot();
         m_cache.ReplaceInventory(std::move(inventory.Devices), refreshedAt);
         m_sourceInventoryGeneration = inventory.Generation;
         m_sourceEnumerationComplete = inventory.EnumerationComplete;
@@ -74,22 +150,30 @@ bool DevicePickerViewModel::IsInventoryFresh(TimePoint now) const noexcept {
 
 apc::device_picker::DevicePickerSnapshot const& DevicePickerViewModel::RefreshSnapshot(TimePoint now) {
     apc::device_picker::DeviceActivitySnapshot activity;
-    if (auto manager = m_manager.lock()) {
-        activity = manager->GetDevicePickerActivitySnapshot();
+    if (auto service = m_service.lock()) {
+        activity = service->GetDevicePickerActivitySnapshot();
     }
 
     std::vector<apc::device_picker::DevicePresentationSetting> presentationSettings;
     bool privacyModeEnabled = false;
-    if (auto settings = m_settings.lock()) {
-        auto locked = settings->LockSharedData();
-        privacyModeEnabled = locked->PrivacyModeEnabled;
-        presentationSettings.reserve(locked->Devices.size());
-        for (auto const& device : locked->Devices) {
+    if (auto settingsStore = m_settingsStore.lock()) {
+        const auto snapshot = settingsStore->Snapshot();
+        privacyModeEnabled = snapshot.Data.PrivacyModeEnabled;
+        presentationSettings.reserve(snapshot.Data.Devices.size());
+        for (auto const& device : snapshot.Data.Devices) {
             presentationSettings.push_back({
                 .Id = device.Id,
                 .Name = device.Name,
                 .Alias = device.Alias,
+                .IsDefault = snapshot.Data.DefaultDevice == DefaultDeviceMode::SpecificDevice &&
+                             snapshot.Data.DefaultDeviceId == device.Id,
             });
+        }
+        if (snapshot.Data.DefaultDevice == DefaultDeviceMode::SpecificDevice &&
+            !snapshot.Data.DefaultDeviceId.empty() &&
+            std::ranges::none_of(presentationSettings,
+                                 [&](auto const& device) { return device.Id == snapshot.Data.DefaultDeviceId; })) {
+            presentationSettings.push_back({snapshot.Data.DefaultDeviceId, {}, {}, true});
         }
     }
 

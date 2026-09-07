@@ -1,8 +1,10 @@
 #pragma once
 
 #include <core/DeviceTrayPresentation.hpp>
+#include <core/DeviceService.hpp>
 #include <ui/TrayIcon.hpp>
 #include <ui/TrayContextMenu.hpp>
+#include <ui/TrayPrimaryActivation.hpp>
 #include <DevicePickerView/DevicePickerView.xaml.h>
 #include <ui/WindowPlacement.hpp>
 
@@ -12,8 +14,7 @@
 #include <cstdint>
 #include <string_view>
 
-class DeviceManager;
-class Settings;
+class SettingsStore;
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Tray Controller ///////////////////////////////////////////////////////////////////////////////////*/
@@ -25,6 +26,7 @@ public:
     /*//////// Callback Types ////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
+    using ShowDevicePickerCallback = apc::ui::TrayPrimaryActivationCallback;
     using ShowSettingsCallback = std::move_only_function<void()>;
     using ExitCallback = std::move_only_function<void()>;
     using DeviceActionCallback = std::move_only_function<void(winrt::hstring)>;
@@ -45,8 +47,10 @@ public:
     TrayController& operator=(TrayController&&) = delete;
 
     void Initialize(HWND hwnd, winrt::Microsoft::UI::Xaml::Window mainWindow);
-    void SetDeviceManager(std::shared_ptr<DeviceManager> deviceManager);
-    void SetSettings(std::shared_ptr<Settings> settings);
+    void SetDeviceService(std::shared_ptr<apc::device::DeviceService> deviceService);
+    void SetSettingsStore(std::shared_ptr<SettingsStore> settingsStore);
+    void SetDeviceSettings(std::shared_ptr<ISettingsController> controller,
+                           apc::app::SettingsWindowCommandExecutor::ExecuteCallback execute);
     void PreloadDevicePicker() noexcept;
     void ReleaseDevicePicker() noexcept;
     void Teardown() noexcept;
@@ -60,6 +64,7 @@ public:
     /*------------------------------------------------------------------------------------------------------------*/
 
     void SetCallbacks(ShowSettingsCallback showSettings,
+                      ShowDevicePickerCallback showDevicePicker,
                       ExitCallback exit,
                       DeviceActionCallback connect,
                       DeviceActionCallback disconnect,
@@ -68,6 +73,7 @@ public:
                       BulkDeviceActionCallback disconnectAll = nullptr,
                       BulkDeviceActionCallback reconnectAll = nullptr);
     void SetResourceStateChangedCallback(ResourceStateChangedCallback callback);
+    void SetHelpCallback(ShowSettingsCallback callback);
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Actions ///////////////////////////////////////////////////////////////////////////////////////////*/
@@ -98,6 +104,7 @@ private:
 
     [[nodiscard]] bool EnsureDevicePickerViewCreated() noexcept;
     void TryHideDevicePicker() noexcept;
+    void ShowSettingsAfterPickerClosed();
     void ReleaseDevicePickerOnUIThread() noexcept;
     void LaunchBluetoothSettings();
     winrt::Microsoft::UI::Xaml::Controls::Flyout CreatePickerFlyout();
@@ -112,8 +119,10 @@ private:
 
     HWND m_hwnd = nullptr;
     winrt::Microsoft::UI::Xaml::Window m_mainWindow{nullptr};
-    std::shared_ptr<DeviceManager> m_deviceManager;
-    std::shared_ptr<Settings> m_settings;
+    std::shared_ptr<apc::device::DeviceService> m_deviceService;
+    std::shared_ptr<SettingsStore> m_settingsStore;
+    std::shared_ptr<ISettingsController> m_settingsController;
+    apc::app::SettingsWindowCommandExecutor::ExecuteCallback m_executeDeviceSetting;
 
     std::unique_ptr<TrayIcon> m_trayIcon;
     std::unique_ptr<TrayContextMenu> m_contextMenu;
@@ -121,6 +130,9 @@ private:
     winrt::AudioPlaybackConnector2::DevicePickerView m_devicePickerView{nullptr};
 
     ShowSettingsCallback m_showSettingsCallback;
+    ShowSettingsCallback m_showHelpCallback;
+    bool m_openSettingsAfterPickerClosed = false;
+    ShowDevicePickerCallback m_showDevicePickerCallback;
     ExitCallback m_exitCallback;
     DeviceActionCallback m_connectCallback;
     DeviceActionCallback m_disconnectCallback;

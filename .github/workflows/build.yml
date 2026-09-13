@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main, develop]
 
+env:
+  NUGET_PACKAGES: ${{ github.workspace }}\.nuget\packages
+
 jobs:
   quality:
     runs-on: windows-2022
@@ -15,6 +18,16 @@ jobs:
 
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
+
+    - name: Cache NuGet packages
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: |
+          packages
+          .nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.config', '**/*.vcxproj', '**/*.wapproj', 'Directory.Build.props', 'AudioPlaybackConnector2.slnx') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
 
     - name: Install static analysis tools
       shell: pwsh
@@ -63,7 +76,6 @@ jobs:
 
   build:
     name: Build (${{ matrix.architecture }})
-    needs: quality
     runs-on: windows-2022
     strategy:
       fail-fast: false
@@ -75,6 +87,16 @@ jobs:
 
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
+
+    - name: Cache NuGet packages
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: |
+          packages
+          .nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.config', '**/*.vcxproj', '**/*.wapproj', 'Directory.Build.props', 'AudioPlaybackConnector2.slnx') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
 
     - name: Restore NuGet packages
       run: msbuild AudioPlaybackConnector2.slnx -t:restore -p:RestorePackagesConfig=true

@@ -5,9 +5,12 @@
 # (manual CLI use).
 param(
     [string] $PackageDir,
-    [ValidateSet('validate', 'cert', 'install', 'verify', 'uninstall')] [string] $Step,
+    [ValidateSet('validate', 'cert', 'cert-machine', 'cert-machine-rollback',
+        'cert-machine-uninstall', 'install', 'verify', 'uninstall')] [string] $Step,
     [ValidateSet('x64', 'arm64')] [string] $PackageArchitecture = 'x64',
     [string] $ExpectedPackageVersion,
+    [string] $ExpectedCertificateThumbprint,
+    [string] $ProgressPath,
     [switch] $Launch
 )
 
@@ -30,23 +33,32 @@ function Get-AppCertificate {
     if ($cert.Subject -ne 'CN=AudioPlaybackConnector2' -or -not $cert.Thumbprint) {
         throw 'The bundled signing certificate has an unexpected identity.'
     }
+    if ($ExpectedCertificateThumbprint -and
+        $cert.Thumbprint -ne $ExpectedCertificateThumbprint.Replace(' ', '').ToUpperInvariant()) {
+        throw 'The bundled signing certificate does not match the installer-pinned thumbprint.'
+    }
     return $cert
 }
 
 function Import-AppCertificate {
-    param([string] $Dir)
+    param(
+        [string] $Dir,
+        [ValidateSet('CurrentUser', 'LocalMachine')] [string] $StoreLocation = 'CurrentUser'
+    )
     $cert = Get-AppCertificate -Dir $Dir
-    # TrustedPeople (not Root): grants MSIX sideload trust per-user without admin rights or a security prompt.
-    $store = [System.Security.Cryptography.X509Certificates.X509Store]::new('TrustedPeople', 'CurrentUser')
+    # Never place a self-signed leaf certificate in a root CA store. Windows uses
+    # LocalMachine\TrustedPeople for MSIX trust on systems that reject user-store trust.
+    $store = [System.Security.Cryptography.X509Certificates.X509Store]::new('TrustedPeople', $StoreLocation)
     $store.Open('ReadWrite')
     try {
         $existing = $store.Certificates.Find('FindByThumbprint', $cert.Thumbprint, $false)
         if ($existing.Count -eq 0) {
             $store.Add($cert)
-            Set-Content -LiteralPath (Join-Path $Dir '.certificate-added') -Value $cert.Thumbprint -Encoding ASCII
-            Write-Host "Certificate $($cert.Thumbprint) added to CurrentUser\TrustedPeople."
+            $markerName = ".certificate-added-$StoreLocation"
+            Set-Content -LiteralPath (Join-Path $Dir $markerName) -Value $cert.Thumbprint -Encoding ASCII
+            Write-Host "Certificate $($cert.Thumbprint) added to $StoreLocation\TrustedPeople."
         } else {
-            Write-Host 'Certificate already trusted, skipping.'
+            Write-Host "Certificate already trusted in $StoreLocation\TrustedPeople, skipping."
         }
     } finally {
         $store.Close()
@@ -54,11 +66,18 @@ function Import-AppCertificate {
 }
 
 function Remove-NewlyImportedCertificate {
-    param([string] $Dir)
-    $markerPath = Join-Path $Dir '.certificate-added'
+    param(
+        [string] $Dir,
+        [ValidateSet('CurrentUser', 'LocalMachine')] [string] $StoreLocation = 'CurrentUser'
+    )
+    $markerPath = Join-Path $Dir ".certificate-added-$StoreLocation"
     if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) { return }
     $thumbprint = (Get-Content -LiteralPath $markerPath -Raw).Trim()
-    $store = [System.Security.Cryptography.X509Certificates.X509Store]::new('TrustedPeople', 'CurrentUser')
+    $cert = Get-AppCertificate -Dir $Dir
+    if ($thumbprint -ne $cert.Thumbprint) {
+        throw 'Refusing to remove a certificate that does not match the bundled signer.'
+    }
+    $store = [System.Security.Cryptography.X509Certificates.X509Store]::new('TrustedPeople', $StoreLocation)
     $store.Open('ReadWrite')
     try {
         $store.Certificates.Find('FindByThumbprint', $thumbprint, $false) | ForEach-Object { $store.Remove($_) }
@@ -66,7 +85,73 @@ function Remove-NewlyImportedCertificate {
         $store.Close()
         Remove-Item -LiteralPath $markerPath -Force -ErrorAction SilentlyContinue
     }
-    Write-Host "Rolled back certificate $thumbprint after installation failure."
+    Write-Host "Rolled back certificate $thumbprint from $StoreLocation\TrustedPeople."
+}
+
+function Assert-Administrator {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        throw 'This certificate operation requires administrator approval.'
+    }
+}
+
+function Test-AppCertificateInStore {
+    param(
+        [string] $Dir,
+        [ValidateSet('CurrentUser', 'LocalMachine')] [string] $StoreLocation
+    )
+    $cert = Get-AppCertificate -Dir $Dir
+    $store = [System.Security.Cryptography.X509Certificates.X509Store]::new('TrustedPeople', $StoreLocation)
+    $store.Open('ReadOnly')
+    try {
+        return $store.Certificates.Find('FindByThumbprint', $cert.Thumbprint, $false).Count -gt 0
+    } finally {
+        $store.Close()
+    }
+}
+
+function Invoke-ElevatedCertificateStep {
+    param(
+        [string] $Dir,
+        [ValidateSet('cert-machine', 'cert-machine-rollback', 'cert-machine-uninstall')] [string] $ElevatedStep
+    )
+    foreach ($value in @($PSCommandPath, $Dir, $ExpectedCertificateThumbprint)) {
+        if ($value.Contains('"')) { throw 'A certificate helper argument contains an invalid quote.' }
+    }
+    $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $arguments = '-NoProfile -ExecutionPolicy Bypass -File "{0}" -Step {1} -PackageDir "{2}" ' +
+        '-PackageArchitecture {3} -ExpectedCertificateThumbprint "{4}"'
+    $arguments = $arguments -f $PSCommandPath, $ElevatedStep, $Dir, $PackageArchitecture,
+        $ExpectedCertificateThumbprint
+    Write-Host 'Windows requires administrator approval to trust this MSIX signing certificate for the computer.'
+    $process = Start-Process -FilePath $windowsPowerShell -ArgumentList $arguments -Verb RunAs -Wait -PassThru `
+        -WindowStyle Hidden
+    if ($process.ExitCode -ne 0) {
+        throw "Elevated certificate step '$ElevatedStep' failed or was cancelled (exit code $($process.ExitCode))."
+    }
+}
+
+function Remove-MachineCertificateAfterLastUninstall {
+    param([string] $Dir)
+    Assert-Administrator
+    $remainingPackages = @(Get-AppxPackage -AllUsers -Name 'N0ahTM.AudioPlaybackConnector2')
+    if ($remainingPackages.Count -gt 0) {
+        Write-Host 'The certificate remains trusted because another user still has the app installed.'
+        return
+    }
+    $cert = Get-AppCertificate -Dir $Dir
+    $store = [System.Security.Cryptography.X509Certificates.X509Store]::new('TrustedPeople', 'LocalMachine')
+    $store.Open('ReadWrite')
+    try {
+        $matches = $store.Certificates.Find('FindByThumbprint', $cert.Thumbprint, $false)
+        foreach ($match in $matches) {
+            $store.Remove($match)
+            Write-Host "Certificate $($match.Thumbprint) removed from LocalMachine\TrustedPeople."
+        }
+    } finally {
+        $store.Close()
+    }
 }
 
 function Get-AppPackage {
@@ -174,6 +259,39 @@ function Get-AppDependencies {
             ($_.Extension -in '.msix', '.appx') -and ($_.Name -notmatch '^AudioPlaybackConnector2_') })
 }
 
+function Invoke-AddAppxPackage {
+    param(
+        [hashtable] $Parameters,
+        [string] $DeploymentProgressPath
+    )
+    if (-not $DeploymentProgressPath) {
+        Add-AppxPackage @Parameters
+        return
+    }
+    $powershell = [PowerShell]::Create()
+    try {
+        $null = $powershell.AddCommand('Add-AppxPackage')
+        foreach ($entry in $Parameters.GetEnumerator()) {
+            $null = $powershell.AddParameter($entry.Key, $entry.Value)
+        }
+        [IO.File]::WriteAllText($DeploymentProgressPath, '0', [Text.Encoding]::ASCII)
+        $powershell.Streams.Progress.add_DataAdded({
+                param($sender, $eventArgs)
+                $record = $sender[$eventArgs.Index]
+                if ($record.PercentComplete -ge 0 -and $record.PercentComplete -le 100) {
+                    [IO.File]::WriteAllText($DeploymentProgressPath,
+                        [string]$record.PercentComplete, [Text.Encoding]::ASCII)
+                }
+            }.GetNewClosure())
+        $null = $powershell.Invoke()
+        if ($powershell.HadErrors) {
+            throw $powershell.Streams.Error[0]
+        }
+    } finally {
+        $powershell.Dispose()
+    }
+}
+
 function Assert-AppDependencies {
     param([string] $Dir)
     $expectedPublisher = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
@@ -249,7 +367,7 @@ function Install-AppPackage {
     Stop-AppProcess
     $addParams['ForceApplicationShutdown'] = $true
     try {
-        Add-AppxPackage @addParams
+        Invoke-AddAppxPackage -Parameters $addParams -DeploymentProgressPath $ProgressPath
     } catch {
         if ($_.Exception.Message -match '0x80073D06') {
             # A newer (or same) build already installed is not an installation failure for a bootstrapper.
@@ -260,15 +378,33 @@ function Install-AppPackage {
                 Write-Host 'App is running; closing it and retrying ...'
                 Stop-AppProcess
                 Start-Sleep -Seconds 2
-                Add-AppxPackage @addParams
+                Invoke-AddAppxPackage -Parameters $addParams -DeploymentProgressPath $ProgressPath
             } elseif ($deps.Count -gt 0) {
                 # The bundled WindowsAppRuntime framework is in use by other apps
                 # (Spotify, widgets, ...). Registering it again is unnecessary when
                 # a framework is already present — retry without forcing the deps.
                 Write-Host 'Shared framework in use by other apps; retrying without bundled dependencies ...'
-                Add-AppxPackage -Path $package.FullName -ErrorAction Stop
+                $retryParams = @{ Path = $package.FullName; ErrorAction = 'Stop' }
+                Invoke-AddAppxPackage -Parameters $retryParams -DeploymentProgressPath $ProgressPath
             } else {
                 throw
+            }
+        } elseif ($_.Exception.Message -match '0x800B0109') {
+            # Some Windows configurations ignore CurrentUser\TrustedPeople for
+            # AppX deployment. Elevate only the certificate import, then retry
+            # package registration in the original user's non-elevated process.
+            Invoke-ElevatedCertificateStep -Dir $Dir -ElevatedStep 'cert-machine'
+            try {
+                Invoke-AddAppxPackage -Parameters $addParams -DeploymentProgressPath $ProgressPath
+                Remove-NewlyImportedCertificate -Dir $Dir -StoreLocation 'CurrentUser'
+            } catch {
+                $installError = $_
+                try {
+                    Invoke-ElevatedCertificateStep -Dir $Dir -ElevatedStep 'cert-machine-rollback'
+                } catch {
+                    Write-Warning "Machine certificate rollback also failed: $($_.Exception.Message)"
+                }
+                throw $installError
             }
         } else {
             throw
@@ -318,15 +454,18 @@ function Uninstall-App {
     try {
         $cerPath = Join-Path $Dir 'AudioPlaybackConnector2.cer'
         if (Test-Path -LiteralPath $cerPath -PathType Leaf) {
-            $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($cerPath)
+            $cert = Get-AppCertificate -Dir $Dir
             $ours = $store.Certificates.Find('FindByThumbprint', $cert.Thumbprint, $false)
             foreach ($c in $ours) {
                 $store.Remove($c)
-                Write-Host "Certificate $($c.Thumbprint) removed from TrustedPeople."
+                Write-Host "Certificate $($c.Thumbprint) removed from CurrentUser\TrustedPeople."
             }
         }
     } finally {
         $store.Close()
+    }
+    if (Test-AppCertificateInStore -Dir $Dir -StoreLocation 'LocalMachine') {
+        Invoke-ElevatedCertificateStep -Dir $Dir -ElevatedStep 'cert-machine-uninstall'
     }
     Write-Host 'User settings under %LOCALAPPDATA% were kept.'
 }
@@ -340,16 +479,34 @@ try {
     }
     switch ($Step) {
         'validate'   { if (-not $PackageDir) { throw '-PackageDir required' }; Test-AppPayload -Dir $PackageDir }
-        'cert'      { if (-not $PackageDir) { throw '-PackageDir required' }; Import-AppCertificate -Dir $PackageDir }
-        'install'   { if (-not $PackageDir) { throw '-PackageDir required' }; Install-AppPackage -Dir $PackageDir }
-        'verify'    { Test-AppInstalled }
-        'uninstall' { if (-not $PackageDir) { throw '-PackageDir required' }; Uninstall-App -Dir $PackageDir }
+        'cert'       { if (-not $PackageDir) { throw '-PackageDir required' }; Import-AppCertificate -Dir $PackageDir }
+        'cert-machine' {
+            if (-not $PackageDir) { throw '-PackageDir required' }
+            Assert-Administrator
+            if (-not $ExpectedCertificateThumbprint) { throw '-ExpectedCertificateThumbprint required' }
+            Import-AppCertificate -Dir $PackageDir -StoreLocation 'LocalMachine'
+        }
+        'cert-machine-rollback' {
+            if (-not $PackageDir) { throw '-PackageDir required' }
+            Assert-Administrator
+            if (-not $ExpectedCertificateThumbprint) { throw '-ExpectedCertificateThumbprint required' }
+            Remove-NewlyImportedCertificate -Dir $PackageDir -StoreLocation 'LocalMachine'
+        }
+        'cert-machine-uninstall' {
+            if (-not $PackageDir) { throw '-PackageDir required' }
+            Assert-Administrator
+            if (-not $ExpectedCertificateThumbprint) { throw '-ExpectedCertificateThumbprint required' }
+            Remove-MachineCertificateAfterLastUninstall -Dir $PackageDir
+        }
+        'install'    { if (-not $PackageDir) { throw '-PackageDir required' }; Install-AppPackage -Dir $PackageDir }
+        'verify'     { Test-AppInstalled }
+        'uninstall'  { if (-not $PackageDir) { throw '-PackageDir required' }; Uninstall-App -Dir $PackageDir }
     }
     Write-Host 'OK'
     exit 0
 } catch {
     if ($PackageDir -and $Step -in 'install', 'verify') {
-        Remove-NewlyImportedCertificate -Dir $PackageDir
+        Remove-NewlyImportedCertificate -Dir $PackageDir -StoreLocation 'CurrentUser'
     }
     Write-Host "FAILED: $($_.Exception.Message)"
     exit 1

@@ -103,7 +103,7 @@ jobs:
 
         For offline installation on x64 or ARM64, use the versioned `AudioPlaybackConnector2-Setup-${{ needs.version.outputs.semver }}.exe`.
 
-        Both installers work per-user without administrator rights. Windows SmartScreen may warn because the setup executables are not yet code-signed.
+        Both installers register the app per-user. On systems that reject user-store certificate trust, setup requests administrator approval only for importing the pinned certificate into the computer's Trusted People store. Windows SmartScreen may warn because the setup executables are not yet code-signed.
 
         For App Installer, direct MSIX bundle installation, certificates, and dependency packages, see the [installation guide](https://github.com/N0ahTM/AudioPlaybackConnector2/blob/${{ needs.version.outputs.tag }}/docs/INSTALLATION.md).
 

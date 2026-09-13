@@ -222,7 +222,7 @@ void TestResumeReconnectDeliversOnceWhenBothSchedulersAreUnavailable() {
     std::vector<std::wstring> deliveredIds;
     std::optional<std::uint64_t> generation;
     coordinator.HandleResume(nullptr,
-                             [&](std::vector<std::wstring> deviceIds,
+                             [&](std::vector<std::wstring> const& deviceIds,
                                  std::uint64_t callbackGeneration,
                                  PowerTransitionCoordinator::ResumeReconnectCompleted completed) {
                                  ++callbackCount;
@@ -271,7 +271,7 @@ void TestResumeReconnectFallbackRejectsStaleAndCancelledCompletions() {
     std::size_t callbackCount = 0;
     std::uint64_t currentGeneration = 0;
     coordinator.HandleResume(nullptr,
-                             [&](std::vector<std::wstring> deviceIds,
+                             [&](std::vector<std::wstring> const& deviceIds,
                                  std::uint64_t generation,
                                  PowerTransitionCoordinator::ResumeReconnectCompleted completed) {
                                  ++callbackCount;

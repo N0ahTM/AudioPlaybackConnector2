@@ -10,7 +10,7 @@ Open `%LOCALAPPDATA%\AudioPlaybackConnector2\install.log`. Retry after closing A
 
 ## Windows reports an untrusted publisher
 
-The releases currently use a self-signed certificate. Web Setup and offline Setup install the pinned certificate for the current user. For a manual MSIX installation, import the `.cer` file from the same release into `Cert:\CurrentUser\TrustedPeople`, then retry. Do not trust a certificate obtained from another website.
+The releases currently use a self-signed certificate. Web Setup and offline Setup first install the pinned certificate for the current user. If Windows reports `0x800B0109`, setup requests administrator approval to import only that certificate into `Cert:\LocalMachine\TrustedPeople` and retries automatically. For a manual MSIX installation, use the same local-machine **Trusted People** store. Never import the self-signed leaf certificate into a root CA store, and do not trust a certificate obtained from another website.
 
 ## A framework package is missing
 

@@ -85,34 +85,34 @@ std::wstring UniquePipeName(std::wstring_view testName) {
 }
 
 CommandLineControlServer::Options TestOptions(std::wstring_view testName, std::size_t instances = 2) {
-    CommandLineControlServer::Options options;
-    options.PipeName = UniquePipeName(testName);
-    options.PipeInstanceCount = instances;
-    options.RequestTimeoutMs = 500;
-    options.HandlerTimeoutMs = 2000;
-    options.ResponseTimeoutMs = 500;
-    options.AcknowledgementTimeoutMs = 100;
-    options.RetryDelayMs = 10;
-    options.RequestRecordLifetime = 2s;
-    options.RetryStartupFailures = false;
-    options.IsTrustedClient = [](HANDLE) noexcept { return true; };
-    return options;
+    CommandLineControlServer::Options serverOptions;
+    serverOptions.PipeName = UniquePipeName(testName);
+    serverOptions.PipeInstanceCount = instances;
+    serverOptions.RequestTimeoutMs = 500;
+    serverOptions.HandlerTimeoutMs = 2000;
+    serverOptions.ResponseTimeoutMs = 500;
+    serverOptions.AcknowledgementTimeoutMs = 100;
+    serverOptions.RetryDelayMs = 10;
+    serverOptions.RequestRecordLifetime = 2s;
+    serverOptions.RetryStartupFailures = false;
+    serverOptions.IsTrustedClient = [](HANDLE) noexcept { return true; };
+    return serverOptions;
 }
 
-UniqueHandle OpenClient(std::wstring const& pipeName, DWORD timeoutMs = 2000) {
+UniqueHandle OpenClient(std::wstring const& targetPipeName, DWORD timeoutMs = 2000) {
     const auto deadline = GetTickCount64() + timeoutMs;
     DWORD baseError = ERROR_SUCCESS;
     while (true) {
         for (std::size_t index = 0; index < apc::control::c_pipeInstanceCount; ++index) {
-            const auto instanceName = apc::control::PipeInstanceName(pipeName, index);
-            UniqueHandle pipe(CreateFileW(instanceName.c_str(),
-                                          GENERIC_READ | FILE_WRITE_DATA,
-                                          0,
-                                          nullptr,
-                                          OPEN_EXISTING,
-                                          FILE_FLAG_OVERLAPPED,
-                                          nullptr));
-            if (pipe) return pipe;
+            const auto instanceName = apc::control::PipeInstanceName(targetPipeName, index);
+            UniqueHandle pipeHandle(CreateFileW(instanceName.c_str(),
+                                                GENERIC_READ | FILE_WRITE_DATA,
+                                                0,
+                                                nullptr,
+                                                OPEN_EXISTING,
+                                                FILE_FLAG_OVERLAPPED,
+                                                nullptr));
+            if (pipeHandle) return pipeHandle;
             if (index == 0) baseError = GetLastError();
         }
         if (GetTickCount64() >= deadline) {
@@ -131,8 +131,8 @@ apc::control::Request MakeRequest(std::uint64_t id,
     return request;
 }
 
-bool WriteRequest(HANDLE pipe, apc::control::Request const& request, DWORD timeoutMs = 1000) {
-    return apc::control::WriteRequest(pipe, request, nullptr, apc::control::DeadlineAfter(timeoutMs)) ==
+bool WriteRequest(HANDLE pipeHandle, apc::control::Request const& commandRequest, DWORD timeoutMs = 1000) {
+    return apc::control::WriteRequest(pipeHandle, commandRequest, nullptr, apc::control::DeadlineAfter(timeoutMs)) ==
            apc::control::IoStatus::Success;
 }
 

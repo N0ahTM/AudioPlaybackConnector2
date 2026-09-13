@@ -470,6 +470,7 @@ void TestResumeWatcherFailureClearsRunningStateAndAllowsRetry() {
     auto* const retriedWatcher = fixture.WatcherAccess->LastWatcher;
     Check(retriedWatcher && retriedWatcher != failedResumeWatcher,
           "the Start retry must use a newer watcher generation");
+    if (!retriedWatcher) return;
     failedResumeWatcher->Add(L"late-resume", L"Late resume");
     retriedWatcher->Add(L"fresh-resume", L"Fresh resume");
     auto const retriedSnapshot = fixture.Service.Snapshot();
@@ -567,6 +568,7 @@ void TestDisablingReconnectRestoresPendingIncomingListenerAfterCloseBarrier() {
     Check(cooldown && cooldown->Delay == std::chrono::milliseconds(1500) &&
               fixture.ConnectionAccess->Connections.size() == connectionCount,
           "policy cancellation must retain the incoming listener close cooldown before recreation");
+    if (!cooldown) return;
     cooldown->FireEvenIfCancelled();
     Check(fixture.ConnectionAccess->Connections.size() == connectionCount + 1,
           "the closed incoming listener must be recreated only after the cooldown barrier");
@@ -659,6 +661,7 @@ void TestDisablingIncomingClosesEstablishedAndPendingIncomingSessions() {
         auto* const closeCooldown = fixture.TimerAccess->LastTimer;
         Check(closeCooldown && closeCooldown->Delay == std::chrono::milliseconds(1500),
               "disabling incoming connections must retain the close barrier until completion");
+        if (!closeCooldown) return;
         closeCooldown->FireEvenIfCancelled();
         Check(StateFor(fixture.Service, L"incoming-pending") == DeviceLifecycleState::Idle &&
                   !SessionFor(fixture.Service, L"incoming-pending").HasConnection,

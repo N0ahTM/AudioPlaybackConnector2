@@ -23,7 +23,7 @@ jobs:
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@6d786de4d6f3531a740e445b53a42b622bbbace8 # v3
+      uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
       with:
         languages: cpp
         queries: security-and-quality
@@ -50,6 +50,34 @@ jobs:
       run: .\x64\Release\tests\AudioPlaybackConnector2.CoreTests.exe
 
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@6d786de4d6f3531a740e445b53a42b622bbbace8 # v3
+      uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
       with:
+        category: /language:cpp
+        output: sarif-results
+        # Keep a diagnostic upload when analysis itself fails. Successful runs are
+        # filtered below before their results are uploaded.
+        upload: failure-only
+
+    - name: Exclude third-party and generated results
+      uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1
+      with:
+        input: sarif-results/cpp.sarif
+        output: sarif-results/cpp.sarif
+        patterns: |
+          -**/packages/**
+          -**/Generated Files/**
+          -**/vcpkg_installed/**
+          -**/external/**
+          -**/third_party/**
+          -**/bin/**
+          -**/obj/**
+          -**/x64/**
+          -**/ARM64/**
+          -**/Debug/**
+          -**/Release/**
+
+    - name: Upload first-party CodeQL results
+      uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
+      with:
+        sarif_file: sarif-results/cpp.sarif
         category: /language:cpp

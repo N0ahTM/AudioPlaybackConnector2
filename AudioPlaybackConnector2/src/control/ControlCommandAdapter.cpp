@@ -846,8 +846,7 @@ Response ControlCommandAdapter::Handle(Request const& request,
                                        Resource(m_options.LocalizeResource, "Command_NotReady"),
                                        wantsJson);
             }
-            const auto code = translation.Failure == AppOutcomeReason::InvalidAliasPayload ? ExitCode::InvalidRequest
-                                                                                           : ExitCode::InvalidRequest;
+            const auto code = ExitCode::InvalidRequest;
             AppResult invalid;
             invalid.Code = AppResultCode::InvalidInput;
             invalid.Command = AppCommandKind::Status;

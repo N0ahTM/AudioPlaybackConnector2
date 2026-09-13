@@ -44,17 +44,17 @@ void Check(bool condition, std::string_view message) {
 
 DeviceRecord Device(std::wstring id,
                     std::wstring name,
-                    std::wstring alias = {},
-                    bool connected = false,
+                    std::wstring deviceAlias = {},
+                    bool isConnected = false,
                     bool known = true,
-                    bool busy = false) {
+                    bool isBusy = false) {
     return DeviceRecord{std::move(id),
                         std::move(name),
-                        std::move(alias),
-                        connected ? DeviceConnectionState::Connected : DeviceConnectionState::Idle,
-                        connected,
+                        std::move(deviceAlias),
+                        isConnected ? DeviceConnectionState::Connected : DeviceConnectionState::Idle,
+                        isConnected,
                         known,
-                        busy};
+                        isBusy};
 }
 
 std::optional<DeviceSelector> IdSelector(std::wstring_view id) {
@@ -366,23 +366,23 @@ void TestMutationAdmissionRejectsCancellationAfterRefreshFallback() {
     const auto runCancelledMutation = [&](AppCommand command,
                                           AppResultCode expectedCode,
                                           std::string_view description) {
-        std::stop_source stop;
+        std::stop_source stopSource;
         AppCommandContext context;
-        context.StopToken = stop.get_token();
+        context.StopToken = stopSource.get_token();
         AppResultCode resultCode = AppResultCode::InternalError;
-        std::thread commandThread([&] { resultCode = bridge.Execute(std::move(command), context).Code; });
+        std::thread workerThread([&] { resultCode = bridge.Execute(std::move(command), context).Code; });
         {
             std::unique_lock lock(refreshMutex);
             const bool entered = refreshChanged.wait_for(lock, std::chrono::seconds(1), [&] { return refreshEntered; });
             Check(entered, "the mutation refresh must enter before cancellation is requested");
         }
-        stop.request_stop();
+        stopSource.request_stop();
         {
             std::scoped_lock lock(refreshMutex);
             releaseRefresh = true;
         }
         refreshChanged.notify_all();
-        commandThread.join();
+        workerThread.join();
         Check(resultCode == expectedCode, description);
     };
 

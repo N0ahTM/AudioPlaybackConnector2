@@ -1,6 +1,6 @@
 # Bootstrapper Installer
 
-The project ships two per-user Inno Setup bootstrapper variants for x64 and ARM64 Windows. Both validate the shared MSIX bundle and signer, select only the native architecture's Microsoft-signed framework dependencies, import the embedded self-signed release certificate into `Cert:\CurrentUser\TrustedPeople`, register the package, verify installation, and launch the app. They do not require administrator rights.
+The project ships two per-user Inno Setup bootstrapper variants for x64 and ARM64 Windows. Both validate the shared MSIX bundle and signer, select only the native architecture's Microsoft-signed framework dependencies, import the embedded self-signed release certificate into `Cert:\CurrentUser\TrustedPeople`, register the package, verify installation, and launch the app. If Windows rejects user-store trust with `0x800B0109`, setup asks for administrator approval to import only the pinned certificate into `Cert:\LocalMachine\TrustedPeople`, then retries package registration as the original user. The certificate is never placed in a root CA store.
 
 | Variant | Payload | Intended use |
 |---|---|---|
@@ -27,7 +27,7 @@ Install [Inno Setup 6](https://jrsoftware.org/isinfo.php), then run from the rep
 - A detected newer version is preserved; the installer does not silently downgrade it.
 - The worker closes only the app's known process names before package registration.
 - If a shared Windows App SDK framework is already in use, installation retries without re-registering bundled framework packages.
-- Uninstall removes the package and pinned certificate but keeps settings under `%LOCALAPPDATA%`.
+- Uninstall removes the package and its user-store certificate but keeps settings under `%LOCALAPPDATA%`. If machine trust was required, setup asks for administrator approval and removes that certificate after the last user uninstalls the app.
 - Logs are written to `%LOCALAPPDATA%\AudioPlaybackConnector2\install.log`.
 - The log rotates at 2 MiB and retains one previous file.
 - Silent install or repair is supported with `/VERYSILENT /NORESTART`; uninstall remains interactive.

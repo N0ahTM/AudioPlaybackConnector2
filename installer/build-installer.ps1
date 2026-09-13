@@ -58,6 +58,13 @@ try {
     }
     if ($Version -notmatch '^\d+\.\d+\.\d+$') { throw "Version must use SemVer format, for example 1.2.3: $Version" }
 
+    $signingCertificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($CertPath)
+    if ($signingCertificate.Subject -ne 'CN=AudioPlaybackConnector2' -or
+        -not $signingCertificate.Thumbprint) {
+        throw 'The installer certificate has an unexpected identity.'
+    }
+    $certificateThumbprint = $signingCertificate.Thumbprint.ToUpperInvariant()
+
     $stageName = 'AudioPlaybackConnector2-installer-' + [guid]::NewGuid().ToString('N')
     $stage = Join-Path ([IO.Path]::GetTempPath()) $stageName
     New-Item -ItemType Directory -Path $stage | Out-Null
@@ -76,7 +83,8 @@ try {
                 -File (Join-Path $stage 'install-app.ps1') `
                 -Step validate `
                 -PackageDir $stage `
-                -PackageArchitecture $architecture
+                -PackageArchitecture $architecture `
+                -ExpectedCertificateThumbprint $certificateThumbprint
             if ($LASTEXITCODE -ne 0) {
                 throw "Staged installer payload validation failed for $architecture."
             }
@@ -105,6 +113,7 @@ try {
     $isccArgs = @(
         "/DAppVersion=$Version",
         "/DStageDir=$stage",
+        "/DCertificateThumbprint=$certificateThumbprint",
         "/O$OutputDir"
     )
     if ($Mode -eq 'Web') {

@@ -8,7 +8,7 @@ AudioPlaybackConnector2 requires Windows 10 version 2004 (build 19041) or newer.
 2. Download `AudioPlaybackConnector2-WebSetup.exe`.
 3. Run the setup and select **Install**.
 
-Web Setup detects whether Windows is running on x64 or ARM64, downloads the shared x64/ARM64 MSIX bundle and only the matching Microsoft-signed framework dependencies, verifies them, trusts the application certificate for the current user, installs the app, and launches it. Administrator rights are not required.
+Web Setup detects whether Windows is running on x64 or ARM64, downloads the shared x64/ARM64 MSIX bundle and only the matching Microsoft-signed framework dependencies, verifies them, trusts the application certificate, installs the app, and launches it. Setup first uses the current user's `TrustedPeople` store. If Windows rejects that trust with `0x800B0109`, setup requests administrator approval for the certificate-only import into the computer's `TrustedPeople` store and retries installation as the original user. It never installs the self-signed certificate as a root CA.
 
 The setup executable is not yet code-signed, so Windows SmartScreen may show an unknown-publisher warning. Only continue when the file came from this repository's release page.
 
@@ -24,16 +24,16 @@ Both setup variants register the raw MSIX with `Add-AppxPackage`; they do not us
 
 The release also includes the App Installer feed, the x64/ARM64 `.msixbundle`, `.cer`, and architecture-specific dependency packages for existing installations and advanced use.
 
-For a fresh manual installation, download `AudioPlaybackConnector2.cer` from the same release and import it for the current user before opening the App Installer feed:
+For a fresh manual installation, download `AudioPlaybackConnector2.cer` from the same release and import it into the local computer's **Trusted People** store from an administrator PowerShell before opening the App Installer feed:
 
 ```powershell
-Import-Certificate -FilePath ".\AudioPlaybackConnector2.cer" -CertStoreLocation "Cert:\CurrentUser\TrustedPeople"
+Import-Certificate -FilePath ".\AudioPlaybackConnector2.cer" -CertStoreLocation "Cert:\LocalMachine\TrustedPeople"
 $installer = Join-Path $env:TEMP "AudioPlaybackConnector2.appinstaller"
 Invoke-WebRequest -Uri "https://n0ahtm.github.io/AudioPlaybackConnector2/AudioPlaybackConnector2.appinstaller" -OutFile $installer
 Start-Process $installer
 ```
 
-If the matching certificate is already trusted, the import step can be skipped. Installing the raw `.msixbundle` is a fallback. Missing framework dependencies must then be installed manually, and a direct bundle installation does not register the App Installer update feed.
+If the matching certificate is already trusted, the import step can be skipped. Do not import this self-signed leaf certificate into **Trusted Root Certification Authorities**. Installing the raw `.msixbundle` is a fallback. Missing framework dependencies must then be installed manually, and a direct bundle installation does not register the App Installer update feed.
 
 ## Build from Source
 

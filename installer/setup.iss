@@ -3,8 +3,9 @@
 ;       -> Download page (web variant only, native Inno download progress)
 ;       -> Progress page (built-in installing page + live step output memo)
 ;       -> Finished page (context-dependent text)
-; Per-user (no admin): imports the self-signed cert into
-; CurrentUser\TrustedPeople, then registers the MSIX via Add-AppxPackage.
+; Imports the self-signed cert into CurrentUser\TrustedPeople first. On
+; 0x800B0109 only the LocalMachine\TrustedPeople import is elevated, while the
+; MSIX remains registered by the original user via Add-AppxPackage.
 ; Modes: Bundle (default, payloads embedded) or Web (/DWEBBOOT=1).
 ; Build with: installer\build-installer.ps1
 
@@ -14,6 +15,9 @@
 #endif
 #ifndef StageDir
   #define StageDir "stage"
+#endif
+#ifndef CertificateThumbprint
+  #error CertificateThumbprint is required; use installer/build-installer.ps1.
 #endif
 #ifdef WEBBOOT
   #define BaseName AppName + "-WebSetup"
@@ -389,6 +393,7 @@ begin
             ExpandConstant('{tmp}\pkg\install-app.ps1') + '" -Step ' + StepName +
             ' -PackageArchitecture ' + NativePackageArchitecture;
   Params := Params + ' -PackageDir "' + ExpandConstant('{tmp}\pkg') + '"';
+  Params := Params + ' -ExpectedCertificateThumbprint "{#CertificateThumbprint}"';
   if (StepName = 'validate') and (LatestVersion <> '') then
     Params := Params + ' -ExpectedPackageVersion "' + LatestVersion + '"';
   if (StepName = 'verify') and (not WizardSilent) then
@@ -482,7 +487,7 @@ begin
       WizardForm.FinishedLabel.Caption :=
         'AudioPlaybackConnector2 could not be installed automatically.' + #13#10#13#10 +
         'Details: ' + ExpandConstant('{localappdata}\AudioPlaybackConnector2\install.log') + #13#10 +
-        'Manual fallback: import AudioPlaybackConnector2.cer into "Trusted People" ' +
+        'Manual fallback: import AudioPlaybackConnector2.cer into the local computer''s "Trusted People" store ' +
         'and open the .appinstaller file from the release page.';
     end
     else if UninstallMode then

@@ -287,4 +287,4 @@ jobs:
         name: ${{ steps.artifacts.outputs.ARTIFACT_NAME }}
         path: ${{ steps.artifacts.outputs.DIR }}
         if-no-files-found: error
-        retention-days: 7
+        retention-days: 30

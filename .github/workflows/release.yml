@@ -23,6 +23,7 @@ jobs:
       semver: ${{ steps.version.outputs.semver }}
       tag: ${{ steps.version.outputs.tag }}
       package_version: ${{ steps.version.outputs.package_version }}
+      commit_sha: ${{ steps.version.outputs.commit_sha }}
     steps:
     - name: Checkout release tag
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -61,9 +62,11 @@ jobs:
         "semver=$semver" >> $env:GITHUB_OUTPUT
         "tag=$tag" >> $env:GITHUB_OUTPUT
         "package_version=$semver.0" >> $env:GITHUB_OUTPUT
+        "commit_sha=$tagCommit" >> $env:GITHUB_OUTPUT
 
   build-artifacts:
     needs: version
+    if: ${{ github.event_name == 'push' }}
     uses: ./.github/workflows/build-release-artifacts.yml
     with:
       source_ref: ${{ needs.version.outputs.source_ref }}
@@ -80,6 +83,7 @@ jobs:
     needs:
       - version
       - build-artifacts
+    if: ${{ github.event_name == 'push' }}
     permissions:
       contents: write
     steps:
@@ -128,22 +132,159 @@ jobs:
           release-artifacts/Dependencies/**/*.msix
         fail_on_unmatched_files: true
 
+  validate-promotion:
+    runs-on: windows-2022
+    needs: version
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      build_run_id: ${{ steps.build.outputs.RUN_ID }}
+      artifact_digest: ${{ steps.build.outputs.ARTIFACT_DIGEST }}
+      asset_fingerprint: ${{ steps.release.outputs.ASSET_FINGERPRINT }}
+    steps:
+    - name: Checkout exact release tag
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        ref: ${{ needs.version.outputs.tag }}
+        fetch-depth: 0
+
+    - name: Locate successful immutable tag build
+      id: build
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RELEASE_TAG: ${{ needs.version.outputs.tag }}
+        EXPECTED_SHA: ${{ needs.version.outputs.commit_sha }}
+        ARTIFACT_NAME: AudioPlaybackConnector2-release-${{ needs.version.outputs.package_version }}
+      run: |
+        $expectedSha = (git rev-parse "$env:RELEASE_TAG^{commit}").Trim()
+        if ($expectedSha -ne $env:EXPECTED_SHA) {
+          throw "Checked out tag commit $expectedSha does not match validated commit $env:EXPECTED_SHA."
+        }
+        $endpoint = "repos/$env:GITHUB_REPOSITORY/actions/workflows/release.yml/runs"
+        $response = gh api --method GET $endpoint -f event=push -f status=success -f per_page=100 | ConvertFrom-Json
+        $runs = @($response.workflow_runs |
+          Where-Object {
+            $_.head_branch -eq $env:RELEASE_TAG -and
+            $_.head_sha -eq $expectedSha -and
+            $_.conclusion -eq 'success'
+          } |
+          Sort-Object run_number -Descending)
+        if ($runs.Count -eq 0) {
+          throw "No successful tag-push Release workflow exists for $env:RELEASE_TAG at $expectedSha."
+        }
+
+        $selectedRun = $null
+        $selectedArtifact = $null
+        foreach ($run in $runs) {
+          $artifacts = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$($run.id)/artifacts" | ConvertFrom-Json
+          $matches = @($artifacts.artifacts | Where-Object { $_.name -eq $env:ARTIFACT_NAME -and -not $_.expired })
+          if ($matches.Count -eq 1) {
+            $selectedRun = $run
+            $selectedArtifact = $matches[0]
+            break
+          }
+        }
+        if ($null -eq $selectedArtifact) {
+          throw "No unexpired $env:ARTIFACT_NAME artifact belongs to a successful tag build."
+        }
+        if ([string]$selectedArtifact.digest -notmatch '^sha256:[0-9a-f]{64}$') {
+          throw 'The immutable build artifact has no valid SHA-256 digest.'
+        }
+        "RUN_ID=$($selectedRun.id)" >> $env:GITHUB_OUTPUT
+        "ARTIFACT_NAME=$($selectedArtifact.name)" >> $env:GITHUB_OUTPUT
+        "ARTIFACT_DIGEST=$($selectedArtifact.digest)" >> $env:GITHUB_OUTPUT
+
+    - name: Download immutable tag-build artifact
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      with:
+        name: ${{ steps.build.outputs.ARTIFACT_NAME }}
+        path: release-artifacts
+        repository: ${{ github.repository }}
+        run-id: ${{ steps.build.outputs.RUN_ID }}
+        github-token: ${{ github.token }}
+
+    - name: Verify draft assets against immutable build
+      id: release
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        ./scripts/release/verify-release-promotion.ps1 `
+          -Repository '${{ github.repository }}' `
+          -Tag '${{ needs.version.outputs.tag }}' `
+          -PackageVersion '${{ needs.version.outputs.package_version }}' `
+          -ArtifactDirectory release-artifacts `
+          -ExpectedReleaseState Draft `
+          -WriteGitHubOutput
+
+        $bundle = Get-Item 'release-artifacts/AudioPlaybackConnector2_${{ needs.version.outputs.package_version }}_x64_ARM64.msixbundle'
+        $certificate = Get-Item 'release-artifacts/AudioPlaybackConnector2.cer'
+        if ((Get-FileHash $certificate.FullName).Hash -ne (Get-FileHash 'certs/AudioPlaybackConnector2.cer').Hash) {
+          throw 'Release certificate does not match the certificate in the tagged source.'
+        }
+        ./scripts/release/verify-msix-bundle.ps1 `
+          -BundlePath $bundle.FullName `
+          -ExpectedPackageVersion '${{ needs.version.outputs.package_version }}' `
+          -ExpectedName N0ahTM.AudioPlaybackConnector2 `
+          -ExpectedPublisher 'CN=AudioPlaybackConnector2' `
+          -ExpectedProcessorArchitectures x64,arm64 `
+          -ExpectedCertificatePath $certificate.FullName `
+          -RequireSignature
+        ./scripts/release/verify-dependency-packages.ps1 `
+          -DependenciesDirectory release-artifacts/Dependencies `
+          -ExpectedProcessorArchitectures x64,arm64
+
+        @(
+          '## Promotion verification',
+          '',
+          '- Tag commit: `${{ needs.version.outputs.commit_sha }}`',
+          '- Tag-build run: `${{ steps.build.outputs.RUN_ID }}`',
+          '- Immutable artifact digest: `${{ steps.build.outputs.ARTIFACT_DIGEST }}`',
+          '- Every draft asset matched its GitHub SHA-256 digest and build-artifact file.'
+        ) -join "`n" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+
   publish-release:
     runs-on: ubuntu-24.04
     needs:
       - version
-      - build-artifacts
-      - create-draft
+      - validate-promotion
     if: ${{ github.event_name == 'workflow_dispatch' }}
     permissions:
       contents: write
     environment:
       name: production-release
     steps:
-    - name: Publish GitHub Release
+    - name: Checkout exact release tag
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        ref: ${{ needs.version.outputs.tag }}
+        fetch-depth: 0
+
+    - name: Recheck assets and publish GitHub Release
+      shell: pwsh
       env:
         GH_TOKEN: ${{ github.token }}
-      run: gh release edit '${{ needs.version.outputs.tag }}' --repo '${{ github.repository }}' --draft=false
+      run: |
+        ./scripts/release/verify-release-promotion.ps1 `
+          -Repository '${{ github.repository }}' `
+          -Tag '${{ needs.version.outputs.tag }}' `
+          -PackageVersion '${{ needs.version.outputs.package_version }}' `
+          -ExpectedReleaseState Draft `
+          -ExpectedAssetFingerprint '${{ needs.validate-promotion.outputs.asset_fingerprint }}'
+        gh release edit '${{ needs.version.outputs.tag }}' --repo '${{ github.repository }}' --draft=false
+
+  verify-public-release:
+    runs-on: ubuntu-24.04
+    needs:
+      - version
+      - publish-release
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    permissions:
+      contents: read
+    steps:
 
     - name: Verify public release assets
       shell: pwsh
@@ -155,9 +296,9 @@ jobs:
           throw 'Release is not public and stable.'
         }
         $required = @(
-          '${{ needs.build-artifacts.outputs.bundle_name }}',
-          '${{ needs.build-artifacts.outputs.web_setup_name }}',
-          '${{ needs.build-artifacts.outputs.offline_setup_name }}',
+          'AudioPlaybackConnector2_${{ needs.version.outputs.package_version }}_x64_ARM64.msixbundle',
+          'AudioPlaybackConnector2-WebSetup.exe',
+          'AudioPlaybackConnector2-Setup-${{ needs.version.outputs.semver }}.exe',
           'AudioPlaybackConnector2.appinstaller',
           'AudioPlaybackConnector2.cer'
         )
@@ -183,7 +324,7 @@ jobs:
   deploy-appinstaller:
     needs:
       - version
-      - publish-release
+      - verify-public-release
     if: ${{ github.event_name == 'workflow_dispatch' }}
     permissions:
       contents: write
@@ -199,8 +340,9 @@ jobs:
     needs:
       - version
       - publish-release
+      - verify-public-release
       - deploy-appinstaller
-    if: ${{ always() && needs.publish-release.result == 'success' && needs.deploy-appinstaller.result != 'success' }}
+    if: ${{ always() && needs.publish-release.result == 'success' && (needs.verify-public-release.result != 'success' || needs.deploy-appinstaller.result != 'success') }}
     permissions:
       contents: write
     steps:

@@ -519,15 +519,3 @@ void DebugTrace(std::wstring_view message) noexcept {
     }
 #endif
 }
-
-#ifdef _DEBUG
-void DebugTraceDiagnostic(std::wstring_view message) noexcept {
-    util::WriteLogLine(message);
-    try {
-        std::wstring output(message);
-        output.push_back(L'\n');
-        OutputDebugStringW(output.c_str());
-    } catch (...) {
-    }
-}
-#endif

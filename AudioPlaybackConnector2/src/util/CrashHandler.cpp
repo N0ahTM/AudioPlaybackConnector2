@@ -50,19 +50,6 @@ inline std::wstring SafeResource(std::string_view key, std::wstring_view fallbac
 /*//////// Controller ////////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-inline std::wstring BuildTimestampForFilename() {
-    SYSTEMTIME st{};
-    GetLocalTime(&st);
-    return std::format(L"{:04}{:02}{:02}_{:02}{:02}{:02}_{:03}",
-                       st.wYear,
-                       st.wMonth,
-                       st.wDay,
-                       st.wHour,
-                       st.wMinute,
-                       st.wSecond,
-                       st.wMilliseconds);
-}
-
 inline std::filesystem::path GetCrashDirectory() {
     auto baseLogPath = GetCachedLogPath();
     if (baseLogPath.empty()) return {};
@@ -430,66 +417,6 @@ inline void ShowCrashDialogAndOfferIssue(DWORD exceptionCode,
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Crash Processing //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
-
-inline void
-PersistCrashArtifacts(DWORD exceptionCode, EXCEPTION_POINTERS* exceptionPointers, std::wstring_view originLabel) {
-    auto crashDir = GetCrashDirectory();
-    auto timestamp = BuildTimestampForFilename();
-    auto reportPath = crashDir.empty() ? std::filesystem::path{} : (crashDir / std::format(L"Crash_{}.txt", timestamp));
-    auto dumpPath = crashDir.empty() ? std::filesystem::path{} : (crashDir / std::format(L"Crash_{}.dmp", timestamp));
-
-    MiniDumpWriteResult dumpResult{};
-    if (!dumpPath.empty()) {
-        dumpResult = WriteMiniDump(dumpPath, exceptionPointers);
-    }
-
-    auto report = std::format(
-        L"AudioPlaybackConnector2 crash report\r\n"
-        L"===============================\r\n"
-        L"Timestamp: {}\r\n"
-        L"Origin: {}\r\n"
-        L"ExceptionCode: 0x{:08X}\r\n"
-        L"ThreadId: {}\r\n"
-        L"ProcessId: {}\r\n"
-        L"AppVersion: {}\r\n"
-        L"WindowsVersion: {}\r\n"
-        L"Executable: {}\r\n"
-        L"LogPath: {}\r\n"
-        L"MiniDump: {}\r\n",
-        timestamp,
-        originLabel,
-        exceptionCode,
-        GetCurrentThreadId(),
-        GetCurrentProcessId(),
-        GetAppVersionString(),
-        GetWindowsVersionString(),
-        util::GetModuleFsPath(nullptr).wstring(),
-        GetCachedLogPath().wstring(),
-        dumpResult.Success
-            ? dumpPath.wstring()
-            : std::format(L"<failed (GetLastError={} / 0x{:08X})>", dumpResult.ErrorCode, dumpResult.ErrorCode));
-
-    auto logTail = ReadLogTail(GetCachedLogPath(), 16 * 1024);
-    if (!logTail.empty()) {
-        report += L"\r\nRecentLogTail:\r\n--------------\r\n";
-        report += logTail;
-        if (!report.empty() && report.back() != L'\n') {
-            report += L"\r\n";
-        }
-    }
-
-    if (!reportPath.empty()) {
-        WriteUtf8File(reportPath, report);
-    }
-
-    DebugTrace(L"[CrashHandler] Fatal crash captured: origin={0} code=0x{1:08X} report={2} dump={3}",
-               std::wstring(originLabel),
-               exceptionCode,
-               reportPath.wstring(),
-               dumpResult.Success ? dumpPath.wstring() : std::format(L"<failed 0x{:08X}>", dumpResult.ErrorCode));
-
-    ShowCrashDialogAndOfferIssue(exceptionCode, reportPath, dumpPath);
-}
 
 inline bool BuildCrashDirectoryPath(wchar_t* outDirectory, std::size_t outDirectoryCount) noexcept {
     if (!outDirectory || outDirectoryCount == 0) return false;

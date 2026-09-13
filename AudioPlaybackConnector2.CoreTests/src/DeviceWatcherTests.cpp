@@ -110,10 +110,9 @@ public:
     }
 
     struct PendingRefresh {
-        PendingRefresh() {
-            Started = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-            Released = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-        }
+        PendingRefresh()
+            : Started(CreateEventW(nullptr, TRUE, FALSE, nullptr)),
+              Released(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {}
 
         ~PendingRefresh() {
             if (Started) CloseHandle(Started);
@@ -158,6 +157,7 @@ void TestStartStopRestartRejectsStaleCallbacks() {
     Check(fixture.Watcher.Start(), "the first start must create and start a platform watcher");
     auto const first = fixture.PlatformAccess->LastWatcher;
     Check(first && first->StartCalls == 1, "start must be delegated exactly once to the platform watcher");
+    if (!first) return;
 
     first->Add(L"z", L"Zulu");
     fixture.Executor.RunAll();

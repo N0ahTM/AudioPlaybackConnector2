@@ -116,11 +116,6 @@ public:
         m_writeStarted.wait(lock, [&] { return m_writes != 0; });
     }
 
-    void WaitForWrites(unsigned int count) {
-        std::unique_lock lock(m_operationMutex);
-        m_writeStarted.wait(lock, [&] { return m_writes >= count; });
-    }
-
     void WaitForCompletedWrites(unsigned int count) {
         std::unique_lock lock(m_operationMutex);
         m_writeCompleted.wait(lock, [&] { return m_completedWrites >= count; });
@@ -213,13 +208,7 @@ private:
 
 class ScopedTestDirectory final {
 public:
-    ScopedTestDirectory() {
-        static std::atomic_uint64_t nextIdentifier = 0;
-        m_path = std::filesystem::temp_directory_path() /
-                 (L"AudioPlaybackConnector2.SettingsStoreTests." + std::to_wstring(GetCurrentProcessId()) + L"." +
-                  std::to_wstring(nextIdentifier++));
-        std::filesystem::create_directories(m_path);
-    }
+    ScopedTestDirectory() : m_path(CreatePath()) { std::filesystem::create_directories(m_path); }
 
     ~ScopedTestDirectory() {
         std::error_code error;
@@ -230,6 +219,13 @@ public:
     [[nodiscard]] std::filesystem::path SettingsPath() const { return m_path / L"AudioPlaybackConnector2.json"; }
 
 private:
+    static std::filesystem::path CreatePath() {
+        static std::atomic_uint64_t nextIdentifier = 0;
+        return std::filesystem::temp_directory_path() /
+               (L"AudioPlaybackConnector2.SettingsStoreTests." + std::to_wstring(GetCurrentProcessId()) + L"." +
+                std::to_wstring(nextIdentifier++));
+    }
+
     std::filesystem::path m_path;
 };
 

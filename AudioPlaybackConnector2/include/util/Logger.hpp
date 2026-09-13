@@ -54,12 +54,6 @@ private:
 
 void DebugTrace(std::wstring_view message) noexcept;
 
-#ifdef _DEBUG
-void DebugTraceDiagnostic(std::wstring_view message) noexcept;
-#else
-inline void DebugTraceDiagnostic(std::wstring_view) noexcept {}
-#endif
-
 template <typename... Args> inline void DebugTrace(std::wstring_view fmt, Args&&... args) noexcept {
     try {
         DebugTrace(std::vformat(fmt, std::make_wformat_args(args...)));
@@ -67,18 +61,6 @@ template <typename... Args> inline void DebugTrace(std::wstring_view fmt, Args&&
         DebugTrace(fmt);
     }
 }
-
-#ifdef _DEBUG
-template <typename... Args> inline void DebugTraceDiagnostic(std::wstring_view fmt, Args&&... args) noexcept {
-    try {
-        DebugTraceDiagnostic(std::vformat(fmt, std::make_wformat_args(args...)));
-    } catch (...) {
-        DebugTraceDiagnostic(fmt);
-    }
-}
-#else
-template <typename... Args> inline void DebugTraceDiagnostic(std::wstring_view, Args&&...) noexcept {}
-#endif
 
 namespace util {
 

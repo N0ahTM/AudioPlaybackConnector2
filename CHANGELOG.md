@@ -5,11 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.9.1] - 2026-09-13
 
 ### Fixed
 - Retry MSIX installation after a narrowly scoped UAC-approved import of the pinned signing certificate into `LocalMachine\TrustedPeople` when Windows reports `0x800B0109` ([#21](https://github.com/N0ahTM/AudioPlaybackConnector2/issues/21)).
 - Keep package registration in the original user session, never trust the self-signed certificate as a root CA, and remove machine trust after the last user uninstalls the app.
+- Show live Windows deployment progress during the otherwise silent `Add-AppxPackage` phase.
 
 ## [0.9.0] - 2026-09-07
 

@@ -10,6 +10,7 @@ param(
     [ValidateSet('x64', 'arm64')] [string] $PackageArchitecture = 'x64',
     [string] $ExpectedPackageVersion,
     [string] $ExpectedCertificateThumbprint,
+    [string] $ProgressPath,
     [switch] $Launch
 )
 
@@ -258,6 +259,39 @@ function Get-AppDependencies {
             ($_.Extension -in '.msix', '.appx') -and ($_.Name -notmatch '^AudioPlaybackConnector2_') })
 }
 
+function Invoke-AddAppxPackage {
+    param(
+        [hashtable] $Parameters,
+        [string] $DeploymentProgressPath
+    )
+    if (-not $DeploymentProgressPath) {
+        Add-AppxPackage @Parameters
+        return
+    }
+    $powershell = [PowerShell]::Create()
+    try {
+        $null = $powershell.AddCommand('Add-AppxPackage')
+        foreach ($entry in $Parameters.GetEnumerator()) {
+            $null = $powershell.AddParameter($entry.Key, $entry.Value)
+        }
+        [IO.File]::WriteAllText($DeploymentProgressPath, '0', [Text.Encoding]::ASCII)
+        $powershell.Streams.Progress.add_DataAdded({
+                param($sender, $eventArgs)
+                $record = $sender[$eventArgs.Index]
+                if ($record.PercentComplete -ge 0 -and $record.PercentComplete -le 100) {
+                    [IO.File]::WriteAllText($DeploymentProgressPath,
+                        [string]$record.PercentComplete, [Text.Encoding]::ASCII)
+                }
+            }.GetNewClosure())
+        $null = $powershell.Invoke()
+        if ($powershell.HadErrors) {
+            throw $powershell.Streams.Error[0]
+        }
+    } finally {
+        $powershell.Dispose()
+    }
+}
+
 function Assert-AppDependencies {
     param([string] $Dir)
     $expectedPublisher = 'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US'
@@ -333,7 +367,7 @@ function Install-AppPackage {
     Stop-AppProcess
     $addParams['ForceApplicationShutdown'] = $true
     try {
-        Add-AppxPackage @addParams
+        Invoke-AddAppxPackage -Parameters $addParams -DeploymentProgressPath $ProgressPath
     } catch {
         if ($_.Exception.Message -match '0x80073D06') {
             # A newer (or same) build already installed is not an installation failure for a bootstrapper.
@@ -344,13 +378,14 @@ function Install-AppPackage {
                 Write-Host 'App is running; closing it and retrying ...'
                 Stop-AppProcess
                 Start-Sleep -Seconds 2
-                Add-AppxPackage @addParams
+                Invoke-AddAppxPackage -Parameters $addParams -DeploymentProgressPath $ProgressPath
             } elseif ($deps.Count -gt 0) {
                 # The bundled WindowsAppRuntime framework is in use by other apps
                 # (Spotify, widgets, ...). Registering it again is unnecessary when
                 # a framework is already present — retry without forcing the deps.
                 Write-Host 'Shared framework in use by other apps; retrying without bundled dependencies ...'
-                Add-AppxPackage -Path $package.FullName -ErrorAction Stop
+                $retryParams = @{ Path = $package.FullName; ErrorAction = 'Stop' }
+                Invoke-AddAppxPackage -Parameters $retryParams -DeploymentProgressPath $ProgressPath
             } else {
                 throw
             }
@@ -360,7 +395,7 @@ function Install-AppPackage {
             # package registration in the original user's non-elevated process.
             Invoke-ElevatedCertificateStep -Dir $Dir -ElevatedStep 'cert-machine'
             try {
-                Add-AppxPackage @addParams
+                Invoke-AddAppxPackage -Parameters $addParams -DeploymentProgressPath $ProgressPath
                 Remove-NewlyImportedCertificate -Dir $Dir -StoreLocation 'CurrentUser'
             } catch {
                 $installError = $_

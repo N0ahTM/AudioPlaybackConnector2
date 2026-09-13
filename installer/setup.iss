@@ -67,6 +67,11 @@ Source: "{#StageDir}\Dependencies\*"; DestDir: "{tmp}\pkg\Dependencies"; Flags: 
 #endif
 
 [Code]
+function SetTimer(hWnd, nIDEvent, uElapse, lpTimerFunc: LongWord): LongWord;
+  external 'SetTimer@user32.dll stdcall';
+function KillTimer(hWnd, uIDEvent: LongWord): BOOL;
+  external 'KillTimer@user32.dll stdcall';
+
 var
   InstallFailed, UninstallMode: Boolean;
   InstalledVersion, LatestVersion: String;
@@ -74,6 +79,9 @@ var
   StartTitle, StartText: TNewStaticText;
   ActionPrimary, ActionUninstall, ActionKeep: TRadioButton;
   ProgressMemo: TNewMemo;
+  ProgressTimerId: LongWord;
+  ActiveProgressPath: String;
+  ActiveProgressStart, ActiveProgressSpan, ActiveProgressPercent: Integer;
 #ifdef WEBBOOT
   DownloadsDone: Boolean;
   DownloadPage: TDownloadWizardPage;
@@ -379,14 +387,51 @@ begin
   ProgressMemo.Lines.Add('');
 end;
 
+procedure DeploymentProgressTimer(Arg1, Arg2, Arg3, Arg4: LongWord);
+var
+  Lines: TArrayOfString;
+  Percent: Integer;
+begin
+  if (ActiveProgressPath = '') or
+     (not LoadStringsFromFile(ActiveProgressPath, Lines)) or
+     (GetArrayLength(Lines) = 0) then
+    exit;
+  Percent := StrToIntDef(Trim(Lines[0]), -1);
+  if (Percent < ActiveProgressPercent) or (Percent > 100) then
+    exit;
+  ActiveProgressPercent := Percent;
+  if WizardForm.ProgressGauge.Style = npbstMarquee then
+    WizardForm.ProgressGauge.Style := npbstNormal;
+  WizardForm.ProgressGauge.Position := ActiveProgressStart +
+    (Percent * ActiveProgressSpan div 100);
+  WizardForm.StatusLabel.Caption := 'Installing the app package ... ' + IntToStr(Percent) + '%';
+end;
+
 procedure RunStep(const StepName, Desc: String);
 var
-  ResultCode: Integer;
-  OutFile, Params: String;
+  ResultCode, PreviousPosition: Integer;
+  ShowMarquee: Boolean;
+  OutFile, Params, ProgressFile: String;
 begin
   if InstallFailed then
     exit;
   WizardForm.StatusLabel.Caption := Desc;
+  PreviousPosition := WizardForm.ProgressGauge.Position;
+  ShowMarquee := (StepName = 'install') and (not WizardSilent);
+  if ShowMarquee then
+  begin
+    WizardForm.ProgressGauge.Style := npbstMarquee;
+    ProgressMemo.Lines.Add('Windows is registering the app package. This can take several minutes ...');
+    ProgressMemo.Lines.Add('Setup will show Windows deployment progress when it becomes available.');
+    ProgressMemo.Lines.Add('');
+    ProgressFile := ExpandConstant('{tmp}\apc2-deployment-progress.txt');
+    DeleteFile(ProgressFile);
+    ActiveProgressPath := ProgressFile;
+    ActiveProgressStart := PreviousPosition;
+    ActiveProgressSpan := 25;
+    ActiveProgressPercent := 0;
+    ProgressTimerId := SetTimer(0, 0, 200, CreateCallback(@DeploymentProgressTimer));
+  end;
   OutFile := ExpandConstant('{tmp}\apc2-step-' + StepName + '.log');
   { cmd /c so console output lands in a file the memo can display. }
   Params := '/c ""' + PsExe + '" -NoProfile -ExecutionPolicy Bypass -File "' +
@@ -394,15 +439,31 @@ begin
             ' -PackageArchitecture ' + NativePackageArchitecture;
   Params := Params + ' -PackageDir "' + ExpandConstant('{tmp}\pkg') + '"';
   Params := Params + ' -ExpectedCertificateThumbprint "{#CertificateThumbprint}"';
+  if ShowMarquee then
+    Params := Params + ' -ProgressPath "' + ProgressFile + '"';
   if (StepName = 'validate') and (LatestVersion <> '') then
     Params := Params + ' -ExpectedPackageVersion "' + LatestVersion + '"';
   if (StepName = 'verify') and (not WizardSilent) then
     Params := Params + ' -Launch';
   Params := Params + ' > "' + OutFile + '" 2>&1"';
-  if not Exec(ExpandConstant('{cmd}'), Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
-    ResultCode := -1;
+  try
+    if not Exec(ExpandConstant('{cmd}'), Params, '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+      ResultCode := -1;
+  finally
+    if ShowMarquee then
+    begin
+      if ProgressTimerId <> 0 then
+      begin
+        KillTimer(0, ProgressTimerId);
+        ProgressTimerId := 0;
+      end;
+      ActiveProgressPath := '';
+      WizardForm.ProgressGauge.Style := npbstNormal;
+      WizardForm.ProgressGauge.Position := PreviousPosition;
+    end;
+  end;
   AppendLogToMemo(OutFile);
-  WizardForm.ProgressGauge.Position := WizardForm.ProgressGauge.Position + 25;
+  WizardForm.ProgressGauge.Position := PreviousPosition + 25;
   if ResultCode <> 0 then
   begin
     InstallFailed := True;
@@ -422,6 +483,8 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
+    WizardForm.ProgressGauge.Min := 0;
+    WizardForm.ProgressGauge.Max := 100;
     WizardForm.ProgressGauge.Position := 0;
     if UninstallMode then
     begin

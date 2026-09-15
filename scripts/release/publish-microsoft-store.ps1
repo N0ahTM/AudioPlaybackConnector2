@@ -62,12 +62,45 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $submissionPath = Join-Path ([IO.Path]::GetTempPath()) "msstore-submission-$PID.json"
-& msstore submission get $ProductId | Out-File -LiteralPath $submissionPath -Encoding utf8
-if ($LASTEXITCODE -ne 0) {
-    throw "Microsoft Store draft retrieval failed with exit code $LASTEXITCODE."
+$expectedPackageVersion = "$Version.0"
+$submission = $null
+$uploadedPackage = $null
+
+# Partner Center can briefly return the previous package after msstore reports a
+# successful upload. Never update or commit that stale representation: doing so
+# would submit only the listing changes and leave the old package in place.
+for ($attempt = 1; $attempt -le 30; $attempt++) {
+    & msstore submission get $ProductId | Out-File -LiteralPath $submissionPath -Encoding utf8
+    if ($LASTEXITCODE -ne 0) {
+        throw "Microsoft Store draft retrieval failed with exit code $LASTEXITCODE."
+    }
+
+    $submission = Get-Content -LiteralPath $submissionPath -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable
+    $uploadedPackage = @($submission['ApplicationPackages']) | Where-Object {
+        if ($null -eq $_) { return $false }
+        $packageVersion = [string]$_['Version']
+        $packageFileName = [string]$_['FileName']
+        $packageVersion -eq $expectedPackageVersion -or
+            $packageFileName -match "_$([regex]::Escape($expectedPackageVersion))_"
+    } | Select-Object -First 1
+
+    if ($null -ne $uploadedPackage) {
+        break
+    }
+
+    if ($attempt -lt 30) {
+        Write-Host "Waiting for Partner Center to expose package version $expectedPackageVersion (attempt $attempt of 30)..."
+        Start-Sleep -Seconds 10
+    }
 }
 
-$submission = Get-Content -LiteralPath $submissionPath -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable
+if ($null -eq $uploadedPackage) {
+    $visiblePackages = @($submission['ApplicationPackages']) | ForEach-Object {
+        "{0} (version {1})" -f [string]$_['FileName'], [string]$_['Version']
+    }
+    throw "Partner Center did not expose uploaded package version $expectedPackageVersion. Visible packages: $($visiblePackages -join ', '). The submission was not updated or committed."
+}
+
 $listings = $submission['Listings']
 if ($null -eq $listings -or $listings.Count -eq 0) {
     throw 'Microsoft Store returned no listings to update.'

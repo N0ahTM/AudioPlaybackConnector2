@@ -2,7 +2,15 @@
 
 AudioPlaybackConnector2 requires Windows 10 version 2004 (build 19041) or newer. Pair the Bluetooth audio device in Windows before launching the app.
 
-## Recommended: Web Setup
+## Recommended: Microsoft Store
+
+Install [AudioPlaybackConnector2 from the Microsoft Store](https://apps.microsoft.com/detail/9n366pgkjz0k). The Store selects the x64 or ARM64 package, signs it with Microsoft's certificate, installs required framework packages, and delivers updates automatically.
+
+## Direct GitHub packages
+
+The GitHub release packages are intended for development, testing, and systems where Microsoft Store installation is unavailable. They use a separate package identity and a self-signed certificate, so they are not an interchangeable update path for the Store installation.
+
+### Web Setup
 
 1. Open the [latest GitHub release](https://github.com/N0ahTM/AudioPlaybackConnector2/releases/latest).
 2. Download `AudioPlaybackConnector2-WebSetup.exe`.
@@ -12,7 +20,7 @@ Web Setup detects whether Windows is running on x64 or ARM64, downloads the shar
 
 The setup executable is not yet code-signed, so Windows SmartScreen may show an unknown-publisher warning. Only continue when the file came from this repository's release page.
 
-## Offline Setup
+### Offline Setup
 
 Use `AudioPlaybackConnector2-Setup-<version>.exe` when the target computer has no internet connection. It contains the application package, certificate, and framework dependencies. Installation is otherwise identical to Web Setup.
 
@@ -20,7 +28,7 @@ Both setup variants can update or repair an installation. Their uninstall option
 
 Both setup variants register the raw MSIX with `Add-AppxPackage`; they do not use the `.appinstaller` during initial installation. The app performs its own GitHub release check and opens the `.appinstaller` when an update is available. Installing through that handoff registers the Windows App Installer update feed.
 
-## App Installer and MSIX
+### App Installer and MSIX
 
 The release also includes the App Installer feed, the x64/ARM64 `.msixbundle`, `.cer`, and architecture-specific dependency packages for existing installations and advanced use.
 

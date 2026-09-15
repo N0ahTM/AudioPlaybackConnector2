@@ -5,6 +5,10 @@
 [![License](https://img.shields.io/github/license/N0ahTM/AudioPlaybackConnector2)](LICENSE)
 [![C++](https://img.shields.io/badge/C%2B%2B-23-00599C?logo=c%2B%2B)](https://en.cppreference.com/)
 
+<a href="https://get.microsoft.com/installer/download/9n366pgkjz0k?referrer=appbadge" target="_self">
+  <img src="https://get.microsoft.com/images/de%20light.svg" width="200" alt="Aus dem Microsoft Store installieren">
+</a>
+
 AudioPlaybackConnector2 is a small Windows tray app that lets you play audio from a paired Bluetooth source, such as a phone, through your PC. It uses the Windows [AudioPlaybackConnection API](https://learn.microsoft.com/windows/apps/develop/media-playback/enable-remote-audio-playback) to manage A2DP sink connections from the tray.
 
 Built with **WinUI 3 Desktop** and **C++/WinRT** and distributed as a per-user Windows package.
@@ -14,9 +18,8 @@ Built with **WinUI 3 Desktop** and **C++/WinRT** and distributed as a per-user W
 ## Quick Start
 
 1. Pair your phone or another compatible Bluetooth audio source with your Windows PC.
-2. Download `AudioPlaybackConnector2-WebSetup.exe` from the [latest release](https://github.com/N0ahTM/AudioPlaybackConnector2/releases/latest).
-3. Run the setup. It installs the app and its signing certificate for the current user.
-4. Launch AudioPlaybackConnector2 and use the tray icon to manage devices.
+2. Install AudioPlaybackConnector2 from the [Microsoft Store](https://apps.microsoft.com/detail/9n366pgkjz0k).
+3. Launch AudioPlaybackConnector2 and use the tray icon to manage devices.
 
 For commands and certificate-store options, see [Installation](docs/INSTALLATION.md).
 
@@ -82,11 +85,9 @@ Add `--json` for machine-readable output. Add `--raw` when you explicitly need r
 
 ## Installation Notes
 
-The recommended install path is `AudioPlaybackConnector2-WebSetup.exe` from the latest release. A versioned offline setup is also provided. Both bootstrapper variants install the signing certificate, app package, and required framework packages for the current user.
+The Microsoft Store is the recommended installation path. It provides Microsoft-signed packages and automatic updates for x64 and ARM64 devices.
 
-The setup installers register the MSIX directly and do not initially register the Windows App Installer feed. The app checks GitHub for updates and opens the `.appinstaller` when an update is available. Direct `.msix` installation may require framework dependencies to be installed manually.
-
-The MSIX package is currently signed with a self-signed certificate; the setup executables are unsigned. Download installers only from this repository's release page. Manual App Installer or MSIX installation requires importing the matching release `.cer` first.
+GitHub release packages remain available for development, testing, and environments where Store installation is unavailable. Those packages use a separate self-signed identity and may require manual certificate and framework installation.
 
 ## Documentation
 
@@ -94,7 +95,6 @@ The MSIX package is currently signed with a self-signed certificate; the setup e
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Contributing](CONTRIBUTING.md)
 - [Changelog](CHANGELOG.md)
-- [Next release validation and demo recording](docs/RELEASE-0.9-CHECKLIST.md)
 
 ## Privacy and Crash Reports
 

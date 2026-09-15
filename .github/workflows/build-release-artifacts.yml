@@ -35,6 +35,8 @@ on:
         value: ${{ jobs.build.outputs.offline_setup_name }}
       dependency_names:
         value: ${{ jobs.build.outputs.dependency_names }}
+      store_upload_name:
+        value: ${{ jobs.build.outputs.store_upload_name }}
 
 env:
   APPINSTALLER_URL: https://n0ahtm.github.io/AudioPlaybackConnector2/AudioPlaybackConnector2.appinstaller
@@ -51,6 +53,7 @@ jobs:
       web_setup_name: ${{ steps.artifacts.outputs.WEB_SETUP_NAME }}
       offline_setup_name: ${{ steps.artifacts.outputs.OFFLINE_SETUP_NAME }}
       dependency_names: ${{ steps.artifacts.outputs.DEPENDENCY_NAMES }}
+      store_upload_name: ${{ steps.store-upload.outputs.NAME }}
 
     steps:
     - name: Checkout release source
@@ -198,6 +201,49 @@ jobs:
           -RequireSignature `
           -WriteGitHubOutput
 
+    - name: Build Microsoft Store upload package
+      shell: pwsh
+      run: |
+        $root = Join-Path $env:RUNNER_TEMP 'store-upload'
+        & msbuild 'AudioPlaybackConnector2 (Package)\AudioPlaybackConnector2 (Package).wapproj' `
+          /p:Configuration=Release `
+          /p:Platform=x64 `
+          /p:PackageVersion=${{ inputs.package_version }} `
+          "/p:AppxPackageDir=$root\" `
+          /p:AppxPackageSigningEnabled=false `
+          /p:StorePackage=true `
+          /p:UapAppxPackageBuildMode=StoreUpload `
+          /p:GenerateAppxPackageOnBuild=true `
+          /p:AppxBundle=Always `
+          '/p:AppxBundlePlatforms=x64|ARM64' `
+          /t:Rebuild
+        if ($LASTEXITCODE -ne 0) { throw "Microsoft Store package build failed with exit code $LASTEXITCODE." }
+
+    - name: Verify Microsoft Store upload package
+      id: store-upload
+      shell: pwsh
+      run: |
+        $uploads = @(Get-ChildItem (Join-Path $env:RUNNER_TEMP 'store-upload') -Recurse -File -Filter '*.msixupload')
+        if ($uploads.Count -ne 1) {
+          throw "Expected exactly one .msixupload file, found $($uploads.Count)."
+        }
+
+        $extractRoot = Join-Path $env:RUNNER_TEMP 'store-upload-contents'
+        [IO.Compression.ZipFile]::ExtractToDirectory($uploads[0].FullName, $extractRoot)
+        $bundles = @(Get-ChildItem $extractRoot -Recurse -File -Filter '*.msixbundle')
+        if ($bundles.Count -ne 1) {
+          throw "Expected exactly one MSIX bundle inside the upload file, found $($bundles.Count)."
+        }
+        ./scripts/release/verify-msix-bundle.ps1 `
+          -BundlePath $bundles[0].FullName `
+          -ExpectedPackageVersion '${{ inputs.package_version }}' `
+          -ExpectedName 12144NoahMeyer.AudioPlaybackConnector2 `
+          -ExpectedPublisher 'CN=3784F101-6355-463B-A35E-41BD0A95071B' `
+          -ExpectedProcessorArchitectures x64,arm64
+
+        "PATH=$($uploads[0].FullName)" >> $env:GITHUB_OUTPUT
+        "NAME=$($uploads[0].Name)" >> $env:GITHUB_OUTPUT
+
     - name: Extract changelog
       id: changelog
       shell: pwsh
@@ -269,6 +315,7 @@ jobs:
         Copy-Item -LiteralPath 'certs/AudioPlaybackConnector2.cer' -Destination $stage
 
         Copy-Item -LiteralPath '${{ steps.changelog.outputs.PATH }}' -Destination $stage
+        Copy-Item -LiteralPath '${{ steps.store-upload.outputs.PATH }}' -Destination $stage
 
         $dependencyNames = @(Get-ChildItem -Path $dependencies -Recurse -File -ErrorAction SilentlyContinue |
           Sort-Object Name |

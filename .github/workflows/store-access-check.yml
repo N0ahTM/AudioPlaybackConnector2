@@ -1,0 +1,32 @@
+name: Microsoft Store Access Check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  partner-center:
+    runs-on: windows-2022
+    steps:
+    - name: Set up Microsoft Store Developer CLI
+      uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4
+
+    - name: Authenticate with Partner Center
+      shell: pwsh
+      env:
+        TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+        SELLER_ID: ${{ secrets.SELLER_ID }}
+        CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+        CLIENT_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+      run: |
+        msstore reconfigure `
+          --tenantId $env:TENANT_ID `
+          --sellerId $env:SELLER_ID `
+          --clientId $env:CLIENT_ID `
+          --clientSecret $env:CLIENT_SECRET
+
+    - name: Read current submission status
+      shell: pwsh
+      run: msstore submission status 9N366PGKJZ0K

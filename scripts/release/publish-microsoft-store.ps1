@@ -95,7 +95,7 @@ if ($missingLocales.Count -gt 0) {
 }
 
 $submission | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $submissionPath -Encoding utf8
-& msstore submission update $ProductId $submissionPath
+$null = & msstore submission update $ProductId $submissionPath
 if ($LASTEXITCODE -ne 0) {
     throw "Microsoft Store release-note update failed with exit code $LASTEXITCODE."
 }

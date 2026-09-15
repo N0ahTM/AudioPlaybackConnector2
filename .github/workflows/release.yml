@@ -10,6 +10,11 @@ on:
         description: Existing release tag to publish, for example v1.2.3.
         required: true
         type: string
+      store_only:
+        description: Submit an already-published GitHub release only to Microsoft Store.
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: audioplaybackconnector2-production-release
@@ -206,18 +211,19 @@ jobs:
         run-id: ${{ steps.build.outputs.RUN_ID }}
         github-token: ${{ github.token }}
 
-    - name: Verify draft assets against immutable build
+    - name: Verify release assets against immutable build
       id: release
       shell: pwsh
       env:
         GH_TOKEN: ${{ github.token }}
+        EXPECTED_RELEASE_STATE: ${{ inputs.store_only && 'Published' || 'Draft' }}
       run: |
         ./scripts/release/verify-release-promotion.ps1 `
           -Repository '${{ github.repository }}' `
           -Tag '${{ needs.version.outputs.tag }}' `
           -PackageVersion '${{ needs.version.outputs.package_version }}' `
           -ArtifactDirectory release-artifacts `
-          -ExpectedReleaseState Draft `
+          -ExpectedReleaseState $env:EXPECTED_RELEASE_STATE `
           -WriteGitHubOutput
 
         $bundle = Get-Item 'release-artifacts/AudioPlaybackConnector2_${{ needs.version.outputs.package_version }}_x64_ARM64.msixbundle'
@@ -243,7 +249,7 @@ jobs:
           '- Tag commit: `${{ needs.version.outputs.commit_sha }}`',
           '- Tag-build run: `${{ steps.build.outputs.RUN_ID }}`',
           '- Immutable artifact digest: `${{ steps.build.outputs.ARTIFACT_DIGEST }}`',
-          '- Every draft asset matched its GitHub SHA-256 digest and build-artifact file.'
+          '- Every release asset matched its GitHub SHA-256 digest and build-artifact file.'
         ) -join "`n" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
 
   publish-release:
@@ -251,7 +257,7 @@ jobs:
     needs:
       - version
       - validate-promotion
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.store_only }}
     permissions:
       contents: write
     environment:
@@ -281,7 +287,7 @@ jobs:
     needs:
       - version
       - publish-release
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && (inputs.store_only || needs.publish-release.result == 'success') }}
     permissions:
       contents: read
     steps:
@@ -325,7 +331,7 @@ jobs:
     needs:
       - version
       - verify-public-release
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.store_only }}
     permissions:
       contents: write
       pages: write
@@ -341,7 +347,8 @@ jobs:
       - version
       - validate-promotion
       - deploy-appinstaller
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+      - verify-public-release
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && needs.validate-promotion.result == 'success' && needs.verify-public-release.result == 'success' && (inputs.store_only || needs.deploy-appinstaller.result == 'success') }}
     permissions:
       actions: read
       contents: read
@@ -353,6 +360,12 @@ jobs:
       with:
         ref: ${{ needs.version.outputs.tag }}
         fetch-depth: 0
+
+    - name: Checkout current Store automation
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        ref: ${{ github.sha }}
+        path: store-automation
 
     - name: Download immutable release artifact
       uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
@@ -407,22 +420,19 @@ jobs:
           throw "Microsoft Store authentication failed with exit code $LASTEXITCODE."
         }
 
-    - name: Submit package to Microsoft Store certification
+    - name: Submit package and localized release notes to Microsoft Store certification
       shell: pwsh
       env:
-        STORE_PACKAGE_PATH: ${{ steps.store-package.outputs.PATH }}
+        AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+        SELLER_ID: ${{ secrets.SELLER_ID }}
+        AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+        AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
       run: |
-        msstore publish . `
-          --inputFile $env:STORE_PACKAGE_PATH `
-          --appId 9N366PGKJZ0K
-        if ($LASTEXITCODE -ne 0) {
-          throw "Microsoft Store submission failed with exit code $LASTEXITCODE."
-        }
-
-        msstore submission status 9N366PGKJZ0K
-        if ($LASTEXITCODE -ne 0) {
-          throw "Microsoft Store status check failed with exit code $LASTEXITCODE."
-        }
+        ./store-automation/scripts/release/publish-microsoft-store.ps1 `
+          -ProductId 9N366PGKJZ0K `
+          -PackagePath '${{ steps.store-package.outputs.PATH }}' `
+          -Version '${{ needs.version.outputs.semver }}' `
+          -WhatsNewPath './store-automation/store/whats-new.json'
 
         @(
           '## Microsoft Store submission',
@@ -439,7 +449,7 @@ jobs:
       - publish-release
       - verify-public-release
       - deploy-appinstaller
-    if: ${{ always() && needs.publish-release.result == 'success' && (needs.verify-public-release.result != 'success' || needs.deploy-appinstaller.result != 'success') }}
+    if: ${{ always() && !inputs.store_only && needs.publish-release.result == 'success' && (needs.verify-public-release.result != 'success' || needs.deploy-appinstaller.result != 'success') }}
     permissions:
       contents: write
     steps:

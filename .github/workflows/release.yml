@@ -252,6 +252,98 @@ jobs:
           '- Every release asset matched its GitHub SHA-256 digest and build-artifact file.'
         ) -join "`n" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
 
+  rebuild-store-upload:
+    runs-on: windows-2022
+    needs: version
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.store_only }}
+    permissions:
+      contents: read
+    steps:
+    - name: Checkout exact release tag
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        ref: ${{ needs.version.outputs.tag }}
+        fetch-depth: 0
+
+    - name: Checkout current Store verification
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        ref: ${{ github.sha }}
+        path: store-automation
+
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
+
+    - name: Cache NuGet packages
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      with:
+        path: |
+          packages
+          .nuget/packages
+        key: ${{ runner.os }}-nuget-${{ hashFiles('**/packages.config', '**/*.vcxproj', '**/*.wapproj', 'Directory.Build.props', 'AudioPlaybackConnector2.slnx') }}
+        restore-keys: |
+          ${{ runner.os }}-nuget-
+
+    - name: Restore NuGet packages
+      run: msbuild AudioPlaybackConnector2.slnx -t:restore -p:RestorePackagesConfig=true
+
+    - name: Build Store-linked x64 and ARM64 upload package
+      shell: pwsh
+      run: |
+        $manifestPath = Resolve-Path 'AudioPlaybackConnector2 (Package)/Package.appxmanifest'
+        [xml]$manifest = Get-Content -LiteralPath $manifestPath -Raw
+        $identity = $manifest.SelectSingleNode("/*[local-name()='Package']/*[local-name()='Identity']")
+        if ($null -eq $identity) { throw 'Package identity is missing from the release manifest.' }
+        $identity.SetAttribute('Name', '12144NoahMeyer.AudioPlaybackConnector2')
+        $identity.SetAttribute('Publisher', 'CN=3784F101-6355-463B-A35E-41BD0A95071B')
+        $manifest.Save($manifestPath)
+
+        $root = Join-Path $env:RUNNER_TEMP 'store-upload'
+        & msbuild 'AudioPlaybackConnector2 (Package)\AudioPlaybackConnector2 (Package).wapproj' `
+          /p:Configuration=Release `
+          /p:Platform=x64 `
+          /p:PackageVersion=${{ needs.version.outputs.package_version }} `
+          "/p:AppxPackageDir=$root\" `
+          /p:AppxPackageSigningEnabled=false `
+          /p:UapAppxPackageBuildMode=StoreUpload `
+          /p:GenerateAppxPackageOnBuild=true `
+          /p:AppxBundle=Always `
+          '/p:AppxBundlePlatforms=x64|ARM64' `
+          /t:Rebuild
+        if ($LASTEXITCODE -ne 0) { throw "Microsoft Store package build failed with exit code $LASTEXITCODE." }
+
+    - name: Verify and stage Store upload package
+      id: store-upload
+      shell: pwsh
+      run: |
+        $uploads = @(Get-ChildItem (Join-Path $env:RUNNER_TEMP 'store-upload') -Recurse -File -Filter '*.msixupload')
+        if ($uploads.Count -ne 1) {
+          throw "Expected exactly one .msixupload file, found $($uploads.Count)."
+        }
+
+        $extractRoot = Join-Path $env:RUNNER_TEMP 'store-upload-contents'
+        [IO.Compression.ZipFile]::ExtractToDirectory($uploads[0].FullName, $extractRoot)
+        $bundles = @(Get-ChildItem $extractRoot -Recurse -File -Filter '*.msixbundle')
+        if ($bundles.Count -ne 1) {
+          throw "Expected exactly one MSIX bundle inside the upload file, found $($bundles.Count)."
+        }
+        ./store-automation/scripts/release/verify-msix-bundle.ps1 `
+          -BundlePath $bundles[0].FullName `
+          -ExpectedPackageVersion '${{ needs.version.outputs.package_version }}' `
+          -ExpectedName 12144NoahMeyer.AudioPlaybackConnector2 `
+          -ExpectedPublisher 'CN=3784F101-6355-463B-A35E-41BD0A95071B' `
+          -ExpectedProcessorArchitectures x64,arm64
+
+        Copy-Item -LiteralPath $uploads[0].FullName -Destination "$env:RUNNER_TEMP/verified-store-upload.msixupload"
+
+    - name: Upload verified Store package
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: AudioPlaybackConnector2-store-${{ needs.version.outputs.package_version }}
+        path: ${{ runner.temp }}/verified-store-upload.msixupload
+        if-no-files-found: error
+        retention-days: 30
+
   publish-release:
     runs-on: ubuntu-24.04
     needs:
@@ -347,8 +439,9 @@ jobs:
       - version
       - validate-promotion
       - deploy-appinstaller
+      - rebuild-store-upload
       - verify-public-release
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && needs.validate-promotion.result == 'success' && needs.verify-public-release.result == 'success' && (inputs.store_only || needs.deploy-appinstaller.result == 'success') }}
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && needs.validate-promotion.result == 'success' && needs.verify-public-release.result == 'success' && ((inputs.store_only && needs.rebuild-store-upload.result == 'success') || (!inputs.store_only && needs.deploy-appinstaller.result == 'success')) }}
     permissions:
       actions: read
       contents: read
@@ -368,6 +461,7 @@ jobs:
         path: store-automation
 
     - name: Download immutable release artifact
+      if: ${{ !inputs.store_only }}
       uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
       with:
         name: AudioPlaybackConnector2-release-${{ needs.version.outputs.package_version }}
@@ -375,6 +469,13 @@ jobs:
         repository: ${{ github.repository }}
         run-id: ${{ needs.validate-promotion.outputs.build_run_id }}
         github-token: ${{ github.token }}
+
+    - name: Download rebuilt Store artifact
+      if: ${{ inputs.store_only }}
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      with:
+        name: AudioPlaybackConnector2-store-${{ needs.version.outputs.package_version }}
+        path: release-artifacts
 
     - name: Verify Microsoft Store upload package
       id: store-package

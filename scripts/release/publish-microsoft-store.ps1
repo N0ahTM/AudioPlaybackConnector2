@@ -5,6 +5,10 @@ param(
     [string]$ProductId,
 
     [Parameter(Mandatory = $true)]
+    [ValidateScript({ Test-Path -LiteralPath $_ -PathType Container })]
+    [string]$ProjectPath,
+
+    [Parameter(Mandatory = $true)]
     [ValidateScript({ Test-Path -LiteralPath $_ -PathType Leaf })]
     [string]$PackagePath,
 
@@ -50,8 +54,9 @@ function Resolve-ReleaseNotesLocale([string]$Language) {
 }
 
 $resolvedPackage = (Resolve-Path -LiteralPath $PackagePath).Path
+$resolvedProject = (Resolve-Path -LiteralPath $ProjectPath).Path
 $packageDirectory = Split-Path -Path $resolvedPackage -Parent
-& msstore publish . --inputDirectory $packageDirectory --appId $ProductId --noCommit
+& msstore publish $resolvedProject --inputDirectory $packageDirectory --appId $ProductId --noCommit
 if ($LASTEXITCODE -ne 0) {
     throw "Microsoft Store draft package upload failed with exit code $LASTEXITCODE."
 }

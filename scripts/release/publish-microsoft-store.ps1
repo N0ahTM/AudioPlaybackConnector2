@@ -61,55 +61,42 @@ if ($LASTEXITCODE -ne 0) {
     throw "Microsoft Store draft package upload failed with exit code $LASTEXITCODE."
 }
 
-$token = Invoke-RestMethod `
-    -Method Post `
-    -Uri "https://login.microsoftonline.com/$env:AZURE_AD_TENANT_ID/oauth2/v2.0/token" `
-    -ContentType 'application/x-www-form-urlencoded' `
-    -Body @{
-        client_id = $env:AZURE_AD_APPLICATION_CLIENT_ID
-        client_secret = $env:AZURE_AD_APPLICATION_SECRET
-        grant_type = 'client_credentials'
-        scope = 'https://api.store.microsoft.com/.default'
-    }
-if ([string]::IsNullOrWhiteSpace($token.access_token)) {
-    throw 'Microsoft Entra returned no access token.'
+$submissionPath = Join-Path ([IO.Path]::GetTempPath()) "msstore-submission-$PID.json"
+& msstore submission get $ProductId | Out-File -LiteralPath $submissionPath -Encoding utf8
+if ($LASTEXITCODE -ne 0) {
+    throw "Microsoft Store draft retrieval failed with exit code $LASTEXITCODE."
 }
 
-$headers = @{
-    Authorization = "Bearer $($token.access_token)"
-    'X-Seller-Account-Id' = $env:SELLER_ID
-}
-$metadataUri = "https://api.store.microsoft.com/submission/v1/product/$ProductId/metadata?includelanguagelist=true"
-$metadata = Invoke-RestMethod -Method Get -Uri $metadataUri -Headers $headers
-$listings = @($metadata.responseData.listings)
-if ($listings.Count -eq 0) {
+$submission = Get-Content -LiteralPath $submissionPath -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable
+$listings = $submission.listings
+if ($null -eq $listings -or $listings.Count -eq 0) {
     throw 'Microsoft Store returned no listings to update.'
 }
 
 $updatedLocales = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-foreach ($listing in $listings) {
-    $language = [string]$listing.language
+foreach ($language in @($listings.Keys)) {
     $locale = Resolve-ReleaseNotesLocale $language
     if (-not $whatsNew.locales.ContainsKey($locale)) {
         throw "No Store release notes are defined for listing language $language."
     }
 
-    $body = @{
-        listings = @{
-            language = $language
-            whatsNew = [string]$whatsNew.locales[$locale]
-        }
-    } | ConvertTo-Json -Depth 5 -Compress
-    $response = Invoke-RestMethod -Method Patch -Uri $metadataUri -Headers $headers -ContentType 'application/json' -Body $body
-    if ($null -ne $response -and $response.PSObject.Properties.Name -contains 'isSuccess' -and -not $response.isSuccess) {
-        throw "Microsoft Store rejected release notes for $language."
+    $listing = $listings[$language]
+    if ($null -eq $listing.baseListing) {
+        throw "Microsoft Store listing $language has no base listing."
     }
+    $listing.baseListing.releaseNotes = [string]$whatsNew.locales[$locale]
     [void]$updatedLocales.Add($locale)
 }
 
 $missingLocales = @($requiredLocales | Where-Object { -not $updatedLocales.Contains($_) })
 if ($missingLocales.Count -gt 0) {
     throw "Microsoft Store has no matching listings for: $($missingLocales -join ', ')."
+}
+
+$submission | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $submissionPath -Encoding utf8
+& msstore submission update $ProductId $submissionPath
+if ($LASTEXITCODE -ne 0) {
+    throw "Microsoft Store release-note update failed with exit code $LASTEXITCODE."
 }
 
 & msstore submission publish $ProductId

@@ -1,13 +1,13 @@
 {
   "version": "0.9.1",
   "locales": {
-    "en": "Improved installation reliability when Windows does not yet trust the package certificate. The installer can now request administrator approval only for a narrowly scoped certificate import, while package registration remains in the original user session. Installation progress is now shown during Windows package deployment.",
-    "de": "Die Installation ist jetzt zuverlässiger, wenn Windows dem Paketzertifikat noch nicht vertraut. Das Installationsprogramm kann ausschließlich für den gezielten Zertifikatimport eine Administratorbestätigung anfordern; die Paketregistrierung bleibt in der ursprünglichen Benutzersitzung. Während der Windows-Paketbereitstellung wird nun der Installationsfortschritt angezeigt.",
-    "fr": "L’installation est désormais plus fiable lorsque Windows n’approuve pas encore le certificat du package. Le programme d’installation peut demander une autorisation administrateur uniquement pour l’importation ciblée du certificat, tandis que l’enregistrement du package reste dans la session utilisateur d’origine. La progression s’affiche maintenant pendant le déploiement du package Windows.",
-    "es": "La instalación ahora es más fiable cuando Windows todavía no confía en el certificado del paquete. El instalador puede solicitar aprobación de administrador únicamente para importar el certificado de forma limitada, mientras que el registro del paquete permanece en la sesión del usuario original. Ahora se muestra el progreso durante la implementación del paquete de Windows.",
-    "ja": "Windows がパッケージ証明書をまだ信頼していない場合のインストールの信頼性を改善しました。インストーラーは、限定された証明書のインポートにのみ管理者の承認を要求でき、パッケージの登録は元のユーザーセッションで行われます。Windows パッケージの展開中に進行状況が表示されるようになりました。",
-    "ko": "Windows에서 패키지 인증서를 아직 신뢰하지 않는 경우의 설치 안정성을 개선했습니다. 설치 프로그램은 제한된 인증서 가져오기에만 관리자 승인을 요청하며, 패키지 등록은 원래 사용자 세션에서 계속 진행됩니다. 이제 Windows 패키지 배포 중에 설치 진행률이 표시됩니다.",
-    "zh-Hans": "提高了 Windows 尚未信任程序包证书时的安装可靠性。安装程序现在仅会为受限的证书导入请求管理员批准，程序包注册仍在原始用户会话中完成。Windows 程序包部署期间现在会显示安装进度。",
-    "zh-Hant": "改善了 Windows 尚未信任套件憑證時的安裝可靠性。安裝程式現在只會針對受限的憑證匯入要求系統管理員核准，套件註冊仍在原始使用者工作階段中完成。Windows 套件部署期間現在會顯示安裝進度。"
+    "en": "Maintenance update: simplified internal command handling, removed unused diagnostic code, and strengthened automated security and regression checks. No new permissions are required.",
+    "de": "Wartungsupdate: Die interne Befehlsverarbeitung wurde vereinfacht, ungenutzter Diagnosecode entfernt und automatische Sicherheits- und Regressionstests verstärkt. Es sind keine neuen Berechtigungen erforderlich.",
+    "fr": "Mise à jour de maintenance : simplification du traitement interne des commandes, suppression du code de diagnostic inutilisé et renforcement des contrôles automatisés de sécurité et de régression. Aucune nouvelle autorisation n’est requise.",
+    "es": "Actualización de mantenimiento: se simplificó el procesamiento interno de comandos, se eliminó código de diagnóstico sin usar y se reforzaron las comprobaciones automáticas de seguridad y regresión. No se requieren permisos nuevos.",
+    "ja": "メンテナンス更新です。内部のコマンド処理を簡素化し、未使用の診断コードを削除して、自動セキュリティチェックと回帰テストを強化しました。新しいアクセス許可は必要ありません。",
+    "ko": "유지 관리 업데이트입니다. 내부 명령 처리를 단순화하고 사용하지 않는 진단 코드를 제거했으며 자동 보안 및 회귀 검사를 강화했습니다. 새로운 권한은 필요하지 않습니다.",
+    "zh-Hans": "维护更新：简化了内部命令处理，移除了未使用的诊断代码，并加强了自动安全检查和回归测试。无需新增权限。",
+    "zh-Hant": "維護更新：簡化了內部命令處理，移除了未使用的診斷程式碼，並加強了自動安全檢查與迴歸測試。無需新增權限。"
   }
 }

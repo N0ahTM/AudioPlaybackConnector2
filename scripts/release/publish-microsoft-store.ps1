@@ -50,7 +50,8 @@ function Resolve-ReleaseNotesLocale([string]$Language) {
 }
 
 $resolvedPackage = (Resolve-Path -LiteralPath $PackagePath).Path
-& msstore publish . --inputFile $resolvedPackage --appId $ProductId --noCommit
+$packageDirectory = Split-Path -Path $resolvedPackage -Parent
+& msstore publish . --inputDirectory $packageDirectory --appId $ProductId --noCommit
 if ($LASTEXITCODE -ne 0) {
     throw "Microsoft Store draft package upload failed with exit code $LASTEXITCODE."
 }

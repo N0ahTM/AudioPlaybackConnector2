@@ -335,6 +335,103 @@ jobs:
       tag: ${{ needs.version.outputs.tag }}
       package_version: ${{ needs.version.outputs.package_version }}
 
+  publish-microsoft-store:
+    runs-on: windows-2022
+    needs:
+      - version
+      - validate-promotion
+      - deploy-appinstaller
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    permissions:
+      actions: read
+      contents: read
+    environment:
+      name: production-release
+    steps:
+    - name: Checkout exact release tag
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      with:
+        ref: ${{ needs.version.outputs.tag }}
+        fetch-depth: 0
+
+    - name: Download immutable release artifact
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      with:
+        name: AudioPlaybackConnector2-release-${{ needs.version.outputs.package_version }}
+        path: release-artifacts
+        repository: ${{ github.repository }}
+        run-id: ${{ needs.validate-promotion.outputs.build_run_id }}
+        github-token: ${{ github.token }}
+
+    - name: Verify Microsoft Store upload package
+      id: store-package
+      shell: pwsh
+      run: |
+        $uploads = @(Get-ChildItem release-artifacts -Recurse -File -Filter '*.msixupload')
+        if ($uploads.Count -ne 1) {
+          throw "Expected exactly one .msixupload file, found $($uploads.Count)."
+        }
+
+        $extractRoot = Join-Path $env:RUNNER_TEMP 'store-upload-contents'
+        [IO.Compression.ZipFile]::ExtractToDirectory($uploads[0].FullName, $extractRoot)
+        $bundles = @(Get-ChildItem $extractRoot -Recurse -File -Filter '*.msixbundle')
+        if ($bundles.Count -ne 1) {
+          throw "Expected exactly one MSIX bundle inside the upload file, found $($bundles.Count)."
+        }
+        ./scripts/release/verify-msix-bundle.ps1 `
+          -BundlePath $bundles[0].FullName `
+          -ExpectedPackageVersion '${{ needs.version.outputs.package_version }}' `
+          -ExpectedName 12144NoahMeyer.AudioPlaybackConnector2 `
+          -ExpectedPublisher 'CN=3784F101-6355-463B-A35E-41BD0A95071B' `
+          -ExpectedProcessorArchitectures x64,arm64
+
+        "PATH=$($uploads[0].FullName)" >> $env:GITHUB_OUTPUT
+
+    - name: Set up Microsoft Store Developer CLI
+      uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4
+
+    - name: Authenticate with Partner Center
+      shell: pwsh
+      env:
+        TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+        SELLER_ID: ${{ secrets.SELLER_ID }}
+        CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+        CLIENT_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+      run: |
+        msstore reconfigure `
+          --tenantId $env:TENANT_ID `
+          --sellerId $env:SELLER_ID `
+          --clientId $env:CLIENT_ID `
+          --clientSecret $env:CLIENT_SECRET
+        if ($LASTEXITCODE -ne 0) {
+          throw "Microsoft Store authentication failed with exit code $LASTEXITCODE."
+        }
+
+    - name: Submit package to Microsoft Store certification
+      shell: pwsh
+      env:
+        STORE_PACKAGE_PATH: ${{ steps.store-package.outputs.PATH }}
+      run: |
+        msstore publish . `
+          --inputFile $env:STORE_PACKAGE_PATH `
+          --appId 9N366PGKJZ0K
+        if ($LASTEXITCODE -ne 0) {
+          throw "Microsoft Store submission failed with exit code $LASTEXITCODE."
+        }
+
+        msstore submission status 9N366PGKJZ0K
+        if ($LASTEXITCODE -ne 0) {
+          throw "Microsoft Store status check failed with exit code $LASTEXITCODE."
+        }
+
+        @(
+          '## Microsoft Store submission',
+          '',
+          '- Product: `9N366PGKJZ0K`',
+          '- Package version: `${{ needs.version.outputs.package_version }}`',
+          '- The package was submitted to Microsoft certification.'
+        ) -join "`n" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+
   rollback-release:
     runs-on: ubuntu-24.04
     needs:

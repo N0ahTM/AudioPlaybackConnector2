@@ -68,7 +68,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $submission = Get-Content -LiteralPath $submissionPath -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable
-$listings = $submission.listings
+$listings = $submission['Listings']
 if ($null -eq $listings -or $listings.Count -eq 0) {
     throw 'Microsoft Store returned no listings to update.'
 }
@@ -81,10 +81,11 @@ foreach ($language in @($listings.Keys)) {
     }
 
     $listing = $listings[$language]
-    if ($null -eq $listing.baseListing) {
+    $baseListing = $listing['BaseListing']
+    if ($null -eq $baseListing) {
         throw "Microsoft Store listing $language has no base listing."
     }
-    $listing.baseListing.releaseNotes = [string]$whatsNew.locales[$locale]
+    $baseListing['ReleaseNotes'] = [string]$whatsNew.locales[$locale]
     [void]$updatedLocales.Add($locale)
 }
 

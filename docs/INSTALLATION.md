@@ -1,50 +1,38 @@
 # Installation
 
-AudioPlaybackConnector2 requires Windows 10 version 2004 (build 19041) or newer. Pair the Bluetooth audio device in Windows before launching the app.
+AudioPlaybackConnector2 requires Windows 10 version 2004 (build 19041) or newer. Pair the Bluetooth audio source in Windows before launching the app.
 
-## Recommended: Microsoft Store
+## 1. Microsoft Store (recommended)
 
-Install [AudioPlaybackConnector2 from the Microsoft Store](https://apps.microsoft.com/detail/9n366pgkjz0k). The Store selects the x64 or ARM64 package, signs it with Microsoft's certificate, installs required framework packages, and delivers updates automatically.
+Install [AudioPlaybackConnector2 from the Microsoft Store](https://apps.microsoft.com/detail/9n366pgkjz0k). The Store provides the Microsoft-signed package, selects x64 or ARM64, installs framework dependencies, and delivers updates automatically.
 
-## Direct GitHub packages
+## 2. GitHub App Installer (automatic updates)
 
-The GitHub release packages are intended for development, testing, and systems where Microsoft Store installation is unavailable. They use a separate package identity and a self-signed certificate, so they are not an interchangeable update path for the Store installation.
+Use this only when Microsoft Store installation is unavailable. GitHub packages have a separate package identity and use the repository's self-signed certificate. They are not an update for a Store installation.
 
-### Web Setup
+1. Download `AudioPlaybackConnector2.cer` from the [latest GitHub release](https://github.com/N0ahTM/AudioPlaybackConnector2/releases/latest).
+2. Verify that it came from this repository, then import it into the current user's **Trusted People** store:
 
-1. Open the [latest GitHub release](https://github.com/N0ahTM/AudioPlaybackConnector2/releases/latest).
-2. Download `AudioPlaybackConnector2-WebSetup.exe`.
-3. Run the setup and select **Install**.
+   ```powershell
+   Import-Certificate -FilePath ".\AudioPlaybackConnector2.cer" -CertStoreLocation "Cert:\CurrentUser\TrustedPeople"
+   ```
 
-Web Setup detects whether Windows is running on x64 or ARM64, downloads the shared x64/ARM64 MSIX bundle and only the matching Microsoft-signed framework dependencies, verifies them, trusts the application certificate, installs the app, and launches it. Setup first uses the current user's `TrustedPeople` store. If Windows rejects that trust with `0x800B0109`, setup requests administrator approval for the certificate-only import into the computer's `TrustedPeople` store and retries installation as the original user. It never installs the self-signed certificate as a root CA.
+3. Download and open the stable [AudioPlaybackConnector2.appinstaller feed](https://n0ahtm.github.io/AudioPlaybackConnector2/AudioPlaybackConnector2.appinstaller).
 
-The setup executable is not yet code-signed, so Windows SmartScreen may show an unknown-publisher warning. Only continue when the file came from this repository's release page.
+Windows App Installer selects the correct architecture, installs the exact framework packages referenced by the feed, and registers automatic update checks. If current-user trust is rejected, an administrator may import the same verified certificate into `Cert:\LocalMachine\TrustedPeople`. Never put this self-signed leaf certificate in **Trusted Root Certification Authorities**.
 
-### Offline Setup
+## 3. GitHub MSIX bundle (manual updates)
 
-Use `AudioPlaybackConnector2-Setup-<version>.exe` when the target computer has no internet connection. It contains the application package, certificate, and framework dependencies. Installation is otherwise identical to Web Setup.
+The release contains `AudioPlaybackConnector2_<version>_x64_ARM64.msixbundle`, the matching certificate, and architecture-specific packages below `Dependencies`.
 
-Both setup variants can update or repair an installation. Their uninstall option removes the package and trusted certificate but keeps user settings in `%LOCALAPPDATA%`.
+1. Import the certificate into **Trusted People** as described above.
+2. Install the matching x64 or ARM64 dependency packages from the same release.
+3. Open the `.msixbundle`.
 
-Both setup variants register the raw MSIX with `Add-AppxPackage`; they do not use the `.appinstaller` during initial installation. The app performs its own GitHub release check and opens the `.appinstaller` when an update is available. Installing through that handoff registers the Windows App Installer update feed.
+This path works offline after all files have been downloaded, but it does not register the App Installer feed. Install future versions manually. Do not substitute generic or differently versioned framework downloads for the packages referenced by the release.
 
-### App Installer and MSIX
+## 4. Build from source
 
-The release also includes the App Installer feed, the x64/ARM64 `.msixbundle`, `.cer`, and architecture-specific dependency packages for existing installations and advanced use.
-
-For a fresh manual installation, download `AudioPlaybackConnector2.cer` from the same release and import it into the local computer's **Trusted People** store from an administrator PowerShell before opening the App Installer feed:
-
-```powershell
-Import-Certificate -FilePath ".\AudioPlaybackConnector2.cer" -CertStoreLocation "Cert:\LocalMachine\TrustedPeople"
-$installer = Join-Path $env:TEMP "AudioPlaybackConnector2.appinstaller"
-Invoke-WebRequest -Uri "https://n0ahtm.github.io/AudioPlaybackConnector2/AudioPlaybackConnector2.appinstaller" -OutFile $installer
-Start-Process $installer
-```
-
-If the matching certificate is already trusted, the import step can be skipped. Do not import this self-signed leaf certificate into **Trusted Root Certification Authorities**. Installing the raw `.msixbundle` is a fallback. Missing framework dependencies must then be installed manually, and a direct bundle installation does not register the App Installer update feed.
-
-## Build from Source
-
-Source builds are intended for contributors. See [Contributing](../CONTRIBUTING.md) for prerequisites, build commands, certificates, and checks.
+Clone the repository when you want to inspect, change, or contribute to the app. [CONTRIBUTING.md](../CONTRIBUTING.md) lists the Visual Studio components, restore, build, test, packaging, and signing commands.
 
 For installation errors, see [Troubleshooting](TROUBLESHOOTING.md).

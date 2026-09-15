@@ -1,26 +1,24 @@
 # Troubleshooting
 
-## SmartScreen warns about the setup executable
-
-The setup `.exe` is not yet code-signed. Download it only from the [official release page](https://github.com/N0ahTM/AudioPlaybackConnector2/releases/latest), verify the filename, and use **More info > Run anyway** if you trust the download. The MSIX inside the setup is signed separately.
-
-## Setup fails
-
-Open `%LOCALAPPDATA%\AudioPlaybackConnector2\install.log`. Retry after closing AudioPlaybackConnector2. If Web Setup could not download the release, check the connection or use the versioned offline setup. The manual App Installer path in [Installation](INSTALLATION.md) is also available.
-
 ## Windows reports an untrusted publisher
 
-The releases currently use a self-signed certificate. Web Setup and offline Setup first install the pinned certificate for the current user. If Windows reports `0x800B0109`, setup requests administrator approval to import only that certificate into `Cert:\LocalMachine\TrustedPeople` and retries automatically. For a manual MSIX installation, use the same local-machine **Trusted People** store. Never import the self-signed leaf certificate into a root CA store, and do not trust a certificate obtained from another website.
+GitHub releases use a self-signed certificate. Download `AudioPlaybackConnector2.cer` only from the [official release page](https://github.com/N0ahTM/AudioPlaybackConnector2/releases/latest) and import it into `Cert:\CurrentUser\TrustedPeople`. If Windows rejects current-user trust with `0x800B0109`, an administrator may import the same verified certificate into `Cert:\LocalMachine\TrustedPeople`.
+
+Never import the certificate into **Trusted Root Certification Authorities**, and never trust a copy obtained from another website. The Microsoft Store package does not need this step because Microsoft signs it after certification.
 
 ## A framework package is missing
 
-This usually occurs after installing the raw `.msix`. Prefer Web Setup, offline Setup, or the `.appinstaller`, which also install the required VCLibs and Windows App SDK packages.
+Prefer the Microsoft Store or the `.appinstaller`; both resolve the applicable framework packages. A direct `.msixbundle` installation requires the matching x64 or ARM64 packages from the same GitHub release's `Dependencies` assets.
 
-If Windows mentions `MicrosoftCorporationII.WinAppRuntime.Main.2` or `MicrosoftCorporationII.WinAppRuntime.Singleton`, install the current [Windows App SDK runtime](https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads) and retry.
+If Windows mentions `MicrosoftCorporationII.WinAppRuntime.Main.2` or `MicrosoftCorporationII.WinAppRuntime.Singleton`, the official [Windows App SDK downloads](https://learn.microsoft.com/windows/apps/windows-app-sdk/downloads) can repair the runtime. The release's pinned dependency packages remain the reproducible choice for manual installation.
 
 ## The `ms-appinstaller:` protocol is disabled
 
-Public Windows installations may block web links using this protocol. Download the `.appinstaller` file locally and open it instead; the command is documented in [Installation](INSTALLATION.md). No policy change is required.
+No policy change is required. Download the [`.appinstaller` file](https://n0ahtm.github.io/AudioPlaybackConnector2/AudioPlaybackConnector2.appinstaller) and open it locally.
+
+## A direct MSIX installation does not update automatically
+
+Opening the raw `.msixbundle` does not associate the installation with the App Installer feed. Open the `.appinstaller` for future automatic updates, or install each new `.msixbundle` manually. Microsoft Store installations continue to update through the Store.
 
 ## The app or a Bluetooth connection fails
 
@@ -45,7 +43,6 @@ The connected indicator reports connection state; it does not measure audible pl
 
 ## A2DP Sink audio always plays through the default output device
 
-Windows may ignore the per-app output device selected in **Settings > System > Sound > Volume mixer** for an
-`A2DP Sink` entry. In that case the Bluetooth source audio keeps playing through the current default playback device.
+Windows may ignore the per-app output device selected in **Settings > System > Sound > Volume mixer** for an `A2DP Sink` entry. In that case the Bluetooth source audio keeps playing through the current default playback device.
 
 `AudioPlaybackConnection` does not expose a supported output-device selector. Windows may therefore ignore a per-app output selected for an A2DP Sink. AudioPlaybackConnector2 does not recommend registry modifications to change this unsupported Windows behavior.

@@ -74,7 +74,7 @@ if (-not $ArtifactDirectory) {
     return
 }
 
-$publishableExtensions = @('.appx', '.msix', '.msixbundle', '.appinstaller', '.exe', '.cer')
+$publishableExtensions = @('.appx', '.msix', '.msixbundle', '.appinstaller', '.cer')
 $artifactFiles = @(Get-ChildItem -LiteralPath $ArtifactDirectory -Recurse -File |
     Where-Object { $publishableExtensions -contains $_.Extension.ToLowerInvariant() })
 if ($artifactFiles.Count -eq 0) {
@@ -103,11 +103,8 @@ if ($unexpectedNames.Count -gt 0) {
     throw "GitHub Release contains files that are not in the immutable build artifact: $($unexpectedNames -join ', ')."
 }
 
-$semanticVersion = $Tag.TrimStart('v')
 $requiredNames = @(
     "AudioPlaybackConnector2_${PackageVersion}_x64_ARM64.msixbundle",
-    'AudioPlaybackConnector2-WebSetup.exe',
-    "AudioPlaybackConnector2-Setup-${semanticVersion}.exe",
     'AudioPlaybackConnector2.appinstaller',
     'AudioPlaybackConnector2.cer'
 )

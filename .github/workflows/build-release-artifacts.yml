@@ -29,10 +29,6 @@ on:
         value: ${{ jobs.build.outputs.artifact_name }}
       bundle_name:
         value: ${{ jobs.build.outputs.bundle_name }}
-      web_setup_name:
-        value: ${{ jobs.build.outputs.web_setup_name }}
-      offline_setup_name:
-        value: ${{ jobs.build.outputs.offline_setup_name }}
       dependency_names:
         value: ${{ jobs.build.outputs.dependency_names }}
       store_upload_name:
@@ -50,8 +46,6 @@ jobs:
     outputs:
       artifact_name: ${{ steps.artifacts.outputs.ARTIFACT_NAME }}
       bundle_name: ${{ steps.artifacts.outputs.BUNDLE_NAME }}
-      web_setup_name: ${{ steps.artifacts.outputs.WEB_SETUP_NAME }}
-      offline_setup_name: ${{ steps.artifacts.outputs.OFFLINE_SETUP_NAME }}
       dependency_names: ${{ steps.artifacts.outputs.DEPENDENCY_NAMES }}
       store_upload_name: ${{ steps.store-upload.outputs.NAME }}
 
@@ -251,9 +245,6 @@ jobs:
         $outputPath = Join-Path $env:RUNNER_TEMP 'RELEASE_NOTES.md'
         ./scripts/release/extract-changelog.ps1 -Version '${{ inputs.tag }}' -OutputPath $outputPath
 
-    - name: Install Inno Setup
-      run: choco install innosetup --version=6.7.1 -y --no-progress
-
     - name: Assemble release artifacts
       id: artifacts
       shell: pwsh
@@ -290,28 +281,6 @@ jobs:
         }
         ./scripts/release/generate-appinstaller.ps1 @feedParams
 
-        $installerOutput = Join-Path $env:RUNNER_TEMP 'installers'
-        $installerParams = @{
-          Mode = 'Bundle'
-          MsixPath = $bundlePath
-          CertPath = 'certs/AudioPlaybackConnector2.cer'
-          Version = '${{ inputs.semver }}'
-          OutputDir = $installerOutput
-        }
-        if (Test-Path -LiteralPath $dependencies) {
-          $installerParams.DependenciesDir = $dependencies
-        }
-        ./installer/build-installer.ps1 @installerParams
-        ./installer/build-installer.ps1 `
-          -Mode Web `
-          -CertPath 'certs/AudioPlaybackConnector2.cer' `
-          -Version '${{ inputs.semver }}' `
-          -OutputDir $installerOutput
-
-        $offlineSetupName = 'AudioPlaybackConnector2-Setup-${{ inputs.semver }}.exe'
-        $webSetupName = 'AudioPlaybackConnector2-WebSetup.exe'
-        Copy-Item -LiteralPath (Join-Path $installerOutput $offlineSetupName) -Destination $stage
-        Copy-Item -LiteralPath (Join-Path $installerOutput $webSetupName) -Destination $stage
         Copy-Item -LiteralPath 'certs/AudioPlaybackConnector2.cer' -Destination $stage
 
         Copy-Item -LiteralPath '${{ steps.changelog.outputs.PATH }}' -Destination $stage
@@ -323,8 +292,6 @@ jobs:
         $artifactName = 'AudioPlaybackConnector2-release-${{ inputs.package_version }}'
         "ARTIFACT_NAME=$artifactName" >> $env:GITHUB_OUTPUT
         "BUNDLE_NAME=$bundleName" >> $env:GITHUB_OUTPUT
-        "WEB_SETUP_NAME=$webSetupName" >> $env:GITHUB_OUTPUT
-        "OFFLINE_SETUP_NAME=$offlineSetupName" >> $env:GITHUB_OUTPUT
         "DEPENDENCY_NAMES=$($dependencyNames -join ',')" >> $env:GITHUB_OUTPUT
         "DIR=$stage" >> $env:GITHUB_OUTPUT
 

@@ -6,7 +6,7 @@
 [![C++](https://img.shields.io/badge/C%2B%2B-23-00599C?logo=c%2B%2B)](https://en.cppreference.com/)
 
 <a href="https://get.microsoft.com/installer/download/9n366pgkjz0k?referrer=appbadge" target="_self">
-  <img src="https://get.microsoft.com/images/de%20light.svg" width="200" alt="Aus dem Microsoft Store installieren">
+  <img src="https://get.microsoft.com/images/en-us%20dark.svg" width="200" alt="Download from the Microsoft Store">
 </a>
 
 AudioPlaybackConnector2 is a small Windows tray app that lets you play audio from a paired Bluetooth source, such as a phone, through your PC. It uses the Windows [AudioPlaybackConnection API](https://learn.microsoft.com/windows/apps/develop/media-playback/enable-remote-audio-playback) to manage A2DP sink connections from the tray.
@@ -87,7 +87,7 @@ Add `--json` for machine-readable output. Add `--raw` when you explicitly need r
 
 The Microsoft Store is the recommended installation path. It provides Microsoft-signed packages and automatic updates for x64 and ARM64 devices.
 
-GitHub release packages remain available for development, testing, and environments where Store installation is unavailable. Those packages use a separate self-signed identity and may require manual certificate and framework installation.
+GitHub releases provide an advanced `.appinstaller` path with automatic updates, a manual x64/ARM64 `.msixbundle` fallback, and the source code. These packages use a separate self-signed identity. Follow the [installation guide](docs/INSTALLATION.md) to trust the certificate under **Trusted People** and install the exact framework dependencies. The old Inno Setup executables are no longer produced.
 
 ## Documentation
 

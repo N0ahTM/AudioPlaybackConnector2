@@ -108,15 +108,15 @@ jobs:
 
         ## Installation
 
-        **Recommended:** Download and run `AudioPlaybackConnector2-WebSetup.exe`.
+        **Recommended:** Install [AudioPlaybackConnector2 from the Microsoft Store](https://apps.microsoft.com/detail/9n366pgkjz0k) for a Microsoft-signed package and automatic updates.
 
-        For offline installation on x64 or ARM64, use the versioned `AudioPlaybackConnector2-Setup-${{ needs.version.outputs.semver }}.exe`.
+        If the Store is unavailable, download `AudioPlaybackConnector2.cer`, trust it under **Trusted People**, and open `AudioPlaybackConnector2.appinstaller`. Windows App Installer selects x64 or ARM64 and follows this release channel for updates.
 
-        Both installers register the app per-user. On systems that reject user-store certificate trust, setup requests administrator approval only for importing the pinned certificate into the computer's Trusted People store. Windows SmartScreen may warn because the setup executables are not yet code-signed.
+        `AudioPlaybackConnector2_${{ needs.version.outputs.package_version }}_x64_ARM64.msixbundle` is the manual fallback. Install the matching framework packages from `Dependencies` first. Direct bundle installation does not register automatic updates.
 
-        For App Installer, direct MSIX bundle installation, certificates, and dependency packages, see the [installation guide](https://github.com/N0ahTM/AudioPlaybackConnector2/blob/${{ needs.version.outputs.tag }}/docs/INSTALLATION.md).
+        You can also clone this tag and build the app yourself. See the [installation guide](https://github.com/N0ahTM/AudioPlaybackConnector2/blob/${{ needs.version.outputs.tag }}/docs/INSTALLATION.md) for all four paths.
 
-        > The MSIX bundle is signed with a self-signed certificate. The setup executables are not yet code-signed.
+        > GitHub packages use a self-signed identity that is separate from the Microsoft Store package. Never import the certificate into Trusted Root Certification Authorities.
         '@
         [IO.File]::WriteAllText('release-body.md', ($changelog + "`n" + $footer).Trim())
 
@@ -131,7 +131,6 @@ jobs:
         files: |
           release-artifacts/*.msixbundle
           release-artifacts/*.appinstaller
-          release-artifacts/*.exe
           release-artifacts/*.cer
           release-artifacts/Dependencies/**/*.appx
           release-artifacts/Dependencies/**/*.msix
@@ -395,8 +394,6 @@ jobs:
         }
         $required = @(
           'AudioPlaybackConnector2_${{ needs.version.outputs.package_version }}_x64_ARM64.msixbundle',
-          'AudioPlaybackConnector2-WebSetup.exe',
-          'AudioPlaybackConnector2-Setup-${{ needs.version.outputs.semver }}.exe',
           'AudioPlaybackConnector2.appinstaller',
           'AudioPlaybackConnector2.cer'
         )

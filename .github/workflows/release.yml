@@ -530,7 +530,6 @@ jobs:
       run: |
         ./store-automation/scripts/release/publish-microsoft-store.ps1 `
           -ProductId 9N366PGKJZ0K `
-          -ProjectPath './AudioPlaybackConnector2 (Package)' `
           -PackagePath '${{ steps.store-package.outputs.PATH }}' `
           -Version '${{ needs.version.outputs.semver }}' `
           -WhatsNewPath './store-automation/store/whats-new.json'

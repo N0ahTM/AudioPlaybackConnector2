@@ -333,13 +333,18 @@ jobs:
           -ExpectedPublisher 'CN=3784F101-6355-463B-A35E-41BD0A95071B' `
           -ExpectedProcessorArchitectures x64,arm64
 
-        Copy-Item -LiteralPath $uploads[0].FullName -Destination "$env:RUNNER_TEMP/verified-store-upload.msixupload"
+        # Preserve the versioned package name. Partner Center can leave the
+        # Version field empty while processing a new upload, so the filename is
+        # the second independent signal used before certification is committed.
+        $stagedUpload = Join-Path $env:RUNNER_TEMP $uploads[0].Name
+        Copy-Item -LiteralPath $uploads[0].FullName -Destination $stagedUpload
+        "PATH=$stagedUpload" >> $env:GITHUB_OUTPUT
 
     - name: Upload verified Store package
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: AudioPlaybackConnector2-store-${{ needs.version.outputs.package_version }}
-        path: ${{ runner.temp }}/verified-store-upload.msixupload
+        path: ${{ steps.store-upload.outputs.PATH }}
         if-no-files-found: error
         retention-days: 30
 

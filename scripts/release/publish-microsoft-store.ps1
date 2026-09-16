@@ -95,6 +95,28 @@ if ($null -eq $uploadedPackage) {
     throw "Partner Center did not expose uploaded package version $expectedPackageVersion. Visible packages: $($visiblePackages -join ', '). The submission was not updated or committed."
 }
 
+# A new bundle supersedes the previous bundle for the same Desktop audience.
+# Partner Center's web UI marks the lower version for removal automatically,
+# but that choice is not persisted until the package module is saved. Express
+# the same state explicitly in the submission JSON so unattended releases do
+# not remain as an incomplete draft.
+$uploadedFileName = [string]$uploadedPackage['FileName']
+foreach ($package in @($submission['ApplicationPackages'])) {
+    if ($null -eq $package -or [string]$package['FileName'] -eq $uploadedFileName) {
+        continue
+    }
+
+    $existingVersionText = [string]$package['Version']
+    if (-not [string]::IsNullOrWhiteSpace($existingVersionText)) {
+        $existingVersion = [version]$existingVersionText
+        if ($existingVersion -ge [version]$expectedPackageVersion) {
+            throw "Unexpected package $([string]$package['FileName']) has version $existingVersionText, which is not older than $expectedPackageVersion."
+        }
+    }
+
+    $package['FileStatus'] = 'PendingDelete'
+}
+
 $listings = $submission['Listings']
 if ($null -eq $listings -or $listings.Count -eq 0) {
     throw 'Microsoft Store returned no listings to update.'
@@ -125,6 +147,28 @@ $submission | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $submissionPa
 $null = & msstore submission update $ProductId $submissionPath
 if ($LASTEXITCODE -ne 0) {
     throw "Microsoft Store release-note update failed with exit code $LASTEXITCODE."
+}
+
+& msstore submission get $ProductId | Out-File -LiteralPath $submissionPath -Encoding utf8
+if ($LASTEXITCODE -ne 0) {
+    throw "Microsoft Store post-update verification failed with exit code $LASTEXITCODE."
+}
+$savedSubmission = Get-Content -LiteralPath $submissionPath -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable
+$savedPackages = @($savedSubmission['ApplicationPackages'])
+$savedUpload = $savedPackages | Where-Object {
+    [string]$_['FileName'] -eq $uploadedFileName -and
+        ([string]$_['Version'] -eq $expectedPackageVersion -or
+            [string]$_['FileName'] -match "_$([regex]::Escape($expectedPackageVersion))_")
+} | Select-Object -First 1
+$unsavedReplacements = @($savedPackages | Where-Object {
+    [string]$_['FileName'] -ne $uploadedFileName -and
+        [string]$_['FileStatus'] -ne 'PendingDelete'
+})
+if ($null -eq $savedUpload -or $unsavedReplacements.Count -gt 0) {
+    $packageStates = $savedPackages | ForEach-Object {
+        "{0} (version {1}, status {2})" -f [string]$_['FileName'], [string]$_['Version'], [string]$_['FileStatus']
+    }
+    throw "Partner Center did not save the complete package replacement. Packages: $($packageStates -join ', '). The submission was not committed."
 }
 
 & msstore submission publish $ProductId

@@ -149,21 +149,33 @@ if ($LASTEXITCODE -ne 0) {
     throw "Microsoft Store release-note update failed with exit code $LASTEXITCODE."
 }
 
-& msstore submission get $ProductId | Out-File -LiteralPath $submissionPath -Encoding utf8
-if ($LASTEXITCODE -ne 0) {
-    throw "Microsoft Store post-update verification failed with exit code $LASTEXITCODE."
+$savedPackages = @()
+$savedUpload = $null
+$unsavedReplacements = @()
+for ($attempt = 1; $attempt -le 30; $attempt++) {
+    & msstore submission get $ProductId | Out-File -LiteralPath $submissionPath -Encoding utf8
+    if ($LASTEXITCODE -ne 0) {
+        throw "Microsoft Store post-update verification failed with exit code $LASTEXITCODE."
+    }
+    $savedSubmission = Get-Content -LiteralPath $submissionPath -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable
+    $savedPackages = @($savedSubmission['ApplicationPackages'])
+    $savedUpload = $savedPackages | Where-Object {
+        [string]$_['FileName'] -eq $uploadedFileName -and
+            ([string]$_['Version'] -eq $expectedPackageVersion -or
+                [string]$_['FileName'] -match "_$([regex]::Escape($expectedPackageVersion))_")
+    } | Select-Object -First 1
+    $unsavedReplacements = @($savedPackages | Where-Object {
+        [string]$_['FileName'] -ne $uploadedFileName -and
+            [string]$_['FileStatus'] -ne 'PendingDelete'
+    })
+    if ($null -ne $savedUpload -and $unsavedReplacements.Count -eq 0) {
+        break
+    }
+    if ($attempt -lt 30) {
+        Write-Host "Waiting for Partner Center to save the package replacement (attempt $attempt of 30)..."
+        Start-Sleep -Seconds 10
+    }
 }
-$savedSubmission = Get-Content -LiteralPath $submissionPath -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable
-$savedPackages = @($savedSubmission['ApplicationPackages'])
-$savedUpload = $savedPackages | Where-Object {
-    [string]$_['FileName'] -eq $uploadedFileName -and
-        ([string]$_['Version'] -eq $expectedPackageVersion -or
-            [string]$_['FileName'] -match "_$([regex]::Escape($expectedPackageVersion))_")
-} | Select-Object -First 1
-$unsavedReplacements = @($savedPackages | Where-Object {
-    [string]$_['FileName'] -ne $uploadedFileName -and
-        [string]$_['FileStatus'] -ne 'PendingDelete'
-})
 if ($null -eq $savedUpload -or $unsavedReplacements.Count -gt 0) {
     $packageStates = $savedPackages | ForEach-Object {
         "{0} (version {1}, status {2})" -f [string]$_['FileName'], [string]$_['Version'], [string]$_['FileStatus']

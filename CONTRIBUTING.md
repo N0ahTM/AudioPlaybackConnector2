@@ -71,6 +71,10 @@ cppcheck `
   $files
 
 .\x64\Release\tests\AudioPlaybackConnector2.CoreTests.exe
+
+pwsh ./scripts/validate-localizations.ps1
+pwsh ./scripts/validate-markdown-links.ps1
+pwsh ./scripts/update-cli-reference.ps1 -Check
 ```
 
 The x64 test executable runs on standard GitHub-hosted Windows runners. CI also cross-compiles the complete ARM64 solution and ARM64 test executable; run that binary on ARM64 Windows when validating architecture-specific behavior.
@@ -88,23 +92,29 @@ Use the [bug report template](.github/ISSUE_TEMPLATE/bug_report.md). Include:
 
 ### Suggesting Features
 
-Use the [feature request template](.github/ISSUE_TEMPLATE/feature_request.md).
+Start early ideas in [GitHub Discussions](https://github.com/N0ahTM/AudioPlaybackConnector2/discussions). Use the [feature request template](.github/ISSUE_TEMPLATE/feature_request.md) when the desired behavior and scope are concrete enough to implement.
 
 ### Submitting Pull Requests
 
 1. Fork the repository and create a branch from `main`
 2. Make your changes
-3. Run the release build and relevant checks above
+3. Run the checks relevant to the files and behavior you changed
 4. Open a pull request against `main`
+
+Small documentation or single-language translation changes do not require an unrelated local x64/ARM64 package build. CI still validates the repository. See [Translating](docs/TRANSLATING.md) for language contributions and [Architecture](docs/ARCHITECTURE.md) for current boundaries.
 
 ## Code Style
 
 - **C++ standard:** C++23 (`/std:c++latest`)
 - **Warnings:** `/W4 /WX` — all warnings are errors; do not introduce new warnings
-- **Includes:** All Windows, WinRT, WIL, and GDI+ headers belong in `pch.h`, not in individual `.cpp` files
-- **Strings:** All user-visible strings must go through `_(key)` and be added to all 8 locale files in `res/strings/`
-- **Thread safety:** Anything that reads or writes `DeviceManager` state must hold the appropriate `wil::srwlock`
+- **Includes:** Every source or header file includes what it uses. `pch.h` is a build cache, not an undeclared dependency contract.
+- **Strings:** User-visible strings go through the localization resources. English is canonical; other locales may fall back to it and preserve all formatting placeholders.
+- **Ownership:** Give mutable state, asynchronous work, and cancellation one explicit owner. Do not forward unchanged global context through unrelated layers.
+- **Thread safety:** Protect shared mutable state at its owning boundary and do not expose references that outlive the lock or snapshot.
+- **Design:** Prefer C++23 and the standard library for general-purpose behavior. Add a helper or abstraction only for a real responsibility, invariant, lifetime, platform boundary, or test seam.
 - **Comments:** Only where the *why* is non-obvious — well-named identifiers do the rest
+
+Maintainer releases follow [Releasing](docs/RELEASING.md). Contributors normally add user-visible changes beneath `[Unreleased]`; release preparation creates the dated version section.
 
 ## Known Issues
 

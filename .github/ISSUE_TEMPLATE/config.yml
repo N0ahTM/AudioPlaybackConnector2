@@ -1,1 +1,8 @@
 blank_issues_enabled: false
+contact_links:
+  - name: Questions and community support
+    url: https://github.com/N0ahTM/AudioPlaybackConnector2/discussions/categories/q-a
+    about: Ask how to install, configure, automate, or troubleshoot AudioPlaybackConnector2.
+  - name: Ideas and translation coordination
+    url: https://github.com/N0ahTM/AudioPlaybackConnector2/discussions
+    about: Discuss an idea, device workflow, automation recipe, or translation before opening implementation work.

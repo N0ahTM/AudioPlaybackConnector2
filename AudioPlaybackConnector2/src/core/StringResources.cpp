@@ -57,23 +57,34 @@ void StringResources::Initialize(HINSTANCE hInst, std::wstring_view language) {
         }
     }
 
-    auto data = util::LoadResourceData(m_hInst, resId, L"JSON");
-    if (!data) {
-        data = util::LoadResourceData(m_hInst, IDR_STRINGS_EN, L"JSON");
-        if (!data) return;
-    }
+    const auto load = [this](int resourceId, bool replace) {
+        const auto data = util::LoadResourceData(m_hInst, resourceId, L"JSON");
+        if (!data) return false;
 
-    try {
-        std::string_view jsonView(reinterpret_cast<const char*>(data->data()), data->size());
-        auto json = winrt::Windows::Data::Json::JsonObject::Parse(winrt::to_hstring(jsonView));
-        for (auto pair : json) {
-            auto key = winrt::to_string(pair.Key());
-            if (pair.Value().ValueType() == winrt::Windows::Data::Json::JsonValueType::String)
-                m_map.emplace(key, std::wstring(pair.Value().GetString()));
+        try {
+            const std::string_view jsonView(reinterpret_cast<const char*>(data->data()), data->size());
+            const auto json = winrt::Windows::Data::Json::JsonObject::Parse(winrt::to_hstring(jsonView));
+            for (const auto pair : json) {
+                if (pair.Value().ValueType() != winrt::Windows::Data::Json::JsonValueType::String) continue;
+
+                auto key = winrt::to_string(pair.Key());
+                auto value = std::wstring(pair.Value().GetString());
+                if (replace)
+                    m_map.insert_or_assign(std::move(key), std::move(value));
+                else
+                    m_map.emplace(std::move(key), std::move(value));
+            }
+            return true;
+        } catch (...) {
+            DebugTrace(L"[StringResources] Initialize ERROR: failed to parse strings JSON resource {0}", resourceId);
+            return false;
         }
-    } catch (...) {
-        DebugTrace(L"[StringResources] Initialize ERROR: failed to parse strings JSON");
-    }
+    };
+
+    // English is the complete source language. A selected locale overlays it so
+    // an incomplete community translation never turns a label into an empty string.
+    if (!load(IDR_STRINGS_EN, false)) return;
+    if (resId != IDR_STRINGS_EN) load(resId, true);
 }
 
 std::wstring StringResources::Get(std::string_view key) const {

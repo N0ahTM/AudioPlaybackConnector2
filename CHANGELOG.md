@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Add versioned usage, CLI, architecture, translation, release, and security documentation with automated link, CLI-help, localization, and release-metadata validation.
+
+### Changed
+- Fall back to the English source string when a selected locale does not yet contain a translated key.
+- Keep contributor guidance and pull-request checks proportional to the files and behavior changed.
+
 ## [0.9.1] - 2026-09-13
 
 ### Fixed

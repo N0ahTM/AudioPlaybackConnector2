@@ -7,6 +7,7 @@ labels: enhancement
 ## Problem / Motivation
 
 <!-- What problem does this feature solve? What is the use case? -->
+<!-- Early or open-ended ideas belong in GitHub Discussions. Use this issue when the desired behavior is concrete. -->
 
 ## Proposed Solution
 

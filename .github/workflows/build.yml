@@ -16,6 +16,13 @@ jobs:
     - name: Checkout
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+    - name: Validate documentation and localizations
+      shell: pwsh
+      run: |
+        ./scripts/validate-localizations.ps1
+        ./scripts/validate-markdown-links.ps1
+        ./scripts/update-cli-reference.ps1 -Check
+
     - name: Add MSBuild to PATH
       uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
 

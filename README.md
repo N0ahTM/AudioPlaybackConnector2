@@ -91,10 +91,18 @@ GitHub releases provide an advanced `.appinstaller` path with automatic updates,
 
 ## Documentation
 
+- [Usage](docs/USAGE.md)
+- [Command-line reference](docs/CLI.md)
 - [Installation](docs/INSTALLATION.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Translating](docs/TRANSLATING.md)
 - [Contributing](CONTRIBUTING.md)
+- [Releasing](docs/RELEASING.md)
+- [Security policy](SECURITY.md)
 - [Changelog](CHANGELOG.md)
+
+Use [GitHub Discussions](https://github.com/N0ahTM/AudioPlaybackConnector2/discussions) for questions, ideas, translation coordination, and automation recipes. Use [GitHub Issues](https://github.com/N0ahTM/AudioPlaybackConnector2/issues) for reproducible defects and accepted work.
 
 ## Privacy and Crash Reports
 
@@ -106,6 +114,8 @@ GitHub releases provide an advanced `.appinstaller` path with automatic updates,
 - Minidumps may contain sensitive memory; review them before attaching them to an issue.
 
 ## Supported Languages
+
+Translation improvements are welcome; see the [translation guide](docs/TRANSLATING.md).
 
 - English
 - German

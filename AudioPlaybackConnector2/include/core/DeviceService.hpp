@@ -1,7 +1,6 @@
 #pragma once
 
 #include <core/DevicePickerTypes.hpp>
-#include <core/DeviceTrayPresentation.hpp>
 #include <core/DeviceSession.hpp>
 #include <core/DeviceWatcher.hpp>
 
@@ -143,7 +142,6 @@ public:
     [[nodiscard]] bool HasConnections() const;
     [[nodiscard]] bool HasBusyOperations() const;
     [[nodiscard]] bool IsDeviceBusy(std::wstring_view deviceId) const;
-    [[nodiscard]] DeviceTrayPresentationSnapshot GetTrayPresentationSnapshot() const;
 
 private:
     /*------------------------------------------------------------------------------------------------------------*/

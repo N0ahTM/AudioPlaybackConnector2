@@ -10,6 +10,7 @@
 #include <core/SettingsStore.hpp>
 #include <core/StringResources.hpp>
 #include <core/ThemeHelper.hpp>
+#include <core/TrayTooltipBuilder.hpp>
 #include <ui/TrayContextMenu.hpp>
 #include <ui/TrayIcon.hpp>
 #include <ui/XamlWindowInterop.hpp>
@@ -708,9 +709,14 @@ void ApplicationHost::EvaluateAdaptiveResources(bool userInteraction, std::wstri
         auto const pressureValues = snapshotFresh ? m_resourcePressureValues : ResourcePressureValues{};
         const bool energySaver = pressureValues.EnergySaver == true;
         const bool backgroundConstrained = pressureValues.IsBackgroundConstrained();
-        std::unique_lock authorizationLock(m_resourceAuthorizationMutex);
-        const bool positiveAuthorizationCurrent = IsPositiveResourceAuthorizationCurrent(
-            m_lastResourcePressureSequence, m_latestConstrainedResourcePressureSequence);
+        bool positiveAuthorizationCurrent;
+        {
+            std::scoped_lock authorizationLock(m_resourceAuthorizationMutex);
+            positiveAuthorizationCurrent = IsPositiveResourceAuthorizationCurrent(
+                m_lastResourcePressureSequence, m_latestConstrainedResourcePressureSequence);
+        }
+        // This capture admits the evaluation. Later pressure observations schedule
+        // another UI evaluation; never hold the fence mutex across picker calls.
         AdaptiveResourcePolicyInput input{
             .MemoryPressure = pressureValues.IsMemoryPressure(),
             .PreloadAllowed = snapshotFresh && positiveAuthorizationCurrent && pressureValues.CanPreload(),
@@ -759,7 +765,7 @@ void ApplicationHost::EvaluateAdaptiveResources(bool userInteraction, std::wstri
         } else {
             m_adaptiveActionRetryBackoff.Reset();
         }
-        m_adaptiveResourceDiagnostics = {
+        AdaptiveResourceDiagnostics diagnostics = {
             .Evaluated = true,
             .Residency = decision.Residency,
             .BackgroundResidency = decision.BackgroundResidency,
@@ -770,7 +776,13 @@ void ApplicationHost::EvaluateAdaptiveResources(bool userInteraction, std::wstri
             .UiResourcesLoaded = m_trayController->IsDevicePickerLoaded(),
             .UiResourcesInitialized = m_trayController->IsDevicePickerPreloadInitialized(),
         };
-        authorizationLock.unlock();
+        {
+            std::scoped_lock authorizationLock(m_resourceAuthorizationMutex);
+            diagnostics.PositiveAuthorizationCurrent = IsPositiveResourceAuthorizationCurrent(
+                m_lastResourcePressureSequence, m_latestConstrainedResourcePressureSequence);
+            diagnostics.PreloadAllowed = input.PreloadAllowed && diagnostics.PositiveAuthorizationCurrent;
+            m_adaptiveResourceDiagnostics = diagnostics;
+        }
         ScheduleAdaptiveResourceEvaluation(reevaluateAt);
     } catch (...) {
         OutputDebugStringW(L"[AudioPlaybackConnector2] Adaptive resource evaluation failed\n");
@@ -1070,13 +1082,13 @@ ApplicationHost::ControlUiActionResult ApplicationHost::RunControlUiAction(std::
 }
 
 bool ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstring_view reason) {
-    if (m_exiting.load() || !m_trayController || !m_deviceService) {
+    if (m_exiting.load() || !m_trayController || !m_appController) {
         DebugTrace(L"[App] RefreshTrayVisualState skipped reason={0} exiting={1} hasTrayController={2} "
-                   L"hasDeviceService={3}",
+                   L"hasAppController={3}",
                    reason,
                    m_exiting.load(),
                    m_trayController != nullptr,
-                   m_deviceService != nullptr);
+                   m_appController != nullptr);
         return true;
     }
     if (!m_hwnd || !IsWindow(m_hwnd)) {
@@ -1086,13 +1098,15 @@ bool ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstri
         return true;
     }
 
-    auto const presentation = m_deviceService->GetTrayPresentationSnapshot();
-    const bool hasBusyOperations = presentation.HasBusyOperations;
-    const bool hasConnections = !presentation.ConnectedDevices.empty();
     const auto now = std::chrono::steady_clock::now();
     if (forceErrorWhenIdle) {
         m_trayErrorUntil = now + std::chrono::milliseconds(c_transientTrayErrorMs);
     }
+    auto const snapshot = m_appController->Snapshot();
+    if (!snapshot.IsRunning) return false;
+    auto const& presentation = snapshot.Tray;
+    const bool hasBusyOperations = presentation.HasBusyOperations;
+    const bool hasConnections = !presentation.ConnectedDevices.empty();
     if (hasConnections) {
         m_trayErrorUntil = {};
         m_transientTrayErrorTooltip.clear();
@@ -1145,7 +1159,7 @@ bool ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstri
     if (showTransientError && !m_transientTrayErrorTooltip.empty()) {
         m_trayController->UpdateTooltip(m_transientTrayErrorTooltip);
     } else {
-        m_trayController->UpdateTooltipFromConnections(presentation.ConnectedDevices);
+        m_trayController->UpdateTooltip(apc::tray::BuildTooltip(_("AppName"), _("Privacy_RedactedDevice"), snapshot));
     }
     m_trayController->SetState(desiredState);
     auto const pickerUpdated = m_trayController->RefreshDevicePickerState();

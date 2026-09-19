@@ -1,6 +1,5 @@
 #include <pch.h>
 #include <services/TrayController.hpp>
-#include <core/TrayTooltipBuilder.hpp>
 #include <core/StringResources.hpp>
 #include <core/ThemeHelper.hpp>
 #include <ui/FlyoutPresenterStyle.hpp>
@@ -397,22 +396,6 @@ void TrayController::UpdateTooltip(std::wstring_view text) {
     if (m_trayIcon) {
         m_trayIcon->SetTooltip(text);
     }
-}
-
-void TrayController::UpdateTooltipFromConnections(std::vector<DeviceTrayPresentationItem> const& connected) {
-    if (!m_trayIcon) return;
-    auto const appName = std::wstring(_("AppName"));
-    auto const redactedDeviceName = std::wstring(_("Privacy_RedactedDevice"));
-    auto controller = m_appController.lock();
-    if (!controller) {
-        m_trayIcon->SetTooltip(apc::tray::BuildTooltip(appName, redactedDeviceName, connected, {}, false));
-        return;
-    }
-
-    const auto snapshot = controller->Snapshot();
-    const auto tooltip = apc::tray::BuildTooltip(
-        appName, redactedDeviceName, connected, snapshot.Settings.Devices, snapshot.Settings.PrivacyModeEnabled);
-    m_trayIcon->SetTooltip(tooltip);
 }
 
 bool TrayController::RefreshDevicePickerState() noexcept {

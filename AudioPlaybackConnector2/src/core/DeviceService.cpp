@@ -893,17 +893,4 @@ bool DeviceService::IsDeviceBusy(std::wstring_view deviceId) const {
            iter->State == DeviceLifecycleState::WaitingForReconnect;
 }
 
-DeviceTrayPresentationSnapshot DeviceService::GetTrayPresentationSnapshot() const {
-    DeviceTrayPresentationSnapshot result;
-    auto const snapshot = Snapshot();
-    for (auto const& session : snapshot.Sessions) {
-        result.HasBusyOperations = result.HasBusyOperations || session.State == DeviceLifecycleState::Connecting ||
-                                   session.State == DeviceLifecycleState::Disconnecting ||
-                                   session.State == DeviceLifecycleState::WaitingForReconnect;
-        if (session.State == DeviceLifecycleState::Connected)
-            result.ConnectedDevices.push_back({.Id = session.DeviceId, .Name = session.DeviceName});
-    }
-    return result;
-}
-
 } // namespace apc::device

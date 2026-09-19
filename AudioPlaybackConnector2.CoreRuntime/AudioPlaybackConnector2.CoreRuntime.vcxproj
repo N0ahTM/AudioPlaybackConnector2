@@ -96,7 +96,6 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\ui\DevicePickerViewState.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceService.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceSession.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceTrayPresentation.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceWatcher.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\ReconnectPolicy.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsStore.hpp" />

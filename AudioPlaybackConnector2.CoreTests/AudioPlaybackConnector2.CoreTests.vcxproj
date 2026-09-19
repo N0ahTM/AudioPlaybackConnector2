@@ -135,7 +135,6 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DevicePickerTypes.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsLimits.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsStore.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceTrayPresentation.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\TrayTooltipBuilder.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResourcePressureMonitor.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResourcePressureState.hpp" />

@@ -8,7 +8,9 @@ application as free of concurrency defects; owners outside the table below still
 Application snapshots obtain connection state and busy flags from the DeviceService session snapshot.
 Presentation facts advance publication and describe events; they do not maintain a second runtime device map.
 A delayed failed, connected or retry event cannot overwrite a newer session state, recreate a removed session,
-or keep a terminal session busy. Tray busy state is derived from the same session records as the device rows.
+or keep a terminal session busy. Tray busy state, connected labels and privacy come from one captured application snapshot. The tooltip
+uses its prepared display names, in the same order as the device list; it performs no additional owner read.
+An unavailable capture leaves the displayed tray state intact and uses the existing refresh retry.
 Command admission may independently consult the current busy state; that read does not alter the snapshot.
 
 After an awaited inventory refresh, session state is read again before merging discovery and saved labels.
@@ -309,3 +311,15 @@ concurrent diagnostic lines. The runner executes suites sequentially; a seed cha
 `scripts/test/run-concurrency-stress.ps1` preserves the seed and output, applies a per-run deadline and an overall
 watchdog, and fails on either a nonzero process result or an expired deadline. This is additional evidence beside
 the deterministic race scenarios, not exhaustive interleaving coverage.
+
+## UI resource evaluation and snapshot reentrancy
+
+The host's resource-authorization mutex protects the constrained-pressure sequence and published diagnostics.
+Evaluation captures the current authorization in a short critical section, then releases it before logging,
+querying tray state, preloading/releasing the picker or scheduling UI work. The capture admits that evaluation;
+a pressure observation arriving afterward queues another UI evaluation. Published diagnostics recheck the fence
+under the mutex, so a superseded evaluation cannot restore positive authorization.
+
+This matters because picker preload reads `AppController::Snapshot`, which calls back into the host's
+`ResourceStatus` and acquires the same mutex. Holding it across preload would wait on the same thread.
+The UI call graph and lock scopes have been inspected; headless tests do not instantiate this WinUI path.

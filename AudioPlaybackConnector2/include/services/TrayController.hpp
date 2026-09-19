@@ -1,7 +1,6 @@
 #pragma once
 
 #include <app/AppController.hpp>
-#include <core/DeviceTrayPresentation.hpp>
 #include <ui/TrayIcon.hpp>
 #include <ui/TrayContextMenu.hpp>
 #include <DevicePickerView/DevicePickerView.xaml.h>
@@ -65,7 +64,6 @@ public:
     void ShowTrayMenu();
     [[nodiscard]] bool ShowDevicePicker(bool toggleIfOpen = true) noexcept;
     void UpdateTooltip(std::wstring_view text);
-    void UpdateTooltipFromConnections(std::vector<DeviceTrayPresentationItem> const& connected);
     [[nodiscard]] bool RefreshDevicePickerState() noexcept;
     [[nodiscard]] bool InvalidateDevicePickerInventory() noexcept;
     void OnThemeChanged();

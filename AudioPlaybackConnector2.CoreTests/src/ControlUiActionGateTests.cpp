@@ -1,6 +1,6 @@
 #include "TestCheck.hpp"
 
-#include <app/ControlUiActionGate.hpp>
+#include <control/ControlUiActionGate.hpp>
 #include <app/AppModels.hpp>
 
 #include <atomic>
@@ -12,6 +12,7 @@
 #include <thread>
 
 namespace {
+using apc::control::ControlUiActionGate;
 
 void CheckCommand(bool condition, std::string_view command, std::string_view message) {
     if (condition) return;

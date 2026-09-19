@@ -2,6 +2,10 @@
 
 #include <atomic>
 
+namespace apc::control {
+
+// One UI action races external cancellation or deadline expiry. Only the
+// successful Pending-to-Running claimant may execute and publish completion.
 class ControlUiActionGate {
 public:
     enum class Phase { Pending, Running, Cancelled, Completed };
@@ -35,3 +39,5 @@ private:
     std::atomic<Phase> m_phase = Phase::Pending;
     std::atomic<bool> m_succeeded = false;
 };
+
+} // namespace apc::control

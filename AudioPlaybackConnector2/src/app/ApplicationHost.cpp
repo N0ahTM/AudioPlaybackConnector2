@@ -34,11 +34,11 @@ constexpr auto c_mainWindowLoadedTimeout = std::chrono::seconds{15};
 
 using OperationStatus = apc::app::AppActionStatus;
 
-OperationStatus ToUiActionStatus(ControlUiActionGate::Result result) noexcept {
+OperationStatus ToUiActionStatus(apc::control::ControlUiActionGate::Result result) noexcept {
     switch (result) {
-        case ControlUiActionGate::Result::Succeeded: return OperationStatus::Succeeded;
-        case ControlUiActionGate::Result::Failed: return OperationStatus::Failed;
-        case ControlUiActionGate::Result::Indeterminate: return OperationStatus::Indeterminate;
+        case apc::control::ControlUiActionGate::Result::Succeeded: return OperationStatus::Succeeded;
+        case apc::control::ControlUiActionGate::Result::Failed: return OperationStatus::Failed;
+        case apc::control::ControlUiActionGate::Result::Indeterminate: return OperationStatus::Indeterminate;
     }
     return OperationStatus::Failed;
 }
@@ -1002,7 +1002,7 @@ ApplicationHost::ControlUiActionResult ApplicationHost::RunControlUiAction(std::
     struct ActionState {
         ActionState() { Completed.create(); }
         wil::unique_event Completed;
-        ControlUiActionGate Gate;
+        apc::control::ControlUiActionGate Gate;
     };
     auto state = std::make_shared<ActionState>();
     auto weak = weak_from_this();

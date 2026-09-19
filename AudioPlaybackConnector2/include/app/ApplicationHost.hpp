@@ -6,7 +6,7 @@
 #include <app/AdaptiveActionRetryBackoff.hpp>
 #include <app/AdaptiveScheduleState.hpp>
 #include <app/AppController.hpp>
-#include <app/ControlUiActionGate.hpp>
+#include <control/ControlUiActionGate.hpp>
 #include <app/PowerTransitionCoordinator.hpp>
 #include <app/ResourcePressureMonitor.hpp>
 #include <app/SettingsWindowPresenter.hpp>
@@ -60,7 +60,7 @@ public:
     void Shutdown() noexcept;
 
 private:
-    using ControlUiActionResult = ControlUiActionGate::Result;
+    using ControlUiActionResult = apc::control::ControlUiActionGate::Result;
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Setup /////////////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/

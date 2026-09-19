@@ -124,7 +124,7 @@
     <ClInclude Include="include\app\AdaptiveActionRetryBackoff.hpp" />
     <ClInclude Include="include\app\AdaptiveResourcePolicy.hpp" />
     <ClInclude Include="include\app\AdaptiveScheduleState.hpp" />
-    <ClInclude Include="include\app\ControlUiActionGate.hpp" />
+    <ClInclude Include="include\control\ControlUiActionGate.hpp" />
     <ClInclude Include="include\app\ResourcePressureMonitor.hpp" />
     <ClInclude Include="include\app\ResourcePressureState.hpp" />
 

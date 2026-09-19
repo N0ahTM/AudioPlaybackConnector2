@@ -127,7 +127,7 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveScheduleState.hpp" />
 
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\LatestStartupTaskRequestState.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\app\ControlUiActionGate.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\control\ControlUiActionGate.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandClient.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandPipeSecurity.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandProtocol.hpp" />

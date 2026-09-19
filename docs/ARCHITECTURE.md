@@ -20,13 +20,14 @@ AudioPlaybackConnector2 is a per-user Windows tray application. WinUI 3 provides
 
 ## Boundaries
 
-- UI code may translate input into application commands and render snapshots; it must not become a second owner of connection or settings state.
+- UI code calls named application methods and renders snapshots; it must not become a second owner of connection or settings state.
 - Device-picker alias and default-device actions call the explicit `AppController` methods. Tray and picker retain weak controller references; each action acquires a temporary strong reference. The host owns the controller lifetime, and these actions have no separate command-wrapper or forwarding callback.
 - Primary tray activation uses the same weak controller endpoint to request picker toggle with detached completion. It cannot wait for a picker event on its own UI dispatcher. A callback retained after controller destruction becomes a no-op.
 - Tray connection actions and notification reconnect actions call named controller methods with detached completion. `ApplicationHost` no longer constructs general commands for these actions or passes them through a general tray command dispatcher; it retains the UI scheduling and visual refresh required by presentation.
 - Core and application behavior must remain testable without WinUI construction. The CoreRuntime boundary verifier protects this constraint.
 - Settings persistence owns schema validation and atomic storage. Callers use the current typed model rather than carrying legacy-format concerns through the application.
 - Command transport is per-user and validates its peer. Protocol changes require compatibility consideration, bounded payloads, and regression tests.
+- `ControlCommandAdapter` validates the wire grammar and directly selects an explicit controller method. It does not build an intermediate `AppCommand`. Response formatting uses the original request and application result. The controller's general command dispatch is private pending removal of the internal legacy bridge.
 - Localization keys are defined by English resources. Selected locales overlay English at runtime.
 - Long-running or asynchronous device actions have an explicit owner and cancellation/lifetime boundary.
 

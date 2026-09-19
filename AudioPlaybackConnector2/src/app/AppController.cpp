@@ -114,7 +114,11 @@ AppResult AppController::Reconnect(DeviceSelector target, AppCommandContext cont
 }
 
 AppResult AppController::ToggleDefault(AppCommandContext context) const {
-    return Execute({AppCommandKind::ToggleLast, DeviceSelector::Default(), {}}, context);
+    return Toggle(DeviceSelector::Default(), context);
+}
+
+AppResult AppController::Toggle(DeviceSelector target, AppCommandContext context) const {
+    return Execute({AppCommandKind::ToggleLast, std::move(target), {}}, context);
 }
 
 AppResult AppController::DisconnectAll(AppCommandContext context) const noexcept {
@@ -133,8 +137,8 @@ AppResult AppController::SetDefault(std::wstring_view deviceId) const {
     return Execute({AppCommandKind::SetDefault, DeviceSelector::ById(deviceId), {}});
 }
 
-AppResult AppController::ClearDefault() const {
-    return Execute({AppCommandKind::ClearDefault, {}, {}});
+AppResult AppController::ClearDefault(AppCommandContext context) const {
+    return Execute({AppCommandKind::ClearDefault, {}, {}}, context);
 }
 
 AppResult AppController::SetAlias(std::wstring_view deviceId, std::wstring_view alias) const {
@@ -144,6 +148,38 @@ AppResult AppController::SetAlias(std::wstring_view deviceId, std::wstring_view 
 
 AppResult AppController::ClearAlias(std::wstring_view deviceId) const {
     return Execute({AppCommandKind::ClearAlias, DeviceSelector::ById(deviceId), {}});
+}
+
+AppResult AppController::SetDefault(DeviceSelector target, AppCommandContext context) const {
+    return Execute({AppCommandKind::SetDefault, std::move(target), {}}, context);
+}
+
+AppResult AppController::SetAlias(DeviceSelector target, std::wstring_view alias, AppCommandContext context) const {
+    return Execute({AppCommandKind::SetAlias, std::move(target), std::wstring(alias)}, context);
+}
+
+AppResult AppController::ClearAlias(DeviceSelector target, AppCommandContext context) const {
+    return Execute({AppCommandKind::ClearAlias, std::move(target), {}}, context);
+}
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Queries ///////////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
+AppResult AppController::ListDevices(AppCommandContext context) const noexcept {
+    return Execute({AppCommandKind::ListDevices, {}, {}}, context);
+}
+
+AppResult AppController::Status(AppCommandContext context) const noexcept {
+    return Execute({AppCommandKind::Status, {}, {}}, context);
+}
+
+AppResult AppController::ShowDefault(AppCommandContext context) const noexcept {
+    return Execute({AppCommandKind::ShowDefault, {}, {}}, context);
+}
+
+AppResult AppController::ListAliases(AppCommandContext context) const noexcept {
+    return Execute({AppCommandKind::ListAliases, {}, {}}, context);
 }
 
 /*------------------------------------------------------------------------------------------------------------*/

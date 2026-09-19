@@ -46,7 +46,7 @@ void TestUiAndCliEquivalentCommandsUseOneExecutor() {
         [&]() { return snapshot; });
 
     auto const uiResult = controller.Connect(*command.Target, {});
-    auto const cliResult = controller.Execute(command);
+    auto const cliResult = controller.Connect(*command.Target, {});
 
     Check(uiResult == cliResult, "UI and CLI adapters must receive equivalent normalized results");
     Check(uiResult.Code == AppResultCode::Success && uiResult.Command == AppCommandKind::Connect,
@@ -123,18 +123,16 @@ void TestMalformedCancelledAndExpiredCommandsShortCircuit() {
         },
         [] { return AppSnapshot{}; });
 
-    auto malformed = ConnectCommand();
-    malformed.Target.reset();
-    auto const malformedResult = controller.Execute(malformed);
+    auto const malformedResult = controller.SetDefault(std::wstring_view{});
 
     std::stop_source stopSource;
     stopSource.request_stop();
     auto cancelledContext = AppCommandContext{stopSource.get_token(), AppCommandContext::TimePoint::max()};
-    auto const cancelledResult = controller.Execute(ConnectCommand(), cancelledContext);
+    auto const cancelledResult = controller.Connect(*ConnectCommand().Target, cancelledContext);
 
     auto expiredContext = AppCommandContext{};
     expiredContext.Deadline = AppCommandContext::TimePoint::min();
-    auto const expiredResult = controller.Execute(ConnectCommand(), expiredContext);
+    auto const expiredResult = controller.Connect(*ConnectCommand().Target, expiredContext);
 
     Check(malformedResult.Code == AppResultCode::InvalidInput,
           "malformed commands must normalize to invalid input before delegation");
@@ -153,7 +151,7 @@ void TestExecutorExceptionsBecomeInternalErrors() {
         [](AppCommand const&, AppCommandContext const&) -> AppResult { throw std::runtime_error("backend failure"); },
         [] { return AppSnapshot{}; });
 
-    auto const result = controller.Execute(ConnectCommand());
+    auto const result = controller.Connect(*ConnectCommand().Target, {});
 
     Check(result.Code == AppResultCode::InternalError,
           "an executor exception must be contained as an internal error result");

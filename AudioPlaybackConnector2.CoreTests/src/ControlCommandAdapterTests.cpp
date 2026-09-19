@@ -353,22 +353,39 @@ void TestUiAndCliTypedParityAndContextPropagation() {
           "an expired absolute control deadline must stop before mutation dispatch");
 }
 
-void TestControllerPreDispatchTerminationIsUnavailableForUiCommands() {
-    const std::vector<CommandType> commands{CommandType::Show, CommandType::Settings};
-    for (const auto command : commands) {
+void TestControllerPreDispatchTerminationIsUnavailableForEveryCommand() {
+    const std::vector<Request> requests{
+        MakeRequest(CommandType::Show),
+        MakeRequest(CommandType::Settings),
+        MakeRequest(CommandType::List),
+        MakeRequest(CommandType::Status),
+        MakeRequest(CommandType::DefaultShow),
+        MakeRequest(CommandType::DefaultSet, TargetKind::Id, L"device-a"),
+        MakeRequest(CommandType::DefaultClear),
+        MakeRequest(CommandType::AliasList),
+        MakeRequest(CommandType::AliasSet, TargetKind::Id, L"device-a\nDesk"),
+        MakeRequest(CommandType::AliasClear, TargetKind::Id, L"device-a"),
+        MakeRequest(CommandType::Connect, TargetKind::Id, L"device-a"),
+        MakeRequest(CommandType::Disconnect, TargetKind::Id, L"device-a"),
+        MakeRequest(CommandType::Reconnect, TargetKind::Id, L"device-a"),
+        MakeRequest(CommandType::ToggleLast, TargetKind::Default),
+        MakeRequest(CommandType::DisconnectAll),
+        MakeRequest(CommandType::ReconnectAll),
+    };
+    for (auto const& request : requests) {
         Harness cancelled;
         std::stop_source stop;
         stop.request_stop();
-        const auto cancelledResponse = cancelled.Adapter.Handle(MakeRequest(command), stop.get_token(), 0);
+        const auto cancelledResponse = cancelled.Adapter.Handle(request, stop.get_token(), 0);
         Check(cancelledResponse.Code == ExitCode::Unavailable,
-              "controller pre-dispatch cancellation must preserve exit 7 for show and settings");
+              "controller pre-dispatch cancellation must preserve exit 7 for every explicit controller method");
         Check(cancelled.Commands.empty() && cancelled.Contexts.empty(),
               "controller pre-dispatch cancellation must not enter the executor");
 
         Harness expired;
-        const auto expiredResponse = expired.Adapter.Handle(MakeRequest(command), {}, GetTickCount64());
+        const auto expiredResponse = expired.Adapter.Handle(request, {}, GetTickCount64());
         Check(expiredResponse.Code == ExitCode::Unavailable,
-              "controller pre-dispatch deadline must preserve exit 7 for show and settings");
+              "controller pre-dispatch deadline must preserve exit 7 for every explicit controller method");
         Check(expired.Commands.empty() && expired.Contexts.empty(),
               "controller pre-dispatch deadline must not enter the executor");
     }
@@ -675,7 +692,7 @@ int RunControlCommandAdapterTests() {
     TestNonDeviceCommandsDoNotRequireInventorySnapshot();
     TestInventoryCommandsFailClosedOnSnapshotReadFailure();
     TestUiAndCliTypedParityAndContextPropagation();
-    TestControllerPreDispatchTerminationIsUnavailableForUiCommands();
+    TestControllerPreDispatchTerminationIsUnavailableForEveryCommand();
     TestControllerPostDispatchTerminationRemainsIndeterminate();
     TestMutationBusyAndNonmutationConcurrency();
     TestResultExitMappingAndGoldenTextJsonPrivacy();

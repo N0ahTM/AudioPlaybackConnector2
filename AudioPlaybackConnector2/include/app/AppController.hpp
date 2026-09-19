@@ -52,7 +52,6 @@ public:
     AppController(AppController&&) = delete;
     AppController& operator=(AppController&&) = delete;
 
-    [[nodiscard]] AppResult Execute(AppCommand command, AppCommandContext context = {}) const noexcept;
     [[nodiscard]] AppSnapshot Snapshot() const noexcept;
 
     /*------------------------------------------------------------------------------------------------------------*/
@@ -70,6 +69,7 @@ public:
     [[nodiscard]] AppResult Disconnect(DeviceSelector target, AppCommandContext context) const;
     [[nodiscard]] AppResult Reconnect(DeviceSelector target, AppCommandContext context) const;
     [[nodiscard]] AppResult ToggleDefault(AppCommandContext context) const;
+    [[nodiscard]] AppResult Toggle(DeviceSelector target, AppCommandContext context) const;
     [[nodiscard]] AppResult DisconnectAll(AppCommandContext context) const noexcept;
     [[nodiscard]] AppResult ReconnectAll(AppCommandContext context) const noexcept;
 
@@ -78,9 +78,21 @@ public:
     /*------------------------------------------------------------------------------------------------------------*/
 
     [[nodiscard]] AppResult SetDefault(std::wstring_view deviceId) const;
-    [[nodiscard]] AppResult ClearDefault() const;
+    [[nodiscard]] AppResult ClearDefault(AppCommandContext context = {}) const;
     [[nodiscard]] AppResult SetAlias(std::wstring_view deviceId, std::wstring_view alias) const;
     [[nodiscard]] AppResult ClearAlias(std::wstring_view deviceId) const;
+    [[nodiscard]] AppResult SetDefault(DeviceSelector target, AppCommandContext context) const;
+    [[nodiscard]] AppResult SetAlias(DeviceSelector target, std::wstring_view alias, AppCommandContext context) const;
+    [[nodiscard]] AppResult ClearAlias(DeviceSelector target, AppCommandContext context) const;
+
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Queries ///////////////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
+
+    [[nodiscard]] AppResult ListDevices(AppCommandContext context) const noexcept;
+    [[nodiscard]] AppResult Status(AppCommandContext context) const noexcept;
+    [[nodiscard]] AppResult ShowDefault(AppCommandContext context) const noexcept;
+    [[nodiscard]] AppResult ListAliases(AppCommandContext context) const noexcept;
 
     // The bridge publishes normalized facts here; UI and CLI consume the one
     // typed subscription surface returned by Subscribe.
@@ -88,6 +100,8 @@ public:
     void Publish(AppEvent const& event) const noexcept;
 
 private:
+    [[nodiscard]] AppResult Execute(AppCommand command, AppCommandContext context = {}) const noexcept;
+
     Executor m_executor;
     SnapshotProvider m_snapshotProvider;
     std::shared_ptr<EventState> m_eventState;

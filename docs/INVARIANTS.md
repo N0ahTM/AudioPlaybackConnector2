@@ -248,12 +248,15 @@ delivery rechecks the recovery generation on the UI context before starting a de
 and retained timer callbacks can outlive the facade and access only shared, invalidated recovery state. Callback
 captures are retired outside the lock, including on suspend and cancellation. Logging also runs unlocked.
 
-`AppWorkCoordinatorTests.cpp` covers scheduler failure, single-flight delivery, retry exhaustion, duplicate and
+`PowerTransitionCoordinatorTests.cpp` covers scheduler failure, single-flight delivery, duplicate and
 stale completions, cancellation during blocked delivery, capture-destructor reentrancy and callbacks retained
 after facade destruction. A real native-timer test blocks an admitted delivery with semaphores, cancels the timer,
 and releases its late completion under the process watchdog. Native callbacks initialize their own runtime
 apartment. Cancellation disarms queued callbacks and drains their admission phase; it does not wait for foreign
 delivery code that has already been disassociated.
+
+`ResumeReconnectAttemptStateTests.cpp` covers retry accounting and pending targets across suspend cycles.
+`UiRefreshCoalescerTests.cpp` covers flag merging, concurrent scheduling, cancellation and lost-wakeup races.
 
 ## Device operation completion
 

@@ -87,7 +87,9 @@
     <ClCompile Include="src\AppControllerTests.cpp" />
     <ClCompile Include="src\ControlCommandAdapterTests.cpp" />
     <ClCompile Include="src\AppModelsTests.cpp" />
-    <ClCompile Include="src\AppWorkCoordinatorTests.cpp" />
+    <ClCompile Include="src\UiRefreshCoalescerTests.cpp" />
+    <ClCompile Include="src\ResumeReconnectAttemptStateTests.cpp" />
+    <ClCompile Include="src\PowerTransitionCoordinatorTests.cpp" />
 
     <ClCompile Include="src\CommandLineControlServerTests.cpp" />
     <ClCompile Include="src\CommandClientTests.cpp" />

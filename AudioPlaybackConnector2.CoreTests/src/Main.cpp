@@ -24,7 +24,9 @@ int RunAdaptiveResourcePolicyTests();
 int RunAppControllerTests();
 int RunAppModelsTests();
 int RunControlCommandAdapterTests();
-int RunAppWorkCoordinatorTests();
+int RunUiRefreshCoalescerTests();
+int RunResumeReconnectAttemptStateTests();
+int RunPowerTransitionCoordinatorTests();
 int RunCommandClientTests();
 int RunCliParserTests();
 int RunLoggerTests();
@@ -116,7 +118,9 @@ int main(int argc, char** argv) {
         Suite{"AppController", RunAppControllerTests},
         Suite{"AppModels", RunAppModelsTests},
         Suite{"ControlCommandAdapter", RunControlCommandAdapterTests},
-        Suite{"AppWorkCoordinator", RunAppWorkCoordinatorTests},
+        Suite{"UiRefreshCoalescer", RunUiRefreshCoalescerTests},
+        Suite{"ResumeReconnectAttemptState", RunResumeReconnectAttemptStateTests},
+        Suite{"PowerTransitionCoordinator", RunPowerTransitionCoordinatorTests},
         Suite{"CommandClient", RunCommandClientTests},
         Suite{"CliParser", RunCliParserTests},
         Suite{"Logger", RunLoggerTests},

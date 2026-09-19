@@ -118,9 +118,9 @@ GetOptionalObject(winrt::Windows::Data::Json::JsonObject const& json, winrt::hst
     return std::min(milliseconds, std::chrono::duration_cast<std::chrono::milliseconds>(c_maxRetryDelay));
 }
 
-void BackupUnreadableSettingsFile(std::filesystem::path const& path) noexcept {
+bool BackupUnreadableSettingsFile(std::filesystem::path const& path) noexcept {
     try {
-        if (path.empty() || !std::filesystem::exists(path)) return;
+        if (path.empty() || !std::filesystem::exists(path)) return false;
         auto backup = path;
         backup += L".corrupt.bak";
         for (std::uint64_t suffix = 1; std::filesystem::exists(backup); ++suffix) {
@@ -129,13 +129,16 @@ void BackupUnreadableSettingsFile(std::filesystem::path const& path) noexcept {
         }
         if (!MoveFileExW(path.c_str(), backup.c_str(), MOVEFILE_WRITE_THROUGH)) {
             DebugTrace(L"[SettingsStore] ERROR: failed to preserve corrupt file: {0}", path.wstring());
+            return false;
         }
+        return true;
     } catch (std::exception const& exception) {
         DebugTrace(L"[SettingsStore] ERROR: corrupt-file preservation failed: {0}",
                    util::Utf8ToUtf16(exception.what()));
     } catch (...) {
         DebugTrace(L"[SettingsStore] ERROR: corrupt-file preservation failed");
     }
+    return false;
 }
 
 class FilesystemSettingsStoreStorage final : public SettingsStoreStorage {
@@ -143,7 +146,11 @@ public:
     std::optional<std::string> Read(std::filesystem::path const& path) override {
         wil::unique_hfile file(CreateFileW(
             path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
-        if (!file) return std::nullopt;
+        if (!file) {
+            auto const error = GetLastError();
+            if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) return std::nullopt;
+            throw std::runtime_error("settings file could not be opened");
+        }
         LARGE_INTEGER size{};
         if (!GetFileSizeEx(file.get(), &size) || size.QuadPart < 0 ||
             static_cast<std::uint64_t>(size.QuadPart) > apc::limits::c_maxSettingsFileBytes) {
@@ -184,7 +191,9 @@ public:
         return true;
     }
 
-    void PreserveCorrupt(std::filesystem::path const& path) noexcept override { BackupUnreadableSettingsFile(path); }
+    bool PreserveCorrupt(std::filesystem::path const& path) noexcept override {
+        return BackupUnreadableSettingsFile(path);
+    }
 };
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -320,6 +329,7 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
     bool workerStartKnown = false;
     bool loadClaimed = false;
     bool loadActive = false;
+    bool preservationFailed = false;
     unsigned int failures = 0;
     std::jthread worker;
 
@@ -330,10 +340,11 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
         wakeup->Notify();
     }
 
-    void CompleteLoadWithoutCommit() noexcept {
+    void CompleteLoadWithoutCommit(bool originalPreserved = true) noexcept {
         {
             std::scoped_lock lock(mutex);
             loadActive = false;
+            preservationFailed = !originalPreserved;
         }
         NotifyChanged();
     }
@@ -472,7 +483,7 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
                 timerArmed = false;
                 changed.notify_all();
                 changed.wait(lock, [&] { return shutdownRequested || (!writerActive && !loadActive); });
-                if (shutdownRequested) return false;
+                if (shutdownRequested || preservationFailed) return false;
                 if (discardRequested || revision == persistedRevision) return true;
                 writerActive = true;
                 snapshot = data;
@@ -607,7 +618,7 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
                 changed.wait(lock, [&] { return closing || shutdownRequested || !loadActive; });
                 continue;
             }
-            if (closing || shutdownRequested) return {SettingsMutationStatus::Rejected, revision};
+            if (closing || shutdownRequested || preservationFailed) return {SettingsMutationStatus::Rejected, revision};
             if (revision == std::numeric_limits<std::uint64_t>::max())
                 return {SettingsMutationStatus::Rejected, revision};
 
@@ -750,7 +761,7 @@ void SettingsStore::Load() {
     try {
         path = lifetime->Path();
         const auto bytes = lifetime->storage->Read(path);
-        if (!bytes || bytes->empty()) {
+        if (!bytes) {
             lifetime->CompleteLoadWithoutCommit();
             return;
         }
@@ -823,13 +834,11 @@ void SettingsStore::Load() {
             }
     } catch (std::exception const& exception) {
         DebugTrace(L"[SettingsStore] load failed: {0}", util::Utf8ToUtf16(exception.what()));
-        lifetime->storage->PreserveCorrupt(path);
-        lifetime->CompleteLoadWithoutCommit();
+        lifetime->CompleteLoadWithoutCommit(lifetime->storage->PreserveCorrupt(path));
         return;
     } catch (...) {
         DebugTrace(L"[SettingsStore] load failed");
-        lifetime->storage->PreserveCorrupt(path);
-        lifetime->CompleteLoadWithoutCommit();
+        lifetime->CompleteLoadWithoutCommit(lifetime->storage->PreserveCorrupt(path));
         return;
     }
     std::vector<Impl::SubscriptionStatePtr> subscriptionsToNotify;

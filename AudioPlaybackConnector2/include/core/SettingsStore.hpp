@@ -59,7 +59,8 @@ public:
     virtual ~SettingsStoreStorage() = default;
     [[nodiscard]] virtual std::optional<std::string> Read(std::filesystem::path const& path) = 0;
     [[nodiscard]] virtual bool WriteAtomically(std::filesystem::path const& path, std::string_view bytes) = 0;
-    virtual void PreserveCorrupt(std::filesystem::path const& path) noexcept = 0;
+    // True only when the original bytes have been preserved away from the writable path.
+    [[nodiscard]] virtual bool PreserveCorrupt(std::filesystem::path const& path) noexcept = 0;
 };
 
 // Owns all mutable settings and its sole persistence worker. Public operations are thread-safe.

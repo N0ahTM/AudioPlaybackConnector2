@@ -80,7 +80,12 @@ public:
         return true;
     }
 
-    void PreserveCorrupt(std::filesystem::path const&) noexcept override { ++m_corruptPreservations; }
+    bool PreserveCorrupt(std::filesystem::path const&) noexcept override {
+        ++m_corruptPreservations;
+        return PreservationSucceeds;
+    }
+
+    bool PreservationSucceeds = true;
 
     void SetInput(std::optional<std::string> input) {
         std::scoped_lock lock(m_dataMutex);
@@ -354,6 +359,48 @@ void TestLegacyWindowDpiLoadCompatibility() {
                   "legacy nonpositive DPI must normalize before persisted-bound validation");
         static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
     }
+}
+
+void TestFailedPreservationBlocksMutationAndFlush() {
+    auto storage = std::make_shared<ControlledStorage>();
+    storage->SetInput("{");
+    storage->PreservationSucceeds = false;
+    SettingsStore store({}, storage);
+    store.Load();
+    Check(storage->m_corruptPreservations == 1 && store.SetLanguage(L"de").Status == SettingsMutationStatus::Rejected &&
+              store.Snapshot().Revision == 0 && !store.FlushNow(1) && storage->Outputs().empty(),
+          "failed preservation must reject mutations and flush without replacing the original");
+    Check(!store.Shutdown(SettingsShutdownMode::Flush),
+          "shutdown must report blocked persistence instead of claiming a successful flush");
+}
+
+void TestUnreadableFileIsNotTreatedAsMissing() {
+    ScopedTestDirectory directory;
+    constexpr std::string_view original = R"({"language":"fr"})";
+    WriteBytes(directory.SettingsPath(), original);
+    wil::unique_hfile blocker(CreateFileW(
+        directory.SettingsPath().c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
+    Check(static_cast<bool>(blocker), "the production read-failure fixture must hold an exclusive file handle");
+    SettingsStore store(directory.Path());
+    store.Load();
+    blocker.reset();
+    Check(store.SetLanguage(L"de").Status == SettingsMutationStatus::Rejected && !store.FlushNow(1) &&
+              ReadBytes(directory.SettingsPath()) == original,
+          "a read and backup sharing violation must preserve bytes even after the external lock disappears");
+    static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+}
+
+void TestEmptyFileIsPreservedBeforeDefaultsCanBeSaved() {
+    ScopedTestDirectory directory;
+    WriteBytes(directory.SettingsPath(), "");
+    SettingsStore store(directory.Path());
+    store.Load();
+    auto const backup = directory.SettingsPath().wstring() + L".corrupt.bak";
+    Check(std::filesystem::exists(backup) && ReadBytes(backup).empty(),
+          "an empty existing file is invalid input and must be preserved, not treated as absent");
+    Check(store.SetLanguage(L"de").IsApplied() && store.FlushNow(1),
+          "successful preservation must allow normal default-based persistence");
+    static_cast<void>(store.Shutdown(SettingsShutdownMode::Flush));
 }
 
 void TestProductionCorruptPreservationAndAtomicWrite() {
@@ -1145,6 +1192,9 @@ int RunSettingsStoreTests() {
     TestValidationAndLoadNormalizationMatrix();
     TestLegacyWindowDpiLoadCompatibility();
     TestProductionCorruptPreservationAndAtomicWrite();
+    TestFailedPreservationBlocksMutationAndFlush();
+    TestUnreadableFileIsNotTreatedAsMissing();
+    TestEmptyFileIsPreservedBeforeDefaultsCanBeSaved();
     TestReplacementFailurePreservesOldBytesAndCleansTemporaryFile();
     TestOversizedInputIsPreserved();
     TestNoOpAndTypedMutationResults();

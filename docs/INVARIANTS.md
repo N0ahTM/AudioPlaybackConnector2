@@ -125,6 +125,14 @@ the data reference and revision under lock, then copies the immutable data after
 | Storage path, backend and worker lifetime | Immutable after construction; admitted load/flush and the persistence worker | Shared `Impl` lifetime; `writerActive` excludes overlapping I/O | Storage backend outside all locks | Final flush runs on the worker; a timed-out worker retains its own state until the admitted I/O returns |
 | Persistence clock, wake version and platform wait | One worker waits; mutations, load/write completion and shutdown signal it | The system wakeup's own mutex/condition variable, never nested with store locks | No callbacks | Notify changes the version; Wait checks that version before sleeping, retaining notifications that arrive before wait entry |
 
+Only file/path-not-found means absent settings. An empty file or a failed open is a load failure, not permission
+to overwrite the path with defaults. The storage boundary reports whether preservation succeeded. A failed
+preservation sets `preservationFailed` under `Impl::mutex` before releasing load admission; all subsequent
+mutations are rejected and flush returns failure for that store instance. No mutation can race this decision:
+it waits for the active load first. A successfully preserved file allows normal default-based persistence.
+Tests exercise both the injected backup failure and a real Windows sharing violation, then verify unchanged
+original bytes after the external file lock is released.
+
 The worker captures a wake version, inspects store state, and releases the store lock before entering the platform
 wait. A blocked writer, active load or clean store produces an indefinite signal wait, not a deadline that has
 already expired. Eligible dirty state waits until the debounce/retry deadline. `SettingsStoreWakeup` provides the

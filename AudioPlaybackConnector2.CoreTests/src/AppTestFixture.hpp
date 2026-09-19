@@ -10,7 +10,7 @@ class MemorySettingsStorage final : public SettingsStoreStorage {
 public:
     std::optional<std::string> Read(std::filesystem::path const&) override { return std::nullopt; }
     bool WriteAtomically(std::filesystem::path const&, std::string_view) override { return true; }
-    void PreserveCorrupt(std::filesystem::path const&) noexcept override {}
+    bool PreserveCorrupt(std::filesystem::path const&) noexcept override { return true; }
 };
 
 inline std::shared_ptr<SettingsStore> MakeTestSettings() {

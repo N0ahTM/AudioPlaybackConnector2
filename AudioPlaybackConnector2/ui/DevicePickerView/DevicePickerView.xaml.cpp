@@ -19,7 +19,6 @@ using namespace winrt::Microsoft::UI::Xaml;
 using namespace winrt::Microsoft::UI::Xaml::Controls;
 
 namespace {
-constexpr auto c_pendingActionFallbackTimeout = std::chrono::seconds(2);
 constexpr double c_pickerMinWidth = 260.0;
 constexpr double c_pickerMaxWidth = 520.0;
 constexpr double c_globalActionsChromeWidth = 82.0;
@@ -86,7 +85,7 @@ DevicePickerView::DevicePickerView() {
     SavedDevicesButton().Click([weak](auto const&, auto const&) {
         if (auto self = weak.get()) {
             self->m_savedDevicesExpanded = !self->m_savedDevicesExpanded;
-            self->RenderDeviceList(false, true);
+            self->RenderDeviceList(RenderReason::PresentationChanged);
         }
     });
     DeviceAliasBox().MaxLength(static_cast<int32_t>(apc::limits::c_maxDeviceAliasCharacters));
@@ -108,7 +107,7 @@ DevicePickerView::DevicePickerView() {
             }
             self->DeviceOptionsError().IsOpen(false);
             self->RefreshDeviceOptions(true);
-            self->RenderDeviceList(false, true);
+            self->RenderDeviceList(RenderReason::PresentationChanged);
         }
     });
     DefaultDeviceToggle().Toggled([weak](auto const&, auto const&) {
@@ -121,7 +120,7 @@ DevicePickerView::DevicePickerView() {
                                 : !options->Device.IsDefaultDevice || controller->ClearDefault().Succeeded());
             if (!applied) self->ShowDeviceOptionsError();
             self->RefreshDeviceOptions();
-            self->RenderDeviceList(false, true);
+            self->RenderDeviceList(RenderReason::PresentationChanged);
         }
     });
     DeviceStartupToggle().Toggled([weak](auto const&, auto const&) {
@@ -250,7 +249,6 @@ void DevicePickerView::PrepareForRelease() noexcept {
         m_preparedForRelease = true;
         m_presentationActive = false;
         StopNavigationAnimation();
-        StopPendingActionTimer();
         CancelLoadDevices();
     } catch (winrt::hresult_error const& ex) {
         m_log.Exception(L"[DevicePickerView] ERROR: PrepareForRelease failed", ex);
@@ -264,8 +262,6 @@ void DevicePickerView::PrepareForRelease() noexcept {
     m_onShowSettings = nullptr;
     m_optionsDeviceId.clear();
     m_appController.reset();
-    m_pendingDeviceActions.clear();
-    m_pendingGlobalAction = false;
     m_renderedSnapshotGeneration = 0;
     m_hasRenderedSnapshot = false;
     m_viewState = {};
@@ -307,7 +303,7 @@ void DevicePickerView::ApplyLanguage() {
         toggle.OnContent(box_value(L""));
         toggle.OffContent(box_value(L""));
     }
-    RenderDeviceList(false, true);
+    RenderDeviceList(RenderReason::PresentationChanged);
 }
 
 void DevicePickerView::ShowDeviceOptions(std::wstring const& id) {
@@ -334,7 +330,7 @@ void DevicePickerView::ReturnToDeviceList() {
     BackButton().Visibility(Visibility::Collapsed);
     TitleText().Text(winrt::hstring(m_strings->Get("TrayMenu_SelectDevice")));
     apc::ui::SetTooltipText(TitleText(), winrt::hstring(m_strings->Get("TrayMenu_SelectDevice")));
-    RenderDeviceList(false, true);
+    RenderDeviceList(RenderReason::PresentationChanged);
     AnimateNavigation(previousHeight);
     for (auto const& entry : DeviceList().Items()) {
         auto item = entry.try_as<ListViewItem>();
@@ -478,19 +474,14 @@ bool DevicePickerView::InvalidateDeviceInventory() {
 
 void DevicePickerView::SetPresentationActive(bool active) noexcept {
     m_presentationActive = active;
-    if (active) {
-        SchedulePendingActionExpiry();
-    } else {
-        StopNavigationAnimation();
-        StopPendingActionTimer();
-    }
+    if (!active) StopNavigationAnimation();
 }
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Private Helpers ///////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-void DevicePickerView::RenderDeviceList(bool reconcilePendingActions, bool forceRender) {
+void DevicePickerView::RenderDeviceList(RenderReason reason) {
     auto controller = m_appController.lock();
     if (!controller) return;
     auto application = controller->Snapshot();
@@ -500,18 +491,9 @@ void DevicePickerView::RenderDeviceList(bool reconcilePendingActions, bool force
     auto const& snapshot = m_viewState;
     auto const& items = snapshot.Items;
     const auto connectedCount = snapshot.ConnectedDeviceCount;
-    const auto pendingDeviceCount = m_pendingDeviceActions.size();
-    const bool pendingGlobalAction = m_pendingGlobalAction;
-    if (reconcilePendingActions) {
-        ReconcilePendingActions(items);
-    }
-    const bool pendingStateChanged =
-        pendingDeviceCount != m_pendingDeviceActions.size() || pendingGlobalAction != m_pendingGlobalAction;
-    if (!forceRender && !pendingStateChanged && m_hasRenderedSnapshot &&
-        m_renderedSnapshotGeneration == snapshot.Generation) {
-        SchedulePendingActionExpiry();
+    if (reason == RenderReason::SnapshotChanged && m_hasRenderedSnapshot &&
+        m_renderedSnapshotGeneration == snapshot.Generation)
         return;
-    }
 
     DeviceList().Items().Clear();
 
@@ -520,13 +502,12 @@ void DevicePickerView::RenderDeviceList(bool reconcilePendingActions, bool force
         std::count_if(items.begin(), items.end(), [](auto const& item) { return item.IsConnected; });
     const auto busyItemCount = std::count_if(items.begin(), items.end(), [](auto const& item) { return item.IsBusy; });
     m_log.Trace(L"[DevicePickerView] RenderDeviceList connectedCount={0} itemCount={1} "
-                L"connectedItemCount={2} busyItemCount={3} pendingGlobalAction={4}",
+                L"connectedItemCount={2} busyItemCount={3}",
                 connectedCount,
                 items.size(),
                 connectedItemCount,
-                busyItemCount,
-                m_pendingGlobalAction);
-    ApplyGlobalActionState(connectedCount > 1, !anyBusy && !m_pendingGlobalAction);
+                busyItemCount);
+    ApplyGlobalActionState(connectedCount > 1, !anyBusy);
     std::vector<apc::device_picker::DeviceSnapshotItem> visibleItems;
     for (auto const& device : items) {
         if (device.IsAvailable || m_savedDevicesExpanded) visibleItems.push_back(device);
@@ -551,7 +532,6 @@ void DevicePickerView::RenderDeviceList(bool reconcilePendingActions, bool force
 
     m_renderedSnapshotGeneration = snapshot.Generation;
     m_hasRenderedSnapshot = true;
-    SchedulePendingActionExpiry();
 }
 
 ListViewItem DevicePickerView::BuildDeviceListItem(apc::device_picker::DeviceSnapshotItem const& device) {
@@ -559,7 +539,7 @@ ListViewItem DevicePickerView::BuildDeviceListItem(apc::device_picker::DeviceSna
     item.HorizontalContentAlignment(HorizontalAlignment::Stretch);
     item.IsTabStop(false);
     item.Padding({0, 0, 0, 0});
-    const bool isBusy = device.IsBusy || m_pendingGlobalAction || IsDeviceActionPending(winrt::hstring(device.Id));
+    const bool isBusy = device.IsBusy;
 
     auto grid = Grid();
     grid.HorizontalAlignment(HorizontalAlignment::Stretch);
@@ -691,108 +671,6 @@ ListViewItem DevicePickerView::BuildDeviceListItem(apc::device_picker::DeviceSna
     return item;
 }
 
-bool DevicePickerView::BeginPendingDeviceAction(winrt::hstring const& id) {
-    if (id.empty() || m_pendingGlobalAction || IsDeviceActionPending(id)) return false;
-    m_pendingDeviceActions[std::wstring(id)] = std::chrono::steady_clock::now();
-    return true;
-}
-
-bool DevicePickerView::BeginPendingGlobalAction() {
-    if (m_pendingGlobalAction) return false;
-    m_pendingGlobalAction = true;
-    m_pendingGlobalActionStarted = std::chrono::steady_clock::now();
-    RenderDeviceList(false, true);
-    return true;
-}
-
-bool DevicePickerView::IsDeviceActionPending(winrt::hstring const& id) const {
-    return m_pendingDeviceActions.contains(std::wstring(id));
-}
-
-void DevicePickerView::ReconcilePendingActions(std::vector<apc::device_picker::DeviceSnapshotItem> const& items) {
-    auto const now = std::chrono::steady_clock::now();
-    for (auto it = m_pendingDeviceActions.begin(); it != m_pendingDeviceActions.end();) {
-        auto item = std::ranges::find(items, it->first, &apc::device_picker::DeviceSnapshotItem::Id);
-        const bool managerOwnsBusy = item != items.end() && item->IsBusy;
-        const bool expired = now - it->second >= c_pendingActionFallbackTimeout;
-        if (managerOwnsBusy || expired) {
-            it = m_pendingDeviceActions.erase(it);
-        } else {
-            ++it;
-        }
-    }
-
-    if (m_pendingGlobalAction) {
-        const bool anyBusy = std::any_of(items.begin(), items.end(), [](auto const& item) { return item.IsBusy; });
-        const bool expired = now - m_pendingGlobalActionStarted >= c_pendingActionFallbackTimeout;
-        if (anyBusy || expired) {
-            m_pendingGlobalAction = false;
-            m_pendingGlobalActionStarted = {};
-        }
-    }
-}
-
-void DevicePickerView::SchedulePendingActionExpiry() noexcept {
-    if (!m_presentationActive || (m_pendingDeviceActions.empty() && !m_pendingGlobalAction)) {
-        StopPendingActionTimer();
-        return;
-    }
-
-    try {
-        auto earliest = std::chrono::steady_clock::time_point::max();
-        for (auto const& [id, startedAt] : m_pendingDeviceActions) {
-            (void)id;
-            earliest = std::min(earliest, startedAt + c_pendingActionFallbackTimeout);
-        }
-        if (m_pendingGlobalAction) {
-            earliest = std::min(earliest, m_pendingGlobalActionStarted + c_pendingActionFallbackTimeout);
-        }
-
-        auto now = std::chrono::steady_clock::now();
-        auto delay = std::max(std::chrono::duration_cast<std::chrono::milliseconds>(earliest - now),
-                              std::chrono::milliseconds(1));
-        if (!m_pendingActionTimer) {
-            auto dispatcher = DispatcherQueue();
-            if (!dispatcher) return;
-            m_pendingActionTimer = dispatcher.CreateTimer();
-            m_pendingActionTimer.IsRepeating(false);
-            auto weak = get_weak();
-            m_pendingActionTimer.Tick([weak, log = m_log](auto const&, auto const&) noexcept {
-                try {
-                    if (auto self = weak.get(); self && self->m_presentationActive) {
-                        self->RenderDeviceList(true, true);
-                    }
-                } catch (winrt::hresult_error const& ex) {
-                    log.Exception(L"[DevicePickerView] Pending-action timer failed", ex);
-                } catch (std::exception const& ex) {
-                    log.Exception(L"[DevicePickerView] Pending-action timer failed", ex);
-                } catch (...) {
-                    log.UnknownException(L"[DevicePickerView] Pending-action timer failed");
-                }
-            });
-        } else {
-            m_pendingActionTimer.Stop();
-        }
-        m_pendingActionTimer.Interval(delay);
-        m_pendingActionTimer.Start();
-    } catch (winrt::hresult_error const& ex) {
-        m_log.Exception(L"[DevicePickerView] Failed to schedule pending-action expiry", ex);
-    } catch (std::exception const& ex) {
-        m_log.Exception(L"[DevicePickerView] Failed to schedule pending-action expiry", ex);
-    } catch (...) {
-        m_log.UnknownException(L"[DevicePickerView] Failed to schedule pending-action expiry");
-    }
-}
-
-void DevicePickerView::StopPendingActionTimer() noexcept {
-    auto timer = std::exchange(m_pendingActionTimer, nullptr);
-    if (!timer) return;
-    try {
-        timer.Stop();
-    } catch (...) {
-    }
-}
-
 void DevicePickerView::ApplyGlobalActionState(bool visible, bool enabled) {
     GlobalActionsPanel().Visibility(visible ? Visibility::Visible : Visibility::Collapsed);
     DisconnectAllButton().IsEnabled(visible && enabled);
@@ -820,36 +698,32 @@ void DevicePickerView::OnCloseClicked(winrt::Windows::Foundation::IInspectable c
 void DevicePickerView::OnDeviceToggle(winrt::hstring const& id) {
     auto controller = m_appController.lock();
     auto target = apc::app::DeviceSelector::ById(std::wstring_view(id));
-    if (!controller || !target || !BeginPendingDeviceAction(id)) return;
+    if (!controller || !target) return;
     static_cast<void>(controller->Toggle(*target, apc::app::AppCommandContext::Detached()));
     if (m_onClose) m_onClose();
-}
-
-void DevicePickerView::OnDeviceDisconnectClicked(winrt::hstring const& id) {
-    auto controller = m_appController.lock();
-    auto target = apc::app::DeviceSelector::ById(std::wstring_view(id));
-    if (!controller || !target || !BeginPendingDeviceAction(id)) return;
-    if (m_onClose) m_onClose();
-    static_cast<void>(controller->Disconnect(*target, apc::app::AppCommandContext::Detached()));
 }
 
 void DevicePickerView::OnDeviceReconnectClicked(winrt::hstring const& id) {
     auto controller = m_appController.lock();
     auto target = apc::app::DeviceSelector::ById(std::wstring_view(id));
-    if (!controller || !target || !BeginPendingDeviceAction(id)) return;
+    if (!controller || !target) return;
     if (m_onClose) m_onClose();
     static_cast<void>(controller->Reconnect(*target, apc::app::AppCommandContext::Detached()));
 }
 
 void DevicePickerView::OnDisconnectAllClicked(winrt::Windows::Foundation::IInspectable const&,
                                               winrt::Microsoft::UI::Xaml::RoutedEventArgs const&) {
-    if (auto controller = m_appController.lock(); controller && BeginPendingGlobalAction())
+    if (auto controller = m_appController.lock()) {
         static_cast<void>(controller->DisconnectAll(apc::app::AppCommandContext::Detached()));
+        RenderDeviceList();
+    }
 }
 
 void DevicePickerView::OnReconnectAllClicked(winrt::Windows::Foundation::IInspectable const&,
                                              winrt::Microsoft::UI::Xaml::RoutedEventArgs const&) {
-    if (auto controller = m_appController.lock(); controller && BeginPendingGlobalAction())
+    if (auto controller = m_appController.lock()) {
         static_cast<void>(controller->ReconnectAll(apc::app::AppCommandContext::Detached()));
+        RenderDeviceList();
+    }
 }
 } // namespace winrt::AudioPlaybackConnector2::implementation

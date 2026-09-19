@@ -1,6 +1,7 @@
 #include "TestCheck.hpp"
 #include "AppTestFixture.hpp"
 #include <core/SettingsLimits.hpp>
+#include <ui/DevicePickerViewState.hpp>
 #include <array>
 #include <atomic>
 #include <future>
@@ -204,6 +205,38 @@ void TestDetachedToggleRespectsOwnedBusyState() {
           "tray toggle must use current device-owner busy state without starting a competing operation");
 }
 
+void TestPickerBusyStateComesFromCommandAdmission() {
+    for (auto operation : {AppCommandKind::Connect, AppCommandKind::ReconnectAll, AppCommandKind::DisconnectAll}) {
+        AppFixture fixture;
+        (void)fixture.Settings->RememberDevice(L"target", L"Target");
+        if (operation != AppCommandKind::Connect) apc::tests::device::ConnectSuccessfully(*fixture.Devices, L"target");
+        const auto before = fixture.Controller.Snapshot().Generation;
+        const auto context = AppCommandContext::Detached();
+        auto result = operation == AppCommandKind::Connect
+                          ? fixture.Controller.Connect(*DeviceSelector::ById(L"target"), context)
+                      : operation == AppCommandKind::ReconnectAll ? fixture.Controller.ReconnectAll(context)
+                                                                  : fixture.Controller.DisconnectAll(context);
+        const auto snapshot = fixture.Controller.Snapshot();
+        const auto view = BuildDevicePickerViewState(snapshot, L"Private device");
+        Check(result.Succeeded() && snapshot.Generation != before && view.Items.size() == 1 &&
+                  view.Items.front().IsBusy,
+              "command admission must publish busy state before the picker renders, including bulk commands");
+        if (operation == AppCommandKind::Connect) {
+            fixture.Devices->ConnectionAccess->LastConnection->CompleteStart(
+                apc::device::DeviceConnectionResult::Failed);
+            const auto closing = BuildDevicePickerViewState(fixture.Controller.Snapshot(), L"Private device");
+            Check(closing.Items.size() == 1 && closing.Items.front().IsBusy,
+                  "a failed connection stays busy until native cleanup completes");
+            apc::tests::device::CompleteCloseAndCooldown(*fixture.Devices,
+                                                         fixture.Devices->ConnectionAccess->LastConnection);
+            const auto finished = BuildDevicePickerViewState(fixture.Controller.Snapshot(), L"Private device");
+            Check(finished.Items.size() == 1 && !finished.Items.front().IsBusy &&
+                      finished.Generation != view.Generation,
+                  "completed failure cleanup must clear picker busy state without a UI expiry timer");
+        }
+    }
+}
+
 void TestQueriesReconcileAllProjectedFieldsAfterOwnerChanges() {
     for (auto query : std::array{&AppController::Status,
                                  &AppController::ListDevices,
@@ -345,5 +378,6 @@ int RunAppControllerUseCasesTests() {
     TestRefreshReadsCurrentSessionsAfterEnumeration();
     TestOpaqueExternalIdentityAndIdempotency();
     TestDetachedToggleRespectsOwnedBusyState();
+    TestPickerBusyStateComesFromCommandAdmission();
     return g_failures;
 }

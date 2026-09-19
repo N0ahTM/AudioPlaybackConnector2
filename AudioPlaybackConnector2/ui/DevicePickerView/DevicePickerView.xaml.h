@@ -12,7 +12,6 @@
 #include <chrono>
 #include <stop_token>
 #include <memory>
-#include <unordered_map>
 
 namespace winrt::Microsoft::UI::Xaml {
 struct RoutedEventArgs;
@@ -53,7 +52,6 @@ private:
                                 winrt::Microsoft::UI::Xaml::RoutedEventArgs const&);
     void OnReconnectAllClicked(winrt::Windows::Foundation::IInspectable const&,
                                winrt::Microsoft::UI::Xaml::RoutedEventArgs const&);
-    void OnDeviceDisconnectClicked(winrt::hstring const& id);
     void OnDeviceReconnectClicked(winrt::hstring const& id);
 
     static winrt::fire_and_forget RefreshDevicesAsync(winrt::weak_ref<DevicePickerView> weak,
@@ -62,15 +60,10 @@ private:
                                                       std::stop_token stop,
                                                       util::LogSink log);
     [[nodiscard]] std::optional<DeviceOptionsViewModel> DeviceOptions(std::wstring_view id) const;
-    void RenderDeviceList(bool reconcilePendingActions = true, bool forceRender = false);
+    enum class RenderReason { SnapshotChanged, PresentationChanged };
+    void RenderDeviceList(RenderReason reason = RenderReason::SnapshotChanged);
     winrt::Microsoft::UI::Xaml::Controls::ListViewItem
     BuildDeviceListItem(apc::device_picker::DeviceSnapshotItem const& device);
-    bool BeginPendingDeviceAction(winrt::hstring const& id);
-    bool BeginPendingGlobalAction();
-    bool IsDeviceActionPending(winrt::hstring const& id) const;
-    void ReconcilePendingActions(std::vector<apc::device_picker::DeviceSnapshotItem> const& items);
-    void SchedulePendingActionExpiry() noexcept;
-    void StopPendingActionTimer() noexcept;
     void ApplyGlobalActionState(bool visible, bool enabled);
     void SetRefreshIndicators(bool refreshing, bool blockingRefresh);
 
@@ -90,10 +83,6 @@ private:
     bool m_isLoadingDevices = false;
     std::stop_source m_refreshCancellation;
     bool m_presentationActive = false;
-    std::unordered_map<std::wstring, std::chrono::steady_clock::time_point> m_pendingDeviceActions;
-    std::chrono::steady_clock::time_point m_pendingGlobalActionStarted{};
-    bool m_pendingGlobalAction = false;
-    winrt::Microsoft::UI::Dispatching::DispatcherQueueTimer m_pendingActionTimer{nullptr};
     std::uint64_t m_renderedSnapshotGeneration = 0;
     bool m_hasRenderedSnapshot = false;
     bool m_preparedForRelease = false;

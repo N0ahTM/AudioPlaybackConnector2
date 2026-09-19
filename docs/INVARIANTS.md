@@ -316,6 +316,13 @@ resetting the application endpoint. An old cancelled completion cannot clear a n
 its result. WinUI rendering and dispatcher failure still require platform acceptance; core projection tests do
 not prove the complete window lifecycle.
 
+The picker renders busy state from that application snapshot. It owns no pending-device map, global action
+reservation or expiry timer. UI commands return after device-owner admission, and bulk handlers immediately
+render the resulting snapshot. Core tests cover Connect, ReconnectAll and DisconnectAll admission through the
+real controller and picker projection. A failed connection stays busy through native close and cooldown;
+completion then clears busy state and changes the generation, without a UI timeout. Presentation changes
+(language, navigation and saved-device expansion) explicitly rebuild the list even at the same generation.
+
 ## Distribution
 
 Store and Windows App Installer own application updates. The application performs no release lookup, update

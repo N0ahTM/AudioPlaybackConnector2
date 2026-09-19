@@ -133,6 +133,64 @@ struct ManualResumeTimer {
     }
 };
 
+void TestResumeCountsOnlyStartedTargets() {
+    std::atomic_bool exiting = false;
+    ManualResumeTimer timer;
+    PowerTransitionCoordinator coordinator(
+        exiting, [&](auto period, auto tick) { return timer.Schedule(period, std::move(tick)); });
+    coordinator.HandleSuspend({}, [] { return std::vector<std::wstring>{L"alpha", L"beta", L"alpha", L""}; });
+    std::vector<std::wstring> delivered;
+    std::vector<std::wstring> attempted{L"alpha", L"alpha"};
+    std::uint64_t generation = 0;
+    coordinator.HandleResume({}, [&](auto ids, auto current, auto completed) {
+        delivered = std::move(ids);
+        generation = current;
+        completed(attempted);
+    });
+    for (int count = 0; count < 6; ++count) {
+        Check(timer.Tick() && delivered == std::vector<std::wstring>({L"alpha", L"beta"}),
+              "only actual attempts count, and duplicate completion IDs count once");
+    }
+    attempted.clear();
+    for (int skipped = 0; skipped < 8; ++skipped) {
+        Check(timer.Tick() && delivered == std::vector<std::wstring>{L"beta"},
+              "exhausted targets leave delivery while skipped targets retain their retry budget");
+    }
+    coordinator.NotifyDeviceConnected(L"unknown");
+    Check(!timer.Cancelled && coordinator.IsResumeReconnectGenerationCurrent(generation),
+          "an unrelated connection must not acknowledge a pending recovery target");
+    coordinator.NotifyDeviceConnected(L"beta");
+    Check(timer.Cancelled && !timer.Tick() && !coordinator.IsResumeReconnectGenerationCurrent(generation),
+          "acknowledging the final target must stop recovery and reject late ticks");
+}
+
+void TestResumeRetainsTargetsAndResetsBudgetAcrossSuspend() {
+    std::atomic_bool exiting = false;
+    ManualResumeTimer timer;
+    PowerTransitionCoordinator coordinator(
+        exiting, [&](auto period, auto tick) { return timer.Schedule(period, std::move(tick)); });
+    coordinator.HandleSuspend({}, [] { return std::vector<std::wstring>{L"alpha"}; });
+    auto completedAttempts = [](auto ids, auto, auto completed) { completed(std::move(ids)); };
+    coordinator.HandleResume({}, completedAttempts);
+    for (int count = 0; count < 5; ++count)
+        Check(timer.Tick(), "initial cycle must retain unfinished recovery");
+    auto staleTick = timer.Tick;
+    coordinator.HandleSuspend({}, [] { return std::vector<std::wstring>{L"beta", L"alpha"}; });
+    Check(timer.Cancelled && !staleTick(), "suspend must invalidate the prior recovery generation");
+    std::vector<std::wstring> delivered;
+    coordinator.HandleResume({}, [&](auto ids, auto, auto completed) {
+        delivered = ids;
+        completed(std::move(ids));
+    });
+    for (int count = 0; count < 6; ++count) {
+        Check(timer.Tick() && delivered == std::vector<std::wstring>({L"alpha", L"beta"}),
+              "a new suspend cycle must retain pending targets, merge new targets and reset retry budgets");
+    }
+    Check(!timer.Tick(), "both targets must finish after six actual attempts in the new cycle");
+    coordinator.Cancel();
+    Check(timer.Cancelled && !timer.Tick(), "terminal cancellation must keep recovery inactive");
+}
+
 void TestResumeDeliveryIsSingleFlightAndCompletionIsConsumedOnce() {
     std::atomic_bool exiting = false;
     ManualResumeTimer timer;
@@ -262,6 +320,8 @@ int RunPowerTransitionCoordinatorTests() {
     TestResumeReconnectDeliversOnceWhenSchedulerIsUnavailable();
     TestResumeReconnectFallbackRejectsStaleAndCancelledCompletions();
     TestResumeReconnectFallbackCompletionOutlivesCoordinatorSafely();
+    TestResumeCountsOnlyStartedTargets();
+    TestResumeRetainsTargetsAndResetsBudgetAcrossSuspend();
     TestResumeDeliveryIsSingleFlightAndCompletionIsConsumedOnce();
     TestResumeCancelDuringDeliveryRejectsLateCompletionAndTicks();
     TestResumeCallbackCaptureRetiresUnlockedAndTimerOutlivesFacade();

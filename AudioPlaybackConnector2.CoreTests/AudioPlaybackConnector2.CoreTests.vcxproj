@@ -88,7 +88,6 @@
     <ClCompile Include="src\ControlCommandAdapterTests.cpp" />
     <ClCompile Include="src\AppModelsTests.cpp" />
     <ClCompile Include="src\UiRefreshCoalescerTests.cpp" />
-    <ClCompile Include="src\ResumeReconnectAttemptStateTests.cpp" />
     <ClCompile Include="src\PowerTransitionCoordinatorTests.cpp" />
 
     <ClCompile Include="src\CommandLineControlServerTests.cpp" />
@@ -130,7 +129,6 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveScheduleState.hpp" />
 
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\LatestStartupTaskRequestState.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResumeReconnectAttemptState.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ControlUiActionGate.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandClient.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandPipeSecurity.hpp" />

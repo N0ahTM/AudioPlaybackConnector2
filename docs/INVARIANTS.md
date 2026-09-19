@@ -255,7 +255,8 @@ and releases its late completion under the process watchdog. Native callbacks in
 apartment. Cancellation disarms queued callbacks and drains their admission phase; it does not wait for foreign
 delivery code that has already been disassociated.
 
-`ResumeReconnectAttemptStateTests.cpp` covers retry accounting and pending targets across suspend cycles.
+Retry counts and pending targets are private coordinator state in a single ordered vector. Coordinator tests
+cover attempt accounting, skipped targets, acknowledgements and target retention across suspend cycles.
 `UiRefreshCoalescerTests.cpp` covers flag merging, concurrent scheduling, cancellation and lost-wakeup races.
 
 ## Device operation completion

@@ -82,7 +82,6 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\DeviceFactPublicationFence.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\LatestStartupTaskRequestState.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\PowerTransitionCoordinator.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResumeReconnectAttemptState.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResourcePressureMonitor.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResourcePressureState.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\SingleInstanceGuard.hpp" />

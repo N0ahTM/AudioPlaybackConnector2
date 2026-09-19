@@ -1,11 +1,11 @@
 #include <app/PowerTransitionCoordinator.hpp>
-#include <app/ResumeReconnectAttemptState.hpp>
 #include <util/Logger.hpp>
 #include <util/RuntimeApartment.hpp>
 
 #include <windows.h>
 #include <wil/resource.h>
 
+#include <algorithm>
 #include <mutex>
 #include <utility>
 
@@ -66,7 +66,39 @@ struct PowerTransitionCoordinator::ResumeState {
     util::LogSink Log;
     // No nested locks. Callbacks, capture destruction and logging occur unlocked.
     std::mutex Mutex;
-    ResumeReconnectAttemptState Attempts;
+    struct Target {
+        std::wstring Id;
+        unsigned int Attempts = 0;
+    };
+    struct Selection {
+        std::vector<std::wstring> Eligible;
+        std::vector<std::wstring> Exhausted;
+    };
+    std::vector<Target> Targets;
+
+    void BeginCycle(std::vector<std::wstring> activeDeviceIds) {
+        for (auto& target : Targets)
+            target.Attempts = 0;
+        for (auto& id : activeDeviceIds) {
+            if (!id.empty() && std::ranges::find(Targets, id, &Target::Id) == Targets.end())
+                Targets.push_back({std::move(id)});
+        }
+    }
+
+    Selection SelectEligible() {
+        Selection result;
+        for (auto const& target : Targets) {
+            (target.Attempts >= c_maxResumeReconnectAttempts ? result.Exhausted : result.Eligible).push_back(target.Id);
+        }
+        std::erase_if(Targets, [](auto const& target) { return target.Attempts >= c_maxResumeReconnectAttempts; });
+        return result;
+    }
+
+    void RecordAttempts(std::vector<std::wstring> const& attemptedIds) {
+        for (auto& target : Targets) {
+            if (std::ranges::find(attemptedIds, target.Id) != attemptedIds.end()) ++target.Attempts;
+        }
+    }
     std::uint64_t Generation = 0;
     std::uint64_t DeliverySequence = 0;
     std::shared_ptr<const ResumeReconnectCallback> Reconnect;
@@ -101,7 +133,7 @@ void PowerTransitionCoordinator::Cancel() noexcept {
     {
         std::scoped_lock lock(m_resumeState->Mutex);
         m_resumeState->Cancelled = true;
-        m_resumeState->Attempts.Clear();
+        m_resumeState->Targets.clear();
         retired = std::move(m_resumeState->Reconnect);
         m_resumeState->DeliveryInFlight = false;
         ++m_resumeState->Generation;
@@ -129,7 +161,7 @@ void PowerTransitionCoordinator::HandleSuspend(std::function<void()> flushSettin
         {
             std::scoped_lock lock(m_resumeState->Mutex);
             if (m_resumeState->Generation != generation || m_exiting.load()) return;
-            m_resumeState->Attempts.BeginCycle(std::move(activeDeviceIds));
+            m_resumeState->BeginCycle(std::move(activeDeviceIds));
             m_resumeState->Cancelled = false;
         }
     } catch (...) {
@@ -157,7 +189,7 @@ void PowerTransitionCoordinator::HandleResume(std::function<void()> resumeDevice
         std::uint64_t generation;
         {
             std::scoped_lock lock(state->Mutex);
-            if (state->Cancelled || state->Attempts.Empty()) return;
+            if (state->Cancelled || state->Targets.empty()) return;
             generation = state->Generation;
             state->Reconnect.swap(callback);
             state->DeliveryInFlight = false;
@@ -184,15 +216,15 @@ void PowerTransitionCoordinator::NotifyDeviceConnected(std::wstring_view deviceI
     bool completed;
     {
         std::scoped_lock lock(m_resumeState->Mutex);
-        static_cast<void>(m_resumeState->Attempts.Acknowledge(deviceId));
-        completed = m_resumeState->Attempts.Empty();
+        std::erase_if(m_resumeState->Targets, [&](auto const& target) { return target.Id == deviceId; });
+        completed = m_resumeState->Targets.empty();
     }
     if (completed) CancelResumeReconnectTimer();
 }
 
 bool PowerTransitionCoordinator::IsResumeReconnectGenerationCurrent(std::uint64_t generation) const noexcept {
     std::scoped_lock lock(m_resumeState->Mutex);
-    return !m_resumeState->Cancelled && m_resumeState->Generation == generation && !m_resumeState->Attempts.Empty();
+    return !m_resumeState->Cancelled && m_resumeState->Generation == generation && !m_resumeState->Targets.empty();
 }
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -206,14 +238,14 @@ void PowerTransitionCoordinator::CancelResumeReconnectTimer() noexcept {
 
 bool PowerTransitionCoordinator::DeliverResumeReconnect(std::shared_ptr<ResumeState> const& state,
                                                         std::uint64_t generation) noexcept {
-    ResumeReconnectAttemptState::Selection selection;
+    ResumeState::Selection selection;
     std::shared_ptr<const ResumeReconnectCallback> reconnect;
     std::uint64_t delivery;
     {
         std::scoped_lock lock(state->Mutex);
-        if (state->Cancelled || state->Generation != generation || state->Attempts.Empty()) return false;
+        if (state->Cancelled || state->Generation != generation || state->Targets.empty()) return false;
         if (state->DeliveryInFlight) return true;
-        selection = state->Attempts.SelectEligible(c_maxResumeReconnectAttempts);
+        selection = state->SelectEligible();
         reconnect = state->Reconnect;
         delivery = ++state->DeliverySequence;
         state->DeliveryInFlight = !selection.Eligible.empty() && reconnect && *reconnect;
@@ -229,7 +261,7 @@ bool PowerTransitionCoordinator::DeliverResumeReconnect(std::shared_ptr<ResumeSt
         if (state->Cancelled || state->Generation != generation || state->DeliverySequence != delivery ||
             !state->DeliveryInFlight)
             return;
-        state->Attempts.RecordAttempts(attemptedIds);
+        state->RecordAttempts(attemptedIds);
         state->DeliveryInFlight = false;
     };
     try {

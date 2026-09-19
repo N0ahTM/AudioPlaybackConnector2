@@ -39,7 +39,6 @@ public:
         TrustClient IsTrustedClient;
 #ifdef APC_COMMAND_PIPE_SERVER_TESTING
         std::function<bool(std::size_t)> BeforeArmConnection;
-        std::function<void(std::size_t)> BeforeDeliveryPromoted;
         std::function<void(std::size_t, std::size_t)> AfterRequestCachePruned;
 #endif
     };
@@ -94,6 +93,8 @@ private:
     void DispatchRequestLocked(PipeInstance& instance) noexcept;
     void FinishClient(PipeInstance& instance) noexcept;
     void FinishClientLocked(PipeInstance& instance) noexcept;
+    // A returned record owns one active delivery, acquired under the cache lock.
+    // Every path must hand it to the pipe instance or call CompleteDelivery.
     [[nodiscard]] std::shared_ptr<RequestRecord> ExecuteOnce(apc::control::Request const& request,
                                                              std::stop_token stopToken,
                                                              std::uint64_t deadline,
@@ -101,8 +102,6 @@ private:
     void CompleteDelivery(apc::control::CorrelationId correlationId,
                           std::shared_ptr<RequestRecord> const& record,
                           bool acknowledged) noexcept;
-    [[nodiscard]] std::shared_ptr<RequestRecord>
-    PromotePendingDelivery(apc::control::Request const& request, apc::control::Response const& response) noexcept;
     void CompletePendingDelivery(apc::control::CorrelationId correlationId) noexcept;
     void PruneRequestRecords(std::chrono::steady_clock::time_point now) noexcept;
     void ScheduleRequestPruneLocked(std::chrono::steady_clock::time_point now) noexcept;

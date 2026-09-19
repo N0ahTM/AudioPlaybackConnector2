@@ -322,60 +322,57 @@ void TestParallelDuplicatesAndCorrelationConflict() {
     {
         auto options = TestOptions(L"parallel-cache-pressure", 2);
         options.MaxRequestRecords = 1;
-        options.AcknowledgedRecordLifetime = 100ms;
+        options.AcknowledgedRecordLifetime = 1ms;
+        options.ResponseTimeoutMs = 5000;
         const auto pipeName = options.PipeName;
-        Event secondPromotionReached;
-        Event releaseSecondPromotion;
-        std::atomic_int promotions = 0;
-        options.BeforeDeliveryPromoted = [&](std::size_t) noexcept {
-            if (++promotions == 2) {
-                secondPromotionReached.Signal();
-                (void)releaseSecondPromotion.Wait(3000);
-            }
-        };
         CommandLineControlServer server(std::move(options));
-        Event handlerStarted;
-        Event releaseHandler;
         std::atomic_int calls = 0;
+        const std::wstring payload(apc::control::c_maxPayloadBytes / sizeof(wchar_t), L'r');
         server.Start([&](apc::control::Request const&, std::stop_token, std::uint64_t) {
             ++calls;
-            handlerStarted.Signal();
-            (void)releaseHandler.Wait(1500);
-            return apc::control::Response{apc::control::ExitCode::Success, L"retained"};
+            return apc::control::Response{apc::control::ExitCode::Success, payload};
         });
 
-        auto request = MakeRequest(32);
+        const auto request = MakeRequest(32);
         auto first = OpenClient(pipeName);
         auto second = OpenClient(pipeName);
         Check(first && second && WriteRequest(first.Get(), request) && WriteRequest(second.Get(), request),
               "cache-pressure duplicates must both be accepted");
-        Check(handlerStarted.Wait(1000), "cache-pressure canonical handler must start");
-        releaseHandler.Signal();
-        Check(secondPromotionReached.Wait(1000), "one duplicate delivery must remain queued before promotion");
 
-        std::optional<apc::control::Response> firstResponse;
-        std::optional<apc::control::Response> secondResponse;
-        Event oneResponseRead;
-        std::jthread firstReader([&] {
-            firstResponse = ReadResponse(first.Get(), request.CorrelationId, true, 3000);
-            oneResponseRead.Signal();
-        });
-        std::jthread secondReader([&] {
-            secondResponse = ReadResponse(second.Get(), request.CorrelationId, true, 3000);
-            oneResponseRead.Signal();
-        });
-        Check(oneResponseRead.Wait(1000), "one duplicate must receive and acknowledge the canonical response");
+        // Reading only the header proves that the second delivery owns the
+        // record. Its 64 KiB body cannot fit in the 4 KiB pipe buffer.
+        apc::control::ResponseHeader secondHeader;
+        auto const headerStatus = apc::control::ReadExact(
+            second.Get(), &secondHeader, sizeof(secondHeader), nullptr, apc::control::DeadlineAfter(1000));
+        Check(headerStatus == apc::control::IoStatus::Success &&
+                  secondHeader.PayloadBytes == apc::control::c_maxPayloadBytes,
+              "the duplicate must begin its full response before cache pressure");
+        auto firstResponse = ReadResponse(first.Get(), request.CorrelationId);
+        Check(firstResponse && firstResponse->Payload == payload && WaitForServerDisconnect(first.Get()),
+              "one duplicate must complete its response and acknowledgement");
 
         auto pressure = Exchange(pipeName, MakeRequest(33), true, 1000);
         Check(pressure && pressure->Code == apc::control::ExitCode::Busy,
-              "cache pressure must not evict a record with a queued duplicate");
-        releaseSecondPromotion.Signal();
-        firstReader.join();
-        secondReader.join();
-        Check(firstResponse && secondResponse && firstResponse->Payload == L"retained" &&
-                  secondResponse->Payload == L"retained",
-              "both duplicates must receive the retained response after cache pressure");
-        Check(calls.load() == 1, "cache pressure must not re-execute a queued duplicate");
+              "cache pressure must not evict a record whose duplicate delivery is blocked on pipe I/O");
+
+        std::wstring secondPayload(payload.size(), L'\0');
+        auto const bodyStatus = apc::control::ReadExact(second.Get(),
+                                                        secondPayload.data(),
+                                                        apc::control::c_maxPayloadBytes,
+                                                        nullptr,
+                                                        apc::control::DeadlineAfter(1000));
+        Check(bodyStatus == apc::control::IoStatus::Success && secondPayload == payload,
+              "the blocked duplicate must receive the original response after cache pressure");
+        Check(apc::control::WriteAcknowledgement(
+                  second.Get(), request.CorrelationId, nullptr, apc::control::DeadlineAfter(1000)) ==
+                      apc::control::IoStatus::Success &&
+                  WaitForServerDisconnect(second.Get()),
+              "the retained duplicate delivery must finish normally");
+        Check(calls.load() == 1, "cache pressure must not execute the duplicate again");
+        auto nextResponse = Exchange(pipeName, MakeRequest(34));
+        Check(nextResponse && nextResponse->Code == apc::control::ExitCode::Success &&
+                  nextResponse->Payload == payload && calls.load() == 2,
+              "finishing both deliveries must release cache capacity for the next command");
         server.Stop();
     }
 

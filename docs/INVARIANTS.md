@@ -64,6 +64,24 @@ shutdown budgets, late completion fences, callback reentrancy, callback-driven f
 storage release after timeout. `FlushNow` is still an explicit synchronous I/O boundary: its retry count does not
 bound platform I/O duration. Callers must not hold application locks when invoking it.
 
+## Named-pipe response retention
+
+`CommandLineControlServer` owns request records, pending handler deliveries and cache-byte accounting under its
+request mutex. A complete request registers its pending delivery before its handler work is submitted. Pending
+deliveries prevent eviction while that work is queued or waiting for another execution of the same request.
+
+Selecting a completed response and acquiring its active delivery happen under the same request lock. A newly
+executed response acquires that delivery when completion is committed. The handler callback then drops its
+pending registration and transfers the active delivery to the pipe instance. Failed dispatch releases it directly;
+normal dispatch releases it when the ACK arrives or the client disconnects. There is no second cache lookup to
+establish ownership after returning the response. A conflicting request never owns the canonical delivery.
+
+An active or pending delivery prevents both TTL pruning and eviction under cache pressure, including after another
+client acknowledges the same result. The real-pipe cache-pressure test holds a duplicate's 64 KiB response behind
+a 4 KiB pipe buffer, completes the other client's ACK, attempts another request, and then drains the retained body.
+It verifies a Busy response under pressure, an intact duplicate response, exactly one execution of that request,
+and restored cache capacity after both deliveries finish.
+
 ## Power recovery
 
 | State | Execution context and callers | Synchronization | Cancellation and shutdown |

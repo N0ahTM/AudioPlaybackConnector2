@@ -726,6 +726,7 @@ void CALLBACK CommandLineControlServer::OnHandlerReady(PTP_CALLBACK_INSTANCE cal
                                                      owner->m_stopSource.get_token(),
                                                      apc::control::DeadlineAfter(owner->m_options.HandlerTimeoutMs),
                                                      response);
+                acknowledgementRecord = executionRecord;
                 g_activeHandlerServer = nullptr;
             }
         } catch (...) {
@@ -742,17 +743,8 @@ void CALLBACK CommandLineControlServer::OnHandlerReady(PTP_CALLBACK_INSTANCE cal
 
     auto const& responseToSend = executionRecord ? executionRecord->Response : response;
 
-#ifdef APC_COMMAND_PIPE_SERVER_TESTING
     if (pendingDelivery) {
-        try {
-            if (owner->m_options.BeforeDeliveryPromoted) owner->m_options.BeforeDeliveryPromoted(instance->Index);
-        } catch (...) {
-        }
-    }
-#endif
-    if (pendingDelivery) {
-        acknowledgementRecord = canRun ? owner->PromotePendingDelivery(request, responseToSend) : nullptr;
-        if (!canRun) owner->CompletePendingDelivery(pendingCorrelation);
+        owner->CompletePendingDelivery(pendingCorrelation);
         pendingDelivery = false;
     }
 
@@ -1111,6 +1103,9 @@ CommandLineControlServer::ExecuteOnce(apc::control::Request const& request,
                 }
                 record->Completed.wait_for(requestLock, std::chrono::milliseconds(std::min<DWORD>(wait, 100)));
             }
+            // Selection and delivery ownership are one cache operation. The
+            // record cannot become evictable between returning it and writing it.
+            ++record->ActiveDeliveries;
             return record;
         }
 
@@ -1172,6 +1167,7 @@ CommandLineControlServer::ExecuteOnce(apc::control::Request const& request,
         record->Response = std::move(response);
         record->CompletedAt = std::chrono::steady_clock::now();
         record->IsComplete = true;
+        ++record->ActiveDeliveries;
         const auto actualBytes = RequestBytes(record->Request) + ResponseBytes(record->Response);
         if (record->Bytes > actualBytes) m_requestCacheBytes -= record->Bytes - actualBytes;
         record->Bytes = actualBytes;
@@ -1198,33 +1194,6 @@ void CommandLineControlServer::CompleteDelivery(apc::control::CorrelationId corr
         }
     } catch (...) {
         Trace(L"request acknowledgement cleanup failed");
-    }
-}
-
-std::shared_ptr<CommandLineControlServer::RequestRecord>
-CommandLineControlServer::PromotePendingDelivery(apc::control::Request const& request,
-                                                 apc::control::Response const& response) noexcept {
-    try {
-        std::lock_guard requestLock(m_requestMutex);
-        auto pending = m_pendingDeliveries.find(request.CorrelationId);
-        if (pending != m_pendingDeliveries.end()) {
-            if (pending->second > 1) {
-                --pending->second;
-            } else {
-                m_pendingDeliveries.erase(pending);
-            }
-        }
-        auto entry = m_requestRecords.find(request.CorrelationId);
-        if (entry == m_requestRecords.end() || !entry->second->IsComplete ||
-            !SameRequest(entry->second->Request, request) || entry->second->Response.Code != response.Code ||
-            entry->second->Response.Payload != response.Payload) {
-            return {};
-        }
-        ++entry->second->ActiveDeliveries;
-        return entry->second;
-    } catch (...) {
-        Trace(L"pending delivery promotion failed");
-        return {};
     }
 }
 

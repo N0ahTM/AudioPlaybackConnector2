@@ -47,6 +47,7 @@ Review the draft:
 - [ ] Release body is the correct changelog section.
 - [ ] `.msixbundle`, `.appinstaller`, `.cer`, and dependency assets are present.
 - [ ] Artifact version is `X.Y.Z.0` and contains x64 and ARM64.
+- [ ] Each application MSIX contains `LICENSE` and `THIRD_PARTY_NOTICES.md` at its root, matching the release source.
 - [ ] The tag points to the intended `main` commit.
 
 Never move or recreate a published release tag. Fix source or metadata with a newer version.

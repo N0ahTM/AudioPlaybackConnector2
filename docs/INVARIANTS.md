@@ -451,3 +451,30 @@ Cleanup coroutines retain only manager, tag, group and log values, never the ser
 These ownership properties have a call-site review and product build/static-analysis verification.
 Headless tests do not instantiate AppNotificationManager. Interactive activation, shutdown during
 delivery and notification behavior on the supported packaged/unpackaged matrix remain runtime checks.
+
+## UI refresh scheduling
+
+ApplicationHost constructs UiRefreshScheduler with an asynchronous dispatcher adapter and a weak host render
+callback. Its subsequent operations are Request and Stop. The scheduler is compiled once in CoreRuntime and
+has no WinUI dependency. There is one native threadpool timer and no dedicated worker or HWND fallback path.
+Timer allocation is part of construction; failure aborts that initialization instead of leaving an unwakeable
+reservation. Dispatcher rejection or exception retains the coalescing reservation and retries after 100 ms.
+Render failures retry from 100 ms up to 3200 ms; the host's retry mask omits the transient-error bit.
+
+UiRefreshCoalescer owns pending flags and the single drain reservation. Its API is Request, BeginDrain,
+CompleteDrain and Cancel. New requests join a queued, rendering or retrying pass. Delivery tickets admit each
+queued callback once; old or duplicated callbacks cannot consume a later pass. Rendering and its failure count
+belong to the serialized UI context. Dispatch must enqueue asynchronously; false means no callback was accepted.
+The native timer lock only protects arm/disarm. No dispatcher, renderer, logging or foreign callback runs under it
+or under the coalescer lock.
+
+Stop closes admission, invalidates the ticket, cancels pending flags and disarms the timer. It drains only the
+native callback admission phase, never the UI dispatcher or already admitted rendering. Native callbacks retain
+state before disassociating; a blocked dispatch can therefore outlive facade destruction safely. Late failure
+cannot rearm stopped state. UI callbacks retain only a weak scheduler reference; already admitted rendering may
+finish, while the host independently checks its exit state before rendering.
+
+UiRefreshSchedulerTests exercise coalescing, requests during rendering, duplicate delivery, native dispatch and
+render retries, exceptions, reentrant Stop, concurrent Request/Stop, queued work after destruction, and destruction
+while a native dispatcher callback is blocked. The timer is the production Windows timer; only the UI queue is
+injected. These tests do not replace interactive tray/WinUI acceptance.

@@ -24,6 +24,7 @@ int RunAppControllerTests();
 int RunAppModelsTests();
 int RunControlCommandAdapterTests();
 int RunUiRefreshCoalescerTests();
+int RunUiRefreshSchedulerTests();
 int RunPowerTransitionCoordinatorTests();
 int RunCommandClientTests();
 int RunCliParserTests();
@@ -116,6 +117,7 @@ int main(int argc, char** argv) {
         Suite{"AppModels", RunAppModelsTests},
         Suite{"ControlCommandAdapter", RunControlCommandAdapterTests},
         Suite{"UiRefreshCoalescer", RunUiRefreshCoalescerTests},
+        Suite{"UiRefreshScheduler", RunUiRefreshSchedulerTests},
         Suite{"PowerTransitionCoordinator", RunPowerTransitionCoordinatorTests},
         Suite{"CommandClient", RunCommandClientTests},
         Suite{"CliParser", RunCliParserTests},

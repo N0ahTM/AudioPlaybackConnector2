@@ -26,9 +26,6 @@
     <ClCompile Include="src\app\ApplicationHost.cpp">
       <Filter>src\app</Filter>
     </ClCompile>
-    <ClCompile Include="src\app\ApplicationHostVisualRefreshRetry.cpp">
-      <Filter>src\app</Filter>
-    </ClCompile>
     <ClCompile Include="src\app\AdaptiveResourcePolicy.cpp">
       <Filter>src\app</Filter>
     </ClCompile>
@@ -116,6 +113,9 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="include\app\UiRefreshScheduler.hpp">
+      <Filter>include\app</Filter>
+    </ClInclude>
     <ClInclude Include="include\pch.h">
       <Filter>include</Filter>
     </ClInclude>

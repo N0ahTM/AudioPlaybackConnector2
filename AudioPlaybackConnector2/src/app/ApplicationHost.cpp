@@ -204,8 +204,7 @@ bool ApplicationHost::PerformTeardown(SettingsShutdownMode settingsShutdownMode)
         m_adaptiveResourceFallbackTimer = nullptr;
     }
     static_cast<void>(m_adaptiveScheduleState.Supersede());
-    m_deviceVisualRefreshCoalescer.Cancel();
-    CancelNativeDeviceVisualRefreshRetry();
+    if (m_visualRefresh) m_visualRefresh->Stop();
     {
         std::scoped_lock lock(m_uiFallbackWorkMutex);
         m_uiFallbackWork.clear();
@@ -234,7 +233,6 @@ bool ApplicationHost::PerformTeardown(SettingsShutdownMode settingsShutdownMode)
             KillTimer(m_hwnd, c_timerAnimation);
             KillTimer(m_hwnd, c_timerTransientTrayError);
             KillTimer(m_hwnd, c_timerAdaptiveResources);
-            KillTimer(m_hwnd, c_timerDeviceVisualRefreshRetry);
             m_connectingAnimationTimerActive = false;
             if (m_windowSubclassInstalled) {
                 if (RemoveWindowSubclass(m_hwnd, SubclassProc, 1)) {
@@ -285,6 +283,16 @@ void ApplicationHost::SetupMainWindow() {
     m_mainWindow = winrt::make<winrt::AudioPlaybackConnector2::implementation::MainWindow>();
     m_mainWindow.Title(winrt::hstring(L"AudioPlaybackConnector2"));
     m_dispatcherQueue = m_mainWindow.DispatcherQueue();
+    m_visualRefresh = std::make_unique<UiRefreshScheduler>(
+        [dispatcher = m_dispatcherQueue](UiRefreshScheduler::Task task) {
+            return dispatcher.TryEnqueue([task = std::move(task)] { task(); });
+        },
+        [weak = weak_from_this()](UiRefreshScheduler::Flags flags) {
+            auto self = weak.lock();
+            return self && self->RefreshDeviceVisuals(flags);
+        },
+        ~c_visualRefreshForceError,
+        m_log);
 
     // Move the window off-screen before Activate() to prevent any visible flash.
     auto appWindow = m_mainWindow.AppWindow();
@@ -1131,101 +1139,16 @@ bool ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstri
 }
 
 void ApplicationHost::ScheduleDeviceVisualRefresh(VisualRefresh refresh) {
-    const auto flags = static_cast<UiRefreshCoalescer::Flags>(refresh);
-    if (m_deviceVisualRefreshCoalescer.Request(flags)) {
-        QueueDeviceVisualRefreshDrain();
-    }
+    if (m_visualRefresh) m_visualRefresh->Request(static_cast<UiRefreshScheduler::Flags>(refresh));
 }
 
-void ApplicationHost::QueueDeviceVisualRefreshDrain() noexcept {
-    constexpr unsigned int c_maxImmediateScheduleAttempts = 3;
-    for (unsigned int attempt = 0; attempt < c_maxImmediateScheduleAttempts; ++attempt) {
-        if (m_exiting.load()) {
-            m_deviceVisualRefreshCoalescer.Cancel();
-            return;
-        }
-
-        if (m_dispatcherQueue) {
-            try {
-                auto weak = weak_from_this();
-                if (m_dispatcherQueue.TryEnqueue([weak]() {
-                        if (auto self = weak.lock()) self->DrainDeviceVisualRefresh();
-                    })) {
-                    return;
-                }
-                m_log.Trace(L"[App] Dispatcher rejected coalesced device visual refresh");
-            } catch (winrt::hresult_error const& ex) {
-                m_log.Exception(L"[App] Failed to enqueue coalesced device visual refresh", ex);
-            } catch (std::exception const& ex) {
-                m_log.Exception(L"[App] Failed to enqueue coalesced device visual refresh", ex);
-            } catch (...) {
-                m_log.UnknownException(L"[App] Failed to enqueue coalesced device visual refresh");
-            }
-        }
-
-        if (m_hwnd && IsWindow(m_hwnd)) {
-            if (PostMessageW(m_hwnd, c_messageDrainDeviceVisualRefresh, 0, 0)) return;
-            if (SetTimer(m_hwnd, c_timerDeviceVisualRefreshRetry, 50, nullptr)) return;
-        }
-
-        if (ScheduleNativeDeviceVisualRefreshRetry(std::chrono::milliseconds(100))) return;
-
-        if (!m_deviceVisualRefreshCoalescer.ScheduleFailed()) return;
-    }
-
-    m_log.Trace(L"[App] ERROR: no UI scheduling path accepted the device visual refresh");
-    m_deviceVisualRefreshCoalescer.AbandonSchedule();
-}
-
-void ApplicationHost::DrainDeviceVisualRefresh() noexcept {
-    auto flags = m_deviceVisualRefreshCoalescer.BeginDrain();
-    bool succeeded = false;
-    try {
-        if (!m_exiting.load()) {
-            succeeded = true;
-            if ((flags & c_visualRefreshInventoryChanged) != 0 && m_trayController) {
-                succeeded = m_trayController->InvalidateDevicePickerInventory();
-            }
-            if (succeeded && (flags & c_visualRefreshRequested) != 0) {
-                succeeded =
-                    RefreshTrayVisualState((flags & c_visualRefreshForceError) != 0, L"coalesced-device-events");
-            }
-        }
-    } catch (winrt::hresult_error const& ex) {
-        m_log.Exception(L"[App] Coalesced device visual refresh failed", ex);
-    } catch (std::exception const& ex) {
-        m_log.Exception(L"[App] Coalesced device visual refresh failed", ex);
-    } catch (...) {
-        m_log.UnknownException(L"[App] Coalesced device visual refresh failed");
-    }
-
-    if (m_exiting.load()) {
-        m_deviceVisualRefreshCoalescer.Cancel();
-        return;
-    }
-
-    if (!succeeded) {
-        static_cast<void>(m_deviceVisualRefreshCoalescer.Request(flags & ~c_visualRefreshForceError));
-    }
-
-    if (!m_deviceVisualRefreshCoalescer.CompleteDrain()) {
-        if (succeeded) m_deviceVisualRefreshConsecutiveFailures = 0;
-        return;
-    }
-
-    if (succeeded) {
-        m_deviceVisualRefreshConsecutiveFailures = 0;
-        QueueDeviceVisualRefreshDrain();
-        return;
-    }
-
-    m_deviceVisualRefreshConsecutiveFailures = std::min(m_deviceVisualRefreshConsecutiveFailures + 1U, 6U);
-    auto const delay = std::min<UINT>(100U << (m_deviceVisualRefreshConsecutiveFailures - 1U), 5000U);
-    if (m_hwnd && IsWindow(m_hwnd) && SetTimer(m_hwnd, c_timerDeviceVisualRefreshRetry, delay, nullptr)) {
-        m_log.Trace(L"[App] Device visual refresh retry scheduled in {0} ms", delay);
-    } else {
-        QueueDeviceVisualRefreshDrain();
-    }
+bool ApplicationHost::RefreshDeviceVisuals(UiRefreshScheduler::Flags flags) {
+    if (m_exiting.load()) return false;
+    if ((flags & c_visualRefreshInventoryChanged) != 0 && m_trayController &&
+        !m_trayController->InvalidateDevicePickerInventory())
+        return false;
+    return (flags & c_visualRefreshRequested) == 0 ||
+           RefreshTrayVisualState((flags & c_visualRefreshForceError) != 0, L"coalesced-device-events");
 }
 
 void ApplicationHost::SetupDeviceEvents() {
@@ -1448,11 +1371,6 @@ LRESULT CALLBACK ApplicationHost::SubclassProc(
         return 0;
     }
 
-    if (msg == c_messageDrainDeviceVisualRefresh) {
-        host->DrainDeviceVisualRefresh();
-        return 0;
-    }
-
     if (msg == WM_SETTINGCHANGE) {
         if (host->m_trayController) host->m_trayController->OnSettingChange(lParam);
         return DefSubclassProc(hwnd, msg, wParam, lParam);
@@ -1496,12 +1414,6 @@ LRESULT CALLBACK ApplicationHost::SubclassProc(
         if (!host->m_adaptiveScheduleState.ConsumeWin32IfDue(AdaptiveResourcePolicy::Clock::now())) return 0;
         KillTimer(hwnd, c_timerAdaptiveResources);
         host->EvaluateAdaptiveResources(false, L"adaptive-deadline");
-        return 0;
-    }
-
-    if (msg == WM_TIMER && wParam == c_timerDeviceVisualRefreshRetry) {
-        KillTimer(hwnd, c_timerDeviceVisualRefreshRetry);
-        host->DrainDeviceVisualRefresh();
         return 0;
     }
 

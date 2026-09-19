@@ -18,16 +18,12 @@ void TestUiRefreshCoalescesFlagsAndDrainsExactlyOnce() {
     constexpr UiRefreshCoalescer::Flags c_refresh = 1U << 0;
     constexpr UiRefreshCoalescer::Flags c_forceError = 1U << 1;
 
-    Check(!coalescer.DrainScheduled(), "a new UI refresh coalescer must not have a scheduled drain");
     Check(coalescer.Request(c_refresh), "the first UI refresh request must schedule one drain");
     Check(!coalescer.Request(c_forceError), "a second UI refresh request must not schedule a duplicate drain");
-    Check(coalescer.DrainScheduled(), "coalesced UI refresh requests must keep the drain scheduled");
 
     const auto flags = coalescer.BeginDrain();
     Check(flags == (c_refresh | c_forceError), "a UI drain must atomically consume the union of pending flags");
-    Check(coalescer.DrainScheduled(), "a UI drain must remain scheduled until completion is committed");
     Check(!coalescer.CompleteDrain(), "a completed UI drain without new work must stop");
-    Check(!coalescer.DrainScheduled(), "a clean UI drain completion must clear its scheduled state");
 }
 
 void TestUiRefreshRetainsRequestsMadeDuringDrain() {
@@ -71,7 +67,6 @@ void TestUiRefreshRequestCompletionRaceHasNoLostWakeup() {
         const bool completionWon = requestScheduledNewDrain && !completionContinuedDrain;
         Check(requestWon || completionWon,
               "a UI request racing completion must continue the old drain or schedule exactly one new drain");
-        Check(coalescer.DrainScheduled(), "a raced UI request must always leave a drain scheduled");
         Check(coalescer.BeginDrain() == c_raced, "a raced UI request must never lose its flags");
         Check(!coalescer.CompleteDrain(), "the drain for raced UI flags must finish cleanly");
     }
@@ -99,60 +94,15 @@ void TestUiRefreshConcurrentRequestsUnionFlagsAndScheduleOnce() {
     Check(!coalescer.CompleteDrain(), "the concurrent UI refresh drain must finish after consuming all flags");
 }
 
-void TestUiRefreshScheduleFailureAllowsAReplacementSchedule() {
-    UiRefreshCoalescer coalescer;
-    constexpr UiRefreshCoalescer::Flags c_first = 1U << 2;
-    constexpr UiRefreshCoalescer::Flags c_replacement = 1U << 3;
-
-    Check(coalescer.Request(c_first), "the schedule-failure test must reserve its initial drain");
-    Check(!coalescer.ScheduleFailed(), "a failed queue without a concurrent request must not spin-retry");
-    Check(!coalescer.DrainScheduled(), "a failed queue operation must release its drain reservation");
-    Check(coalescer.Request(c_replacement), "the next request after a queue failure must schedule a replacement drain");
-    Check(coalescer.BeginDrain() == (c_first | c_replacement),
-          "a replacement drain must retain flags whose earlier queue operation failed");
-    Check(!coalescer.CompleteDrain(), "a replacement drain must finish cleanly after consuming retained flags");
-}
-
-void TestUiRefreshScheduleFailureRetainsAConcurrentRequest() {
-    UiRefreshCoalescer coalescer;
-    constexpr UiRefreshCoalescer::Flags c_first = 1U << 4;
-    constexpr UiRefreshCoalescer::Flags c_concurrent = 1U << 5;
-
-    Check(coalescer.Request(c_first), "the failure-race test must reserve its first schedule");
-    Check(!coalescer.Request(c_concurrent), "a concurrent request must join the outstanding schedule");
-    Check(coalescer.ScheduleFailed(), "queue failure must atomically reserve a retry for concurrent work");
-    Check(coalescer.DrainScheduled(), "the retry reservation must remain visible to later requests");
-    Check(coalescer.BeginDrain() == (c_first | c_concurrent),
-          "the replacement schedule must preserve original and concurrent flags");
-    Check(!coalescer.CompleteDrain(), "the failure-race replacement drain must finish cleanly");
-}
-
 void TestUiRefreshCancellationIsTerminal() {
     UiRefreshCoalescer coalescer;
     constexpr UiRefreshCoalescer::Flags c_flag = 1U << 3;
 
     static_cast<void>(coalescer.Request(c_flag));
     coalescer.Cancel();
-    Check(!coalescer.DrainScheduled(), "UI refresh cancellation must clear the scheduled drain");
     Check(coalescer.BeginDrain() == 0, "UI refresh cancellation must discard pending flags");
     Check(!coalescer.CompleteDrain(), "completion after UI refresh cancellation must remain idle");
-    static_cast<void>(coalescer.ScheduleFailed());
     Check(!coalescer.Request(c_flag), "a cancelled UI refresh coalescer must reject all later requests");
-    Check(!coalescer.DrainScheduled(), "a cancelled UI refresh coalescer must remain terminally idle");
-}
-
-void TestUiRefreshAbandonRetainsDirtyFlagsForANewRequest() {
-    UiRefreshCoalescer coalescer;
-    constexpr UiRefreshCoalescer::Flags c_initial = 1U << 6;
-    constexpr UiRefreshCoalescer::Flags c_wakeup = 1U << 7;
-
-    Check(coalescer.Request(c_initial), "the abandoned-schedule test must reserve its initial drain");
-    coalescer.AbandonSchedule();
-    Check(!coalescer.DrainScheduled(), "abandoning an unavailable scheduler must release its reservation");
-    Check(coalescer.Request(c_wakeup), "a later event must wake dirty work after scheduler abandonment");
-    Check(coalescer.BeginDrain() == (c_initial | c_wakeup),
-          "scheduler abandonment must retain all dirty flags for the later wakeup");
-    Check(!coalescer.CompleteDrain(), "the recovered abandoned schedule must drain cleanly");
 }
 
 } // namespace
@@ -166,9 +116,6 @@ int RunUiRefreshCoalescerTests() {
     TestUiRefreshRetainsRequestsMadeDuringDrain();
     TestUiRefreshRequestCompletionRaceHasNoLostWakeup();
     TestUiRefreshConcurrentRequestsUnionFlagsAndScheduleOnce();
-    TestUiRefreshScheduleFailureAllowsAReplacementSchedule();
-    TestUiRefreshScheduleFailureRetainsAConcurrentRequest();
     TestUiRefreshCancellationIsTerminal();
-    TestUiRefreshAbandonRetainsDirtyFlagsForANewRequest();
     return g_failures;
 }

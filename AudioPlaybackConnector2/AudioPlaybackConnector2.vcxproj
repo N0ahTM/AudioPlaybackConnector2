@@ -135,7 +135,7 @@
     <ClInclude Include="include\app\LatestStartupTaskRequestState.hpp" />
     <ClInclude Include="include\app\StartupTaskCoordinator.hpp" />
     <ClInclude Include="include\app\StartupTaskSnapshot.hpp" />
-    <ClInclude Include="include\app\UiRefreshCoalescer.hpp" />
+    <ClInclude Include="include\app\UiRefreshScheduler.hpp" />
     <ClInclude Include="include\util\RuntimeApartment.hpp" />
     <ClInclude Include="include\control\CommandProtocol.hpp" />
     <ClInclude Include="include\control\CommandPipeSecurity.hpp" />
@@ -201,7 +201,6 @@
       <PrecompiledHeader>Create</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="src\app\ApplicationHost.cpp" />
-    <ClCompile Include="src\app\ApplicationHostVisualRefreshRetry.cpp" />
     <ClCompile Include="src\app\SettingsWindowPresenter.cpp" />
     <ClCompile Include="src\core\ThemeHelper.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="src\services\NotificationService.cpp" />

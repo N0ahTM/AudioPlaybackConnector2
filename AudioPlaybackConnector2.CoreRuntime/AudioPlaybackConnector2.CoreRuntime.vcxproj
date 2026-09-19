@@ -69,6 +69,7 @@
     <Lib><LinkTimeCodeGeneration>true</LinkTimeCodeGeneration></Lib>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\UiRefreshScheduler.hpp" />
     <ClInclude Include="include\pch.h" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveResourcePolicy.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppController.hpp" />
@@ -120,6 +121,7 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\util\Util.hpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\UiRefreshScheduler.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\SettingsCodec.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\control\CliParser.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="src\pch.cpp"><PrecompiledHeader>Create</PrecompiledHeader></ClCompile>

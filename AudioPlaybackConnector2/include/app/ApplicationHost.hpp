@@ -12,7 +12,7 @@
 #include <app/SettingsWindowPresenter.hpp>
 #include <app/SingleInstanceGuard.hpp>
 #include <app/StartupTaskCoordinator.hpp>
-#include <app/UiRefreshCoalescer.hpp>
+#include <app/UiRefreshScheduler.hpp>
 
 #include <core/DeviceService.hpp>
 #include <core/SettingsStore.hpp>
@@ -82,17 +82,14 @@ private:
     void HandlePowerResume();
     [[nodiscard]] bool RefreshTrayVisualState(bool forceErrorWhenIdle = false,
                                               std::wstring_view reason = L"unspecified");
-    enum class VisualRefresh : UiRefreshCoalescer::Flags {
+    enum class VisualRefresh : UiRefreshScheduler::Flags {
         Tray = 1U << 0,
         TrayWithError = (1U << 0) | (1U << 1),
         Inventory = 1U << 2,
         TrayAndInventory = (1U << 0) | (1U << 2)
     };
     void ScheduleDeviceVisualRefresh(VisualRefresh refresh);
-    void QueueDeviceVisualRefreshDrain() noexcept;
-    void DrainDeviceVisualRefresh() noexcept;
-    [[nodiscard]] bool ScheduleNativeDeviceVisualRefreshRetry(std::chrono::milliseconds delay) noexcept;
-    void CancelNativeDeviceVisualRefreshRetry() noexcept;
+    bool RefreshDeviceVisuals(UiRefreshScheduler::Flags flags);
     void HandleResourcePressureSnapshot(ResourcePressureSnapshot snapshot);
     void EvaluateAdaptiveResources(bool userInteraction, std::wstring_view reason) noexcept;
     void ScheduleAdaptiveResourceEvaluation(std::optional<AdaptiveResourcePolicy::TimePoint> reevaluateAt) noexcept;
@@ -129,9 +126,6 @@ private:
 
     static LRESULT CALLBACK
     SubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) noexcept;
-    static void CALLBACK DeviceVisualRefreshRetryTimerCallback(PTP_CALLBACK_INSTANCE,
-                                                               void* context,
-                                                               PTP_TIMER) noexcept;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
@@ -167,13 +161,11 @@ private:
     static constexpr UINT_PTR c_timerAnimation = 0x41504332;
     static constexpr UINT_PTR c_timerTransientTrayError = 0x41504333;
     static constexpr UINT_PTR c_timerAdaptiveResources = 0x41504334;
-    static constexpr UINT_PTR c_timerDeviceVisualRefreshRetry = 0x41504335;
     static constexpr UINT c_messageDrainUiFallbackWork = WM_APP + 2;
-    static constexpr UINT c_messageDrainDeviceVisualRefresh = WM_APP + 3;
     static constexpr UINT c_transientTrayErrorMs = 3000;
-    static constexpr UiRefreshCoalescer::Flags c_visualRefreshRequested = 1U << 0;
-    static constexpr UiRefreshCoalescer::Flags c_visualRefreshForceError = 1U << 1;
-    static constexpr UiRefreshCoalescer::Flags c_visualRefreshInventoryChanged = 1U << 2;
+    static constexpr UiRefreshScheduler::Flags c_visualRefreshRequested = 1U << 0;
+    static constexpr UiRefreshScheduler::Flags c_visualRefreshForceError = 1U << 1;
+    static constexpr UiRefreshScheduler::Flags c_visualRefreshInventoryChanged = 1U << 2;
     std::chrono::steady_clock::time_point m_trayErrorUntil{};
     std::wstring m_transientTrayErrorTooltip;
     bool m_connectingAnimationTimerActive = false;
@@ -194,10 +186,7 @@ private:
     std::atomic<bool> m_started = false;
     std::atomic<bool> m_teardownWindowCloseSucceeded = true;
     bool m_windowSubclassInstalled = false;
-    UiRefreshCoalescer m_deviceVisualRefreshCoalescer;
-    unsigned int m_deviceVisualRefreshConsecutiveFailures = 0;
-    std::mutex m_deviceVisualRefreshRetryTimerMutex;
-    wil::unique_threadpool_timer m_deviceVisualRefreshRetryTimer;
+    std::unique_ptr<UiRefreshScheduler> m_visualRefresh;
     PowerTransitionCoordinator m_powerTransitionCoordinator{m_exiting, {}, m_log};
     SettingsWindowPresenter m_settingsWindowPresenter{m_log, m_strings};
 };

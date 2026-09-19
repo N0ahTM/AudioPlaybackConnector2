@@ -45,22 +45,6 @@ public:
                 {std::wstring(deviceId), state.StatusGeneration, Token::Channel::Status}};
     }
 
-    [[nodiscard]] Token RecordConnected(std::wstring_view deviceId) {
-        return RecordConnection(deviceId, true, Status::Connected);
-    }
-
-    [[nodiscard]] Token RecordDisconnected(std::wstring_view deviceId) {
-        return RecordConnection(deviceId, false, Status::None);
-    }
-
-    [[nodiscard]] Token RecordStatus(std::wstring_view deviceId, Status status) {
-        std::scoped_lock lock(m_mutex);
-        auto& state = m_devices[std::wstring(deviceId)];
-        UpdateConnection(state, status == Status::Connected);
-        UpdateStatus(state, status);
-        return Token{std::wstring(deviceId), state.StatusGeneration, Token::Channel::Status};
-    }
-
     [[nodiscard]] bool IsCurrent(Token const& token) const {
         std::scoped_lock lock(m_mutex);
         const auto found = m_devices.find(token.DeviceId);
@@ -77,14 +61,6 @@ private:
         std::uint64_t StatusGeneration = 0;
         bool IsGenerationExhausted = false;
     };
-
-    [[nodiscard]] Token RecordConnection(std::wstring_view deviceId, bool isConnected, Status status) {
-        std::scoped_lock lock(m_mutex);
-        auto& state = m_devices[std::wstring(deviceId)];
-        UpdateConnection(state, isConnected);
-        UpdateStatus(state, status);
-        return Token{std::wstring(deviceId), state.ConnectionGeneration, Token::Channel::Connection};
-    }
 
     static void UpdateConnection(DeviceState& state, bool isConnected) noexcept {
         if (state.IsConnected == isConnected) return;

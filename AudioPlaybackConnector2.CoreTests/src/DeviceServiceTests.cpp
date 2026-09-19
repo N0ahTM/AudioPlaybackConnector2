@@ -113,7 +113,7 @@ void TestCancellationDoesNotWaitBehindBlockedPublisher() {
         release.acquire();
     });
     // This produces a session mutation on the owned context while the accepted connect is still pending.
-    std::jthread publisher([&] { fixture.Service.SetReconnectOnConnectionLoss(L"blocked-publication", true); });
+    std::jthread publisher([&] { fixture.Service.ApplySettingsPolicy({1, false, false, {}, {}}); });
     entered.acquire();
     std::stop_source cancellation;
     cancellation.request_stop();
@@ -202,7 +202,7 @@ void TestControllerStatusTokensFollowTheDeviceOwner() {
 
     (void)fixture->Service.Connect(L"status-token");
     auto const connecting = lastStatus();
-    fixture->Service.SetReconnectOnConnectionLoss(L"status-token", true);
+    (void)controller.SetGlobalReconnectOnConnectionLoss(true);
     auto const duplicate = lastStatus();
     Check(connecting && duplicate && connecting->Revision < duplicate->Revision && controller.IsCurrent(*connecting) &&
               controller.IsCurrent(*duplicate),
@@ -221,7 +221,7 @@ void TestControllerStatusTokensFollowTheDeviceOwner() {
     fixture->ConnectionAccess->LastConnection->CompleteStart(DeviceConnectionResult::Success);
     fixture->ConnectionAccess->LastConnection->CompleteOpen(DeviceConnectionResult::Success);
     Check(failed && !controller.IsCurrent(*failed), "a replacement connection must invalidate a queued failure event");
-    fixture->Service.SetReconnectOnConnectionLoss(L"status-token", true);
+    (void)controller.SetGlobalReconnectOnConnectionLoss(false);
     Check(std::ranges::count_if(events,
                                 [](auto const& event) {
                                     return std::holds_alternative<apc::app::DeviceConnectedEvent>(event.Event);
@@ -455,7 +455,7 @@ void TestResumeWatcherFailureClearsRunningStateAndAllowsRetry() {
 void TestIncomingCallbackOrderingAndLossFollowReconnectPolicy() {
     Fixture fixture;
     Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted, "watcher start must be accepted");
-    fixture.Service.ConfigureIncomingConnections(true);
+    fixture.Service.ApplySettingsPolicy({1, true, true, {}, {}});
     fixture.WatcherAccess->LastWatcher->Add(L"incoming", L"Incoming");
     auto* const connection = fixture.ConnectionAccess->LastConnection;
     connection->Signal(DeviceConnectionState::Opened);
@@ -494,7 +494,7 @@ void TestIncomingCallbackOrderingAndLossFollowReconnectPolicy() {
 
     auto* const retainedListener = fixture.ConnectionAccess->LastConnection;
     fixture.ConnectionAccess->LastConnection->Signal(DeviceConnectionState::Opened);
-    fixture.Service.ConfigureReconnectPolicy(false, {});
+    fixture.Service.ApplySettingsPolicy({2, true, false, {}, {}});
     auto const failureCount = std::ranges::count_if(
         fixture.Facts, [](DeviceFact const& fact) { return fact.DeviceId == L"incoming" && fact.IsTerminalFailure; });
     fixture.ConnectionAccess->LastConnection->Signal(DeviceConnectionState::Closed);
@@ -516,7 +516,7 @@ void TestDisablingReconnectRestoresPendingIncomingListenerAfterCloseBarrier() {
     Fixture fixture;
     Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted,
           "watcher start must establish the pending incoming policy fixture");
-    fixture.Service.ConfigureIncomingConnections(true);
+    fixture.Service.ApplySettingsPolicy({1, true, true, {}, {}});
     fixture.WatcherAccess->LastWatcher->Add(L"incoming-policy-disable", L"Incoming policy disable");
     auto* const listener = fixture.ConnectionAccess->LastConnection;
     listener->Signal(DeviceConnectionState::Opened);
@@ -529,7 +529,7 @@ void TestDisablingReconnectRestoresPendingIncomingListenerAfterCloseBarrier() {
         return fact.DeviceId == L"incoming-policy-disable" && fact.IsTerminalFailure;
     });
 
-    fixture.Service.ConfigureReconnectPolicy(false, {});
+    fixture.Service.ApplySettingsPolicy({2, true, false, {}, {}});
     Check(*retryTimerCancellationState, "disabling reconnect policy must cancel the pending incoming retry timer");
     Check(listener->CloseCalls == 1, "disabling reconnect policy must close the retained incoming listener");
     if (retryCallback) retryCallback();
@@ -566,7 +566,7 @@ void TestExplicitDisconnectRestoresIncomingListenerAfterOutgoingRetry() {
     ConnectSuccessfully(fixture, L"outgoing-retry");
     auto* const outgoingConnection = fixture.ConnectionAccess->LastConnection;
 
-    fixture.Service.ConfigureIncomingConnections(true);
+    fixture.Service.ApplySettingsPolicy({1, true, true, {}, {}});
     outgoingConnection->Signal(DeviceConnectionState::Closed);
     auto* const retryTimer = fixture.TimerAccess->LastTimer;
     auto const staleRetryCallback = retryTimer->Callback;
@@ -602,11 +602,11 @@ void TestDisablingIncomingClosesEstablishedAndPendingIncomingSessions() {
         Fixture fixture;
         Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted,
               "watcher start must establish the incoming-disable fixture");
-        fixture.Service.ConfigureIncomingConnections(true);
+        fixture.Service.ApplySettingsPolicy({1, true, true, {}, {}});
         fixture.WatcherAccess->LastWatcher->Add(L"incoming-disable", L"Incoming disable");
         auto* const connection = fixture.ConnectionAccess->LastConnection;
         connection->Signal(DeviceConnectionState::Opened);
-        fixture.Service.ConfigureIncomingConnections(false);
+        fixture.Service.ApplySettingsPolicy({2, false, true, {}, {}});
         Check(connection->CloseCalls == 1,
               "disabling incoming connections must close an established incoming listener exactly once");
         CompleteCloseAndCooldown(fixture, connection);
@@ -619,14 +619,14 @@ void TestDisablingIncomingClosesEstablishedAndPendingIncomingSessions() {
         Fixture fixture;
         Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted,
               "watcher start must establish the incoming-pending fixture");
-        fixture.Service.ConfigureIncomingConnections(true);
+        fixture.Service.ApplySettingsPolicy({1, true, true, {}, {}});
         fixture.WatcherAccess->LastWatcher->Add(L"incoming-pending", L"Incoming pending");
         auto* const connection = fixture.ConnectionAccess->LastConnection;
         connection->Signal(DeviceConnectionState::Opened);
         connection->Signal(DeviceConnectionState::Closed);
         auto* const pendingRetry = fixture.TimerAccess->LastTimer;
         auto const pendingRetryCallback = pendingRetry->Callback;
-        fixture.Service.ConfigureIncomingConnections(false);
+        fixture.Service.ApplySettingsPolicy({2, false, true, {}, {}});
         Check(connection->CloseCalls == 1 &&
                   StateFor(fixture.Service, L"incoming-pending") == DeviceLifecycleState::Disconnecting,
               "disabling incoming connections must cancel pending retry and close the retained incoming listener");
@@ -694,7 +694,7 @@ void TestRemovingAnIdleIncomingListenerClosesWithoutTerminalFailure() {
     Fixture fixture;
     Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted,
           "watcher start must establish the incoming-removal fixture");
-    fixture.Service.ConfigureIncomingConnections(true);
+    fixture.Service.ApplySettingsPolicy({1, true, true, {}, {}});
     fixture.WatcherAccess->LastWatcher->Add(L"incoming-removed", L"Incoming removed");
     auto* const listener = fixture.ConnectionAccess->LastConnection;
     listener->CompleteStart(DeviceConnectionResult::Success);
@@ -856,7 +856,7 @@ void TestManualTransientOpenRetryExhaustsAtTheCharacterizedLimit() {
     Fixture fixture;
     Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted,
           "watcher start must establish the transient exhaustion incoming fixture");
-    fixture.Service.ConfigureIncomingConnections(true);
+    fixture.Service.ApplySettingsPolicy({1, true, true, {}, {}});
     fixture.WatcherAccess->LastWatcher->Add(L"transient-open-exhaust", L"Transient open exhaust");
     auto* const originalListener = fixture.ConnectionAccess->LastConnection;
     originalListener->CompleteStart(DeviceConnectionResult::Success);
@@ -997,7 +997,7 @@ void TestTerminalOutgoingPathsRestoreIncomingListener() {
         Fixture fixture;
         Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted,
               "watcher start must establish the outgoing failure listener fixture");
-        fixture.Service.ConfigureIncomingConnections(true);
+        fixture.Service.ApplySettingsPolicy({1, true, true, {}, {}});
         fixture.WatcherAccess->LastWatcher->Add(L"restore-after-start-failure", L"Restore after start failure");
         auto* const listener = fixture.ConnectionAccess->LastConnection;
         listener->CompleteStart(DeviceConnectionResult::Success);
@@ -1017,8 +1017,8 @@ void TestTerminalOutgoingPathsRestoreIncomingListener() {
     {
         Fixture fixture;
         ConnectSuccessfully(fixture, L"restore-after-unexpected-loss");
-        fixture.Service.ConfigureIncomingConnections(true);
-        fixture.Service.ConfigureReconnectPolicy(false, {});
+        fixture.Service.ApplySettingsPolicy({1, true, true, {}, {}});
+        fixture.Service.ApplySettingsPolicy({2, true, false, {}, {}});
         fixture.ConnectionAccess->LastConnection->Signal(DeviceConnectionState::Closed);
         auto* const restoredListener = fixture.ConnectionAccess->LastConnection;
         restoredListener->CompleteStart(DeviceConnectionResult::Success);
@@ -1032,7 +1032,7 @@ void TestTerminalOutgoingPathsRestoreIncomingListener() {
         Fixture fixture;
         Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted,
               "watcher start must establish the outgoing cancellation listener fixture");
-        fixture.Service.ConfigureIncomingConnections(true);
+        fixture.Service.ApplySettingsPolicy({1, true, true, {}, {}});
         fixture.WatcherAccess->LastWatcher->Add(L"restore-after-cancellation", L"Restore after cancellation");
         auto* const listener = fixture.ConnectionAccess->LastConnection;
         listener->CompleteStart(DeviceConnectionResult::Success);
@@ -1146,10 +1146,10 @@ void TestReconnectPolicyAndUserCancellationRemainDistinct() {
     Fixture fixture;
     ConnectSuccessfully(fixture, L"policy");
 
-    fixture.Service.ConfigureReconnectPolicy(false, {});
+    fixture.Service.ApplySettingsPolicy({1, false, false, {}, {}});
     Check(!SessionFor(fixture.Service, L"policy").IsReconnectEnabled,
           "disabling reconnect policy must be observable independently of user cancellation");
-    fixture.Service.ConfigureReconnectPolicy(true, {L"policy"});
+    fixture.Service.ApplySettingsPolicy({2, false, true, {L"policy"}, {}});
     Check(SessionFor(fixture.Service, L"policy").IsReconnectEnabled,
           "re-enabling reconnect policy must allow later connection-loss retries");
     Check(!SessionFor(fixture.Service, L"policy").IsReconnectCancelled,
@@ -1158,8 +1158,8 @@ void TestReconnectPolicyAndUserCancellationRemainDistinct() {
     (void)fixture.Service.CancelReconnect(L"policy");
     Check(SessionFor(fixture.Service, L"policy").IsReconnectCancelled,
           "manual reconnect cancellation must remain observable as user state");
-    fixture.Service.ConfigureReconnectPolicy(false, {});
-    fixture.Service.ConfigureReconnectPolicy(true, {L"policy"});
+    fixture.Service.ApplySettingsPolicy({3, false, false, {}, {}});
+    fixture.Service.ApplySettingsPolicy({4, false, true, {L"policy"}, {}});
     Check(SessionFor(fixture.Service, L"policy").IsReconnectCancelled,
           "policy changes must not erase an explicit user cancellation");
 
@@ -1312,7 +1312,7 @@ void TestPowerTransitionRecoveryTargetsIncludeIncomingAndPendingReconnectWithout
         Fixture fixture;
         Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted,
               "watcher start must establish the incoming power-recovery fixture");
-        fixture.Service.ConfigureIncomingConnections(true);
+        fixture.Service.ApplySettingsPolicy({1, true, true, {}, {}});
         fixture.WatcherAccess->LastWatcher->Add(L"power-incoming", L"Power incoming");
         fixture.ConnectionAccess->LastConnection->CompleteStart(DeviceConnectionResult::Success);
         Check(StateFor(fixture.Service, L"power-incoming") == DeviceLifecycleState::Idle &&
@@ -1578,7 +1578,7 @@ void TestFailureFactsRetainOperationKind() {
     {
         Fixture fixture;
         ConnectSuccessfully(fixture, L"automatic-fact-operation");
-        fixture.Service.SetReconnectOnConnectionLoss(std::wstring(L"automatic-fact-operation"), true);
+        fixture.Service.ApplySettingsPolicy({1, false, false, {L"automatic-fact-operation"}, {}});
         fixture.ConnectionAccess->LastConnection->Signal(DeviceConnectionState::Closed);
         fixture.ConnectionAccess->NextBehavior.ThrowOnStart = true;
         fixture.TimerAccess->LastTimer->FireEvenIfCancelled();
@@ -1615,7 +1615,7 @@ void TestDisconnectReasonsSelectTheLockedNotificationPolicy() {
     {
         Fixture fixture;
         ConnectSuccessfully(fixture, L"unexpected-loss");
-        fixture.Service.ConfigureReconnectPolicy(false, {});
+        fixture.Service.ApplySettingsPolicy({1, false, false, {}, {}});
         fixture.Facts.clear();
         fixture.ConnectionAccess->LastConnection->Signal(DeviceConnectionState::Closed);
 
@@ -1685,7 +1685,7 @@ void TestSettingsPolicyDoesNotWaitForForeignDeliveryAndCancelsQueuedWork() {
         entered.release();
         release.acquire();
     });
-    std::jthread publisher([&] { fixture.Service.ConfigureReconnectPolicy(false, {}); });
+    std::jthread publisher([&] { fixture.Service.ApplySettingsPolicy({1, false, false, {}, {}}); });
     entered.acquire();
     std::stop_source stopped;
     auto applying = std::async(std::launch::async,

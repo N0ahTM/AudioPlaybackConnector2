@@ -122,6 +122,8 @@ settings controller or presentation callback slot. The shared settings event car
 presentation inputs; the host applies these on its UI context. The host closes the settings window and commits
 its final placement before closing application admission, then drains commands before shutting down the store.
 
+`ApplySettingsPolicy` is the sole service entry point for incoming/reconnect configuration; there are no
+unversioned setters. Device tests use this same contract, including policy changes during blocked delivery.
 The application subscribes once to settings changes and submits the complete incoming/reconnect policy to
 `DeviceService`. The device context applies only a newer settings revision. It stages the per-device set before
 committing the version and flags, and does not republish session changes for semantically unchanged policy.

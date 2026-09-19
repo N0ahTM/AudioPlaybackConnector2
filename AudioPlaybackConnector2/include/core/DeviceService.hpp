@@ -102,9 +102,7 @@ public:
     [[nodiscard]] DeviceCommandResult CancelPendingReconnects();
     [[nodiscard]] DeviceCommandResult DisconnectAll();
     [[nodiscard]] DeviceCommandResult ReconnectAll();
-    void ConfigureIncomingConnections(bool enabled);
     void ApplySettingsPolicy(DeviceSettingsPolicy policy);
-    void ConfigureReconnectPolicy(bool globallyEnabled, std::vector<std::wstring> enabledDeviceIds);
     void ConnectStartupTargets(std::vector<std::wstring> deviceIds);
     void Suspend();
     void Resume();
@@ -118,7 +116,6 @@ public:
     std::vector<std::wstring> SuspendForPowerTransition();
     void ResumeAfterPowerTransition();
     void ResumeSuspendedSessions(std::vector<std::wstring> deviceIds);
-    void SetReconnectOnConnectionLoss(std::wstring deviceId, bool enabled);
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Operation Completion //////////////////////////////////////////////////////////////////////////////*/

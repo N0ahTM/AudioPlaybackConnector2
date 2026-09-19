@@ -612,25 +612,6 @@ DeviceCommandResult DeviceService::ReconnectAll() {
                                      .Kind = DeviceCommandResultKind::Coalesced};
 }
 
-void DeviceService::ConfigureIncomingConnections(bool enabled) {
-    auto state = m_state;
-    if (!state) return;
-    static_cast<void>(state->Post([state, enabled] {
-        if (state->IsShutdown) return;
-        state->IsIncomingEnabled = enabled;
-        for (auto const& [id, session] : state->Sessions) {
-            (void)id;
-            session->SetIncomingEnabled(enabled);
-        }
-        if (enabled && state->Watcher) {
-            auto const inventory = state->Watcher->Snapshot();
-            for (auto const& device : inventory.Devices) {
-                state->GetOrCreateSession(device.Id)->SetIncomingEnabled(true);
-            }
-        }
-    }));
-}
-
 void DeviceService::ApplySettingsPolicy(DeviceSettingsPolicy policy) {
     auto state = m_state;
     if (!state) return;
@@ -661,19 +642,6 @@ void DeviceService::ApplySettingsPolicy(DeviceSettingsPolicy policy) {
             }
         },
         false));
-}
-
-void DeviceService::ConfigureReconnectPolicy(bool globallyEnabled, std::vector<std::wstring> enabledDeviceIds) {
-    auto state = m_state;
-    if (!state) return;
-    static_cast<void>(state->Post([state, globallyEnabled, enabledDeviceIds = std::move(enabledDeviceIds)] {
-        if (state->IsShutdown) return;
-        state->IsGlobalReconnectEnabled = globallyEnabled;
-        state->IndividuallyReconnectEnabled = {enabledDeviceIds.begin(), enabledDeviceIds.end()};
-        for (auto const& [id, session] : state->Sessions) {
-            session->SetReconnectEnabled(globallyEnabled || state->IndividuallyReconnectEnabled.contains(id));
-        }
-    }));
 }
 
 void DeviceService::ConnectStartupTargets(std::vector<std::wstring> deviceIds) {
@@ -780,22 +748,6 @@ void DeviceService::ResumeSuspendedSessions(std::vector<std::wstring> deviceIds)
             state->PowerTransitionRecoveryEpochs.erase(recoveryEpoch);
         }
         state->Publish(DeviceFactKind::SessionChanged);
-    }));
-}
-
-void DeviceService::SetReconnectOnConnectionLoss(std::wstring deviceId, bool enabled) {
-    auto const state = m_state;
-    if (!state || deviceId.empty()) return;
-    static_cast<void>(state->Post([state, deviceId = std::move(deviceId), enabled] {
-        if (state->IsShutdown) return;
-        if (enabled) {
-            state->IndividuallyReconnectEnabled.insert(deviceId);
-        } else {
-            state->IndividuallyReconnectEnabled.erase(deviceId);
-        }
-        if (auto iter = state->Sessions.find(deviceId); iter != state->Sessions.end()) {
-            iter->second->SetReconnectEnabled(enabled || state->IsGlobalReconnectEnabled);
-        }
     }));
 }
 

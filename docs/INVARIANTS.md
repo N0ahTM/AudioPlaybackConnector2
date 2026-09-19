@@ -212,6 +212,13 @@ instance address until Stop has cancelled I/O and drained the callback groups. T
 only close resources: waiting is explicit in Stop, slot recreation and the server destructor. Slot recreation
 moves the old pipe and I/O owners out under the state lock, then cancels and drains them after unlocking.
 
+Overlapped connection admission uses the native `ConnectNamedPipe` boundary in `Options::ConnectPipe`.
+It is invoked under the slot lock because its `OVERLAPPED` and threadpool-I/O reservation belong to that slot;
+the implementation must support concurrent slots, return immediately without throwing or reentering the
+server, and preserve Win32 return/error semantics. The default calls Windows directly. Real-pipe tests close a client before native
+admission and inject eight `ERROR_RETRY` results at this boundary, then restore native admission. Both use
+the ordinary error classification, I/O reservation balancing, backoff and slot recreation paths.
+
 `CommandLineControlServer` owns request records, pending handler deliveries and cache-byte accounting under its
 request mutex. A complete request registers its pending delivery before its handler work is submitted. Pending
 deliveries prevent eviction while that work is queued or waiting for another execution of the same request.

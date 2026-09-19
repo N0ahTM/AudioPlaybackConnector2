@@ -484,23 +484,7 @@ void CommandLineControlServer::Stop() noexcept {
 
 bool CommandLineControlServer::ArmConnection(PipeInstance& instance) noexcept {
     try {
-#ifdef APC_COMMAND_PIPE_SERVER_TESTING
-        bool allowArm = true;
-        try {
-            allowArm = !m_options.BeforeArmConnection || m_options.BeforeArmConnection(instance.Index);
-        } catch (...) {
-            allowArm = false;
-        }
-#endif
         std::scoped_lock stateLock(instance.StateMutex);
-#ifdef APC_COMMAND_PIPE_SERVER_TESTING
-        if (!allowArm) {
-            SetLastError(ERROR_RETRY);
-            if (instance.RearmFailures >= 7) instance.RecreateRequired = true;
-            ScheduleRearmLocked(instance);
-            return false;
-        }
-#endif
         return ArmConnectionLocked(instance);
     } catch (...) {
         Trace(L"pipe arm failed");
@@ -519,7 +503,7 @@ bool CommandLineControlServer::ArmConnectionLocked(PipeInstance& instance) noexc
     instance.Phase = PipePhase::Connecting;
     instance.Overlapped = {};
     StartThreadpoolIo(instance.Io.get());
-    if (ConnectNamedPipe(instance.Pipe.get(), &instance.Overlapped)) return true;
+    if (m_options.ConnectPipe(instance.Pipe.get(), &instance.Overlapped)) return true;
 
     const auto error = GetLastError();
     if (error == ERROR_IO_PENDING) return true;

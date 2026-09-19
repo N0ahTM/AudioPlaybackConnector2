@@ -39,8 +39,11 @@ public:
         std::chrono::milliseconds AcknowledgedRecordLifetime = std::chrono::seconds(1);
         bool RetryStartupFailures = true;
         TrustClient IsTrustedClient;
+        // Native overlapped admission runs under the slot lock. Implementations
+        // must return immediately, preserve Win32 error semantics and never reenter.
+        std::move_only_function<BOOL(HANDLE, LPOVERLAPPED) noexcept> ConnectPipe =
+            [](HANDLE pipe, LPOVERLAPPED operation) noexcept { return ConnectNamedPipe(pipe, operation); };
 #ifdef APC_COMMAND_PIPE_SERVER_TESTING
-        std::function<bool(std::size_t)> BeforeArmConnection;
         std::function<void(std::size_t, std::size_t)> AfterRequestCachePruned;
 #endif
     };

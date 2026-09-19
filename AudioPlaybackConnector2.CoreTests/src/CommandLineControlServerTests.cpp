@@ -555,8 +555,8 @@ void TestStopLifecycleAndRearmRetry() {
         const auto pipeName = options.PipeName;
         std::atomic_bool injected = false;
         std::atomic_bool earlyClientOpened = false;
-        options.BeforeArmConnection = [&](std::size_t) noexcept {
-            if (injected.exchange(true)) return true;
+        options.ConnectPipe = [&](HANDLE pipe, LPOVERLAPPED operation) noexcept {
+            if (injected.exchange(true)) return ConnectNamedPipe(pipe, operation);
             wil::unique_handle client(CreateFileW(pipeName.c_str(),
                                                   GENERIC_READ | FILE_WRITE_DATA,
                                                   0,
@@ -565,7 +565,8 @@ void TestStopLifecycleAndRearmRetry() {
                                                   FILE_FLAG_OVERLAPPED,
                                                   nullptr));
             earlyClientOpened = static_cast<bool>(client);
-            return true;
+            client.reset();
+            return ConnectNamedPipe(pipe, operation);
         };
         CommandLineControlServer server(std::move(options));
         server.Start([](apc::control::Request const&, std::stop_token, std::uint64_t) {
@@ -583,9 +584,12 @@ void TestStopLifecycleAndRearmRetry() {
         const auto pipeName = options.PipeName;
         options.RetryDelayMs = 1;
         std::atomic_int attempts = 0;
-        options.BeforeArmConnection = [&](std::size_t) noexcept {
-            ++attempts;
-            return false;
+        options.ConnectPipe = [&](HANDLE pipe, LPOVERLAPPED operation) noexcept -> BOOL {
+            if (++attempts <= 8) {
+                SetLastError(ERROR_RETRY);
+                return FALSE;
+            }
+            return ConnectNamedPipe(pipe, operation);
         };
         CommandLineControlServer server(std::move(options));
         server.Start([](apc::control::Request const&, std::stop_token, std::uint64_t) {

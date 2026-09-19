@@ -58,10 +58,8 @@
   </ItemGroup>
   <PropertyGroup Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
-    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
     <DesktopCompatible>true</DesktopCompatible>
-    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
     <UseDebugLibraries>true</UseDebugLibraries>
@@ -90,13 +88,8 @@
       <PrecompiledHeaderOutputFile>$(IntDir)pch.pch</PrecompiledHeaderOutputFile>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <ProcessorNumber>4</ProcessorNumber>
-      <WarningLevel>Level4</WarningLevel>
       <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)src;$(ProjectDir)res;$(ProjectDir)ui;$(ProjectDir)Generated Files;$(ProjectDir)Generated Files\ui\App;$(ProjectDir)Generated Files\ui\MainWindow;$(ProjectDir)Generated Files\ui\SettingsWindow;$(ProjectDir)Generated Files\ui\DevicePickerView;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <LanguageStandard>stdcpplatest</LanguageStandard>
       <AdditionalOptions>%(AdditionalOptions) /bigobj</AdditionalOptions>
-      <TreatWarningAsError>true</TreatWarningAsError>
-      <ConformanceMode>true</ConformanceMode>
-      <SDLCheck>true</SDLCheck>
     </ClCompile>
     <Link>
       <AdditionalDependencies>shell32.lib;gdiplus.lib;gdi32.lib;comctl32.lib;shlwapi.lib;dwmapi.lib;shcore.lib;advapi32.lib;%(AdditionalDependencies)</AdditionalDependencies>

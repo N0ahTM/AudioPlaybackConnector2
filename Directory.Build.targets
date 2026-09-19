@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <Target Name="ValidateCppToolchain" BeforeTargets="PrepareForBuild"
+          Condition="'$(MSBuildProjectExtension)' == '.vcxproj'">
+    <Error Condition="'$(PlatformToolset)' != 'v145'" Text="AudioPlaybackConnector2 requires the v145 toolset." />
+    <Error Condition="'$(VCToolsVersion)' == ''" Text="The MSVC toolchain version was not resolved." />
+    <Error Condition="'$(VCToolsVersion)' != '' and $([MSBuild]::VersionLessThan('$(VCToolsVersion)', '14.51'))"
+           Text="AudioPlaybackConnector2 requires MSVC 14.51 or newer; found $(VCToolsVersion)." />
+    <Error Condition="'%(ClCompile.LanguageStandard)' != 'stdcpplatest'"
+           Text="All C++ translation units must use the C++26 draft mode (stdcpplatest)." />
+    <Message Importance="high" Text="Toolchain: $(PlatformToolset), MSVC $(VCToolsVersion), C++26 draft, $(Platform)." />
+  </Target>
+  <Target Name="DisablePrecompiledHeaders" BeforeTargets="ClCompile"
+          Condition="'$(ApcDisablePrecompiledHeaders)' == 'true'">
+    <ItemGroup>
+      <ClCompile>
+        <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      </ClCompile>
+    </ItemGroup>
+  </Target>
+</Project>

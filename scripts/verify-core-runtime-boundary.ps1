@@ -19,6 +19,12 @@ $forbiddenProjectPatterns = @(
 $failures = [System.Collections.Generic.List[string]]::new()
 $msbuildQueue = [System.Collections.Generic.Queue[string]]::new()
 $msbuildQueue.Enqueue("$resolvedProject|$projectDirectory")
+foreach ($sharedName in @('Directory.Build.props', 'Directory.Build.targets')) {
+    $sharedPath = Join-Path $repositoryDirectory $sharedName
+    if (Test-Path -LiteralPath $sharedPath -PathType Leaf) {
+        $msbuildQueue.Enqueue("$sharedPath|$projectDirectory")
+    }
+}
 $visitedMsbuildFiles = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 $declaredFiles = [System.Collections.Generic.List[object]]::new()
 $packagesDirectory = Join-Path $repositoryDirectory 'packages'
@@ -44,12 +50,16 @@ function Resolve-LocalMsbuildImport(
         throw "unverifiable wildcard MSBuild path: $Import"
     }
     $expanded = $Import.Replace('$(MSBuildProjectDirectory)', $EvaluationProjectDirectory)
+    $expanded = $expanded.Replace('$(ProjectDir)', ($EvaluationProjectDirectory.TrimEnd('\') + '\'))
     $expanded = $expanded.Replace('$(MSBuildThisFileDirectory)', ($CurrentDirectory.TrimEnd('\') + '\'))
     if ($expanded.Contains('$(')) {
         if ($expanded -match '^\$\((VCTargetsPath|UserRootDir|MSBuildExtensionsPath|MSBuildToolsPath)\)[\\/]') {
             return $null
         }
         throw "unverifiable MSBuild import: $Import"
+    }
+    if ([System.IO.Path]::IsPathRooted($expanded)) {
+        return [System.IO.Path]::GetFullPath($expanded)
     }
     return [System.IO.Path]::GetFullPath((Join-Path $CurrentDirectory $expanded))
 }
@@ -134,10 +144,32 @@ while ($msbuildQueue.Count -ne 0) {
     $nodes = $project.SelectNodes('//msb:ItemGroup/msb:ClCompile[@Include] | //msb:ItemGroup/msb:ClInclude[@Include]',
         $namespace)
     foreach ($node in $nodes) {
+        # Resolve PCH and quoted headers in the declaring project's include context. In particular,
+        # CoreTests compiles some shared sources with CoreRuntime's PCH, not the GUI project's PCH.
+        $includeRoots = [System.Collections.Generic.List[string]]::new()
+        $directoryNodes = @($node.SelectNodes('msb:AdditionalIncludeDirectories', $namespace))
+        $directoryNodes += @($project.SelectNodes(
+            '//msb:ItemDefinitionGroup/msb:ClCompile/msb:AdditionalIncludeDirectories', $namespace))
+        foreach ($directoryNode in $directoryNodes) {
+            foreach ($directory in $directoryNode.InnerText.Split(';')) {
+                if ([string]::IsNullOrWhiteSpace($directory) -or $directory.Contains('%(')) { continue }
+                try {
+                    $resolvedDirectory = Resolve-LocalMsbuildImport $currentDirectory $evaluationProjectDirectory $directory
+                } catch {
+                    $failures.Add("unverifiable source include directory: $directory")
+                    continue
+                }
+                if ($null -ne $resolvedDirectory -and (Test-IsWithinRepository $resolvedDirectory) -and
+                    -not (Test-IsWithinDirectory $resolvedDirectory $packagesDirectory)) {
+                    $includeRoots.Add($resolvedDirectory)
+                }
+            }
+        }
         $declaredFiles.Add([pscustomobject]@{
             Directory = $currentDirectory
             EvaluationProjectDirectory = $evaluationProjectDirectory
             Include = $node.GetAttribute('Include')
+            IncludeRoots = $includeRoots.ToArray()
         })
     }
 }
@@ -149,7 +181,7 @@ $searchRoots = @(
     (Join-Path $repositoryDirectory 'AudioPlaybackConnector2\src'),
     (Join-Path $repositoryDirectory 'AudioPlaybackConnector2\res')
 )
-$pending = [System.Collections.Generic.Queue[string]]::new()
+$pending = [System.Collections.Generic.Queue[object]]::new()
 $visited = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 
 foreach ($declaredFile in $declaredFiles) {
@@ -175,28 +207,33 @@ foreach ($declaredFile in $declaredFiles) {
         continue
     }
 
-    $pending.Enqueue($candidate)
+    $pending.Enqueue([pscustomobject]@{ Path = $candidate; IncludeRoots = $declaredFile.IncludeRoots })
 }
 
 while ($pending.Count -ne 0) {
-    $candidate = $pending.Dequeue()
-    if (-not $visited.Add($candidate)) {
+    $source = $pending.Dequeue()
+    $candidate = $source.Path
+    if (-not $visited.Add("$candidate|$($source.IncludeRoots -join ';')")) {
         continue
     }
 
     $content = Get-Content -LiteralPath $candidate -Raw
     if ($content -match $forbiddenSourcePattern) {
-        $relativePath = [System.IO.Path]::GetRelativePath($repositoryDirectory, $candidate)
+        $relativePath = $candidate.Substring($repositoryDirectory.TrimEnd('\').Length + 1)
         $failures.Add("forbidden XAML dependency in $relativePath")
     }
 
     foreach ($match in [regex]::Matches($content, $includePattern)) {
         $includeName = $match.Groups[1].Value.Replace('/', '\')
         $includeCandidates = @((Join-Path (Split-Path -Parent $candidate) $includeName))
+        $includeCandidates += $source.IncludeRoots | ForEach-Object { Join-Path $_ $includeName }
         $includeCandidates += $searchRoots | ForEach-Object { Join-Path $_ $includeName }
         foreach ($includeCandidate in $includeCandidates) {
             if (Test-Path -LiteralPath $includeCandidate -PathType Leaf) {
-                $pending.Enqueue([System.IO.Path]::GetFullPath($includeCandidate))
+                $pending.Enqueue([pscustomobject]@{
+                    Path = [System.IO.Path]::GetFullPath($includeCandidate)
+                    IncludeRoots = $source.IncludeRoots
+                })
                 break
             }
         }

@@ -12,6 +12,20 @@ Thank you for your interest in contributing to AudioPlaybackConnector2.
 
 ## Building
 
+The shortest path from a clone to native regression tests is the headless solution filter. Open a Visual Studio
+developer shell with PowerShell 7 and run:
+
+```powershell
+pwsh ./scripts/build-headless.ps1 -Platform x64
+```
+
+This verifies the CoreRuntime, CoreTests and Control boundaries, restores only their packages, builds them in
+parallel and runs CoreTests. It needs the C++ workload and Windows SDK, without WinUI, XAML generation or the
+graphical app project. For an ARM64 cross-build use `-Platform ARM64`; run that test binary on ARM64 Windows.
+Add `-DisablePrecompiledHeaders` to check the build without compiler PCH reuse. CI runs these same commands.
+Shared C++ rules live in `Directory.Build.props`; `Directory.Build.targets` rejects MSVC older than 14.51 and
+any translation unit outside the C++26 draft mode.
+
 Restore packages before the first command-line build:
 
 ```powershell

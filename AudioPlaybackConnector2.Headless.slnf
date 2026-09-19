@@ -1,0 +1,10 @@
+{
+  "solution": {
+    "path": "AudioPlaybackConnector2.slnx",
+    "projects": [
+      "AudioPlaybackConnector2.Control\\AudioPlaybackConnector2.Control.vcxproj",
+      "AudioPlaybackConnector2.CoreRuntime\\AudioPlaybackConnector2.CoreRuntime.vcxproj",
+      "AudioPlaybackConnector2.CoreTests\\AudioPlaybackConnector2.CoreTests.vcxproj"
+    ]
+  }
+}

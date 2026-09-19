@@ -26,7 +26,6 @@
 
 namespace {
 
-using apc::app::AppCommand;
 using apc::app::AppCommandContext;
 using apc::app::AppCommandKind;
 using apc::app::AppController;

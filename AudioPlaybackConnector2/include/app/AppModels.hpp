@@ -152,66 +152,6 @@ enum class AppCommandKind {
 // TrayController depend on AppController or transport details.
 enum class DevicePickerOpenMode { EnsureOpen, ToggleIfOpen };
 
-// The command carries intent only. It has no pipe headers, JSON flags,
-// localized text, or platform handles; adapters translate those concerns at
-// the boundary. Target and Alias are meaningful only for the command kinds
-// checked by IsWellFormed(). Tray Exit is intentionally not a command here:
-// it is an AppRuntime lifecycle intent, not a shared UI/CLI use case. The
-// command grammar retains valid P01 alias text above the P07 persistence
-// limit; SettingsController owns that later failure/result translation.
-struct AppCommand {
-    AppCommandKind Kind = AppCommandKind::Status;
-    std::optional<DeviceSelector> Target;
-    std::wstring Alias;
-    DevicePickerOpenMode PickerOpenMode = DevicePickerOpenMode::EnsureOpen;
-
-    [[nodiscard]] bool IsWellFormed() const noexcept {
-        if (PickerOpenMode != DevicePickerOpenMode::EnsureOpen && Kind != AppCommandKind::ShowDevicePicker) {
-            return false;
-        }
-        const bool hasTarget = Target.has_value();
-        const bool hasAlias = !Alias.empty();
-        const bool aliasIsValid = hasAlias && Alias.size() <= c_maxAppCommandTextCharacters && !Alias.contains(L'\r') &&
-                                  !Alias.contains(L'\n') && !Alias.contains(L'\0');
-
-        switch (Kind) {
-            case AppCommandKind::SetAlias: return hasTarget && IsExplicitTarget(*Target) && aliasIsValid;
-            case AppCommandKind::SetDefault: return hasTarget && IsExplicitTarget(*Target) && !hasAlias;
-            case AppCommandKind::ClearAlias: return hasTarget && IsExplicitTarget(*Target) && !hasAlias;
-            case AppCommandKind::Connect:
-            case AppCommandKind::Disconnect:
-            case AppCommandKind::Reconnect:
-            case AppCommandKind::ToggleLast: return hasTarget && !hasAlias;
-            case AppCommandKind::ShowDevicePicker:
-            case AppCommandKind::ShowSettings:
-            case AppCommandKind::ListDevices:
-            case AppCommandKind::Status:
-            case AppCommandKind::ShowDefault:
-            case AppCommandKind::ClearDefault:
-            case AppCommandKind::ListAliases:
-            case AppCommandKind::DisconnectAll:
-            case AppCommandKind::ReconnectAll: return !hasTarget && !hasAlias;
-        }
-        return false;
-    }
-
-    friend bool operator==(AppCommand const&, AppCommand const&) = default;
-
-private:
-    [[nodiscard]] static bool IsExplicitTarget(DeviceSelector const& target) noexcept {
-        switch (target.Kind()) {
-            case DeviceSelectorKind::Id:
-            case DeviceSelectorKind::Name:
-            case DeviceSelectorKind::Mac:
-            case DeviceSelectorKind::Auto:
-            case DeviceSelectorKind::Alias: return true;
-            case DeviceSelectorKind::Last:
-            case DeviceSelectorKind::Default: return false;
-        }
-        return false;
-    }
-};
-
 enum class AppResultCode {
     Success,
     InvalidInput,

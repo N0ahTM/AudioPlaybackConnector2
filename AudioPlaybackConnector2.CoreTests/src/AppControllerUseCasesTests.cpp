@@ -48,6 +48,55 @@ void TestTargetResolutionAndDefaultModes() {
           "missing default and last selectors must retain distinct typed reasons");
 }
 
+void TestExplicitSettingsInputContracts() {
+    AppFixture fixture;
+    (void)fixture.Settings->RememberDevice(L"target", L"Target");
+    auto const target = *DeviceSelector::ById(L"target");
+    auto const revision = fixture.Settings->Snapshot().Revision;
+    for (auto const& alias : {std::wstring{},
+                              std::wstring{L"line\nwrapped"},
+                              std::wstring{L"line\rwrapped"},
+                              std::wstring{L"abc\0nul", 7},
+                              std::wstring(c_maxAppCommandTextCharacters + 1, L'x')}) {
+        Check(fixture.Controller.SetAlias(target, alias, {}).Code == AppResultCode::InvalidInput,
+              "the explicit alias action must reject malformed input before accessing the store");
+    }
+    for (auto const& implicit : {DeviceSelector::Default(), DeviceSelector::Last()}) {
+        Check(fixture.Controller.SetDefault(implicit, {}).Code == AppResultCode::InvalidInput &&
+                  fixture.Controller.SetAlias(implicit, L"Alias", {}).Code == AppResultCode::InvalidInput &&
+                  fixture.Controller.ClearAlias(implicit, {}).Code == AppResultCode::InvalidInput,
+              "persistent mutations must require an explicit target");
+    }
+    for (auto const& alias : {std::wstring(129, L'x'), std::wstring(1, static_cast<wchar_t>(0xD800))}) {
+        auto const result = fixture.Controller.SetAlias(target, alias, {});
+        Check(result.Code == AppResultCode::OperationFailed && result.Reason == AppOutcomeReason::AliasSetFailed,
+              "transport-valid aliases outside the persistence format must retain the typed mutation failure");
+    }
+    Check(fixture.Settings->Snapshot().Revision == revision,
+          "rejected alias and default inputs must not commit or advance the settings revision");
+    Check(fixture.Controller.SetAlias(target, L"Living room", {}).Succeeded() &&
+              fixture.Controller.SetAlias(L"target", L"").Succeeded() &&
+              fixture.Settings->Snapshot().Data.Devices.front().Alias.empty(),
+          "the exact-ID UI overload must preserve clearing an alias with empty text");
+}
+
+void TestQueriesChooseTheirRequiredInputs() {
+    AppFixture fixture;
+    (void)fixture.Settings->RememberDevice(L"target", L"Target");
+    int refreshes = 0;
+    fixture.Devices->WatcherAccess->BeforeRefreshCompletion = [&] { ++refreshes; };
+    auto const status = fixture.Controller.Status({});
+    auto const aliases = fixture.Controller.ListAliases({});
+    auto const selected = fixture.Controller.ShowDefault({});
+    Check(status.Succeeded() && aliases.Succeeded() && selected.Succeeded() && refreshes == 0,
+          "status, aliases and default queries must read current owner snapshots without discovery");
+    auto const devices = fixture.Controller.ListDevices({});
+    Check(devices.Succeeded() && refreshes == 1 && devices.Devices == status.Devices &&
+              status.Command == AppCommandKind::Status && aliases.Command == AppCommandKind::ListAliases &&
+              selected.Command == AppCommandKind::ShowDefault && devices.Command == AppCommandKind::ListDevices,
+          "device listing must refresh once and each explicit query must identify its own result");
+}
+
 void TestSettingsResultsReadTheCommittedOwner() {
     AppFixture fixture;
     (void)fixture.Settings->RememberDevice(L"target", L"Target");
@@ -153,6 +202,8 @@ void TestDetachedToggleRespectsOwnedBusyState() {
 } // namespace
 
 int RunAppControllerUseCasesTests() {
+    TestExplicitSettingsInputContracts();
+    TestQueriesChooseTheirRequiredInputs();
     TestTargetResolutionAndDefaultModes();
     TestSettingsResultsReadTheCommittedOwner();
     TestRefreshCancellationCannotAdmitMutation();

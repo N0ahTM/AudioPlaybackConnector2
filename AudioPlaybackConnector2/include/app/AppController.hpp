@@ -116,10 +116,18 @@ public:
     [[nodiscard]] bool IsCurrent(EventNotification const& notification) const;
 
 private:
-    [[nodiscard]] AppResult Execute(AppCommand const& command, AppCommandContext context = {}) const noexcept;
+    enum class SettingsRead { Once, Current };
+    template <typename Action>
+    [[nodiscard]] AppResult
+    WithSettings(AppCommandKind kind, AppCommandContext context, SettingsRead read, Action&& action) const noexcept;
+    [[nodiscard]] AppResult
+    PresentationResult(AppCommandKind kind, AppUiActionResult const& action, SettingsData const& settings) const;
+    [[nodiscard]] AppResult WriteAlias(AppCommandKind kind,
+                                       DeviceSelector const& target,
+                                       std::wstring_view alias,
+                                       AppCommandContext context) const;
     static constexpr auto c_refreshTimeout = std::chrono::milliseconds{2500};
     using OperationStatus = AppActionStatus;
-    using UiActionResult = AppUiActionResult;
     struct OperationResult {
         OperationStatus Status = OperationStatus::Failed;
     };
@@ -162,18 +170,11 @@ private:
         bool HasTarget = false;
     };
 
-    [[nodiscard]] AppResult ExecuteCommand(AppCommand const& command,
-                                           AppCommandContext const& context,
-                                           SettingsData const& settings,
-                                           std::uint64_t settingsRevision) const;
-    [[nodiscard]] AppResult ExecuteTargetOperation(AppCommand const& command,
-                                                   AppCommandContext const& context,
-                                                   std::vector<DeviceRecord> const& devices,
-                                                   SettingsData const& settings) const;
-    [[nodiscard]] AppResult ExecuteToggle(AppCommand const& command,
-                                          AppCommandContext const& context,
-                                          std::vector<DeviceRecord> const& devices,
-                                          SettingsData const& settings) const;
+    [[nodiscard]] AppResult RunDeviceOperation(AppCommandKind kind,
+                                               DeviceSelector const& target,
+                                               AppCommandContext const& context,
+                                               std::vector<DeviceRecord> const& devices,
+                                               SettingsData const& settings) const;
     [[nodiscard]] Resolution Resolve(DeviceSelector const& selector,
                                      std::vector<DeviceRecord> const& devices,
                                      SettingsData const& settings) const;
@@ -199,6 +200,8 @@ private:
                                             std::uint64_t pickerGeneration,
                                             bool isRunning) const;
 
+    [[nodiscard]] AppResult DeviceQueryResult(std::vector<DeviceRecord> devices,
+                                              SettingsSnapshot const& settings) const;
     [[nodiscard]] AppResult MakeFailure(AppCommandKind command,
                                         AppResultCode code,
                                         AppOutcomeReason reason,
@@ -233,8 +236,7 @@ private:
     // cancelled command cannot act on that fallback.
     [[nodiscard]] static std::optional<AppResultCode>
     MutationAdmissionFailure(AppCommandContext const& context) noexcept;
-    [[nodiscard]] static bool IsRefreshNeeded(AppCommandKind command,
-                                              DeviceSelectorKind selectorKind = DeviceSelectorKind::Id) noexcept;
+    [[nodiscard]] static bool IsRefreshNeeded(DeviceSelectorKind selectorKind) noexcept;
     [[nodiscard]] static AppCommandContext CappedRefreshContext(AppCommandContext const& context);
     static void AdvanceGeneration(std::uint64_t& generation) noexcept;
     void ApplySessionStates(std::vector<DeviceRecord>& devices,

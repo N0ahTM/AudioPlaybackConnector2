@@ -9,7 +9,6 @@
 
 namespace {
 
-using apc::app::AppCommand;
 using apc::app::AppCommandContext;
 using apc::app::AppCommandKind;
 using apc::app::AppEvent;
@@ -89,46 +88,6 @@ void TestCommandContractsAndNormalizedResults() {
     auto exact = DeviceSelector::ById(L"device-a");
     Check(exact.has_value(), "command contract fixture must have a valid target");
     if (!exact) return;
-
-    AppCommand connect{AppCommandKind::Connect, exact, {}};
-    Check(connect.IsWellFormed(), "connect with an exact target must be well formed");
-
-    AppCommand alias{AppCommandKind::SetAlias, exact, L"Living room"};
-    Check(alias.IsWellFormed(), "alias set with an explicit target and one-line alias must be well formed");
-    AppCommand longAlias{AppCommandKind::SetAlias, exact, std::wstring(129, L'x')};
-    Check(longAlias.IsWellFormed(),
-          "alias set must retain valid P01 text beyond the persisted alias bound for downstream validation");
-    AppCommand oversizedAlias{
-        AppCommandKind::SetAlias, exact, std::wstring(apc::app::c_maxAppCommandTextCharacters + 1, L'x')};
-    Check(!oversizedAlias.IsWellFormed(), "alias set must reject text beyond the P01 payload bound");
-    AppCommand invalidAliasUtf16{AppCommandKind::SetAlias, exact, std::wstring(1, static_cast<wchar_t>(0xD800))};
-    Check(invalidAliasUtf16.IsWellFormed(),
-          "command grammar must retain bounded invalid UTF-16 accepted by the existing wire validator");
-
-    AppCommand invalidAlias{AppCommandKind::SetAlias, exact, L"line\nwrapped"};
-    Check(!invalidAlias.IsWellFormed(), "alias set must reject line breaks before persistence or transport");
-    AppCommand invalidAliasNul{AppCommandKind::SetAlias, exact, std::wstring{L"abc\0nul", 7}};
-    Check(!invalidAliasNul.IsWellFormed(), "alias set must reject embedded NUL");
-
-    AppCommand invalidDefault{AppCommandKind::SetDefault, DeviceSelector::Last(), {}};
-    Check(!invalidDefault.IsWellFormed(), "default set must reject implicit last-device selection");
-
-    AppCommand invalidStatus{AppCommandKind::Status, exact, {}};
-    Check(!invalidStatus.IsWellFormed(), "query commands must reject an unexpected target");
-
-    AppCommand toggle{AppCommandKind::ToggleLast, DeviceSelector::Default(), {}};
-    Check(toggle.IsWellFormed(), "toggle-last must retain its default-device selector");
-    AppCommand toggleLast{AppCommandKind::ToggleLast, DeviceSelector::Last(), {}};
-    Check(toggleLast.IsWellFormed(), "toggle-last must retain its last-device selector");
-    AppCommand missingToggleTarget{AppCommandKind::ToggleLast, {}, {}};
-    Check(!missingToggleTarget.IsWellFormed(), "toggle-last must reject a missing selector");
-
-    AppCommand trayActivation{AppCommandKind::ShowDevicePicker, {}, {}, apc::app::DevicePickerOpenMode::ToggleIfOpen};
-    Check(trayActivation.IsWellFormed() &&
-              trayActivation.PickerOpenMode == apc::app::DevicePickerOpenMode::ToggleIfOpen,
-          "the tray activation command must allow toggle mode only for show-picker");
-    AppCommand invalidPickerMode{AppCommandKind::Status, {}, {}, apc::app::DevicePickerOpenMode::ToggleIfOpen};
-    Check(!invalidPickerMode.IsWellFormed(), "toggle mode must be rejected on non-picker commands");
 
     apc::app::AppResult success{AppResultCode::Success, AppCommandKind::Connect};
     success.Device = apc::app::DeviceSnapshot{

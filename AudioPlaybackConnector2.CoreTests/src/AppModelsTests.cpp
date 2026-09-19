@@ -1,3 +1,5 @@
+#include "TestCheck.hpp"
+
 #include <app/AppModels.hpp>
 #include <ui/TrayPrimaryActivation.hpp>
 
@@ -17,14 +19,6 @@ using apc::app::DeviceConnectionState;
 using apc::app::DeviceSelector;
 using apc::core::DeviceId;
 using apc::core::DeviceIdHash;
-
-int g_failures = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 void TestDeviceIdValidationAndValueSemantics() {
     auto id = DeviceId::TryCreate(L"Bluetooth#Exact Case ");

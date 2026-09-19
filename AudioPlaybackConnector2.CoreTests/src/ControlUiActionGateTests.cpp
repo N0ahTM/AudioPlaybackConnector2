@@ -1,3 +1,5 @@
+#include "TestCheck.hpp"
+
 #include <app/ControlUiActionGate.hpp>
 #include <app/AppModels.hpp>
 
@@ -10,13 +12,6 @@
 #include <thread>
 
 namespace {
-int g_failures = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 void CheckCommand(bool condition, std::string_view command, std::string_view message) {
     if (condition) return;

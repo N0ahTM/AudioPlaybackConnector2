@@ -1,3 +1,5 @@
+#include "TestCheck.hpp"
+
 #include <core/DevicePickerSnapshot.hpp>
 
 #include <chrono>
@@ -11,14 +13,6 @@ using apc::device_picker::DeviceIdentity;
 using apc::device_picker::DeviceInventoryGeneration;
 using apc::device_picker::DevicePickerSnapshotCache;
 using apc::device_picker::DevicePresentationSetting;
-
-int g_failures = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 DevicePickerSnapshotCache::TimePoint At(std::chrono::seconds elapsed) {
     return DevicePickerSnapshotCache::TimePoint{} + elapsed;

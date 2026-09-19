@@ -1,3 +1,5 @@
+#include "TestCheck.hpp"
+
 #include <app/AppController.hpp>
 #include <app/SettingsWindowCommandExecutor.hpp>
 #include <ui/TrayPrimaryActivation.hpp>
@@ -26,14 +28,6 @@ using apc::app::DeviceConnectedEvent;
 using apc::app::DevicePickerOpenMode;
 using apc::app::DeviceSelector;
 using apc::app::SettingsWindowCommandExecutor;
-
-int g_failures = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 AppCommand ConnectCommand() {
     auto target = DeviceSelector::ById(L"device-a");

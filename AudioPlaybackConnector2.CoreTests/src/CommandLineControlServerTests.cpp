@@ -1,3 +1,5 @@
+#include "TestCheck.hpp"
+
 #include <control/CommandPipeSecurity.hpp>
 #include <control/CommandProtocol.hpp>
 #include <app/LegacyAppUseCaseBridge.hpp>
@@ -25,14 +27,7 @@ namespace {
 using namespace std::chrono_literals;
 using apc::app::LegacyAppUseCaseBridge;
 
-int g_failures = 0;
 std::atomic_uint64_t g_pipeSequence = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 class UniqueHandle {
 public:

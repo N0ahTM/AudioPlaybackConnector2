@@ -1,3 +1,5 @@
+#include "TestCheck.hpp"
+
 #include <control/ControlCommandAdapter.hpp>
 
 #include <winrt/Windows.Data.Json.h>
@@ -37,14 +39,6 @@ using apc::control::ExitCode;
 using apc::control::Request;
 using apc::control::Response;
 using apc::control::TargetKind;
-
-int g_failures = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 std::wstring Localize(std::string_view key) {
     static const std::map<std::string, std::wstring> resources{

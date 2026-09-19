@@ -1,19 +1,10 @@
+#include "TestCheck.hpp"
+
 #include <app/AdaptiveResourceDiagnostics.hpp>
 
 #include <iostream>
 
-namespace {
-
-int g_failures = 0;
-
-void Check(bool condition, char const* message) {
-    if (!condition) {
-        std::cerr << "FAIL: " << message << '\n';
-        ++g_failures;
-    }
-}
-
-} // namespace
+namespace {} // namespace
 
 int RunAdaptiveResourceDiagnosticsTests() {
     Check(!AdaptiveResourceDiagnostics{}.Evaluated, "default diagnostics must not impersonate an evaluation");

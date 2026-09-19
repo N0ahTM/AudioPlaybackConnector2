@@ -1,18 +1,11 @@
+#include "TestCheck.hpp"
+
 #include "util/Event.hpp"
 
 #include <iostream>
 #include <stdexcept>
 
 namespace {
-
-int g_failures = 0;
-
-void Check(bool condition, const char* message) {
-    if (!condition) {
-        std::cerr << "FAILED: " << message << '\n';
-        ++g_failures;
-    }
-}
 
 struct ThrowOnCopy {
     ThrowOnCopy() = default;

@@ -1,17 +1,11 @@
+#include "TestCheck.hpp"
+
 #include <core/TrayTooltipBuilder.hpp>
 
 #include <iostream>
 #include <vector>
 
 namespace {
-
-int g_failures = 0;
-
-void Check(bool condition, char const* message) {
-    if (condition) return;
-    std::cerr << "FAIL: " << message << '\n';
-    ++g_failures;
-}
 
 void TestEmptyTooltip() {
     Check(apc::tray::BuildTooltip(L"App", L"Hidden", {}, {}, false) == L"App",

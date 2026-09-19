@@ -1,3 +1,5 @@
+#include "TestCheck.hpp"
+
 #include <windows.h>
 
 #include <wil/resource.h>
@@ -19,14 +21,6 @@
 #include <vector>
 
 namespace {
-
-int g_failures = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 void TestUiRefreshCoalescesFlagsAndDrainsExactlyOnce() {
     UiRefreshCoalescer coalescer;
@@ -329,9 +323,3 @@ int RunAppWorkCoordinatorTests() {
     TestResumeReconnectFallbackCompletionOutlivesCoordinatorSafely();
     return g_failures;
 }
-
-#if defined(APC_APP_WORK_COORDINATOR_TEST_STANDALONE)
-int main() {
-    return RunAppWorkCoordinatorTests();
-}
-#endif

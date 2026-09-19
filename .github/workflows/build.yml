@@ -10,6 +10,10 @@ on:
 env:
   NUGET_PACKAGES: ${{ github.workspace }}\.nuget\packages
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   headless:
     name: Headless (${{ matrix.platform }}, PCH disabled=${{ matrix.disable_pch }})
@@ -38,6 +42,19 @@ jobs:
         DISABLE_PCH: ${{ matrix.disable_pch }}
       run: |
         ./scripts/build-headless.ps1 -Platform $env:HEADLESS_PLATFORM -DisablePrecompiledHeaders:($env:DISABLE_PCH -eq 'true')
+    - name: Repeat native race scenarios with a watchdog
+      if: ${{ matrix.platform == 'x64' && !matrix.disable_pch }}
+      shell: pwsh
+      run: |
+        ./scripts/test/run-concurrency-stress.ps1 -Iterations 5 -Seed 314159 -TotalTimeoutSeconds 180 -OutputDirectory '${{ runner.temp }}/concurrency'
+    - name: Upload failed stress diagnostics
+      if: ${{ failure() && matrix.platform == 'x64' && !matrix.disable_pch }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: concurrency-diagnostics
+        path: ${{ runner.temp }}/concurrency
+        if-no-files-found: ignore
+        retention-days: 7
 
   quality:
     runs-on: windows-2025-vs2026

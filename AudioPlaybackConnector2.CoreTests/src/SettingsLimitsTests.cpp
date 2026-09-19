@@ -1,17 +1,11 @@
+#include "TestCheck.hpp"
+
 #include <core/SettingsLimits.hpp>
 
 #include <iostream>
 #include <string>
 
 namespace {
-
-int g_failures = 0;
-
-void Check(bool condition, char const* message) {
-    if (condition) return;
-    std::cerr << "FAIL: " << message << '\n';
-    ++g_failures;
-}
 
 void TestUtf16Validation() {
     const std::wstring validPair{static_cast<wchar_t>(0xD83D), static_cast<wchar_t>(0xDE00)};

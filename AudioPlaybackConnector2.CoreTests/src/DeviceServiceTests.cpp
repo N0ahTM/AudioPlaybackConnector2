@@ -1,3 +1,5 @@
+#include "TestCheck.hpp"
+
 #include <app/DeviceEventRouter.hpp>
 #include <core/DeviceService.hpp>
 
@@ -35,14 +37,6 @@ using apc::device::DeviceTimerPlatform;
 using apc::device::DeviceWatcherCallbacks;
 using apc::device::DeviceWatcherPlatform;
 using apc::device::DeviceWatcherRegistration;
-
-int g_failures = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 struct FakeConnectionBehavior {
     bool ThrowOnRegister = false;
@@ -1736,9 +1730,3 @@ int RunDeviceServiceTests() {
     TestOperationFailuresRemainOperationFailuresWithoutDisconnectReason();
     return g_failures;
 }
-
-#ifdef APC_DEVICE_SERVICE_STANDALONE
-int main() {
-    return RunDeviceServiceTests();
-}
-#endif

@@ -1,3 +1,5 @@
+#include "TestCheck.hpp"
+
 #include <app/LegacyAppUseCaseBridge.hpp>
 #include <app/DeviceFactPublicationFence.hpp>
 #include <ui/TrayPrimaryActivation.hpp>
@@ -33,14 +35,6 @@ using apc::app::LegacyAppUseCaseBridge;
 
 using DeviceRecord = LegacyAppUseCaseBridge::DeviceRecord;
 using OperationStatus = LegacyAppUseCaseBridge::OperationStatus;
-
-int g_failures = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 DeviceRecord Device(std::wstring id,
                     std::wstring name,

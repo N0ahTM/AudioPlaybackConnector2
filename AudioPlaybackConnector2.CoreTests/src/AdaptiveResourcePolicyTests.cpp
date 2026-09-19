@@ -1,3 +1,5 @@
+#include "TestCheck.hpp"
+
 #include <app/AdaptiveResourcePolicy.hpp>
 
 #include <chrono>
@@ -6,14 +8,6 @@
 
 namespace {
 using namespace std::chrono_literals;
-
-int g_failures = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 AdaptiveResourcePolicyConfig TestConfig() {
     return {

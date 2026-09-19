@@ -1,3 +1,5 @@
+#include "TestCheck.hpp"
+
 #include <core/SettingsStore.hpp>
 #include <core/SettingsLimits.hpp>
 #include <util/RuntimeApartment.hpp>
@@ -19,14 +21,6 @@
 #include <vector>
 
 namespace {
-
-int g_failures = 0;
-
-void Check(bool condition, char const* message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 class ControlledStorage final : public SettingsStoreStorage {
 public:

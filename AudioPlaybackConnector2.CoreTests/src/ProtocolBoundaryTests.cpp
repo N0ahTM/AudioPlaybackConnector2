@@ -1,3 +1,5 @@
+#include "TestCheck.hpp"
+
 #include <control/CommandProtocol.hpp>
 #include <services/ToastXmlSanitizer.hpp>
 
@@ -8,14 +10,6 @@
 #include <utility>
 
 namespace {
-
-int g_failures = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 class UniqueHandle {
 public:
@@ -245,73 +239,12 @@ void TestToastXmlSanitization() {
 
 } // namespace
 
-int RunAdaptiveResourceDiagnosticsTests();
-int RunAdaptiveResourcePolicyTests();
-int RunAppControllerTests();
-int RunAppModelsTests();
-int RunControlCommandAdapterTests();
-int RunAppWorkCoordinatorTests();
-int RunAutoReconnectPlannerTests();
-int RunCommandClientTests();
-int RunCommandLineControlServerTests();
-int RunControlUiActionGateTests();
-int RunControlTargetMatcherTests();
-int RunDeviceServiceTests();
-int RunDeviceWatcherTests();
-int RunDiagnosticsLogCollectorTests();
-int RunEventTests();
-int RunSettingsDiagnosticsReportBuilderTests();
-int RunSettingsStoreTests();
-int RunDevicePickerSnapshotTests();
-int RunLatestStartupTaskRequestStateTests();
-int RunLegacyAppUseCaseBridgeTests();
-int RunReconnectPolicyTests();
-int RunResourcePressureMonitorTests();
-int RunRuntimeApartmentTests();
-int RunSettingsLimitsTests();
-int RunSingleInstanceGuardTests();
-int RunStartupTaskCoordinatorTests();
-int RunTrayTooltipBuilderTests();
-
-int main() {
+int RunProtocolBoundaryTests() {
     TestCommandProtocolRoundTrip();
     TestCommandProtocolDelayedResponseReader();
     TestCommandProtocolStrictValidation();
     TestCommandProtocolTimeoutAndCancellation();
     TestCommandProtocolRejectsInvalidHeader();
     TestToastXmlSanitization();
-    g_failures += RunAdaptiveResourceDiagnosticsTests();
-    g_failures += RunAdaptiveResourcePolicyTests();
-    g_failures += RunAppControllerTests();
-    g_failures += RunAppModelsTests();
-    g_failures += RunControlCommandAdapterTests();
-    g_failures += RunAppWorkCoordinatorTests();
-    g_failures += RunAutoReconnectPlannerTests();
-    g_failures += RunCommandClientTests();
-    g_failures += RunCommandLineControlServerTests();
-    g_failures += RunControlUiActionGateTests();
-    g_failures += RunControlTargetMatcherTests();
-    g_failures += RunDeviceServiceTests();
-    g_failures += RunDeviceWatcherTests();
-    g_failures += RunDiagnosticsLogCollectorTests();
-    g_failures += RunEventTests();
-    g_failures += RunSettingsDiagnosticsReportBuilderTests();
-    g_failures += RunSettingsStoreTests();
-    g_failures += RunDevicePickerSnapshotTests();
-    g_failures += RunLatestStartupTaskRequestStateTests();
-    g_failures += RunLegacyAppUseCaseBridgeTests();
-    g_failures += RunReconnectPolicyTests();
-    g_failures += RunResourcePressureMonitorTests();
-    g_failures += RunRuntimeApartmentTests();
-    g_failures += RunSettingsLimitsTests();
-    g_failures += RunSingleInstanceGuardTests();
-    g_failures += RunStartupTaskCoordinatorTests();
-    g_failures += RunTrayTooltipBuilderTests();
-
-    if (g_failures != 0) {
-        std::cerr << g_failures << " core test(s) failed\n";
-        return 1;
-    }
-    std::cout << "All core tests passed\n";
-    return 0;
+    return g_failures;
 }

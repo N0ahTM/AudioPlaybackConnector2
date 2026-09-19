@@ -48,3 +48,16 @@ bound platform I/O duration. Callers must not hold application locks when invoki
 Store and Windows App Installer own application updates. The application performs no release lookup, update
 download or installation. Build and analysis on a working branch must not publish a release, promote an App
 Installer feed or submit a Store package. Release promotion is a separate operation.
+
+## Native test process
+
+The shared runner owns a Windows Runtime apartment for the complete suite run. Individual workers still
+initialize their own apartments. A suite must not rely on another suite's temporary apartment keeping WinRT
+factories alive. The shuffled-order regression seed `314159` exposed a stale JSON activation factory after
+temporary apartment teardown; the same seed passes with process lifetime ownership, including AddressSanitizer.
+
+Checks share an atomic failure counter within each suite and report source locations without interleaving
+concurrent diagnostic lines. The runner executes suites sequentially; a seed changes only their order.
+`scripts/test/run-concurrency-stress.ps1` preserves the seed and output, applies a per-run deadline and an overall
+watchdog, and fails on either a nonzero process result or an expired deadline. This is additional evidence beside
+the deterministic race scenarios, not exhaustive interleaving coverage.

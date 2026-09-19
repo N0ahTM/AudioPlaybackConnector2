@@ -26,6 +26,18 @@ Add `-DisablePrecompiledHeaders` to check the build without compiler PCH reuse. 
 Shared C++ rules live in `Directory.Build.props`; `Directory.Build.targets` rejects MSVC older than 14.51 and
 any translation unit outside the C++26 draft mode.
 
+The native runner supports `--list`, `--suite SettingsStore`, and `--seed 42`. A seed randomizes suite order;
+the individual race scenarios still use their explicit synchronization gates. Run repeated suites with a
+per-process and global watchdog using:
+
+```powershell
+pwsh ./scripts/test/run-concurrency-stress.ps1 -Iterations 10 -Seed 42
+```
+
+The script records each seed, exit code, elapsed time and output in a temporary results directory. Its failure
+message includes the exact replay command. Suite-order stress complements deterministic race tests; it does not
+claim to explore every thread interleaving.
+
 Restore packages before the first command-line build:
 
 ```powershell

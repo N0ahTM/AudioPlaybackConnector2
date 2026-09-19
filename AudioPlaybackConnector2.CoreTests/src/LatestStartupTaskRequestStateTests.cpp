@@ -1,3 +1,5 @@
+#include "TestCheck.hpp"
+
 #include <app/LatestStartupTaskRequestState.hpp>
 
 #include <algorithm>
@@ -9,14 +11,6 @@
 #include <vector>
 
 namespace {
-
-int g_failures = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 void TestInitialDesiredRequestStartsOneOperation() {
     LatestStartupTaskRequestState state;

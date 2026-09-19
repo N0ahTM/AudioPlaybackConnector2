@@ -1,3 +1,5 @@
+#include "TestCheck.hpp"
+
 #include <app/StartupTaskCoordinator.hpp>
 
 #include <windows.h>
@@ -16,14 +18,6 @@
 
 namespace {
 using namespace std::chrono_literals;
-
-int g_failures = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 class Event {
 public:

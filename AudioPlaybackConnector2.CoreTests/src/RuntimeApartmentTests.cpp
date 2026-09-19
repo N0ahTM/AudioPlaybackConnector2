@@ -1,3 +1,5 @@
+#include "TestCheck.hpp"
+
 #include <util/RuntimeApartment.hpp>
 
 #include <roapi.h>
@@ -10,14 +12,6 @@
 #include <thread>
 
 namespace {
-
-int g_failures = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 void TestFreshWorkerCanActivateWindowsRuntimeClass() {
     std::atomic<bool> ready = false;

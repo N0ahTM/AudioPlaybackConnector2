@@ -1,3 +1,5 @@
+#include "TestCheck.hpp"
+
 #include <core/DeviceWatcher.hpp>
 
 #include <algorithm>
@@ -20,14 +22,6 @@ using apc::device::DeviceWatcherFactKind;
 using apc::device::DeviceWatcherPlatform;
 using apc::device::DeviceWatcherRegistration;
 using apc::device_picker::DeviceIdentity;
-
-int g_failures = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 class ManualExecutor {
 public:
@@ -292,9 +286,3 @@ int RunDeviceWatcherTests() {
     TestRefreshDoesNotOverwriteNewerCallbackInventory();
     return g_failures;
 }
-
-#ifdef APC_DEVICE_WATCHER_STANDALONE
-int main() {
-    return RunDeviceWatcherTests();
-}
-#endif

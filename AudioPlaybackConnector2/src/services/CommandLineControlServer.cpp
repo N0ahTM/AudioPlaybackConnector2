@@ -132,26 +132,20 @@ struct CommandLineControlServer::RequestRecord {
 struct CommandLineControlServer::PipeInstance {
     PipeInstance(CommandLineControlServer* owner, std::size_t index, std::wstring name)
         : Owner(owner), Index(index), Name(std::move(name)) {}
-    ~PipeInstance() {
-        if (DeadlineTimer) CloseThreadpoolTimer(DeadlineTimer);
-        if (RearmTimer) CloseThreadpoolTimer(RearmTimer);
-        if (HandlerWork) CloseThreadpoolWork(HandlerWork);
-        if (AlreadyConnectedWork) CloseThreadpoolWork(AlreadyConnectedWork);
-        if (RecreateWork) CloseThreadpoolWork(RecreateWork);
-        if (Pipe && Pipe != INVALID_HANDLE_VALUE) CloseHandle(Pipe);
-        if (Io) CloseThreadpoolIo(Io);
-    }
 
+    // Stop drains callbacks before destroying the instance. The non-waiting
+    // owners only release resources; no destructor can introduce a hidden wait
+    // while a callback still needs StateMutex or another server resource.
     CommandLineControlServer* Owner = nullptr;
     std::size_t Index = 0;
     std::wstring Name;
-    HANDLE Pipe = INVALID_HANDLE_VALUE;
-    PTP_IO Io = nullptr;
-    PTP_WORK AlreadyConnectedWork = nullptr;
-    PTP_WORK HandlerWork = nullptr;
-    PTP_WORK RecreateWork = nullptr;
-    PTP_TIMER DeadlineTimer = nullptr;
-    PTP_TIMER RearmTimer = nullptr;
+    wil::unique_handle Pipe;
+    wil::unique_threadpool_io_nowait Io;
+    wil::unique_threadpool_work_nowait AlreadyConnectedWork;
+    wil::unique_threadpool_work_nowait HandlerWork;
+    wil::unique_threadpool_work_nowait RecreateWork;
+    wil::unique_threadpool_timer_nowait DeadlineTimer;
+    wil::unique_threadpool_timer_nowait RearmTimer;
     OVERLAPPED Overlapped{};
     std::mutex StateMutex;
 
@@ -212,21 +206,18 @@ CommandLineControlServer::~CommandLineControlServer() {
     if (g_activeHandlerServer == this) std::terminate();
     Stop();
     if (m_startRetryTimer) {
-        SetThreadpoolTimer(m_startRetryTimer, nullptr, 0, 0);
-        WaitForThreadpoolTimerCallbacks(m_startRetryTimer, TRUE);
-        CloseThreadpoolTimer(m_startRetryTimer);
-        m_startRetryTimer = nullptr;
+        SetThreadpoolTimer(m_startRetryTimer.get(), nullptr, 0, 0);
+        WaitForThreadpoolTimerCallbacks(m_startRetryTimer.get(), TRUE);
+        m_startRetryTimer.reset();
     }
     if (m_requestPruneTimer) {
-        SetThreadpoolTimer(m_requestPruneTimer, nullptr, 0, 0);
-        WaitForThreadpoolTimerCallbacks(m_requestPruneTimer, TRUE);
-        CloseThreadpoolTimer(m_requestPruneTimer);
-        m_requestPruneTimer = nullptr;
+        SetThreadpoolTimer(m_requestPruneTimer.get(), nullptr, 0, 0);
+        WaitForThreadpoolTimerCallbacks(m_requestPruneTimer.get(), TRUE);
+        m_requestPruneTimer.reset();
     }
     if (m_deferredStopWork) {
-        WaitForThreadpoolWorkCallbacks(m_deferredStopWork, FALSE);
-        CloseThreadpoolWork(m_deferredStopWork);
-        m_deferredStopWork = nullptr;
+        WaitForThreadpoolWorkCallbacks(m_deferredStopWork.get(), FALSE);
+        m_deferredStopWork.reset();
     }
 }
 
@@ -243,15 +234,15 @@ void CommandLineControlServer::Trace(std::wstring_view message) const noexcept {
 
 bool CommandLineControlServer::EnsureControlCallbacksLocked() noexcept {
     if (!m_startRetryTimer) {
-        m_startRetryTimer = CreateThreadpoolTimer(OnStartRetry, this, nullptr);
+        m_startRetryTimer.reset(CreateThreadpoolTimer(OnStartRetry, this, nullptr));
         if (!m_startRetryTimer) return false;
     }
     if (!m_requestPruneTimer) {
-        m_requestPruneTimer = CreateThreadpoolTimer(OnRequestPrune, this, nullptr);
+        m_requestPruneTimer.reset(CreateThreadpoolTimer(OnRequestPrune, this, nullptr));
         if (!m_requestPruneTimer) return false;
     }
     if (!m_deferredStopWork) {
-        m_deferredStopWork = CreateThreadpoolWork(OnDeferredStop, this, nullptr);
+        m_deferredStopWork.reset(CreateThreadpoolWork(OnDeferredStop, this, nullptr));
         if (!m_deferredStopWork) return false;
     }
     return true;
@@ -308,7 +299,7 @@ bool CommandLineControlServer::TryStart() noexcept {
         for (std::size_t index = 0; index < m_options.PipeInstanceCount; ++index) {
             auto instance =
                 std::make_unique<PipeInstance>(this, index, apc::control::PipeInstanceName(pipeName, index));
-            instance->Pipe =
+            instance->Pipe.reset(
                 CreateNamedPipeW(instance->Name.c_str(),
                                  PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
                                  PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
@@ -316,28 +307,28 @@ bool CommandLineControlServer::TryStart() noexcept {
                                  apc::control::c_pipeBufferBytes,
                                  apc::control::c_pipeBufferBytes,
                                  0,
-                                 security->Get());
-            if (instance->Pipe != INVALID_HANDLE_VALUE) {
-                instance->Io = CreateThreadpoolIo(instance->Pipe, OnIoCompleted, instance.get(), nullptr);
+                                 security->Get()));
+            if (instance->Pipe) {
+                instance->Io.reset(CreateThreadpoolIo(instance->Pipe.get(), OnIoCompleted, instance.get(), nullptr));
                 if (instance->Io) {
                     ++availableInstances;
                 } else {
                     instanceCreationError = GetLastError();
-                    CloseHandle(std::exchange(instance->Pipe, INVALID_HANDLE_VALUE));
+                    instance->Pipe.reset();
                 }
             } else {
                 instanceCreationError = GetLastError();
             }
             if (!instance->Io) instance->RecreateRequired = true;
-            instance->AlreadyConnectedWork = CreateThreadpoolWork(OnAlreadyConnected, instance.get(), nullptr);
+            instance->AlreadyConnectedWork.reset(CreateThreadpoolWork(OnAlreadyConnected, instance.get(), nullptr));
             if (!instance->AlreadyConnectedWork) ThrowWin32Error(GetLastError());
-            instance->HandlerWork = CreateThreadpoolWork(OnHandlerReady, instance.get(), nullptr);
+            instance->HandlerWork.reset(CreateThreadpoolWork(OnHandlerReady, instance.get(), nullptr));
             if (!instance->HandlerWork) ThrowWin32Error(GetLastError());
-            instance->RecreateWork = CreateThreadpoolWork(OnRecreateReady, instance.get(), nullptr);
+            instance->RecreateWork.reset(CreateThreadpoolWork(OnRecreateReady, instance.get(), nullptr));
             if (!instance->RecreateWork) ThrowWin32Error(GetLastError());
-            instance->DeadlineTimer = CreateThreadpoolTimer(OnOperationDeadline, instance.get(), nullptr);
+            instance->DeadlineTimer.reset(CreateThreadpoolTimer(OnOperationDeadline, instance.get(), nullptr));
             if (!instance->DeadlineTimer) ThrowWin32Error(GetLastError());
-            instance->RearmTimer = CreateThreadpoolTimer(OnRearmReady, instance.get(), nullptr);
+            instance->RearmTimer.reset(CreateThreadpoolTimer(OnRearmReady, instance.get(), nullptr));
             if (!instance->RearmTimer) ThrowWin32Error(GetLastError());
             instances.push_back(std::move(instance));
         }
@@ -349,7 +340,7 @@ bool CommandLineControlServer::TryStart() noexcept {
         m_running = true;
         m_starting = false;
         m_startRetryFailures = 0;
-        SetThreadpoolTimer(m_startRetryTimer, nullptr, 0, 0);
+        SetThreadpoolTimer(m_startRetryTimer.get(), nullptr, 0, 0);
 
         for (auto& instance : m_instances) {
             if (!ArmConnection(*instance)) Trace(L"pipe instance arm deferred");
@@ -375,7 +366,7 @@ bool CommandLineControlServer::TryStart() noexcept {
 void CommandLineControlServer::ScheduleStartRetryLocked() noexcept {
     if (!m_desiredRunning || !m_options.RetryStartupFailures || !m_startRetryTimer) return;
     auto due = RelativeDelay(RetryDelay(m_options.RetryDelayMs, m_startRetryFailures, GetCurrentProcessId()));
-    SetThreadpoolTimer(m_startRetryTimer, &due, 0, 0);
+    SetThreadpoolTimer(m_startRetryTimer.get(), &due, 0, 0);
 }
 
 void CommandLineControlServer::RequestStopLocked() noexcept {
@@ -384,7 +375,7 @@ void CommandLineControlServer::RequestStopLocked() noexcept {
     m_running = false;
     m_stopRequested = true;
     m_stopSource.request_stop();
-    if (m_startRetryTimer) SetThreadpoolTimer(m_startRetryTimer, nullptr, 0, 0);
+    if (m_startRetryTimer) SetThreadpoolTimer(m_startRetryTimer.get(), nullptr, 0, 0);
 }
 
 void CommandLineControlServer::RequestStop() noexcept {
@@ -405,7 +396,7 @@ void CommandLineControlServer::Stop() noexcept {
     if (g_activeHandlerServer == this) {
         RequestStop();
         if (!m_deferredStopRequested.exchange(true) && m_deferredStopWork) {
-            SubmitThreadpoolWork(m_deferredStopWork);
+            SubmitThreadpoolWork(m_deferredStopWork.get());
         }
         return;
     }
@@ -425,24 +416,24 @@ void CommandLineControlServer::Stop() noexcept {
             instances.swap(m_instances);
         }
 
-        if (m_startRetryTimer) WaitForThreadpoolTimerCallbacks(m_startRetryTimer, TRUE);
+        if (m_startRetryTimer) WaitForThreadpoolTimerCallbacks(m_startRetryTimer.get(), TRUE);
 
         for (auto& instance : instances) {
             std::scoped_lock stateLock(instance->StateMutex);
-            SetThreadpoolTimer(instance->DeadlineTimer, nullptr, 0, 0);
-            SetThreadpoolTimer(instance->RearmTimer, nullptr, 0, 0);
-            if (instance->Pipe && instance->Pipe != INVALID_HANDLE_VALUE) {
-                CancelIoEx(instance->Pipe, &instance->Overlapped);
+            SetThreadpoolTimer(instance->DeadlineTimer.get(), nullptr, 0, 0);
+            SetThreadpoolTimer(instance->RearmTimer.get(), nullptr, 0, 0);
+            if (instance->Pipe) {
+                CancelIoEx(instance->Pipe.get(), &instance->Overlapped);
             }
         }
         for (auto& instance : instances) {
-            WaitForThreadpoolTimerCallbacks(instance->DeadlineTimer, TRUE);
-            WaitForThreadpoolTimerCallbacks(instance->RearmTimer, TRUE);
-            WaitForThreadpoolWorkCallbacks(instance->RecreateWork, TRUE);
-            if (instance->Io) WaitForThreadpoolIoCallbacks(instance->Io, FALSE);
-            WaitForThreadpoolWorkCallbacks(instance->HandlerWork, TRUE);
-            WaitForThreadpoolWorkCallbacks(instance->AlreadyConnectedWork, TRUE);
-            if (instance->Pipe && instance->Pipe != INVALID_HANDLE_VALUE) DisconnectNamedPipe(instance->Pipe);
+            WaitForThreadpoolTimerCallbacks(instance->DeadlineTimer.get(), TRUE);
+            WaitForThreadpoolTimerCallbacks(instance->RearmTimer.get(), TRUE);
+            WaitForThreadpoolWorkCallbacks(instance->RecreateWork.get(), TRUE);
+            if (instance->Io) WaitForThreadpoolIoCallbacks(instance->Io.get(), FALSE);
+            WaitForThreadpoolWorkCallbacks(instance->HandlerWork.get(), TRUE);
+            WaitForThreadpoolWorkCallbacks(instance->AlreadyConnectedWork.get(), TRUE);
+            if (instance->Pipe) DisconnectNamedPipe(instance->Pipe.get());
         }
         instances.clear();
 
@@ -518,7 +509,7 @@ bool CommandLineControlServer::ArmConnection(PipeInstance& instance) noexcept {
 
 bool CommandLineControlServer::ArmConnectionLocked(PipeInstance& instance) noexcept {
     if (!m_running.load()) return false;
-    if (!instance.Io || !instance.Pipe || instance.Pipe == INVALID_HANDLE_VALUE) {
+    if (!instance.Io || !instance.Pipe) {
         instance.RecreateRequired = true;
         ScheduleRearmLocked(instance);
         return false;
@@ -526,19 +517,19 @@ bool CommandLineControlServer::ArmConnectionLocked(PipeInstance& instance) noexc
 
     instance.Phase = PipePhase::Connecting;
     instance.Overlapped = {};
-    StartThreadpoolIo(instance.Io);
-    if (ConnectNamedPipe(instance.Pipe, &instance.Overlapped)) return true;
+    StartThreadpoolIo(instance.Io.get());
+    if (ConnectNamedPipe(instance.Pipe.get(), &instance.Overlapped)) return true;
 
     const auto error = GetLastError();
     if (error == ERROR_IO_PENDING) return true;
 
-    CancelThreadpoolIo(instance.Io);
+    CancelThreadpoolIo(instance.Io.get());
     if (error == ERROR_PIPE_CONNECTED) {
-        SubmitThreadpoolWork(instance.AlreadyConnectedWork);
+        SubmitThreadpoolWork(instance.AlreadyConnectedWork.get());
         return true;
     }
     if (error == ERROR_NO_DATA) {
-        DisconnectNamedPipe(instance.Pipe);
+        DisconnectNamedPipe(instance.Pipe.get());
         instance.RearmFailures = 0;
     }
 
@@ -555,7 +546,7 @@ void CommandLineControlServer::ScheduleRearmLocked(PipeInstance& instance) noexc
     if (!m_running.load()) return;
     ++instance.RearmFailures;
     auto due = RelativeDelay(RetryDelay(m_options.RetryDelayMs, instance.RearmFailures, instance.Index));
-    SetThreadpoolTimer(instance.RearmTimer, &due, 0, 0);
+    SetThreadpoolTimer(instance.RearmTimer.get(), &due, 0, 0);
 }
 
 void CommandLineControlServer::RecreatePipeInstance(PipeInstance& instance) noexcept {
@@ -579,38 +570,39 @@ void CommandLineControlServer::RecreatePipeInstance(PipeInstance& instance) noex
             return;
         }
 
-        HANDLE oldPipe = INVALID_HANDLE_VALUE;
-        PTP_IO oldIo = nullptr;
+        wil::unique_handle oldPipe;
+        wil::unique_threadpool_io_nowait oldIo;
         {
             std::scoped_lock stateLock(instance.StateMutex);
             if (!m_running.load() || !instance.RecreateRequired) {
                 instance.RecreateScheduled = false;
                 return;
             }
-            oldPipe = std::exchange(instance.Pipe, INVALID_HANDLE_VALUE);
-            oldIo = std::exchange(instance.Io, nullptr);
+            oldPipe = std::move(instance.Pipe);
+            oldIo = std::move(instance.Io);
         }
 
-        if (oldPipe && oldPipe != INVALID_HANDLE_VALUE) CancelIoEx(oldPipe, nullptr);
-        if (oldIo) WaitForThreadpoolIoCallbacks(oldIo, FALSE);
-        if (oldPipe && oldPipe != INVALID_HANDLE_VALUE) CloseHandle(oldPipe);
-        if (oldIo) CloseThreadpoolIo(oldIo);
+        if (oldPipe) CancelIoEx(oldPipe.get(), nullptr);
+        if (oldIo) WaitForThreadpoolIoCallbacks(oldIo.get(), FALSE);
+        oldPipe.reset();
+        oldIo.reset();
 
-        HANDLE newPipe = CreateNamedPipeW(instance.Name.c_str(),
-                                          PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
-                                          PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-                                          1,
-                                          apc::control::c_pipeBufferBytes,
-                                          apc::control::c_pipeBufferBytes,
-                                          0,
-                                          security->Get());
-        if (newPipe == INVALID_HANDLE_VALUE) {
+        wil::unique_handle newPipe(
+            CreateNamedPipeW(instance.Name.c_str(),
+                             PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                             1,
+                             apc::control::c_pipeBufferBytes,
+                             apc::control::c_pipeBufferBytes,
+                             0,
+                             security->Get()));
+        if (!newPipe) {
             failAndRetry();
             return;
         }
-        auto newIo = CreateThreadpoolIo(newPipe, OnIoCompleted, &instance, nullptr);
+        wil::unique_threadpool_io_nowait newIo(CreateThreadpoolIo(newPipe.get(), OnIoCompleted, &instance, nullptr));
         if (!newIo) {
-            CloseHandle(newPipe);
+            newPipe.reset();
             failAndRetry();
             return;
         }
@@ -618,13 +610,11 @@ void CommandLineControlServer::RecreatePipeInstance(PipeInstance& instance) noex
         {
             std::scoped_lock stateLock(instance.StateMutex);
             if (!m_running.load()) {
-                CloseHandle(newPipe);
-                CloseThreadpoolIo(newIo);
                 instance.RecreateScheduled = false;
                 return;
             }
-            instance.Pipe = newPipe;
-            instance.Io = newIo;
+            instance.Pipe = std::move(newPipe);
+            instance.Io = std::move(newIo);
             instance.RecreateRequired = false;
             instance.RecreateScheduled = false;
             instance.RearmFailures = 0;
@@ -658,19 +648,20 @@ bool CommandLineControlServer::StartCurrentTransferLocked(PipeInstance& instance
 
     instance.Overlapped = {};
     auto due = AbsoluteDeadline(instance.TransferDeadline);
-    SetThreadpoolTimer(instance.DeadlineTimer, &due, 0, 0);
-    StartThreadpoolIo(instance.Io);
+    SetThreadpoolTimer(instance.DeadlineTimer.get(), &due, 0, 0);
+    StartThreadpoolIo(instance.Io.get());
 
     auto* cursor = static_cast<std::byte*>(instance.Buffer) + instance.TransferredBytes;
     const DWORD remaining = instance.TotalBytes - instance.TransferredBytes;
-    const BOOL started = instance.Write ? WriteFile(instance.Pipe, cursor, remaining, nullptr, &instance.Overlapped)
-                                        : ReadFile(instance.Pipe, cursor, remaining, nullptr, &instance.Overlapped);
+    const BOOL started = instance.Write
+                             ? WriteFile(instance.Pipe.get(), cursor, remaining, nullptr, &instance.Overlapped)
+                             : ReadFile(instance.Pipe.get(), cursor, remaining, nullptr, &instance.Overlapped);
     if (started || GetLastError() == ERROR_IO_PENDING) return true;
 
     const auto error = GetLastError();
-    CancelThreadpoolIo(instance.Io);
-    SetThreadpoolTimer(instance.DeadlineTimer, nullptr, 0, 0);
-    WaitForThreadpoolTimerCallbacks(instance.DeadlineTimer, TRUE);
+    CancelThreadpoolIo(instance.Io.get());
+    SetThreadpoolTimer(instance.DeadlineTimer.get(), nullptr, 0, 0);
+    WaitForThreadpoolTimerCallbacks(instance.DeadlineTimer.get(), TRUE);
     SetLastError(error);
     return false;
 }
@@ -780,8 +771,8 @@ void CALLBACK CommandLineControlServer::OnHandlerReady(PTP_CALLBACK_INSTANCE cal
 
 void CALLBACK CommandLineControlServer::OnOperationDeadline(PTP_CALLBACK_INSTANCE, void* context, PTP_TIMER) noexcept {
     auto* instance = static_cast<PipeInstance*>(context);
-    if (instance && instance->Pipe != INVALID_HANDLE_VALUE) {
-        CancelIoEx(instance->Pipe, &instance->Overlapped);
+    if (instance && instance->Pipe) {
+        CancelIoEx(instance->Pipe.get(), &instance->Overlapped);
     }
 }
 
@@ -806,7 +797,7 @@ void CALLBACK CommandLineControlServer::OnRearmReady(PTP_CALLBACK_INSTANCE, void
         return;
     }
     if (recreate) {
-        SubmitThreadpoolWork(instance->RecreateWork);
+        SubmitThreadpoolWork(instance->RecreateWork.get());
     } else if (arm) {
         (void)instance->Owner->ArmConnection(*instance);
     }
@@ -865,8 +856,8 @@ void CommandLineControlServer::HandleIoCompletion(PipeInstance& instance,
                                                   ULONG_PTR bytes) noexcept {
     try {
         std::unique_lock stateLock(instance.StateMutex);
-        SetThreadpoolTimer(instance.DeadlineTimer, nullptr, 0, 0);
-        WaitForThreadpoolTimerCallbacks(instance.DeadlineTimer, TRUE);
+        SetThreadpoolTimer(instance.DeadlineTimer.get(), nullptr, 0, 0);
+        WaitForThreadpoolTimerCallbacks(instance.DeadlineTimer.get(), TRUE);
         if (overlapped != &instance.Overlapped) {
             FinishClientLocked(instance);
             return;
@@ -905,7 +896,7 @@ void CommandLineControlServer::HandleIoCompletion(PipeInstance& instance,
 void CommandLineControlServer::HandleConnectedInstance(PipeInstance& instance) noexcept {
     bool trusted = false;
     try {
-        trusted = m_options.IsTrustedClient && m_options.IsTrustedClient(instance.Pipe);
+        trusted = m_options.IsTrustedClient && m_options.IsTrustedClient(instance.Pipe.get());
     } catch (...) {
         trusted = false;
     }
@@ -1040,7 +1031,7 @@ void CommandLineControlServer::DispatchRequestLocked(PipeInstance& instance) noe
         ++entry->second;
         instance.PendingDelivery = true;
         instance.Phase = PipePhase::RunningHandler;
-        SubmitThreadpoolWork(instance.HandlerWork);
+        SubmitThreadpoolWork(instance.HandlerWork.get());
     } catch (...) {
         FinishClientLocked(instance);
     }
@@ -1065,7 +1056,7 @@ void CommandLineControlServer::FinishClientLocked(PipeInstance& instance) noexce
         auto record = std::move(instance.AcknowledgementRecord);
         CompleteDelivery(instance.Request.CorrelationId, record, false);
     }
-    DisconnectNamedPipe(instance.Pipe);
+    DisconnectNamedPipe(instance.Pipe.get());
     if (m_running.load() && !ArmConnectionLocked(instance)) Trace(L"pipe rearm deferred");
 }
 
@@ -1246,11 +1237,11 @@ void CommandLineControlServer::ScheduleRequestPruneLocked(std::chrono::steady_cl
         if (!earliest || expires < *earliest) earliest = expires;
     }
     if (!earliest) {
-        SetThreadpoolTimer(m_requestPruneTimer, nullptr, 0, 0);
+        SetThreadpoolTimer(m_requestPruneTimer.get(), nullptr, 0, 0);
         return;
     }
     const auto remaining =
         *earliest > now ? std::chrono::duration_cast<std::chrono::milliseconds>(*earliest - now).count() : 1;
     auto due = RelativeDelay(static_cast<DWORD>(std::clamp<std::int64_t>(remaining, 1, MAXDWORD - 1)));
-    SetThreadpoolTimer(m_requestPruneTimer, &due, 0, 0);
+    SetThreadpoolTimer(m_requestPruneTimer.get(), &due, 0, 0);
 }

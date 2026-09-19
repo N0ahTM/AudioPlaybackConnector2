@@ -1,6 +1,7 @@
 #pragma once
 
 #include <windows.h>
+#include <wil/resource.h>
 
 #include <control/CommandProtocol.hpp>
 
@@ -119,9 +120,9 @@ private:
     std::stop_source m_stopSource;
     Handler m_handler;
     std::vector<std::unique_ptr<PipeInstance>> m_instances;
-    PTP_TIMER m_startRetryTimer = nullptr;
-    PTP_TIMER m_requestPruneTimer = nullptr;
-    PTP_WORK m_deferredStopWork = nullptr;
+    wil::unique_threadpool_timer_nowait m_startRetryTimer;
+    wil::unique_threadpool_timer_nowait m_requestPruneTimer;
+    wil::unique_threadpool_work_nowait m_deferredStopWork;
     std::size_t m_startRetryFailures = 0;
 
     std::mutex m_requestMutex;

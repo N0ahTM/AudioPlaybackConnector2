@@ -66,6 +66,11 @@ bound platform I/O duration. Callers must not hold application locks when invoki
 
 ## Named-pipe response retention
 
+Each pipe instance owns its pipe, threadpool I/O, work items and timers through WIL. Callback contexts retain the
+instance address until Stop has cancelled I/O and drained the callback groups. The `*_nowait` owners deliberately
+only close resources: waiting is explicit in Stop, slot recreation and the server destructor. Slot recreation
+moves the old pipe and I/O owners out under the state lock, then cancels and drains them after unlocking.
+
 `CommandLineControlServer` owns request records, pending handler deliveries and cache-byte accounting under its
 request mutex. A complete request registers its pending delivery before its handler work is submitted. Pending
 deliveries prevent eviction while that work is queued or waiting for another execution of the same request.

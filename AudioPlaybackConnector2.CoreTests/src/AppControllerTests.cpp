@@ -2,7 +2,6 @@
 #include "AppTestFixture.hpp"
 
 #include <app/AppController.hpp>
-#include <ui/TrayPrimaryActivation.hpp>
 
 #include <chrono>
 #include <future>
@@ -83,8 +82,7 @@ void TestPreflightAndShutdownCloseAdmission() {
 void TestPresentationBoundaryRetainsPickerIntent() {
     apc::tests::AppFixture fixture;
     auto controller = std::make_shared<AppController>(fixture.Settings, fixture.Service, fixture.Presentation);
-    auto tray = apc::ui::MakeTrayPrimaryActivationCallback(controller);
-    tray();
+    (void)controller->ShowDevicePicker(DevicePickerOpenMode::ToggleIfOpen, AppCommandContext::Detached());
     Check(controller->ShowDevicePicker(DevicePickerOpenMode::EnsureOpen).Succeeded() &&
               controller->ShowSettings().Succeeded(),
           "explicit UI actions must use the presentation boundary");
@@ -92,10 +90,6 @@ void TestPresentationBoundaryRetainsPickerIntent() {
                                                                            DevicePickerOpenMode::EnsureOpen} &&
               fixture.Presentation->Contexts.front().Completion == AppCommandContext::CompletionMode::Detached,
           "tray toggling and control ensure-open must preserve their distinct intent and completion contracts");
-    controller.reset();
-    auto const before = fixture.Presentation->Modes.size();
-    tray();
-    Check(fixture.Presentation->Modes.size() == before, "tray callback must not retain its controller");
 }
 
 void TestShutdownClosesEventAdmission() {

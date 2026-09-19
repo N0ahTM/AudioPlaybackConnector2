@@ -24,41 +24,26 @@ constexpr double c_pickerMinWidth = 260.0;
 constexpr double c_pickerMaxWidth = 520.0;
 constexpr double c_globalActionsChromeWidth = 82.0;
 
-class DevicePickerSizer final {
-public:
-    [[nodiscard]] static double WidthFor(bool showGlobalActions) {
-        // Both pages share a width based on localized controls; long names use their full tooltip.
-        double desiredWidth = OptionsWidth();
-        if (showGlobalActions) {
-            desiredWidth = std::max(desiredWidth, GlobalActionsWidth());
-        }
-
-        return std::clamp(desiredWidth, c_pickerMinWidth, c_pickerMaxWidth);
-    }
-
-    [[nodiscard]] static double OptionsWidth() {
-        auto labelWidth = std::max({MeasureTextWidth(_("Settings_DefaultDevice")),
-                                    MeasureTextWidth(_("DeviceOptions_Startup")),
-                                    MeasureTextWidth(_("DeviceOptions_Reconnect"))});
-        return std::clamp(labelWidth + 100.0, 280.0, c_pickerMaxWidth);
-    }
-
-private:
-    [[nodiscard]] static double MeasureTextWidth(std::wstring_view text, double fontSize = 14.0) {
+double DevicePickerWidth(bool showGlobalActions) {
+    const auto measureText = [](std::wstring_view text, double fontSize = 14.0) {
         auto block = TextBlock();
         block.Text(winrt::hstring(text));
         block.FontSize(fontSize);
         block.TextWrapping(TextWrapping::NoWrap);
         block.Measure({c_pickerMaxWidth * 2.0, 48.0});
         return block.DesiredSize().Width;
+    };
+    // Both pages share a width based on localized controls; long names use their full tooltip.
+    auto labelWidth = std::max({measureText(_("Settings_DefaultDevice")),
+                                measureText(_("DeviceOptions_Startup")),
+                                measureText(_("DeviceOptions_Reconnect"))});
+    auto desiredWidth = std::clamp(labelWidth + 100.0, 280.0, c_pickerMaxWidth);
+    if (showGlobalActions) {
+        auto actionWidth = std::max(measureText(_("DisconnectAll"), 12.0), measureText(_("ReconnectAll"), 12.0));
+        desiredWidth = std::max(desiredWidth, 2.0 * actionWidth + c_globalActionsChromeWidth);
     }
-
-    [[nodiscard]] static double GlobalActionsWidth() {
-        auto disconnectAll = MeasureTextWidth(winrt::hstring(_("DisconnectAll")), 12.0);
-        auto reconnectAll = MeasureTextWidth(winrt::hstring(_("ReconnectAll")), 12.0);
-        return 2.0 * std::max(disconnectAll, reconnectAll) + c_globalActionsChromeWidth;
-    }
-};
+    return std::clamp(desiredWidth, c_pickerMinWidth, c_pickerMaxWidth);
+}
 } // namespace
 
 namespace winrt::AudioPlaybackConnector2::implementation {
@@ -422,7 +407,7 @@ void DevicePickerView::RefreshDeviceOptions(bool resetAlias) {
     auto const& device = options->Device;
     TitleText().Text(winrt::hstring(device.DisplayName));
     apc::ui::SetTooltipText(TitleText(), winrt::hstring(device.DisplayName));
-    RootGrid().Width(DevicePickerSizer::WidthFor(m_viewState.ConnectedDeviceCount > 1));
+    RootGrid().Width(DevicePickerWidth(m_viewState.ConnectedDeviceCount > 1));
     if (resetAlias || std::wstring(DeviceAliasBox().Text()) == m_savedAlias) {
         m_savedAlias = device.Alias;
         DeviceAliasBox().Text(winrt::hstring(device.Alias));
@@ -535,7 +520,7 @@ void DevicePickerView::RenderDeviceList(bool reconcilePendingActions, bool force
     for (auto const& device : items) {
         if (device.IsAvailable || m_savedDevicesExpanded) visibleItems.push_back(device);
     }
-    if (m_optionsDeviceId.empty()) RootGrid().Width(DevicePickerSizer::WidthFor(connectedCount > 1));
+    if (m_optionsDeviceId.empty()) RootGrid().Width(DevicePickerWidth(connectedCount > 1));
     const bool hasSavedDevices = std::ranges::any_of(items, [](auto const& device) { return !device.IsAvailable; });
     SavedDevicesButton().Visibility(hasSavedDevices ? Visibility::Visible : Visibility::Collapsed);
     SavedDevicesChevron().Glyph(m_savedDevicesExpanded ? L"\xE70E" : L"\xE70D");

@@ -24,7 +24,14 @@ TrayController::~TrayController() {
 /*//////// Lifecycle /////////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-void TrayController::Initialize(HWND hwnd, winrt::Microsoft::UI::Xaml::Window mainWindow) {
+void TrayController::Initialize(HWND hwnd,
+                                winrt::Microsoft::UI::Xaml::Window mainWindow,
+                                std::weak_ptr<apc::app::AppController> controller,
+                                ExitCallback exit,
+                                ShowHelpCallback showHelp) {
+    m_appController = std::move(controller);
+    m_exitCallback = std::move(exit);
+    m_showHelpCallback = std::move(showHelp);
     m_isTearingDown.store(false);
     m_hwnd = hwnd;
     m_mainWindow = mainWindow;
@@ -55,8 +62,8 @@ void TrayController::Initialize(HWND hwnd, winrt::Microsoft::UI::Xaml::Window ma
         m_contextMenu->Initialize(
             root,
             [weak]() {
-                if (auto self = weak.lock(); self && !self->m_isTearingDown.load() && self->m_showSettingsCallback)
-                    self->m_showSettingsCallback();
+                if (auto self = weak.lock(); self && !self->m_isTearingDown.load())
+                    self->ShowSettingsAfterPickerClosed();
             },
             [weak]() {
                 if (auto self = weak.lock(); self && !self->m_isTearingDown.load() && self->m_showHelpCallback)
@@ -78,12 +85,8 @@ void TrayController::Initialize(HWND hwnd, winrt::Microsoft::UI::Xaml::Window ma
             });
         DebugTrace(L"[TrayController] TrayContextMenu initialized");
     }
-}
-
-void TrayController::SetAppController(std::weak_ptr<apc::app::AppController> appController) {
-    m_appController = std::move(appController);
-    if (auto controller = m_appController.lock())
-        SetSystemBackdropEffectsEnabled(controller->Snapshot().Settings.UseSystemBackdropEffects);
+    if (auto owner = m_appController.lock())
+        SetSystemBackdropEffectsEnabled(owner->Snapshot().Settings.UseSystemBackdropEffects);
 }
 
 void TrayController::ApplyLanguage() {
@@ -162,13 +165,10 @@ void TrayController::Teardown() noexcept try {
         ThemeHelper::RemoveThemeChangedHandler(m_themeChangedToken);
         m_themeChangedToken = 0;
     }
-    m_showSettingsCallback = nullptr;
     m_showHelpCallback = nullptr;
     m_openSettingsAfterPickerClosed = false;
     m_appController.reset();
-    m_showDevicePickerCallback = nullptr;
     m_exitCallback = nullptr;
-    m_toggleDeviceCallback = nullptr;
     m_resourceStateChangedCallback = nullptr;
     if (m_trayIcon) {
         m_trayIcon->Remove();
@@ -198,16 +198,6 @@ void TrayController::Teardown() noexcept try {
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Callbacks /////////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
-
-void TrayController::SetCallbacks(ShowSettingsCallback showSettings,
-                                  ShowDevicePickerCallback showDevicePicker,
-                                  ExitCallback exit,
-                                  ToggleDeviceCallback toggleDevice) {
-    m_showSettingsCallback = std::move(showSettings);
-    m_showDevicePickerCallback = std::move(showDevicePicker);
-    m_exitCallback = std::move(exit);
-    m_toggleDeviceCallback = std::move(toggleDevice);
-}
 
 void TrayController::SetResourceStateChangedCallback(ResourceStateChangedCallback callback) {
     m_resourceStateChangedCallback = std::move(callback);
@@ -516,7 +506,11 @@ void TrayController::SetState(TrayIconState state) {
 }
 
 util::SettingsWindowPlacement TrayController::GetSettingsWindowPlacement() const {
-    return CalculateSettingsWindowPlacement();
+    std::optional<RECT> anchorRect;
+    if (m_trayIcon) {
+        anchorRect = m_trayIcon->GetIconRect();
+    }
+    return util::CalculateSettingsWindowPlacement(anchorRect);
 }
 
 void TrayController::HandleTrayMessage([[maybe_unused]] WPARAM wParam, LPARAM lParam) noexcept try {
@@ -558,10 +552,10 @@ void TrayController::HandleTrayMessage([[maybe_unused]] WPARAM wParam, LPARAM lP
                 break;
             }
             if (shouldProcess(m_lastLeftClickTick, c_clickDebounceMs)) {
-                if (m_showDevicePickerCallback) {
-                    m_showDevicePickerCallback();
-                } else {
-                    DebugTrace(L"[TrayController] ERROR: primary activation callback is not configured");
+                if (auto controller = m_appController.lock()) {
+                    // The UI callback cannot wait for its own flyout Opened event.
+                    (void)controller->ShowDevicePicker(apc::app::DevicePickerOpenMode::ToggleIfOpen,
+                                                       apc::app::AppCommandContext::Detached());
                 }
             }
             break;
@@ -715,16 +709,13 @@ void TrayController::ReleaseDevicePicker() noexcept {
     }
 }
 
-void TrayController::SetHelpCallback(ShowSettingsCallback callback) {
-    m_showHelpCallback = std::move(callback);
-}
-
 void TrayController::ShowSettingsAfterPickerClosed() {
     m_openSettingsAfterPickerClosed = true;
     TryHideDevicePicker();
     if (m_openSettingsAfterPickerClosed && m_pickerFlyoutState.load() != PickerFlyoutState::Closing) {
         m_openSettingsAfterPickerClosed = false;
-        if (m_showSettingsCallback) m_showSettingsCallback();
+        if (auto controller = m_appController.lock())
+            (void)controller->ShowSettings(apc::app::AppCommandContext::Detached());
     }
 }
 
@@ -873,8 +864,10 @@ Controls::Flyout TrayController::CreatePickerFlyout() {
             if (self->m_releaseDevicePickerPending) {
                 self->ReleaseDevicePickerOnUIThread();
             }
-            if (std::exchange(self->m_openSettingsAfterPickerClosed, false) && self->m_showSettingsCallback)
-                self->m_showSettingsCallback();
+            if (std::exchange(self->m_openSettingsAfterPickerClosed, false)) {
+                if (auto controller = self->m_appController.lock())
+                    (void)controller->ShowSettings(apc::app::AppCommandContext::Detached());
+            }
         } catch (winrt::hresult_error const& ex) {
             util::DebugTraceException(L"[TrayController] ERROR: Picker flyout closed handler failed", ex);
         } catch (std::exception const& ex) {
@@ -900,14 +893,6 @@ void TrayController::NotifyResourceStateChanged(bool userInteraction) noexcept {
     }
 }
 
-util::SettingsWindowPlacement TrayController::CalculateSettingsWindowPlacement() const {
-    std::optional<RECT> anchorRect;
-    if (m_trayIcon) {
-        anchorRect = m_trayIcon->GetIconRect();
-    }
-    return util::CalculateSettingsWindowPlacement(anchorRect);
-}
-
 bool TrayController::IsCursorOverTrayIcon() const {
     if (!m_trayIcon) return false;
 
@@ -923,9 +908,8 @@ bool TrayController::IsCursorOverTrayIcon() const {
 void TrayController::OnTrayIconDoubleClick() {
     if (m_isTearingDown.load()) return;
     DebugTrace(L"[TrayController] OnTrayIconDoubleClick()");
-    if (m_toggleDeviceCallback) {
-        m_toggleDeviceCallback();
-    }
+    if (auto controller = m_appController.lock())
+        (void)controller->ToggleDefault(apc::app::AppCommandContext::Detached());
 }
 
 void TrayController::LaunchBluetoothSettings() {

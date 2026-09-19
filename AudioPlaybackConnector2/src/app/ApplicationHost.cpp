@@ -464,32 +464,18 @@ void ApplicationHost::FailStartup(std::wstring_view stage) noexcept {
 void ApplicationHost::InitializeTray() {
     DebugTrace(L"[App] InitializeTray()");
     m_trayController = std::make_shared<TrayController>();
-    m_trayController->Initialize(m_hwnd, m_mainWindow);
     auto weak = weak_from_this();
-    m_trayController->SetAppController(m_appController);
-
-    m_trayController->SetHelpCallback([weak] {
-        if (auto self = weak.lock(); self && !self->m_exiting.load() && self->m_appController) {
-            auto result = self->m_appController->ShowSettings();
-            if (result.Succeeded()) static_cast<void>(self->m_settingsWindowPresenter.ShowHelp());
-        }
-    });
-    auto controller = std::weak_ptr<apc::app::AppController>(m_appController);
-    m_trayController->SetCallbacks(
-        [controller]() {
-            if (auto owner = controller.lock()) {
-                (void)owner->ShowSettings(apc::app::AppCommandContext::Detached());
-            }
-        },
-        apc::ui::MakeTrayPrimaryActivationCallback(m_appController),
-        [weak]() {
+    m_trayController->Initialize(
+        m_hwnd,
+        m_mainWindow,
+        m_appController,
+        [weak] {
             if (auto self = weak.lock()) self->ExitApplication();
         },
-        [weak]() {
+        [weak] {
             if (auto self = weak.lock(); self && !self->m_exiting.load() && self->m_appController) {
-                if (self->m_appController->ToggleDefault(apc::app::AppCommandContext::Detached()).Succeeded()) {
-                    self->ScheduleDeviceVisualRefresh(false);
-                }
+                auto result = self->m_appController->ShowSettings();
+                if (result.Succeeded()) static_cast<void>(self->m_settingsWindowPresenter.ShowHelp());
             }
         });
     DebugTrace(L"[App] TrayController initialized");

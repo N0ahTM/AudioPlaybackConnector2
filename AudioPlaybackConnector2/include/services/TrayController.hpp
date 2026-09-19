@@ -4,7 +4,6 @@
 #include <core/DeviceTrayPresentation.hpp>
 #include <ui/TrayIcon.hpp>
 #include <ui/TrayContextMenu.hpp>
-#include <ui/TrayPrimaryActivation.hpp>
 #include <DevicePickerView/DevicePickerView.xaml.h>
 #include <ui/WindowPlacement.hpp>
 
@@ -24,10 +23,8 @@ public:
     /*//////// Callback Types ////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    using ShowDevicePickerCallback = apc::ui::TrayPrimaryActivationCallback;
-    using ShowSettingsCallback = std::move_only_function<void()>;
+    using ShowHelpCallback = std::move_only_function<void()>;
     using ExitCallback = std::move_only_function<void()>;
-    using ToggleDeviceCallback = std::move_only_function<void()>;
     using ResourceStateChangedCallback = std::move_only_function<void(bool userInteraction)>;
 
     /*------------------------------------------------------------------------------------------------------------*/
@@ -42,8 +39,11 @@ public:
     TrayController(TrayController&&) = delete;
     TrayController& operator=(TrayController&&) = delete;
 
-    void Initialize(HWND hwnd, winrt::Microsoft::UI::Xaml::Window mainWindow);
-    void SetAppController(std::weak_ptr<apc::app::AppController> appController);
+    void Initialize(HWND hwnd,
+                    winrt::Microsoft::UI::Xaml::Window mainWindow,
+                    std::weak_ptr<apc::app::AppController> controller,
+                    ExitCallback exit,
+                    ShowHelpCallback showHelp);
     void PreloadDevicePicker() noexcept;
     void ReleaseDevicePicker() noexcept;
     void Teardown() noexcept;
@@ -56,12 +56,7 @@ public:
     /*//////// Callbacks /////////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    void SetCallbacks(ShowSettingsCallback showSettings,
-                      ShowDevicePickerCallback showDevicePicker,
-                      ExitCallback exit,
-                      ToggleDeviceCallback toggleDevice);
     void SetResourceStateChangedCallback(ResourceStateChangedCallback callback);
-    void SetHelpCallback(ShowSettingsCallback callback);
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Actions ///////////////////////////////////////////////////////////////////////////////////////////*/
@@ -96,7 +91,6 @@ private:
     void ReleaseDevicePickerOnUIThread() noexcept;
     void LaunchBluetoothSettings();
     winrt::Microsoft::UI::Xaml::Controls::Flyout CreatePickerFlyout();
-    [[nodiscard]] util::SettingsWindowPlacement CalculateSettingsWindowPlacement() const;
     [[nodiscard]] bool IsCursorOverTrayIcon() const;
     void OnTrayIconDoubleClick();
     void NotifyResourceStateChanged(bool userInteraction) noexcept;
@@ -115,12 +109,9 @@ private:
     winrt::Microsoft::UI::Xaml::Controls::Flyout m_pickerFlyout{nullptr};
     winrt::AudioPlaybackConnector2::DevicePickerView m_devicePickerView{nullptr};
 
-    ShowSettingsCallback m_showSettingsCallback;
-    ShowSettingsCallback m_showHelpCallback;
+    ShowHelpCallback m_showHelpCallback;
     bool m_openSettingsAfterPickerClosed = false;
-    ShowDevicePickerCallback m_showDevicePickerCallback;
     ExitCallback m_exitCallback;
-    ToggleDeviceCallback m_toggleDeviceCallback;
     ResourceStateChangedCallback m_resourceStateChangedCallback;
 
     UINT m_trayCallbackMsg = WM_APP + 1;

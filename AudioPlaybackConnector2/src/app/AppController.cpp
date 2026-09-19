@@ -85,6 +85,31 @@ AppSnapshot AppController::Snapshot() const noexcept {
     }
 }
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Device Settings ///////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
+AppResult AppController::SetDefault(std::wstring_view deviceId) const {
+    return Execute({AppCommandKind::SetDefault, DeviceSelector::ById(deviceId), {}});
+}
+
+AppResult AppController::ClearDefault() const {
+    return Execute({AppCommandKind::ClearDefault, {}, {}});
+}
+
+AppResult AppController::SetAlias(std::wstring_view deviceId, std::wstring_view alias) const {
+    if (alias.empty()) return ClearAlias(deviceId);
+    return Execute({AppCommandKind::SetAlias, DeviceSelector::ById(deviceId), std::wstring(alias)});
+}
+
+AppResult AppController::ClearAlias(std::wstring_view deviceId) const {
+    return Execute({AppCommandKind::ClearAlias, DeviceSelector::ById(deviceId), {}});
+}
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Event Subscriptions ////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 AppController::Subscription AppController::Subscribe(EventHandler handler) {
     if (!handler) return {};
 

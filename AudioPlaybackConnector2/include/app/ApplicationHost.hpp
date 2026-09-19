@@ -145,7 +145,7 @@ private:
     std::shared_ptr<NotificationService> m_notificationService;
     std::shared_ptr<TrayController> m_trayController;
     std::shared_ptr<apc::app::LegacyAppUseCaseBridge> m_appBridge;
-    std::unique_ptr<apc::app::AppController> m_appController;
+    std::shared_ptr<apc::app::AppController> m_appController;
     std::unique_ptr<apc::control::ControlCommandAdapter> m_controlCommandAdapter;
     CommandLineControlServer m_commandLineControlServer;
     std::mutex m_uiFallbackWorkMutex;

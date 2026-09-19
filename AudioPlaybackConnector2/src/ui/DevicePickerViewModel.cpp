@@ -21,9 +21,9 @@ void DevicePickerViewModel::SetSettingsStore(std::weak_ptr<SettingsStore> settin
 }
 
 void DevicePickerViewModel::SetDeviceSettings(std::weak_ptr<ISettingsController> controller,
-                                              apc::app::SettingsWindowCommandExecutor::ExecuteCallback execute) {
+                                              std::weak_ptr<apc::app::AppController> appController) {
     m_settingsController = std::move(controller);
-    m_deviceCommands.emplace(std::move(execute));
+    m_appController = std::move(appController);
 }
 
 std::optional<DeviceOptionsViewModel> DevicePickerViewModel::DeviceOptions(std::wstring_view id) const {
@@ -56,17 +56,19 @@ std::optional<DeviceOptionsViewModel> DevicePickerViewModel::DeviceOptions(std::
 }
 
 bool DevicePickerViewModel::SetAlias(std::wstring_view id, std::wstring_view alias) const {
-    return m_deviceCommands && m_deviceCommands->SetAlias(id, alias).Succeeded();
+    auto controller = m_appController.lock();
+    return controller && controller->SetAlias(id, alias).Succeeded();
 }
 
 bool DevicePickerViewModel::SetDefault(std::wstring_view id, bool enabled) const {
-    if (!m_deviceCommands) return false;
+    auto controller = m_appController.lock();
+    if (!controller) return false;
     if (!enabled) {
         const auto options = DeviceOptions(id);
         if (!options) return false;
         if (!options->Device.IsDefaultDevice) return true;
     }
-    return (enabled ? m_deviceCommands->SetDefault(id) : m_deviceCommands->ClearDefault()).Succeeded();
+    return (enabled ? controller->SetDefault(id) : controller->ClearDefault()).Succeeded();
 }
 
 bool DevicePickerViewModel::SetConnectOnStartup(std::wstring const& id, bool enabled) const {

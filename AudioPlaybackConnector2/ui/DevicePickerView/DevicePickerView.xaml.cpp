@@ -217,9 +217,9 @@ void DevicePickerView::Initialize(std::shared_ptr<apc::device::DeviceService> se
 }
 
 void DevicePickerView::SetDeviceSettings(std::shared_ptr<ISettingsController> controller,
-                                         apc::app::SettingsWindowCommandExecutor::ExecuteCallback execute,
+                                         std::weak_ptr<apc::app::AppController> appController,
                                          std::function<void()> showSettings) {
-    m_viewModel.SetDeviceSettings(std::move(controller), std::move(execute));
+    m_viewModel.SetDeviceSettings(std::move(controller), std::move(appController));
     m_onShowSettings = std::move(showSettings);
 }
 

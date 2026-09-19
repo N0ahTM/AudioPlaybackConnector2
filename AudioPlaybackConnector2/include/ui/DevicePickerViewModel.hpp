@@ -1,7 +1,7 @@
 #pragma once
 
 #include <core/DevicePickerSnapshot.hpp>
-#include <app/SettingsWindowCommandExecutor.hpp>
+#include <app/AppController.hpp>
 #include <ui/SettingsDeviceViewModel.hpp>
 #include <memory>
 #include <optional>
@@ -35,7 +35,7 @@ public:
     void SetDeviceService(std::weak_ptr<apc::device::DeviceService> service);
     void SetSettingsStore(std::weak_ptr<SettingsStore> settingsStore);
     void SetDeviceSettings(std::weak_ptr<ISettingsController> controller,
-                           apc::app::SettingsWindowCommandExecutor::ExecuteCallback execute);
+                           std::weak_ptr<apc::app::AppController> appController);
     [[nodiscard]] std::optional<DeviceOptionsViewModel> DeviceOptions(std::wstring_view id) const;
     [[nodiscard]] bool SetAlias(std::wstring_view id, std::wstring_view alias) const;
     [[nodiscard]] bool SetDefault(std::wstring_view id, bool enabled) const;
@@ -64,7 +64,7 @@ private:
     std::weak_ptr<apc::device::DeviceService> m_service;
     std::weak_ptr<SettingsStore> m_settingsStore;
     std::weak_ptr<ISettingsController> m_settingsController;
-    std::optional<apc::app::SettingsWindowCommandExecutor> m_deviceCommands;
+    std::weak_ptr<apc::app::AppController> m_appController;
     apc::device_picker::DevicePickerSnapshotCache m_cache;
     std::optional<std::uint64_t> m_sourceInventoryGeneration;
     bool m_sourceEnumerationComplete = false;

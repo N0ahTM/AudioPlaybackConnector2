@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string_view>
 #include <utility>
 
 namespace apc::app {
@@ -53,6 +54,15 @@ public:
 
     [[nodiscard]] AppResult Execute(AppCommand command, AppCommandContext context = {}) const noexcept;
     [[nodiscard]] AppSnapshot Snapshot() const noexcept;
+
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Device Settings ///////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
+
+    [[nodiscard]] AppResult SetDefault(std::wstring_view deviceId) const;
+    [[nodiscard]] AppResult ClearDefault() const;
+    [[nodiscard]] AppResult SetAlias(std::wstring_view deviceId, std::wstring_view alias) const;
+    [[nodiscard]] AppResult ClearAlias(std::wstring_view deviceId) const;
 
     // The bridge publishes normalized facts here; UI and CLI consume the one
     // typed subscription surface returned by Subscribe.

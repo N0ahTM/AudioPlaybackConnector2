@@ -21,6 +21,7 @@ AudioPlaybackConnector2 is a per-user Windows tray application. WinUI 3 provides
 ## Boundaries
 
 - UI code may translate input into application commands and render snapshots; it must not become a second owner of connection or settings state.
+- Device-picker alias and default-device actions call the explicit `AppController` methods. Tray and picker retain weak controller references; each action acquires a temporary strong reference. The host owns the controller lifetime, and these actions have no separate command-wrapper or forwarding callback.
 - Core and application behavior must remain testable without WinUI construction. The CoreRuntime boundary verifier protects this constraint.
 - Settings persistence owns schema validation and atomic storage. Callers use the current typed model rather than carrying legacy-format concerns through the application.
 - Command transport is per-user and validates its peer. Protocol changes require compatibility consideration, bounded payloads, and regression tests.

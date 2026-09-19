@@ -1,10 +1,12 @@
 #pragma once
 
+#include <app/AppController.hpp>
 #include <DevicePickerView.g.h>
 #include <ui/DevicePickerViewModel.hpp>
 #include <winrt/Microsoft.UI.Xaml.Media.Animation.h>
 #include <chrono>
 #include <mutex>
+#include <memory>
 #include <unordered_map>
 
 class SettingsStore;
@@ -44,7 +46,7 @@ struct DevicePickerView : DevicePickerViewT<DevicePickerView> {
     [[nodiscard]] bool InvalidateDeviceInventory();
     void SetPresentationActive(bool active) noexcept;
     void SetDeviceSettings(std::shared_ptr<ISettingsController> controller,
-                           apc::app::SettingsWindowCommandExecutor::ExecuteCallback execute,
+                           std::weak_ptr<apc::app::AppController> appController,
                            std::function<void()> showSettings);
 
 private:

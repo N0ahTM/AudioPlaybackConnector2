@@ -537,16 +537,7 @@ void ApplicationHost::InitializeTray() {
     m_trayController->SetDeviceService(m_deviceService);
     m_trayController->SetSettingsStore(m_settingsStore);
     auto weak = weak_from_this();
-    m_trayController->SetDeviceSettings(m_settingsController, [weak](apc::app::AppCommand command) {
-        if (auto self = weak.lock(); self && !self->m_exiting.load() && self->m_appController) {
-            return self->m_appController->Execute(std::move(command));
-        }
-        apc::app::AppResult result;
-        result.Code = apc::app::AppResultCode::Unavailable;
-        result.Command = command.Kind;
-        result.Reason = apc::app::AppOutcomeReason::NotReady;
-        return result;
-    });
+    m_trayController->SetDeviceSettings(m_settingsController, m_appController);
     if (m_settingsController) {
         m_settingsController->SetPresentationChangedCallback([weak](ISettingsController::PresentationChangeKind kind) {
             auto self = weak.lock();
@@ -939,7 +930,7 @@ void ApplicationHost::InitializeAppController() {
 
     m_appBridge = std::make_shared<Bridge>(std::move(operations));
     std::weak_ptr<Bridge> weakBridge = m_appBridge;
-    m_appController = std::make_unique<apc::app::AppController>(
+    m_appController = std::make_shared<apc::app::AppController>(
         [weakBridge](apc::app::AppCommand const& command, apc::app::AppCommandContext const& context) {
             if (auto bridge = weakBridge.lock()) return bridge->Execute(command, context);
             apc::app::AppResult result;

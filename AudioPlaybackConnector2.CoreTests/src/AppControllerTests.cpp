@@ -1,7 +1,6 @@
 #include "TestCheck.hpp"
 
 #include <app/AppController.hpp>
-#include <app/SettingsWindowCommandExecutor.hpp>
 #include <ui/TrayPrimaryActivation.hpp>
 
 #include <chrono>
@@ -27,7 +26,6 @@ using apc::app::AppSnapshot;
 using apc::app::DeviceConnectedEvent;
 using apc::app::DevicePickerOpenMode;
 using apc::app::DeviceSelector;
-using apc::app::SettingsWindowCommandExecutor;
 
 AppCommand ConnectCommand() {
     auto target = DeviceSelector::ById(L"device-a");
@@ -183,23 +181,31 @@ void TestEventOrderingAndReentrantUnsubscribe() {
           "subscription tokens must expose active ownership until reset or scope exit");
 }
 
-void TestSettingsWindowCommandsUseSharedExecutor() {
+void TestDeviceSettingsUseControllerMethods() {
     std::vector<AppCommand> executed;
     const auto longDeviceId = std::wstring(513, L'd');
-    SettingsWindowCommandExecutor executor([&](AppCommand command) {
-        const auto kind = command.Kind;
-        executed.push_back(command);
-        AppResult result;
-        result.Code = kind == AppCommandKind::SetAlias ? AppResultCode::OperationFailed : AppResultCode::Success;
-        result.Command = kind;
-        return result;
-    });
+    AppController controller(
+        [&](AppCommand const& command, AppCommandContext const&) {
+            const auto kind = command.Kind;
+            executed.push_back(command);
+            AppResult result;
+            result.Code = kind == AppCommandKind::SetAlias ? AppResultCode::OperationFailed : AppResultCode::Success;
+            result.Command = kind;
+            return result;
+        },
+        [] { return AppSnapshot{}; });
 
-    const auto clearDefault = executor.ClearDefault();
-    const auto setDefault = executor.SetDefault(longDeviceId);
-    const auto setAlias = executor.SetAlias(longDeviceId, L"Office");
-    const auto clearAlias = executor.ClearAlias(longDeviceId);
-    const auto emptyAlias = executor.SetAlias(longDeviceId, {});
+    const auto clearDefault = controller.ClearDefault();
+    const auto setDefault = controller.SetDefault(longDeviceId);
+    const auto setAlias = controller.SetAlias(longDeviceId, L"Office");
+    const auto clearAlias = controller.ClearAlias(longDeviceId);
+    const auto emptyAlias = controller.SetAlias(longDeviceId, {});
+
+    Check(controller.SetDefault({}).Code == AppResultCode::InvalidInput &&
+              controller.SetAlias({}, L"Office").Code == AppResultCode::InvalidInput &&
+              controller.ClearAlias({}).Code == AppResultCode::InvalidInput &&
+              controller.SetAlias(longDeviceId, L"bad\nalias").Code == AppResultCode::InvalidInput,
+          "invalid device settings must be rejected before backend dispatch");
 
     Check(clearDefault.Code == AppResultCode::Success && clearDefault.Command == AppCommandKind::ClearDefault,
           "settings clear-default must return the shared executor result");
@@ -238,6 +244,6 @@ int RunAppControllerTests() {
     TestExecutorExceptionsBecomeInternalErrors();
     TestSnapshotIsReturnedByValue();
     TestEventOrderingAndReentrantUnsubscribe();
-    TestSettingsWindowCommandsUseSharedExecutor();
+    TestDeviceSettingsUseControllerMethods();
     return g_failures;
 }

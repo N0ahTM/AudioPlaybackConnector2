@@ -1,5 +1,6 @@
 #pragma once
 
+#include <app/AppController.hpp>
 #include <core/DeviceTrayPresentation.hpp>
 #include <core/DeviceService.hpp>
 #include <ui/TrayIcon.hpp>
@@ -50,7 +51,7 @@ public:
     void SetDeviceService(std::shared_ptr<apc::device::DeviceService> deviceService);
     void SetSettingsStore(std::shared_ptr<SettingsStore> settingsStore);
     void SetDeviceSettings(std::shared_ptr<ISettingsController> controller,
-                           apc::app::SettingsWindowCommandExecutor::ExecuteCallback execute);
+                           std::weak_ptr<apc::app::AppController> appController);
     void PreloadDevicePicker() noexcept;
     void ReleaseDevicePicker() noexcept;
     void Teardown() noexcept;
@@ -122,7 +123,7 @@ private:
     std::shared_ptr<apc::device::DeviceService> m_deviceService;
     std::shared_ptr<SettingsStore> m_settingsStore;
     std::shared_ptr<ISettingsController> m_settingsController;
-    apc::app::SettingsWindowCommandExecutor::ExecuteCallback m_executeDeviceSetting;
+    std::weak_ptr<apc::app::AppController> m_appController;
 
     std::unique_ptr<TrayIcon> m_trayIcon;
     std::unique_ptr<TrayContextMenu> m_contextMenu;

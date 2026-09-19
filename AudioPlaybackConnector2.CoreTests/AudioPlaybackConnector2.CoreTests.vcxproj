@@ -85,6 +85,7 @@
 
     <ClCompile Include="src\CommandLineControlServerTests.cpp" />
     <ClCompile Include="src\CommandClientTests.cpp" />
+    <ClCompile Include="src\CliParserTests.cpp" />
     <ClCompile Include="src\ControlUiActionGateTests.cpp" />
     <ClCompile Include="src\ControlTargetMatcherTests.cpp" />
     <ClCompile Include="src\DeviceServiceTests.cpp" />

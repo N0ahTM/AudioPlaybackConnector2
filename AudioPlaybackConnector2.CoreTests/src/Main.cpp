@@ -26,6 +26,7 @@ int RunAppModelsTests();
 int RunControlCommandAdapterTests();
 int RunAppWorkCoordinatorTests();
 int RunCommandClientTests();
+int RunCliParserTests();
 int RunCommandLineControlServerTests();
 int RunControlUiActionGateTests();
 int RunControlTargetMatcherTests();
@@ -112,6 +113,7 @@ int main(int argc, char** argv) {
         Suite{"ControlCommandAdapter", RunControlCommandAdapterTests},
         Suite{"AppWorkCoordinator", RunAppWorkCoordinatorTests},
         Suite{"CommandClient", RunCommandClientTests},
+        Suite{"CliParser", RunCliParserTests},
         Suite{"CommandLineControlServer", RunCommandLineControlServerTests},
         Suite{"ControlUiActionGate", RunControlUiActionGateTests},
         Suite{"ControlTargetMatcher", RunControlTargetMatcherTests},

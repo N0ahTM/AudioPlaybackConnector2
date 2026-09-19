@@ -11,7 +11,6 @@
 #include <condition_variable>
 #include <deque>
 #include <limits>
-#include <new>
 #include <stdexcept>
 #include <thread>
 #include <type_traits>
@@ -19,6 +18,10 @@
 #include <unordered_set>
 
 namespace {
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Persistence Policy ////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 constexpr auto c_debounceDelay = std::chrono::milliseconds(300);
 constexpr auto c_maxRetryDelay = std::chrono::minutes(5);
@@ -187,8 +190,13 @@ public:
 
 } // namespace
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Settings State and Persistence ////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::Impl> {
-    static_assert(std::is_nothrow_move_assignable_v<SettingsData>);
+    using DataSnapshot = std::shared_ptr<const SettingsData>;
+    static_assert(std::is_nothrow_copy_assignable_v<DataSnapshot>);
 
     explicit Impl(std::filesystem::path directory, std::shared_ptr<SettingsStoreStorage> persistenceStorage)
         : persistenceDirectory(std::move(directory)), storage(std::move(persistenceStorage)) {
@@ -200,7 +208,9 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
     std::condition_variable publicationChanged;
     std::condition_variable shutdownChanged;
     std::condition_variable changed;
-    SettingsData data;
+    // The store and an admitted writer share immutable data. Replacing the
+    // current revision cannot change or destroy the writer's captured revision.
+    DataSnapshot data = std::make_shared<const SettingsData>();
     std::uint64_t revision = 0;
     std::uint64_t persistedRevision = 0;
     std::uint64_t nextSubscriptionId = 0;
@@ -278,33 +288,8 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
 #if defined(APC_SETTINGS_STORE_TESTING)
     std::atomic_uint64_t workerLoopIterations = 0;
     std::atomic_bool workerWaiting = false;
-    std::atomic_uint32_t forcedSnapshotCaptureFailures = 0;
-    std::atomic_uint32_t snapshotCaptureFailures = 0;
 #endif
     std::jthread worker;
-
-    [[nodiscard]] SettingsSnapshot SnapshotLocked() const { return {data, revision, revision != persistedRevision}; }
-
-    [[nodiscard]] bool TryCaptureSnapshotLocked(SettingsData& snapshot, std::uint64_t& capturedRevision) noexcept {
-        try {
-#if defined(APC_SETTINGS_STORE_TESTING)
-            auto remaining = forcedSnapshotCaptureFailures.load(std::memory_order_relaxed);
-            while (remaining != 0 &&
-                   !forcedSnapshotCaptureFailures.compare_exchange_weak(
-                       remaining, remaining - 1, std::memory_order_relaxed, std::memory_order_relaxed)) {
-            }
-            if (remaining != 0) {
-                ++snapshotCaptureFailures;
-                throw std::bad_alloc();
-            }
-#endif
-            snapshot = data;
-            capturedRevision = revision;
-            return true;
-        } catch (...) {
-            return false;
-        }
-    }
 
     void CompleteLoadWithoutCommit() noexcept {
         {
@@ -436,7 +421,7 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
         if (!apartment.Ready()) return false;
         maximumAttempts = std::max(maximumAttempts, 1U);
         for (unsigned int attempt = 0; attempt < maximumAttempts; ++attempt) {
-            SettingsData snapshot;
+            DataSnapshot snapshot;
             std::uint64_t capturedRevision = 0;
             {
                 std::unique_lock lock(mutex);
@@ -446,13 +431,10 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
                 if (shutdownRequested) return false;
                 if (discardRequested || revision == persistedRevision) return true;
                 writerActive = true;
-                if (!TryCaptureSnapshotLocked(snapshot, capturedRevision)) {
-                    CompleteWriteLocked(revision, false);
-                    changed.notify_all();
-                    continue;
-                }
+                snapshot = data;
+                capturedRevision = revision;
             }
-            const auto succeeded = Write(snapshot);
+            const auto succeeded = Write(*snapshot);
             CompleteWrite(capturedRevision, succeeded);
             if (!succeeded) continue;
         }
@@ -514,18 +496,15 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
                            due != scheduled || loadActive;
                 }))
                 continue;
-            SettingsData snapshot;
+            DataSnapshot snapshot;
             std::uint64_t capturedRevision = 0;
             if (writerActive || revision == persistedRevision || discardRequested) continue;
             writerActive = true;
             timerArmed = false;
-            if (!TryCaptureSnapshotLocked(snapshot, capturedRevision)) {
-                CompleteWriteLocked(revision, false);
-                changed.notify_all();
-                continue;
-            }
+            snapshot = data;
+            capturedRevision = revision;
             lock.unlock();
-            const auto succeeded = Write(snapshot);
+            const auto succeeded = Write(*snapshot);
             CompleteWrite(capturedRevision, succeeded);
             lock.lock();
         }
@@ -607,11 +586,12 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
             // revision, timer, and publication queue are untouched until the candidate and callback list are
             // complete. Enqueuing before the no-throw move commit prevents a subscriber publication from being
             // lost if a later staging operation fails.
-            SettingsData candidate = data;
+            SettingsData candidate = *data;
             if (!mutation(candidate)) return {SettingsMutationStatus::Unchanged, revision};
+            auto committedData = std::make_shared<const SettingsData>(std::move(candidate));
             committedRevision = revision + 1;
             if (!subscriptions.empty()) {
-                snapshot = {candidate, committedRevision, committedRevision != persistedRevision};
+                snapshot = {*committedData, committedRevision, committedRevision != persistedRevision};
                 subscriptionsToNotify.reserve(subscriptions.size());
                 for (auto const& [_, entry] : subscriptions) {
                     subscriptionsToNotify.push_back(entry.State);
@@ -619,9 +599,9 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
                 EnqueuePublicationWithLockHeld(std::move(snapshot), std::move(subscriptionsToNotify));
             }
 
-            // SettingsData is statically required to have a no-throw move assignment. From this point on the
+            // The immutable data pointer can be published without allocation. From this point on the
             // commit consists only of no-throw state publication and the notification below is unconditional.
-            data = std::move(candidate);
+            data = std::move(committedData);
             revision = committedRevision;
             timerArmed = true;
             due = std::chrono::steady_clock::now() + c_debounceDelay;
@@ -631,6 +611,10 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
         return {SettingsMutationStatus::Applied, committedRevision};
     }
 };
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Subscription Lifecycle ////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 SettingsStore::Subscription::~Subscription() {
     Reset();
@@ -655,6 +639,10 @@ void SettingsStore::Subscription::Reset() noexcept {
     m_unsubscribe = {};
 }
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Constructors /////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 SettingsStore::SettingsStore(std::filesystem::path persistenceDirectory, std::shared_ptr<SettingsStoreStorage> storage)
     : m_impl(std::make_shared<Impl>(std::move(persistenceDirectory), std::move(storage))) {
     // Without its persistence executor the store cannot offer a bounded shutdown.
@@ -673,9 +661,21 @@ SettingsStore::~SettingsStore() {
     static_cast<void>(Shutdown(SettingsShutdownMode::Flush, 3));
 }
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 SettingsSnapshot SettingsStore::Snapshot() const {
-    std::scoped_lock lock(m_impl->mutex);
-    return m_impl->SnapshotLocked();
+    Impl::DataSnapshot data;
+    std::uint64_t revision;
+    bool dirty;
+    {
+        std::scoped_lock lock(m_impl->mutex);
+        data = m_impl->data;
+        revision = m_impl->revision;
+        dirty = revision != m_impl->persistedRevision;
+    }
+    return {*data, revision, dirty};
 }
 
 #if defined(APC_SETTINGS_STORE_TESTING)
@@ -685,14 +685,6 @@ std::uint64_t SettingsStore::WorkerLoopIterationsForTesting() const noexcept {
 
 bool SettingsStore::WorkerWaitingForTesting() const noexcept {
     return m_impl->workerWaiting.load(std::memory_order_acquire);
-}
-
-void SettingsStore::FailNextSnapshotCapturesForTesting(unsigned int count) noexcept {
-    m_impl->forcedSnapshotCaptureFailures.store(count, std::memory_order_relaxed);
-}
-
-std::uint32_t SettingsStore::SnapshotCaptureFailuresForTesting() const noexcept {
-    return m_impl->snapshotCaptureFailures.load(std::memory_order_relaxed);
 }
 #endif
 
@@ -815,6 +807,7 @@ void SettingsStore::Load() {
     std::vector<Impl::SubscriptionStatePtr> subscriptionsToNotify;
     SettingsSnapshot snapshot;
     try {
+        auto loadedData = std::make_shared<const SettingsData>(std::move(loaded));
         {
             std::scoped_lock lock(lifetime->mutex);
             if (lifetime->shutdownRequested || lifetime->revision != 0) {
@@ -827,7 +820,7 @@ void SettingsStore::Load() {
             const auto shouldPublish = !lifetime->closing && !lifetime->subscriptions.empty();
             if (shouldPublish) publicationLock.lock();
             if (shouldPublish) {
-                snapshot = {loaded, 1, false};
+                snapshot = {*loadedData, 1, false};
                 subscriptionsToNotify.reserve(lifetime->subscriptions.size());
                 for (auto const& [_, entry] : lifetime->subscriptions) {
                     subscriptionsToNotify.push_back(entry.State);
@@ -835,7 +828,7 @@ void SettingsStore::Load() {
                 lifetime->EnqueuePublicationWithLockHeld(std::move(snapshot), std::move(subscriptionsToNotify));
             }
 
-            lifetime->data = std::move(loaded);
+            lifetime->data = std::move(loadedData);
             lifetime->revision = 1;
             lifetime->persistedRevision = 1;
             lifetime->loadActive = false;
@@ -854,6 +847,10 @@ DeviceSettings* FindDevice(SettingsData& data, std::wstring_view id) {
     return it == data.Devices.end() ? nullptr : &*it;
 }
 } // namespace
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Settings Mutations ////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 SettingsMutationResult SettingsStore::SetGlobalConnectOnStartup(bool enabled) {
     return m_impl->Commit([=](auto& data) { return std::exchange(data.GlobalConnectOnStartup, enabled) != enabled; });
@@ -1027,6 +1024,10 @@ RecordConnectedDeviceResult SettingsStore::RecordConnectedDevice(std::wstring_vi
         });
     return result;
 }
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Flush and Shutdown ////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 bool SettingsStore::FlushNow(unsigned int maximumAttempts) noexcept {
     const auto impl = m_impl;
     return impl->FlushSynchronously(maximumAttempts);

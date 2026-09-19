@@ -11,6 +11,10 @@
 #include <string>
 #include <string_view>
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Types /////////////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 struct SettingsSnapshot {
     SettingsData Data;
     std::uint64_t Revision = 0;
@@ -43,6 +47,10 @@ struct RecordConnectedDeviceResult {
 
 enum class SettingsShutdownMode { Flush, DiscardStartupFailure };
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Storage Boundary //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 // The only persistence boundary. Production uses complete file writes and atomic replacement;
 // deterministic tests can block or fail this boundary without timing the store worker.
 class SettingsStoreStorage {
@@ -58,6 +66,10 @@ public:
 // committing thread or an already-active publisher. Reentrant changes are queued and drained in revision order.
 class SettingsStore final {
 public:
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Subscription //////////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
+
     class Subscription final {
     public:
         Subscription() = default;
@@ -81,11 +93,19 @@ public:
 
     using SnapshotCallback = std::function<void(SettingsSnapshot const&)>;
 
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Constructors /////////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
+
     explicit SettingsStore(std::filesystem::path persistenceDirectory = {},
                            std::shared_ptr<SettingsStoreStorage> storage = {});
     ~SettingsStore();
     SettingsStore(SettingsStore const&) = delete;
     SettingsStore& operator=(SettingsStore const&) = delete;
+
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
 
     void Load();
     [[nodiscard]] SettingsSnapshot Snapshot() const;
@@ -93,8 +113,6 @@ public:
     // Test-only observability for the deterministic worker-parking regression.
     [[nodiscard]] std::uint64_t WorkerLoopIterationsForTesting() const noexcept;
     [[nodiscard]] bool WorkerWaitingForTesting() const noexcept;
-    void FailNextSnapshotCapturesForTesting(unsigned int count) noexcept;
-    [[nodiscard]] std::uint32_t SnapshotCaptureFailuresForTesting() const noexcept;
 #endif
     [[nodiscard]] Subscription Subscribe(SnapshotCallback callback);
 
@@ -131,6 +149,10 @@ public:
                                 std::chrono::milliseconds timeBudget = std::chrono::seconds(2)) noexcept;
 
 private:
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
+
     struct Impl;
     std::shared_ptr<Impl> m_impl;
 };

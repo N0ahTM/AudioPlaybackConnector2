@@ -75,6 +75,7 @@ public:
         }
         std::scoped_lock lock(m_dataMutex);
         m_output.assign(bytes);
+        m_outputs.emplace_back(bytes);
         return true;
     }
 
@@ -131,6 +132,11 @@ public:
         return m_output;
     }
 
+    [[nodiscard]] std::vector<std::string> Outputs() const {
+        std::scoped_lock lock(m_dataMutex);
+        return m_outputs;
+    }
+
     unsigned int m_failWrites = 0;
     std::atomic_uint32_t m_corruptPreservations = 0;
     [[nodiscard]] unsigned int MaxActiveWriters() const {
@@ -163,6 +169,7 @@ private:
     std::condition_variable m_allowRead;
     std::optional<std::string> m_input;
     std::string m_output;
+    std::vector<std::string> m_outputs;
     unsigned int m_writes = 0;
     unsigned int m_completedWrites = 0;
     unsigned int m_reads = 0;
@@ -596,30 +603,39 @@ void TestDebouncedWorkerWaitsForSynchronousWriter() {
     static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
 }
 
-void TestWorkerSnapshotCaptureFailureRetries() {
+void TestWorkerPersistsDistinctCommittedRevisions() {
     auto storage = std::make_shared<ControlledStorage>();
+    storage->BlockWrites();
     SettingsStore store({}, storage);
-    store.FailNextSnapshotCapturesForTesting(1);
-    Check(store.SetLanguage(L"fr").IsApplied(), "the worker failure test must commit a dirty revision");
-    storage->WaitForCompletedWrites(1);
-    Check(store.SnapshotCaptureFailuresForTesting() == 1,
-          "the worker failure test must exercise the injected allocation failure");
-    Check(storage->Output().find("\"language\":\"fr\"") != std::string::npos,
-          "the worker must retry after a snapshot allocation failure");
-    static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+    Check(store.SetLanguage(L"fr").IsApplied(), "the worker must receive its first committed revision");
+    storage->WaitForWrite();
+    auto retained = store.Snapshot();
+    Check(store.SetLanguage(L"de").IsApplied(), "mutation must publish while an older revision is being written");
+    storage->ReleaseWrites();
+    storage->WaitForCompletedWrites(2);
+    Check(store.Shutdown(SettingsShutdownMode::Flush), "both revisions must finish persistence");
+    auto outputs = storage->Outputs();
+    Check(outputs.size() == 2 && outputs.front().find("\"language\":\"fr\"") != std::string::npos &&
+              outputs.back().find("\"language\":\"de\"") != std::string::npos,
+          "the worker must write separate old and new committed values without mixing revisions");
+    Check(retained.Data.Language == L"fr" && retained.Revision < store.Snapshot().Revision,
+          "a previously returned snapshot must remain independent of subsequent changes");
 }
 
-void TestSynchronousSnapshotCaptureFailureRetries() {
+void TestStorageFailureRetriesLatestRevision() {
     auto storage = std::make_shared<ControlledStorage>();
+    storage->m_failWrites = 1;
+    storage->BlockWrites();
     SettingsStore store({}, storage);
-    store.FailNextSnapshotCapturesForTesting(1);
-    Check(store.SetLanguage(L"de").IsApplied(), "the shutdown failure test must commit a dirty revision");
-    Check(store.Shutdown(SettingsShutdownMode::Flush, 2),
-          "synchronous shutdown must retry after a snapshot allocation failure");
-    Check(store.SnapshotCaptureFailuresForTesting() == 1,
-          "the shutdown failure test must exercise the injected allocation failure");
-    Check(storage->Output().find("\"language\":\"de\"") != std::string::npos,
-          "synchronous shutdown must persist the revision after recovering from snapshot allocation failure");
+    Check(store.SetLanguage(L"fr").IsApplied(), "a revision must be pending before the failed write");
+    storage->WaitForWrite();
+    Check(store.SetLanguage(L"de").IsApplied(), "a newer revision must be accepted during the failed write");
+    storage->ReleaseWrites();
+    storage->WaitForCompletedWrites(2);
+    Check(store.Shutdown(SettingsShutdownMode::Flush), "a storage retry must persist the latest revision");
+    auto outputs = storage->Outputs();
+    Check(outputs.size() == 1 && outputs.front().find("\"language\":\"de\"") != std::string::npos,
+          "retry must capture the current committed data instead of replaying the failed old revision");
 }
 
 void TestLoadAdmissionFencesMutationAndFlush() {
@@ -1079,8 +1095,8 @@ int RunSettingsStoreTests() {
     TestRecordConnectedDeviceEffectiveReconnectPolicy();
     TestMutationDuringBlockedWriteAndFinalFlush();
     TestDebouncedWorkerWaitsForSynchronousWriter();
-    TestWorkerSnapshotCaptureFailureRetries();
-    TestSynchronousSnapshotCaptureFailureRetries();
+    TestWorkerPersistsDistinctCommittedRevisions();
+    TestStorageFailureRetriesLatestRevision();
     TestLoadAdmissionFencesMutationAndFlush();
     TestShutdownWaitsForAdmittedLoad();
     TestShutdownClosesAdmissionBeforeAdmittedLoadCompletes();

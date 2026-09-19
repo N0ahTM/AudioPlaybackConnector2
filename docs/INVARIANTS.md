@@ -5,8 +5,17 @@ application as free of concurrency defects; owners outside the table below still
 
 ## Settings persistence
 
-`SettingsStore` owns the only mutable `SettingsData`, revision and persisted revision. Changes stage a candidate
-before committing it, and publish immutable snapshots in revision order. Storage never runs under an owner lock.
+`SettingsStore` owns the current immutable `SettingsData` reference, revision and persisted revision. Changes stage
+a private mutable candidate, allocate its immutable representation, and stage subscriber publication before the
+no-throw commit. Allocation failure during staging cannot publish a partial revision. Storage never runs under an
+owner lock.
+
+An admitted writer captures the immutable data reference and matching revision under the store lock. Reference
+capture cannot allocate or throw; there is no separate copying-failure/retry path. A later mutation replaces the
+current reference while the old writer retains its original data until completion. Serialization and I/O happen
+after unlocking. A failed write retries against the then-current committed revision, and an old successful write
+cannot mark a newer revision as persisted. Public snapshots remain independent value objects: the reader captures
+the data reference and revision under lock, then copies the immutable data after unlocking.
 
 | State | Execution context and callers | Synchronization | Outgoing callbacks | Cancellation and shutdown |
 | --- | --- | --- | --- | --- |

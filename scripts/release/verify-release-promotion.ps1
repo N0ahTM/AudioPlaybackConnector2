@@ -5,11 +5,9 @@ param(
     [string]$Repository,
 
     [Parameter(Mandatory = $true)]
-    [ValidatePattern('^v\d+\.\d+\.\d+$')]
     [string]$Tag,
 
     [Parameter(Mandatory = $true)]
-    [ValidatePattern('^\d+\.\d+\.\d+\.\d+$')]
     [string]$PackageVersion,
 
     [ValidateScript({ Test-Path -LiteralPath $_ -PathType Container })]
@@ -26,6 +24,11 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSScriptRoot 'ReleaseVersion.psm1') -Force
+$version = Resolve-ReleaseVersion -Tag $Tag
+if ($PackageVersion -cne $version.PackageVersion) {
+    throw 'Promotion package version disagrees with the release tag.'
+}
 
 $releaseJson = gh release view $Tag --repo $Repository --json tagName,isDraft,isPrerelease,assets
 if ($LASTEXITCODE -ne 0) {

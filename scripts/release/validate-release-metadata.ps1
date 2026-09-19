@@ -1,14 +1,14 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidatePattern('^\d+\.\d+\.\d+$')]
     [string]$Version
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$packageVersion = "$Version.0"
+Import-Module (Join-Path $PSScriptRoot 'ReleaseVersion.psm1') -Force
+$packageVersion = (Resolve-ReleaseVersion -Tag "v$Version").PackageVersion
 $changelog = [IO.File]::ReadAllText((Resolve-Path 'CHANGELOG.md'))
 if ($changelog -notmatch "(?m)^## \[$([regex]::Escape($Version))\] - \d{4}-\d{2}-\d{2}\r?$") {
     throw "CHANGELOG.md has no dated [$Version] release section."

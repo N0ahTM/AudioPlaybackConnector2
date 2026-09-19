@@ -49,24 +49,17 @@ jobs:
         } else {
           $env:REF_NAME
         }
-        if ($tag -notmatch '^v\d+\.\d+\.\d+$') {
-          throw 'Release tag must look like v1.2.3.'
-        }
+        Import-Module ./scripts/release/ReleaseVersion.psm1 -Force
+        $version = Resolve-ReleaseVersion -Tag $tag
         $head = (git rev-parse HEAD).Trim()
         $tagCommit = (git rev-parse "$tag^{commit}").Trim()
         if ($head -ne $tagCommit) {
           throw "Checked out commit $head does not match $tag ($tagCommit)."
         }
-        $semver = $tag.TrimStart('v')
-        foreach ($part in $semver.Split('.')) {
-          if ([uint32]$part -gt [uint16]::MaxValue) {
-            throw 'A release version component exceeds 65535.'
-          }
-        }
         "source_ref=$tag" >> $env:GITHUB_OUTPUT
-        "semver=$semver" >> $env:GITHUB_OUTPUT
+        "semver=$($version.SemVer)" >> $env:GITHUB_OUTPUT
         "tag=$tag" >> $env:GITHUB_OUTPUT
-        "package_version=$semver.0" >> $env:GITHUB_OUTPUT
+        "package_version=$($version.PackageVersion)" >> $env:GITHUB_OUTPUT
         "commit_sha=$tagCommit" >> $env:GITHUB_OUTPUT
 
   build-artifacts:

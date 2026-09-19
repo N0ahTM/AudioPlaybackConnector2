@@ -11,6 +11,9 @@ This maintainer guide documents the existing GitHub, App Installer, and Microsof
 - `Directory.Build.props` and `Package.appxmanifest`: matching checked-in default `X.Y.Z.0` for local builds
 
 Do not add another independent version constant. The workflows pass `PackageVersion` from the tag to release builds.
+`scripts/release/ReleaseVersion.psm1` validates the canonical `vX.Y.Z` tag and derives `X.Y.Z.0` for release,
+dry-run, metadata and promotion checks. Components must fit 0–65535; leading zeros, prerelease/build suffixes
+and whitespace are rejected. Run `pwsh ./scripts/test-release-version.ps1` to check this contract locally.
 
 ## Prepare
 

@@ -69,6 +69,7 @@ jobs:
         ./scripts/validate-markdown-links.ps1
         ./scripts/update-cli-reference.ps1 -Check
         ./scripts/test-release-metadata.ps1
+        ./scripts/test-release-version.ps1
         ./scripts/test-package-notices.ps1
 
     - name: Add MSBuild to PATH

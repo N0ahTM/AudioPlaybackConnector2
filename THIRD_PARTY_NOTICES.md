@@ -3,6 +3,23 @@
 AudioPlaybackConnector2 includes or depends on the following third-party components.
 Their licenses are reproduced below or linked to their canonical sources.
 
+## Dependency evaluation tools
+
+The isolated programs in `benchmarks/dependencies` evaluate the following
+components. They are not yet linked into the product or included in its packages.
+Their vcpkg baseline and versions are pinned in that directory. The probe runner
+copies each restored package's complete copyright text into its executable ZIP
+and records the license SHA-256 in `measurements.json`.
+
+| Component | Version | License | Upstream |
+|-----------|---------|---------|----------|
+| CLI11 | 2.6.2 | BSD-3-Clause | https://github.com/CLIUtils/CLI11 |
+| nlohmann/json | 3.12.0 (vcpkg port revision 2) | MIT | https://github.com/nlohmann/json |
+| spdlog | 1.17.0 | MIT, with bundled notices in the package copyright file | https://github.com/gabime/spdlog |
+
+See [the evaluation scope and remaining gates](benchmarks/dependencies/README.md).
+Product adoption requires updating product attribution and distribution artifacts.
+
 ---
 
 ## Microsoft Windows App SDK

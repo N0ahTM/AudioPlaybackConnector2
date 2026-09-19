@@ -69,6 +69,11 @@ public:
                   std::shared_ptr<apc::device::DeviceService> devices,
                   std::weak_ptr<AppPresentation> presentation = {},
                   std::shared_ptr<StartupTaskCoordinator> startupTask = {});
+    enum class StartupConnectionStatus { Unavailable, NoTargets, Submitted };
+    // Lifecycle action: submits targets from one settings snapshot to the device owner.
+    // Submitted does not mean the asynchronous connections have succeeded.
+    [[nodiscard]] StartupConnectionStatus RestoreStartupConnections() const;
+
     // Callback-safe: closes admission without waiting for admitted calls or observers.
     // Already admitted calls may finish; the lifecycle owner drains them with Shutdown.
     void RequestStop() noexcept;

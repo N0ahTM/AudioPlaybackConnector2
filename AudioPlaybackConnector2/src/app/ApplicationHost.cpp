@@ -4,7 +4,6 @@
 #include <type_traits>
 
 #include <MainWindow/MainWindow.xaml.h>
-#include <app/AutoReconnectPlanner.hpp>
 #include <core/DeviceService.hpp>
 #include <core/SettingsStore.hpp>
 #include <core/StringResources.hpp>
@@ -419,10 +418,9 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept tr
     static_cast<void>(m_deviceService->Start());
     DebugTrace(L"[App] Device watcher started");
     InitializeCommandLineControl();
-    const auto reconnectSettingsSnapshot = m_settingsStore->Snapshot();
-    const bool willAutoReconnect = AutoReconnectPlanner::HasReconnectTargets(reconnectSettingsSnapshot.Data);
+    const auto startupConnections = m_appController->RestoreStartupConnections();
 
-    if (m_notificationService && !willAutoReconnect) {
+    if (m_notificationService && startupConnections == apc::app::AppController::StartupConnectionStatus::NoTargets) {
         try {
             m_notificationService->ShowAppStarted();
         } catch (winrt::hresult_error const& ex) {
@@ -433,7 +431,6 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept tr
             util::DebugTraceUnknownException(L"[App] startup notification failed");
         }
     }
-    TryAutoReconnect();
     ScheduleDeviceVisualRefresh(false);
 
     s_wmTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
@@ -857,19 +854,6 @@ winrt::hstring ApplicationHost::ResolveKnownDeviceName(winrt::hstring const& id)
         if (!it->Name.empty()) return winrt::hstring(it->Name);
     }
     return settings.PrivacyModeEnabled ? winrt::hstring(_("Privacy_RedactedDevice")) : id;
-}
-
-void ApplicationHost::TryAutoReconnect() {
-    if (m_exiting.load() || !m_settingsStore || !m_deviceService) return;
-
-    DebugTrace(L"[App] TryAutoReconnect()");
-    const auto settingsSnapshot = m_settingsStore->Snapshot();
-    const auto reconnectIds = AutoReconnectPlanner::BuildReconnectPlan(settingsSnapshot.Data);
-
-    for (const auto& id : reconnectIds) {
-        DebugTrace(L"[App] Auto-reconnecting to: {0}", id);
-    }
-    m_deviceService->ConnectStartupTargets(reconnectIds);
 }
 
 void ApplicationHost::HandlePowerSuspend() {

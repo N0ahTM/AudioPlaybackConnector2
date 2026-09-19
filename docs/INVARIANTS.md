@@ -108,6 +108,14 @@ reconnect entry, typed platform failure and callbacks after controller destructi
 
 ## Settings persistence
 
+Startup restoration is an admitted controller action. It reads one validated settings snapshot and submits
+eligible saved devices exactly once per request, ordered by recent connection history and then saved order.
+The global startup preference includes every saved device; otherwise each device's preference controls
+eligibility. Unknown history entries do not become connection targets. `Submitted` describes handoff to the
+device owner, not successful Bluetooth connection. Stop rejects later restoration calls; an admitted call is
+drained with the other controller actions. Integration tests check empty and disabled settings, both policy
+modes, recent ordering, inclusion of devices without history and stop rejection.
+
 Settings UI mutations enter through named `AppController` methods and return the store's typed mutation result.
 The application snapshot includes the settings value from its validated owner capture. There is no separate
 settings controller or presentation callback slot. The shared settings event carries the language/backdrop

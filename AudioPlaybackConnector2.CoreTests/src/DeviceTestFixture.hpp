@@ -120,7 +120,8 @@ private:
 
 class FakeConnectionPlatform final : public DeviceConnectionPlatform {
 public:
-    [[nodiscard]] std::unique_ptr<DeviceConnection> Create(std::wstring const&) override {
+    [[nodiscard]] std::unique_ptr<DeviceConnection> Create(std::wstring const& id) override {
+        CreatedIds.push_back(id);
         auto state = std::make_shared<FakeConnectionState>(NextBehavior);
         LastConnection = state.get();
         Connections.push_back(LastConnection);
@@ -128,6 +129,7 @@ public:
         return std::make_unique<FakeConnection>(States.back());
     }
 
+    std::vector<std::wstring> CreatedIds;
     FakeConnectionState* LastConnection = nullptr;
     std::vector<FakeConnectionState*> Connections;
     std::vector<std::shared_ptr<FakeConnectionState>> States;

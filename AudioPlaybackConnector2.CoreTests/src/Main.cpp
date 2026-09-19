@@ -25,7 +25,6 @@ int RunAppControllerTests();
 int RunAppModelsTests();
 int RunControlCommandAdapterTests();
 int RunAppWorkCoordinatorTests();
-int RunAutoReconnectPlannerTests();
 int RunCommandClientTests();
 int RunCommandLineControlServerTests();
 int RunControlUiActionGateTests();
@@ -112,7 +111,6 @@ int main(int argc, char** argv) {
         Suite{"AppModels", RunAppModelsTests},
         Suite{"ControlCommandAdapter", RunControlCommandAdapterTests},
         Suite{"AppWorkCoordinator", RunAppWorkCoordinatorTests},
-        Suite{"AutoReconnectPlanner", RunAutoReconnectPlannerTests},
         Suite{"CommandClient", RunCommandClientTests},
         Suite{"CommandLineControlServer", RunCommandLineControlServerTests},
         Suite{"ControlUiActionGate", RunControlUiActionGateTests},

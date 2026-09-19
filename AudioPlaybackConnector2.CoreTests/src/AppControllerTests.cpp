@@ -30,6 +30,40 @@ using apc::app::DeviceConnectedEvent;
 using apc::app::DevicePickerOpenMode;
 using apc::app::DeviceSelector;
 
+void TestStartupConnectionsUseSavedPolicyAndRecentOrder() {
+    using Status = AppController::StartupConnectionStatus;
+    {
+        apc::tests::AppFixture fixture;
+        Check(fixture.Controller.RestoreStartupConnections() == Status::NoTargets,
+              "empty settings must not start connections");
+        (void)fixture.Settings->RememberDevice(L"a", L"A");
+        (void)fixture.Settings->RememberDevice(L"b", L"B");
+        (void)fixture.Settings->RememberDevice(L"c", L"C");
+        (void)fixture.Settings->RecordConnectedDevice(L"a", L"A");
+        (void)fixture.Settings->RecordConnectedDevice(L"c", L"C");
+        (void)fixture.Controller.SetGlobalConnectOnStartup(true);
+        Check(fixture.Controller.RestoreStartupConnections() == Status::Submitted &&
+                  fixture.Devices->ConnectionAccess->CreatedIds == std::vector<std::wstring>{L"c", L"a", L"b"},
+              "global startup policy must submit every saved device once, with recent devices first");
+    }
+    {
+        apc::tests::AppFixture fixture;
+        (void)fixture.Settings->RememberDevice(L"disabled", L"Disabled");
+        (void)fixture.Settings->RememberDevice(L"enabled", L"Enabled");
+        Check(fixture.Controller.RestoreStartupConnections() == Status::NoTargets,
+              "saved devices with disabled startup policies must produce no work");
+        (void)fixture.Controller.SetDeviceConnectOnStartup(L"enabled", true);
+        Check(fixture.Controller.RestoreStartupConnections() == Status::Submitted &&
+                  fixture.Devices->ConnectionAccess->CreatedIds == std::vector<std::wstring>{L"enabled"},
+              "per-device startup policy must work without connection history");
+        fixture.Controller.RequestStop();
+        auto const before = fixture.Devices->ConnectionAccess->CreatedIds;
+        Check(fixture.Controller.RestoreStartupConnections() == Status::Unavailable &&
+                  fixture.Devices->ConnectionAccess->CreatedIds == before,
+              "a stopped controller must not submit startup connections");
+    }
+}
+
 void TestConnectionFactsRecordPreferencesBeforeNotification() {
     apc::tests::AppFixture fixture;
     (void)fixture.Controller.SetGlobalConnectOnStartup(true);
@@ -500,6 +534,7 @@ void TestShutdownDrainsAnObservationBeingCaptured() {
 } // namespace
 
 int RunAppControllerTests() {
+    TestStartupConnectionsUseSavedPolicyAndRecentOrder();
     TestConnectionFactsRecordPreferencesBeforeNotification();
     TestShutdownDrainsDeviceFactSettingsCommit();
     TestConnectionObserverCanRequestStopAndLateFactsCannotPersist();

@@ -73,7 +73,7 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\ControlCommandAdapter.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveActionRetryBackoff.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveScheduleState.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AutoReconnectPlanner.hpp" />
+
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ControlUiActionGate.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\DeviceFactPublicationFence.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\LatestStartupTaskRequestState.hpp" />
@@ -124,7 +124,7 @@
     <ClCompile Include="..\AudioPlaybackConnector2\src\control\ControlCommandAdapter.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveActionRetryBackoff.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveScheduleState.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
-    <ClCompile Include="..\AudioPlaybackConnector2\src\app\AutoReconnectPlanner.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\PowerTransitionCoordinator.cpp">
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>

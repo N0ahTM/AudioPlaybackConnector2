@@ -254,6 +254,28 @@ AppController::AppController(std::shared_ptr<SettingsStore> settings,
     }
 }
 
+AppController::StartupConnectionStatus AppController::RestoreStartupConnections() const {
+    CallLease lease(*this);
+    if (!lease.Acquired()) return StartupConnectionStatus::Unavailable;
+    auto const settings = m_settings->Snapshot().Data;
+    std::vector<std::wstring> targets;
+    auto append = [&](std::wstring const& id) {
+        auto const device = std::ranges::find(settings.Devices, id, &DeviceSettings::Id);
+        if (device != settings.Devices.end() && (settings.GlobalConnectOnStartup || device->ConnectOnStartup) &&
+            !std::ranges::contains(targets, id))
+            targets.push_back(id);
+    };
+    // SettingsStore guarantees valid, bounded identities. Recent connections take
+    // priority; eligible saved devices without history follow in saved order.
+    for (auto const& id : settings.LastConnectedIds)
+        append(id);
+    for (auto const& device : settings.Devices)
+        append(device.Id);
+    if (targets.empty()) return StartupConnectionStatus::NoTargets;
+    m_devices->ConnectStartupTargets(std::move(targets));
+    return StartupConnectionStatus::Submitted;
+}
+
 AppController::~AppController() {
     Shutdown();
     m_settingsSubscription.Reset();

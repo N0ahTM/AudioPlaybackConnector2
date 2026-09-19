@@ -75,7 +75,6 @@ private:
     void InitializeAdaptiveResources() noexcept;
     void SetupDeviceEvents();
     void TeardownDeviceEvents();
-    void TryAutoReconnect();
     void HandlePowerSuspend();
     void HandlePowerResume();
     [[nodiscard]] bool RefreshTrayVisualState(bool forceErrorWhenIdle = false,

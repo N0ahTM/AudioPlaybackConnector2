@@ -82,7 +82,7 @@
     <ClCompile Include="src\ControlCommandAdapterTests.cpp" />
     <ClCompile Include="src\AppModelsTests.cpp" />
     <ClCompile Include="src\AppWorkCoordinatorTests.cpp" />
-    <ClCompile Include="src\AutoReconnectPlannerTests.cpp" />
+
     <ClCompile Include="src\CommandLineControlServerTests.cpp" />
     <ClCompile Include="src\CommandClientTests.cpp" />
     <ClCompile Include="src\ControlUiActionGateTests.cpp" />
@@ -119,7 +119,7 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveResourcePolicy.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveActionRetryBackoff.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveScheduleState.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AutoReconnectPlanner.hpp" />
+
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\LatestStartupTaskRequestState.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResumeReconnectAttemptState.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ControlUiActionGate.hpp" />

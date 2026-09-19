@@ -10,15 +10,14 @@ $ErrorActionPreference = 'Stop'
 
 $packageVersion = "$Version.0"
 $changelog = [IO.File]::ReadAllText((Resolve-Path 'CHANGELOG.md'))
-if ($changelog -notmatch "(?m)^## \[$([regex]::Escape($Version))\] - \d{4}-\d{2}-\d{2}$") {
+if ($changelog -notmatch "(?m)^## \[$([regex]::Escape($Version))\] - \d{4}-\d{2}-\d{2}\r?$") {
     throw "CHANGELOG.md has no dated [$Version] release section."
 }
 
 [xml]$props = Get-Content -LiteralPath 'Directory.Build.props' -Raw
-$defaultPackageVersion = [string]$props.Project.PropertyGroup.PackageVersion.'#text'
-if ([string]::IsNullOrWhiteSpace($defaultPackageVersion)) {
-    $defaultPackageVersion = [string]$props.Project.PropertyGroup.PackageVersion
-}
+$versionNodes = @($props.SelectNodes('/Project/PropertyGroup/PackageVersion'))
+if ($versionNodes.Count -ne 1) { throw 'Directory.Build.props must declare exactly one default PackageVersion.' }
+$defaultPackageVersion = $versionNodes[0].InnerText
 if ($defaultPackageVersion -ne $packageVersion) {
     throw "Directory.Build.props defaults to $defaultPackageVersion, expected $packageVersion."
 }

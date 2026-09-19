@@ -2,7 +2,6 @@
 
 #include <app/AppController.hpp>
 #include <core/DeviceTrayPresentation.hpp>
-#include <core/DeviceService.hpp>
 #include <ui/TrayIcon.hpp>
 #include <ui/TrayContextMenu.hpp>
 #include <ui/TrayPrimaryActivation.hpp>
@@ -14,8 +13,6 @@
 #include <atomic>
 #include <cstdint>
 #include <string_view>
-
-class SettingsStore;
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Tray Controller ///////////////////////////////////////////////////////////////////////////////////*/
@@ -30,8 +27,6 @@ public:
     using ShowDevicePickerCallback = apc::ui::TrayPrimaryActivationCallback;
     using ShowSettingsCallback = std::move_only_function<void()>;
     using ExitCallback = std::move_only_function<void()>;
-    using DeviceActionCallback = std::move_only_function<void(winrt::hstring)>;
-    using BulkDeviceActionCallback = std::move_only_function<void()>;
     using ToggleDeviceCallback = std::move_only_function<void()>;
     using ResourceStateChangedCallback = std::move_only_function<void(bool userInteraction)>;
 
@@ -48,8 +43,6 @@ public:
     TrayController& operator=(TrayController&&) = delete;
 
     void Initialize(HWND hwnd, winrt::Microsoft::UI::Xaml::Window mainWindow);
-    void SetDeviceService(std::shared_ptr<apc::device::DeviceService> deviceService);
-    void SetSettingsStore(std::shared_ptr<SettingsStore> settingsStore);
     void SetAppController(std::weak_ptr<apc::app::AppController> appController);
     void PreloadDevicePicker() noexcept;
     void ReleaseDevicePicker() noexcept;
@@ -66,12 +59,7 @@ public:
     void SetCallbacks(ShowSettingsCallback showSettings,
                       ShowDevicePickerCallback showDevicePicker,
                       ExitCallback exit,
-                      DeviceActionCallback connect,
-                      DeviceActionCallback disconnect,
-                      DeviceActionCallback reconnect,
-                      ToggleDeviceCallback toggleDevice,
-                      BulkDeviceActionCallback disconnectAll = nullptr,
-                      BulkDeviceActionCallback reconnectAll = nullptr);
+                      ToggleDeviceCallback toggleDevice);
     void SetResourceStateChangedCallback(ResourceStateChangedCallback callback);
     void SetHelpCallback(ShowSettingsCallback callback);
 
@@ -119,8 +107,6 @@ private:
 
     HWND m_hwnd = nullptr;
     winrt::Microsoft::UI::Xaml::Window m_mainWindow{nullptr};
-    std::shared_ptr<apc::device::DeviceService> m_deviceService;
-    std::shared_ptr<SettingsStore> m_settingsStore;
 
     std::weak_ptr<apc::app::AppController> m_appController;
 
@@ -134,11 +120,6 @@ private:
     bool m_openSettingsAfterPickerClosed = false;
     ShowDevicePickerCallback m_showDevicePickerCallback;
     ExitCallback m_exitCallback;
-    DeviceActionCallback m_connectCallback;
-    DeviceActionCallback m_disconnectCallback;
-    DeviceActionCallback m_reconnectCallback;
-    BulkDeviceActionCallback m_disconnectAllCallback;
-    BulkDeviceActionCallback m_reconnectAllCallback;
     ToggleDeviceCallback m_toggleDeviceCallback;
     ResourceStateChangedCallback m_resourceStateChangedCallback;
 

@@ -4,7 +4,7 @@
 #include <DevicePickerView.g.cpp>
 #endif
 
-#include <core/DeviceService.hpp>
+#include <util/RuntimeApartment.hpp>
 #include <core/StringResources.hpp>
 #include <core/SettingsLimits.hpp>
 #include <ui/ButtonHelpers.hpp>
@@ -23,27 +23,6 @@ constexpr auto c_pendingActionFallbackTimeout = std::chrono::seconds(2);
 constexpr double c_pickerMinWidth = 260.0;
 constexpr double c_pickerMaxWidth = 520.0;
 constexpr double c_globalActionsChromeWidth = 82.0;
-
-void CancelRefreshDevicesOperation(winrt::Windows::Foundation::IAsyncOperation<
-                                       winrt::Windows::Devices::Enumeration::DeviceInformationCollection> const& op,
-                                   std::wstring_view context) noexcept {
-    if (!op) return;
-
-    try {
-        op.Cancel();
-    } catch (winrt::hresult_error const& ex) {
-        DebugTrace(L"[DevicePickerView] ERROR: {0} failed to cancel RefreshDevicesAsync: 0x{1:08X} {2}",
-                   context,
-                   static_cast<uint32_t>(ex.code()),
-                   ex.message());
-    } catch (std::exception const& ex) {
-        DebugTrace(L"[DevicePickerView] ERROR: {0} failed to cancel RefreshDevicesAsync: {1}",
-                   context,
-                   util::Utf8ToUtf16(ex.what()));
-    } catch (...) {
-        DebugTrace(L"[DevicePickerView] ERROR: {0} failed to cancel RefreshDevicesAsync: unknown exception", context);
-    }
-}
 
 class DevicePickerSizer final {
 public:
@@ -121,7 +100,7 @@ DevicePickerView::DevicePickerView() {
     SavedDevicesButton().Click([weak](auto const&, auto const&) {
         if (auto self = weak.get()) {
             self->m_savedDevicesExpanded = !self->m_savedDevicesExpanded;
-            self->RebuildDeviceListFromCache(false, true);
+            self->RenderDeviceList(false, true);
         }
     });
     DeviceAliasBox().MaxLength(static_cast<int32_t>(apc::limits::c_maxDeviceAliasCharacters));
@@ -136,41 +115,56 @@ DevicePickerView::DevicePickerView() {
     });
     ClearAliasButton().Click([weak](auto const&, auto const&) {
         if (auto self = weak.get()) {
-            if (!self->m_viewModel.SetAlias(self->m_optionsDeviceId, L"")) {
+            auto controller = self->m_appController.lock();
+            if (!controller || !controller->ClearAlias(self->m_optionsDeviceId).Succeeded()) {
                 self->ShowDeviceOptionsError();
                 return;
             }
             self->DeviceOptionsError().IsOpen(false);
             self->RefreshDeviceOptions(true);
-            self->RebuildDeviceListFromCache(false, true);
+            self->RenderDeviceList(false, true);
         }
     });
     DefaultDeviceToggle().Toggled([weak](auto const&, auto const&) {
         if (auto self = weak.get(); self && !self->m_updatingDeviceOptions) {
-            if (!self->m_viewModel.SetDefault(self->m_optionsDeviceId, self->DefaultDeviceToggle().IsOn()))
-                self->ShowDeviceOptionsError();
+            auto controller = self->m_appController.lock();
+            auto options = self->DeviceOptions(self->m_optionsDeviceId);
+            bool applied = controller && options &&
+                           (self->DefaultDeviceToggle().IsOn()
+                                ? controller->SetDefault(self->m_optionsDeviceId).Succeeded()
+                                : !options->Device.IsDefaultDevice || controller->ClearDefault().Succeeded());
+            if (!applied) self->ShowDeviceOptionsError();
             self->RefreshDeviceOptions();
-            self->RebuildDeviceListFromCache(false, true);
+            self->RenderDeviceList(false, true);
         }
     });
     DeviceStartupToggle().Toggled([weak](auto const&, auto const&) {
         if (auto self = weak.get(); self && !self->m_updatingDeviceOptions) {
-            if (!self->m_viewModel.SetConnectOnStartup(self->m_optionsDeviceId, self->DeviceStartupToggle().IsOn()))
+            auto controller = self->m_appController.lock();
+            if (!controller ||
+                controller->SetDeviceConnectOnStartup(self->m_optionsDeviceId, self->DeviceStartupToggle().IsOn())
+                        .Status == SettingsMutationStatus::Rejected)
                 self->ShowDeviceOptionsError();
             self->RefreshDeviceOptions();
         }
     });
     DeviceReconnectToggle().Toggled([weak](auto const&, auto const&) {
         if (auto self = weak.get(); self && !self->m_updatingDeviceOptions) {
-            if (!self->m_viewModel.SetReconnectOnConnectionLoss(self->m_optionsDeviceId,
-                                                                self->DeviceReconnectToggle().IsOn()))
+            auto controller = self->m_appController.lock();
+            if (!controller || controller
+                                       ->SetDeviceReconnectOnConnectionLoss(self->m_optionsDeviceId,
+                                                                            self->DeviceReconnectToggle().IsOn())
+                                       .Status == SettingsMutationStatus::Rejected)
                 self->ShowDeviceOptionsError();
             self->RefreshDeviceOptions();
         }
     });
     ForgetDeviceButton().Click([weak](auto const&, auto const&) {
         if (auto self = weak.get()) {
-            if (!self->m_viewModel.ForgetDevice(self->m_optionsDeviceId)) {
+            auto controller = self->m_appController.lock();
+            auto options = self->DeviceOptions(self->m_optionsDeviceId);
+            if (!controller || !options || !options->CanForget ||
+                !controller->ForgetDevice(self->m_optionsDeviceId).IsApplied()) {
                 self->ShowDeviceOptionsError();
                 return;
             }
@@ -184,238 +178,74 @@ DevicePickerView::DevicePickerView() {
 /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-void DevicePickerView::Initialize(std::shared_ptr<apc::device::DeviceService> service,
-                                  std::shared_ptr<SettingsStore> settingsStore,
+DevicePickerView::~DevicePickerView() {
+    m_refreshCancellation.request_stop();
+}
+
+void DevicePickerView::Initialize(std::weak_ptr<apc::app::AppController> controller,
                                   std::function<void()> onClose,
-                                  std::function<void(winrt::hstring)> onDeviceSelected,
-                                  std::function<void(winrt::hstring)> onDeviceDisconnect,
-                                  std::function<void(winrt::hstring)> onDeviceReconnect,
-                                  std::function<void()> onDisconnectAll,
-                                  std::function<void()> onReconnectAll) {
-    m_preparedForRelease.store(false);
-    m_presentationActive.store(false, std::memory_order_release);
-    m_deviceService = service;
-    m_settingsStore = settingsStore;
-    m_viewModel.SetDeviceService(service);
-    m_viewModel.SetSettingsStore(settingsStore);
+                                  std::function<void()> showSettings) {
+    m_appController = std::move(controller);
     m_onClose = std::move(onClose);
-    m_onDeviceSelected = std::move(onDeviceSelected);
-    m_onDeviceDisconnect = std::move(onDeviceDisconnect);
-    m_onDeviceReconnect = std::move(onDeviceReconnect);
-    m_onDisconnectAll = std::move(onDisconnectAll);
-    m_onReconnectAll = std::move(onReconnectAll);
-    TitleText().Text(winrt::hstring(_("TrayMenu_SelectDevice")));
-    auto closeText = winrt::hstring(_("Close"));
-    apc::ui::SetButtonLabel(CloseButton(), closeText);
-    auto disconnectAllText = winrt::hstring(_("DisconnectAll"));
-    auto reconnectAllText = winrt::hstring(_("ReconnectAll"));
-    DisconnectAllText().Text(disconnectAllText);
-    ReconnectAllText().Text(reconnectAllText);
-    apc::ui::SetButtonLabel(DisconnectAllButton(), disconnectAllText);
-    apc::ui::SetButtonLabel(ReconnectAllButton(), reconnectAllText);
+    m_onShowSettings = std::move(showSettings);
     ApplyLanguage();
 }
 
-void DevicePickerView::SetAppController(std::weak_ptr<apc::app::AppController> appController,
-                                        std::function<void()> showSettings) {
-    m_viewModel.SetAppController(std::move(appController));
-    m_onShowSettings = std::move(showSettings);
-}
-
 bool DevicePickerView::LoadDevices() {
-    if (m_preparedForRelease.load()) {
-        return false;
-    }
-
-    if (m_isLoadingDevices) {
-        SetRefreshIndicators(true, !m_viewModel.HasInventory());
-        return true;
-    }
-
-    const bool nativeInventoryComplete = m_viewModel.SynchronizeInventoryFromService();
-    if (m_viewModel.HasInventory()) {
-        RebuildDeviceListFromCache();
-    }
-
-    if (nativeInventoryComplete || m_viewModel.IsInventoryFresh()) {
-        SetRefreshIndicators(false, false);
-        return true;
-    }
-
-    m_isLoadingDevices.store(true);
-    m_loadDevicesCancelled.store(false);
-    auto requestId = ++m_loadDevicesRequestId;
-    const auto inventoryGenerationAtStart = m_inventoryGeneration->Capture();
-    m_activeLoadRequestId.store(requestId);
-
-    const bool blockingRefresh = !m_viewModel.HasInventory() && DeviceList().Items().Size() == 0;
-    SetRefreshIndicators(true, blockingRefresh);
-
-    auto dispatcher = this->DispatcherQueue();
-    if (!dispatcher) {
-        DebugTrace(L"[DevicePickerView] ERROR: no UI dispatcher available for LoadDevices");
-        SetRefreshIndicators(false, false);
-        m_isLoadingDevices.store(false);
-        m_activeLoadRequestId.store(0);
-        return false;
-    }
-
-    auto service = m_deviceService.lock();
-    if (!service) {
-        DebugTrace(L"[DevicePickerView] ERROR: no DeviceService available for LoadDevices");
-        OnDeviceEnumerationFailed(blockingRefresh, requestId, inventoryGenerationAtStart);
-        return false;
-    }
-
-    auto weak = get_weak();
-
-    winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
-        previousOp{nullptr};
-    {
-        std::lock_guard lock(m_refreshDevicesOpMutex);
-        previousOp = std::exchange(m_refreshDevicesOp, nullptr);
-    }
-    CancelRefreshDevicesOperation(previousOp, L"LoadDevices");
-
-    try {
-        auto refreshOp = service->RefreshDevicesAsync();
-        {
-            std::lock_guard lock(m_refreshDevicesOpMutex);
-            m_refreshDevicesOp = refreshOp;
-        }
-
-        winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
-            pendingOp = refreshOp;
-
-        pendingOp.Completed([weak, dispatcher, blockingRefresh, requestId, inventoryGenerationAtStart](
-                                auto const& sender, winrt::Windows::Foundation::AsyncStatus status) {
-            if (auto self = weak.get()) {
-                std::lock_guard lock(self->m_refreshDevicesOpMutex);
-                if (self->m_activeLoadRequestId.load() != requestId) {
-                    return;
-                }
-                self->m_refreshDevicesOp = nullptr;
-            }
-
-            if (status == winrt::Windows::Foundation::AsyncStatus::Canceled) {
-                bool enqueued = false;
-                try {
-                    enqueued = dispatcher.TryEnqueue([weak, requestId]() noexcept {
-                        if (auto self = weak.get(); self && self->m_loadDevicesRequestId.load() == requestId &&
-                                                    self->m_activeLoadRequestId.load() == requestId) {
-                            auto completeLoad = wil::scope_exit([self, requestId]() noexcept {
-                                if (self->m_loadDevicesRequestId.load() == requestId &&
-                                    self->m_activeLoadRequestId.load() == requestId) {
-                                    self->m_isLoadingDevices.store(false);
-                                    self->m_activeLoadRequestId.store(0);
-                                }
-                            });
-                            try {
-                                self->SetRefreshIndicators(false, false);
-                            } catch (winrt::hresult_error const& ex) {
-                                util::DebugTraceException(L"[DevicePickerView] canceled refresh UI cleanup failed", ex);
-                            } catch (std::exception const& ex) {
-                                util::DebugTraceException(L"[DevicePickerView] canceled refresh UI cleanup failed", ex);
-                            } catch (...) {
-                                util::DebugTraceUnknownException(
-                                    L"[DevicePickerView] canceled refresh UI cleanup failed");
-                            }
-                        }
-                    });
-                } catch (...) {
-                    util::DebugTraceUnknownException(L"[DevicePickerView] ERROR: marshaling canceled refresh threw");
-                }
-                if (!enqueued) {
-                    if (auto self = weak.get(); self && self->m_loadDevicesRequestId.load() == requestId) {
-                        self->m_isLoadingDevices.store(false);
-                        self->m_activeLoadRequestId.store(0);
-                    }
-                }
-                return;
-            }
-            auto enqueueFailure = [&]() noexcept {
-                bool enqueued = false;
-                try {
-                    enqueued = dispatcher.TryEnqueue([weak, blockingRefresh, requestId, inventoryGenerationAtStart]() {
-                        if (auto self = weak.get()) {
-                            self->OnDeviceEnumerationFailed(blockingRefresh, requestId, inventoryGenerationAtStart);
-                        }
-                    });
-                } catch (...) {
-                    util::DebugTraceUnknownException(
-                        L"[DevicePickerView] ERROR: marshaling OnDeviceEnumerationFailed threw");
-                }
-                if (!enqueued) {
-                    DebugTrace(L"[DevicePickerView] ERROR: failed to marshal OnDeviceEnumerationFailed to UI thread");
-                    if (auto self = weak.get()) {
-                        if (self->m_loadDevicesRequestId.load() == requestId) {
-                            ++self->m_loadDevicesRequestId;
-                            self->m_isLoadingDevices.store(false);
-                            self->m_activeLoadRequestId.store(0);
-                        }
-                    }
-                }
-            };
-            try {
-                auto devices = sender.GetResults();
-                bool enqueued =
-                    dispatcher.TryEnqueue([weak, devices, blockingRefresh, requestId, inventoryGenerationAtStart]() {
-                        if (auto self = weak.get()) {
-                            self->ApplyDeviceResults(devices, blockingRefresh, requestId, inventoryGenerationAtStart);
-                        }
-                    });
-                if (!enqueued) {
-                    DebugTrace(L"[DevicePickerView] ERROR: failed to marshal ApplyDeviceResults to UI thread");
-                    if (auto self = weak.get()) {
-                        if (self->m_loadDevicesRequestId.load() == requestId) {
-                            ++self->m_loadDevicesRequestId;
-                            self->m_isLoadingDevices.store(false);
-                            self->m_activeLoadRequestId.store(0);
-                        }
-                    }
-                }
-            } catch (winrt::hresult_error const& ex) {
-                DebugTrace(L"[DevicePickerView] ERROR: RefreshDevicesAsync failed: 0x{0:08X} {1}",
-                           static_cast<uint32_t>(ex.code()),
-                           ex.message());
-                enqueueFailure();
-            } catch (std::exception const& ex) {
-                DebugTrace(L"[DevicePickerView] ERROR: RefreshDevicesAsync failed: {0}", util::Utf8ToUtf16(ex.what()));
-                enqueueFailure();
-            } catch (...) {
-                DebugTrace(L"[DevicePickerView] ERROR: RefreshDevicesAsync failed: unknown exception");
-                enqueueFailure();
-            }
-        });
-    } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[DevicePickerView] ERROR: failed to start RefreshDevicesAsync", ex);
-        OnDeviceEnumerationFailed(blockingRefresh, requestId, inventoryGenerationAtStart);
-        return false;
-    } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[DevicePickerView] ERROR: failed to start RefreshDevicesAsync", ex);
-        OnDeviceEnumerationFailed(blockingRefresh, requestId, inventoryGenerationAtStart);
-        return false;
-    } catch (...) {
-        util::DebugTraceUnknownException(L"[DevicePickerView] ERROR: failed to start RefreshDevicesAsync");
-        OnDeviceEnumerationFailed(blockingRefresh, requestId, inventoryGenerationAtStart);
-        return false;
-    }
+    if (m_preparedForRelease) return false;
+    RenderDeviceList();
+    if (m_isLoadingDevices || m_viewState.InventoryComplete) return true;
+    auto controller = m_appController.lock();
+    if (!controller) return false;
+    m_refreshCancellation = std::stop_source{};
+    m_isLoadingDevices = true;
+    SetRefreshIndicators(true, m_viewState.Items.empty());
+    RefreshDevicesAsync(get_weak(), DispatcherQueue(), std::move(controller), m_refreshCancellation.get_token());
     return true;
 }
 
-void DevicePickerView::CancelLoadDevices() {
-    m_loadDevicesCancelled.store(true);
-    ++m_loadDevicesRequestId;
-    m_activeLoadRequestId.store(0);
-    m_isLoadingDevices.store(false);
-    SetRefreshIndicators(false, false);
-    winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection> op{
-        nullptr};
-    {
-        std::lock_guard lock(m_refreshDevicesOpMutex);
-        op = std::exchange(m_refreshDevicesOp, nullptr);
+winrt::fire_and_forget
+DevicePickerView::RefreshDevicesAsync(winrt::weak_ref<DevicePickerView> weak,
+                                      winrt::Microsoft::UI::Dispatching::DispatcherQueue dispatcher,
+                                      std::shared_ptr<apc::app::AppController> controller,
+                                      std::stop_token stop) {
+    try {
+        co_await winrt::resume_background();
+        util::RuntimeApartment apartment;
+        if (apartment.Ready() && !stop.stop_requested())
+            static_cast<void>(controller->ListDevices({.StopToken = stop}));
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[DevicePickerView] background refresh failed");
     }
-    CancelRefreshDevicesOperation(op, L"CancelLoadDevices");
+    try {
+        // Only this dispatcher callback touches the view. A cancelled older request cannot finish a newer one.
+        static_cast<void>(dispatcher.TryEnqueue([weak, stop]() noexcept {
+            if (stop.stop_requested()) return;
+            try {
+                if (auto self = weak.get(); self && !self->m_preparedForRelease) {
+                    self->m_isLoadingDevices = false;
+                    self->SetRefreshIndicators(false, false);
+                    self->RenderDeviceList();
+                }
+            } catch (...) {
+                util::DebugTraceUnknownException(L"[DevicePickerView] refresh presentation failed");
+            }
+        }));
+    } catch (...) {
+        util::DebugTraceUnknownException(L"[DevicePickerView] refresh dispatch failed");
+    }
+}
+
+void DevicePickerView::CancelLoadDevices() {
+    m_refreshCancellation.request_stop();
+    m_isLoadingDevices = false;
+    SetRefreshIndicators(false, false);
+}
+
+std::optional<DeviceOptionsViewModel> DevicePickerView::DeviceOptions(std::wstring_view id) const {
+    auto controller = m_appController.lock();
+    if (!controller) return std::nullopt;
+    return BuildDeviceOptionsViewState(controller->Snapshot(), id, _("Privacy_RedactedDevice"));
 }
 
 void DevicePickerView::PrepareForRelease() noexcept {
@@ -426,11 +256,10 @@ void DevicePickerView::PrepareForRelease() noexcept {
             return;
         }
 
-        m_preparedForRelease.store(true);
-        m_presentationActive.store(false, std::memory_order_release);
+        m_preparedForRelease = true;
+        m_presentationActive = false;
         StopNavigationAnimation();
         StopPendingActionTimer();
-        m_inventoryGeneration->Deactivate();
         CancelLoadDevices();
     } catch (winrt::hresult_error const& ex) {
         util::DebugTraceException(L"[DevicePickerView] ERROR: PrepareForRelease failed", ex);
@@ -441,28 +270,22 @@ void DevicePickerView::PrepareForRelease() noexcept {
     }
 
     m_onClose = nullptr;
-    m_onDeviceSelected = nullptr;
-    m_onDeviceDisconnect = nullptr;
-    m_onDeviceReconnect = nullptr;
-    m_onDisconnectAll = nullptr;
-    m_onReconnectAll = nullptr;
     m_onShowSettings = nullptr;
     m_optionsDeviceId.clear();
-    m_deviceService.reset();
-    m_settingsStore.reset();
+    m_appController.reset();
     m_pendingDeviceActions.clear();
     m_pendingGlobalAction = false;
     m_renderedSnapshotGeneration = 0;
     m_hasRenderedSnapshot = false;
-    m_viewModel.Clear();
+    m_viewState = {};
 }
 
 void DevicePickerView::RefreshDeviceStates() {
-    RebuildDeviceListFromCache();
+    RenderDeviceList();
 }
 
 void DevicePickerView::ApplyLanguage() {
-    if (m_preparedForRelease.load()) return;
+    if (m_preparedForRelease) return;
     TitleText().Text(winrt::hstring(_("TrayMenu_SelectDevice")));
     auto closeText = winrt::hstring(_("Close"));
     auto disconnectAllText = winrt::hstring(_("DisconnectAll"));
@@ -489,11 +312,11 @@ void DevicePickerView::ApplyLanguage() {
         toggle.OnContent(box_value(L""));
         toggle.OffContent(box_value(L""));
     }
-    RebuildDeviceListFromCache(false, true);
+    RenderDeviceList(false, true);
 }
 
 void DevicePickerView::ShowDeviceOptions(std::wstring const& id) {
-    if (!m_viewModel.DeviceOptions(id)) return;
+    if (!DeviceOptions(id)) return;
     const auto previousHeight = RootGrid().ActualHeight();
     StopNavigationAnimation();
     m_optionsDeviceId = id;
@@ -516,7 +339,7 @@ void DevicePickerView::ReturnToDeviceList() {
     BackButton().Visibility(Visibility::Collapsed);
     TitleText().Text(winrt::hstring(_("TrayMenu_SelectDevice")));
     apc::ui::SetTooltipText(TitleText(), winrt::hstring(_("TrayMenu_SelectDevice")));
-    RebuildDeviceListFromCache(false, true);
+    RenderDeviceList(false, true);
     AnimateNavigation(previousHeight);
     for (auto const& entry : DeviceList().Items()) {
         auto item = entry.try_as<ListViewItem>();
@@ -540,7 +363,7 @@ void DevicePickerView::StopNavigationAnimation() noexcept {
 
 void DevicePickerView::AnimateNavigation(double previousHeight) noexcept {
     try {
-        if (!m_presentationActive.load() || previousHeight <= 0 ||
+        if (!m_presentationActive || previousHeight <= 0 ||
             !winrt::Windows::UI::ViewManagement::UISettings().AnimationsEnabled())
             return;
         using namespace winrt::Microsoft::UI::Xaml::Media::Animation;
@@ -588,7 +411,7 @@ void DevicePickerView::AnimateNavigation(double previousHeight) noexcept {
 
 void DevicePickerView::RefreshDeviceOptions(bool resetAlias) {
     if (m_optionsDeviceId.empty()) return;
-    const auto options = m_viewModel.DeviceOptions(m_optionsDeviceId);
+    const auto options = DeviceOptions(m_optionsDeviceId);
     if (!options) {
         m_optionsDeviceId.clear();
         ReturnToDeviceList();
@@ -599,7 +422,7 @@ void DevicePickerView::RefreshDeviceOptions(bool resetAlias) {
     auto const& device = options->Device;
     TitleText().Text(winrt::hstring(device.DisplayName));
     apc::ui::SetTooltipText(TitleText(), winrt::hstring(device.DisplayName));
-    RootGrid().Width(DevicePickerSizer::WidthFor(m_viewModel.CachedSnapshot().ConnectedDeviceCount > 1));
+    RootGrid().Width(DevicePickerSizer::WidthFor(m_viewState.ConnectedDeviceCount > 1));
     if (resetAlias || std::wstring(DeviceAliasBox().Text()) == m_savedAlias) {
         m_savedAlias = device.Alias;
         DeviceAliasBox().Text(winrt::hstring(device.Alias));
@@ -622,7 +445,7 @@ void DevicePickerView::RefreshDeviceOptions(bool resetAlias) {
 }
 
 bool DevicePickerView::SaveDeviceAlias() {
-    if (m_preparedForRelease.load() || m_optionsDeviceId.empty() || m_updatingDeviceOptions) return true;
+    if (m_preparedForRelease || m_optionsDeviceId.empty() || m_updatingDeviceOptions) return true;
     auto alias = std::wstring(DeviceAliasBox().Text());
     auto first = std::ranges::find_if_not(alias, [](wchar_t value) { return std::iswspace(value) != 0; });
     auto last = std::ranges::find_if_not(alias.rbegin(), alias.rend(), [](wchar_t value) {
@@ -633,7 +456,8 @@ bool DevicePickerView::SaveDeviceAlias() {
         DeviceAliasBox().Text(winrt::hstring(alias));
         return true;
     }
-    if (!m_viewModel.SetAlias(m_optionsDeviceId, alias)) {
+    auto controller = m_appController.lock();
+    if (!controller || !controller->SetAlias(m_optionsDeviceId, alias).Succeeded()) {
         ShowDeviceOptionsError();
         return false;
     }
@@ -651,15 +475,13 @@ void DevicePickerView::ShowDeviceOptionsError() {
 }
 
 bool DevicePickerView::InvalidateDeviceInventory() {
-    if (m_preparedForRelease.load()) return true;
-    static_cast<void>(m_inventoryGeneration->TryInvalidate());
-    m_viewModel.InvalidateInventory();
-    if (m_presentationActive.load(std::memory_order_acquire)) return LoadDevices();
-    return true;
+    if (m_preparedForRelease) return true;
+    RenderDeviceList();
+    return !m_presentationActive || LoadDevices();
 }
 
 void DevicePickerView::SetPresentationActive(bool active) noexcept {
-    m_presentationActive.store(active, std::memory_order_release);
+    m_presentationActive = active;
     if (active) {
         SchedulePendingActionExpiry();
     } else {
@@ -672,88 +494,14 @@ void DevicePickerView::SetPresentationActive(bool active) noexcept {
 /*//////// Private Helpers ///////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-void DevicePickerView::ApplyDeviceResults(
-    winrt::Windows::Devices::Enumeration::DeviceInformationCollection const& devices,
-    bool blockingRefresh,
-    uint64_t requestId,
-    uint64_t inventoryGenerationAtStart) noexcept {
-    if (m_loadDevicesRequestId.load() != requestId) return;
-    if (m_activeLoadRequestId.load() != requestId) return;
-    auto completeLoad = [this, requestId]() noexcept {
-        if (m_activeLoadRequestId.load() == requestId) {
-            m_isLoadingDevices.store(false);
-            m_activeLoadRequestId.store(0);
-        }
-    };
-    auto completionGuard = wil::scope_exit([completeLoad]() noexcept { completeLoad(); });
-    try {
-        if (m_loadDevicesCancelled) {
-            SetRefreshIndicators(false, false);
-            return;
-        }
-        SetRefreshIndicators(false, false);
-
-        const bool inventoryChangedDuringLoad = m_inventoryGeneration->ChangedSince(inventoryGenerationAtStart);
-        bool nativeInventoryComplete = false;
-        if (!devices) {
-            nativeInventoryComplete = m_viewModel.SynchronizeInventoryFromService();
-            if (m_viewModel.HasInventory() || (blockingRefresh && DeviceList().Items().Size() == 0)) {
-                RebuildDeviceListFromCache();
-            }
-        } else {
-            nativeInventoryComplete = m_viewModel.SynchronizeInventoryFromService();
-            if (!m_viewModel.HasInventory()) m_viewModel.SetDevices(devices);
-            if (inventoryChangedDuringLoad && !nativeInventoryComplete) m_viewModel.InvalidateInventory();
-            RebuildDeviceListFromCache();
-        }
-
-        const bool retryInventory = inventoryChangedDuringLoad && !nativeInventoryComplete;
-        completeLoad();
-        completionGuard.release();
-        if (retryInventory) static_cast<void>(LoadDevices());
-    } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[DevicePickerView] ERROR: applying device results failed", ex);
-    } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[DevicePickerView] ERROR: applying device results failed", ex);
-    } catch (...) {
-        util::DebugTraceUnknownException(L"[DevicePickerView] ERROR: applying device results failed");
-    }
-}
-
-void DevicePickerView::OnDeviceEnumerationFailed(bool blockingRefresh,
-                                                 uint64_t requestId,
-                                                 uint64_t inventoryGenerationAtStart) noexcept {
-    if (m_loadDevicesRequestId.load() != requestId) return;
-    if (m_activeLoadRequestId.load() != requestId) return;
-    auto completeLoad = [this, requestId]() noexcept {
-        if (m_activeLoadRequestId.load() == requestId) {
-            m_isLoadingDevices.store(false);
-            m_activeLoadRequestId.store(0);
-        }
-    };
-    auto completionGuard = wil::scope_exit([completeLoad]() noexcept { completeLoad(); });
-    try {
-        if (m_loadDevicesCancelled.load()) return;
-        SetRefreshIndicators(false, false);
-        if (blockingRefresh && !m_viewModel.HasInventory() && DeviceList().Items().Size() == 0) {
-            RebuildDeviceListFromCache();
-        }
-        const bool retryInventory = m_inventoryGeneration->ChangedSince(inventoryGenerationAtStart);
-        completeLoad();
-        completionGuard.release();
-        if (retryInventory) static_cast<void>(LoadDevices());
-    } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[DevicePickerView] ERROR: applying enumeration failure state failed", ex);
-    } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[DevicePickerView] ERROR: applying enumeration failure state failed", ex);
-    } catch (...) {
-        util::DebugTraceUnknownException(L"[DevicePickerView] ERROR: applying enumeration failure state failed");
-    }
-}
-
-void DevicePickerView::RebuildDeviceListFromCache(bool reconcilePendingActions, bool forceRender) {
+void DevicePickerView::RenderDeviceList(bool reconcilePendingActions, bool forceRender) {
+    auto controller = m_appController.lock();
+    if (!controller) return;
+    auto application = controller->Snapshot();
+    if (!application.IsRunning) return;
+    m_viewState = BuildDevicePickerViewState(application, _("Privacy_RedactedDevice"));
     RefreshDeviceOptions();
-    auto const& snapshot = m_viewModel.RefreshSnapshot();
+    auto const& snapshot = m_viewState;
     auto const& items = snapshot.Items;
     const auto connectedCount = snapshot.ConnectedDeviceCount;
     const auto pendingDeviceCount = m_pendingDeviceActions.size();
@@ -775,7 +523,7 @@ void DevicePickerView::RebuildDeviceListFromCache(bool reconcilePendingActions, 
     const auto connectedItemCount =
         std::count_if(items.begin(), items.end(), [](auto const& item) { return item.IsConnected; });
     const auto busyItemCount = std::count_if(items.begin(), items.end(), [](auto const& item) { return item.IsBusy; });
-    DebugTrace(L"[DevicePickerView] RebuildDeviceListFromCache connectedCount={0} itemCount={1} "
+    DebugTrace(L"[DevicePickerView] RenderDeviceList connectedCount={0} itemCount={1} "
                L"connectedItemCount={2} busyItemCount={3} pendingGlobalAction={4}",
                connectedCount,
                items.size(),
@@ -953,7 +701,7 @@ bool DevicePickerView::BeginPendingGlobalAction() {
     if (m_pendingGlobalAction) return false;
     m_pendingGlobalAction = true;
     m_pendingGlobalActionStarted = std::chrono::steady_clock::now();
-    RebuildDeviceListFromCache(false, true);
+    RenderDeviceList(false, true);
     return true;
 }
 
@@ -985,8 +733,7 @@ void DevicePickerView::ReconcilePendingActions(std::vector<apc::device_picker::D
 }
 
 void DevicePickerView::SchedulePendingActionExpiry() noexcept {
-    if (!m_presentationActive.load(std::memory_order_acquire) ||
-        (m_pendingDeviceActions.empty() && !m_pendingGlobalAction)) {
+    if (!m_presentationActive || (m_pendingDeviceActions.empty() && !m_pendingGlobalAction)) {
         StopPendingActionTimer();
         return;
     }
@@ -1012,8 +759,8 @@ void DevicePickerView::SchedulePendingActionExpiry() noexcept {
             auto weak = get_weak();
             m_pendingActionTimer.Tick([weak](auto const&, auto const&) noexcept {
                 try {
-                    if (auto self = weak.get(); self && self->m_presentationActive.load(std::memory_order_acquire)) {
-                        self->RebuildDeviceListFromCache(true, true);
+                    if (auto self = weak.get(); self && self->m_presentationActive) {
+                        self->RenderDeviceList(true, true);
                     }
                 } catch (winrt::hresult_error const& ex) {
                     util::DebugTraceException(L"[DevicePickerView] Pending-action timer failed", ex);
@@ -1066,45 +813,43 @@ void DevicePickerView::SetRefreshIndicators(bool refreshing, bool blockingRefres
 void DevicePickerView::OnCloseClicked(winrt::Windows::Foundation::IInspectable const&,
                                       winrt::Microsoft::UI::Xaml::RoutedEventArgs const&) {
     if (!SaveDeviceAlias()) return;
-    m_loadDevicesCancelled.store(true);
+    CancelLoadDevices();
     if (m_onClose) m_onClose();
 }
 
 void DevicePickerView::OnDeviceToggle(winrt::hstring const& id) {
-    auto const& items = m_viewModel.RefreshSnapshot().Items;
-    auto const device = std::ranges::find(items, std::wstring_view(id), &apc::device_picker::DeviceSnapshotItem::Id);
-    if (device == items.end() || !device->IsAvailable || device->IsBusy) return;
-    if (device->IsConnected) {
-        OnDeviceDisconnectClicked(id);
-        return;
-    }
-    if (!m_viewModel.CanSelect(id)) return;
-    if (!BeginPendingDeviceAction(id)) return;
-
-    if (m_onDeviceSelected) {
-        m_onDeviceSelected(id);
-    }
+    auto controller = m_appController.lock();
+    auto target = apc::app::DeviceSelector::ById(std::wstring_view(id));
+    if (!controller || !target || !BeginPendingDeviceAction(id)) return;
+    static_cast<void>(controller->Toggle(*target, apc::app::AppCommandContext::Detached()));
+    if (m_onClose) m_onClose();
 }
 
 void DevicePickerView::OnDeviceDisconnectClicked(winrt::hstring const& id) {
-    if (!BeginPendingDeviceAction(id)) return;
-    if (m_onDeviceDisconnect) m_onDeviceDisconnect(id);
+    auto controller = m_appController.lock();
+    auto target = apc::app::DeviceSelector::ById(std::wstring_view(id));
+    if (!controller || !target || !BeginPendingDeviceAction(id)) return;
+    if (m_onClose) m_onClose();
+    static_cast<void>(controller->Disconnect(*target, apc::app::AppCommandContext::Detached()));
 }
 
 void DevicePickerView::OnDeviceReconnectClicked(winrt::hstring const& id) {
-    if (!BeginPendingDeviceAction(id)) return;
-    if (m_onDeviceReconnect) m_onDeviceReconnect(id);
+    auto controller = m_appController.lock();
+    auto target = apc::app::DeviceSelector::ById(std::wstring_view(id));
+    if (!controller || !target || !BeginPendingDeviceAction(id)) return;
+    if (m_onClose) m_onClose();
+    static_cast<void>(controller->Reconnect(*target, apc::app::AppCommandContext::Detached()));
 }
 
 void DevicePickerView::OnDisconnectAllClicked(winrt::Windows::Foundation::IInspectable const&,
                                               winrt::Microsoft::UI::Xaml::RoutedEventArgs const&) {
-    if (!BeginPendingGlobalAction()) return;
-    if (m_onDisconnectAll) m_onDisconnectAll();
+    if (auto controller = m_appController.lock(); controller && BeginPendingGlobalAction())
+        static_cast<void>(controller->DisconnectAll(apc::app::AppCommandContext::Detached()));
 }
 
 void DevicePickerView::OnReconnectAllClicked(winrt::Windows::Foundation::IInspectable const&,
                                              winrt::Microsoft::UI::Xaml::RoutedEventArgs const&) {
-    if (!BeginPendingGlobalAction()) return;
-    if (m_onReconnectAll) m_onReconnectAll();
+    if (auto controller = m_appController.lock(); controller && BeginPendingGlobalAction())
+        static_cast<void>(controller->ReconnectAll(apc::app::AppCommandContext::Detached()));
 }
 } // namespace winrt::AudioPlaybackConnector2::implementation

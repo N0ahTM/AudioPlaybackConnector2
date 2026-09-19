@@ -1,8 +1,6 @@
 #include <pch.h>
 #include <services/TrayController.hpp>
-#include <core/SettingsStore.hpp>
 #include <core/TrayTooltipBuilder.hpp>
-#include <core/DeviceService.hpp>
 #include <core/StringResources.hpp>
 #include <core/ThemeHelper.hpp>
 #include <ui/FlyoutPresenterStyle.hpp>
@@ -82,20 +80,10 @@ void TrayController::Initialize(HWND hwnd, winrt::Microsoft::UI::Xaml::Window ma
     }
 }
 
-void TrayController::SetDeviceService(std::shared_ptr<apc::device::DeviceService> deviceService) {
-    m_deviceService = std::move(deviceService);
-}
-
-void TrayController::SetSettingsStore(std::shared_ptr<SettingsStore> settingsStore) {
-    m_settingsStore = std::move(settingsStore);
-    if (m_settingsStore) {
-        const auto snapshot = m_settingsStore->Snapshot();
-        SetSystemBackdropEffectsEnabled(snapshot.Data.UseSystemBackdropEffects);
-    }
-}
-
 void TrayController::SetAppController(std::weak_ptr<apc::app::AppController> appController) {
     m_appController = std::move(appController);
+    if (auto controller = m_appController.lock())
+        SetSystemBackdropEffectsEnabled(controller->Snapshot().Settings.UseSystemBackdropEffects);
 }
 
 void TrayController::ApplyLanguage() {
@@ -180,11 +168,6 @@ void TrayController::Teardown() noexcept try {
     m_appController.reset();
     m_showDevicePickerCallback = nullptr;
     m_exitCallback = nullptr;
-    m_connectCallback = nullptr;
-    m_disconnectCallback = nullptr;
-    m_reconnectCallback = nullptr;
-    m_disconnectAllCallback = nullptr;
-    m_reconnectAllCallback = nullptr;
     m_toggleDeviceCallback = nullptr;
     m_resourceStateChangedCallback = nullptr;
     if (m_trayIcon) {
@@ -219,20 +202,10 @@ void TrayController::Teardown() noexcept try {
 void TrayController::SetCallbacks(ShowSettingsCallback showSettings,
                                   ShowDevicePickerCallback showDevicePicker,
                                   ExitCallback exit,
-                                  DeviceActionCallback connect,
-                                  DeviceActionCallback disconnect,
-                                  DeviceActionCallback reconnect,
-                                  ToggleDeviceCallback toggleDevice,
-                                  BulkDeviceActionCallback disconnectAll,
-                                  BulkDeviceActionCallback reconnectAll) {
+                                  ToggleDeviceCallback toggleDevice) {
     m_showSettingsCallback = std::move(showSettings);
     m_showDevicePickerCallback = std::move(showDevicePicker);
     m_exitCallback = std::move(exit);
-    m_connectCallback = std::move(connect);
-    m_disconnectCallback = std::move(disconnect);
-    m_reconnectCallback = std::move(reconnect);
-    m_disconnectAllCallback = std::move(disconnectAll);
-    m_reconnectAllCallback = std::move(reconnectAll);
     m_toggleDeviceCallback = std::move(toggleDevice);
 }
 
@@ -440,14 +413,15 @@ void TrayController::UpdateTooltipFromConnections(std::vector<DeviceTrayPresenta
     if (!m_trayIcon) return;
     auto const appName = std::wstring(_("AppName"));
     auto const redactedDeviceName = std::wstring(_("Privacy_RedactedDevice"));
-    if (!m_settingsStore) {
+    auto controller = m_appController.lock();
+    if (!controller) {
         m_trayIcon->SetTooltip(apc::tray::BuildTooltip(appName, redactedDeviceName, connected, {}, false));
         return;
     }
 
-    const auto snapshot = m_settingsStore->Snapshot();
+    const auto snapshot = controller->Snapshot();
     const auto tooltip = apc::tray::BuildTooltip(
-        appName, redactedDeviceName, connected, snapshot.Data.Devices, snapshot.Data.PrivacyModeEnabled);
+        appName, redactedDeviceName, connected, snapshot.Settings.Devices, snapshot.Settings.PrivacyModeEnabled);
     m_trayIcon->SetTooltip(tooltip);
 }
 
@@ -649,65 +623,14 @@ bool TrayController::EnsureDevicePickerViewCreated() noexcept {
         auto impl = pickerView.as<winrt::AudioPlaybackConnector2::implementation::DevicePickerView>();
         auto weak = weak_from_this();
         impl->Initialize(
-            m_deviceService,
-            m_settingsStore,
-            [weak]() {
-                auto self = weak.lock();
-                if (self && !self->m_isTearingDown.load()) self->TryHideDevicePicker();
+            m_appController,
+            [weak] {
+                if (auto self = weak.lock(); self && !self->m_isTearingDown.load()) self->TryHideDevicePicker();
             },
-            [weak](winrt::hstring id) {
-                auto self = weak.lock();
-                if (!self || self->m_isTearingDown.load()) return;
-                DebugTrace(L"[TrayController] User selected device: {0}", std::wstring(id));
-                if (self->m_connectCallback) self->m_connectCallback(id);
-                self->TryHideDevicePicker();
-            },
-            [weak](winrt::hstring id) {
-                auto self = weak.lock();
-                if (!self || self->m_isTearingDown.load()) return;
-                DebugTrace(L"[TrayController] User disconnected device: {0}", std::wstring(id));
-                self->TryHideDevicePicker();
-                if (self->m_disconnectCallback) self->m_disconnectCallback(id);
-            },
-            [weak](winrt::hstring id) {
-                auto self = weak.lock();
-                if (!self || self->m_isTearingDown.load()) return;
-                DebugTrace(L"[TrayController] User reconnected device: {0}", std::wstring(id));
-                self->TryHideDevicePicker();
-                try {
-                    auto dispatcher = self->m_mainWindow ? self->m_mainWindow.DispatcherQueue() : nullptr;
-                    if (dispatcher) {
-                        auto weakSelf = weak;
-                        bool queued = dispatcher.TryEnqueue([weakSelf, id]() {
-                            if (auto queuedSelf = weakSelf.lock();
-                                queuedSelf && !queuedSelf->m_isTearingDown.load() && queuedSelf->m_reconnectCallback) {
-                                queuedSelf->m_reconnectCallback(id);
-                            }
-                        });
-                        if (queued) return;
-                    }
-                } catch (...) {
-                    util::DebugTraceUnknownException(L"[TrayController] failed to queue reconnect callback");
-                }
-                if (self->m_reconnectCallback) self->m_reconnectCallback(id);
-            },
-            [weak]() {
-                auto self = weak.lock();
-                if (!self || self->m_isTearingDown.load()) return;
-                DebugTrace(L"[TrayController] User disconnected all devices");
-                if (self->m_disconnectAllCallback) self->m_disconnectAllCallback();
-            },
-            [weak]() {
-                auto self = weak.lock();
-                if (!self || self->m_isTearingDown.load()) return;
-                DebugTrace(L"[TrayController] User reconnected all devices");
-                if (self->m_reconnectAllCallback) self->m_reconnectAllCallback();
+            [weak] {
+                if (auto self = weak.lock(); self && !self->m_isTearingDown.load())
+                    self->ShowSettingsAfterPickerClosed();
             });
-        impl->SetAppController(m_appController, [weak] {
-            if (auto self = weak.lock(); self && !self->m_isTearingDown.load()) {
-                self->ShowSettingsAfterPickerClosed();
-            }
-        });
         m_devicePickerView = std::move(pickerView);
         m_releaseDevicePickerPending = false;
         return true;

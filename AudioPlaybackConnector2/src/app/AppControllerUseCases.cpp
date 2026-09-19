@@ -180,6 +180,12 @@ AppSnapshot AppController::CaptureSnapshot() const {
         snapshot.StartupTask = startup;
         snapshot.SettingsRevision = settings->Revision;
         snapshot.DeviceGeneration = deviceState.Generation;
+        snapshot.InventoryComplete = deviceState.Inventory.EnumerationComplete;
+        for (auto& device : snapshot.Devices) {
+            device.IsAvailable = device.IsConnected || device.IsBusy ||
+                                 std::ranges::any_of(deviceState.Inventory.Devices,
+                                                     [&](auto const& known) { return known.Id == device.Id.View(); });
+        }
         return snapshot;
     }
     AppSnapshot unavailable;

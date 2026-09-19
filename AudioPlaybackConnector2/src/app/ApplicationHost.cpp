@@ -465,8 +465,6 @@ void ApplicationHost::InitializeTray() {
     DebugTrace(L"[App] InitializeTray()");
     m_trayController = std::make_shared<TrayController>();
     m_trayController->Initialize(m_hwnd, m_mainWindow);
-    m_trayController->SetDeviceService(m_deviceService);
-    m_trayController->SetSettingsStore(m_settingsStore);
     auto weak = weak_from_this();
     m_trayController->SetAppController(m_appController);
 
@@ -487,42 +485,11 @@ void ApplicationHost::InitializeTray() {
         [weak]() {
             if (auto self = weak.lock()) self->ExitApplication();
         },
-        [controller](winrt::hstring id) {
-            if (auto owner = controller.lock()) {
-                if (auto selector = apc::app::DeviceSelector::ById(std::wstring_view(id))) {
-                    (void)owner->Connect(std::move(*selector), apc::app::AppCommandContext::Detached());
-                }
-            }
-        },
-        [controller](winrt::hstring id) {
-            if (auto owner = controller.lock()) {
-                if (auto selector = apc::app::DeviceSelector::ById(std::wstring_view(id))) {
-                    (void)owner->Disconnect(std::move(*selector), apc::app::AppCommandContext::Detached());
-                }
-            }
-        },
-        [controller](winrt::hstring id) {
-            if (auto owner = controller.lock()) {
-                if (auto selector = apc::app::DeviceSelector::ById(std::wstring_view(id))) {
-                    (void)owner->Reconnect(std::move(*selector), apc::app::AppCommandContext::Detached());
-                }
-            }
-        },
         [weak]() {
             if (auto self = weak.lock(); self && !self->m_exiting.load() && self->m_appController) {
                 if (self->m_appController->ToggleDefault(apc::app::AppCommandContext::Detached()).Succeeded()) {
                     self->ScheduleDeviceVisualRefresh(false);
                 }
-            }
-        },
-        [controller]() {
-            if (auto owner = controller.lock()) {
-                (void)owner->DisconnectAll(apc::app::AppCommandContext::Detached());
-            }
-        },
-        [controller]() {
-            if (auto owner = controller.lock()) {
-                (void)owner->ReconnectAll(apc::app::AppCommandContext::Detached());
             }
         });
     DebugTrace(L"[App] TrayController initialized");

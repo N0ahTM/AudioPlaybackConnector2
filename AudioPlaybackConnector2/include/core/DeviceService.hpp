@@ -143,10 +143,6 @@ public:
     [[nodiscard]] bool HasConnections() const;
     [[nodiscard]] bool HasBusyOperations() const;
     [[nodiscard]] bool IsDeviceBusy(std::wstring_view deviceId) const;
-    [[nodiscard]] device_picker::DeviceActivitySnapshot GetDevicePickerActivitySnapshot() const;
-    [[nodiscard]] device_picker::DeviceInventorySnapshot GetDevicePickerInventorySnapshot() const;
-    [[nodiscard]] std::optional<device_picker::DeviceInventorySnapshot>
-    GetDevicePickerInventorySnapshotIfChanged(std::uint64_t knownGeneration) const;
     [[nodiscard]] DeviceTrayPresentationSnapshot GetTrayPresentationSnapshot() const;
 
 private:

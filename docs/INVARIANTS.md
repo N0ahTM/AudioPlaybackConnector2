@@ -250,6 +250,22 @@ for an already admitted commit, so none continues after it returns. Shutdown can
 started; its late completion only releases internal lifetime. Tests cover supersession, coalescing, failed queries,
 reentrant commit/shutdown, foreign commit drain, facade destruction during a set and application-event integration.
 
+## Device picker presentation
+
+The device owner supplies inventory completion and availability together with its captured generation. Pure
+`BuildDevicePickerViewState` / `BuildDeviceOptionsViewState` functions read only an immutable application snapshot
+and an explicit localized privacy label. Saved unavailable devices and an orphaned persisted default remain
+configurable; connected/busy devices remain visible independently of discovery. Projection tests exercise real
+controller captures, privacy, rediscovery, unavailable captures and retained snapshot values.
+
+The WinUI picker owns only presentation values and UI-thread state. Its discovery request runs the bounded,
+cancellable controller query on the Windows threadpool; it creates no dedicated worker. Background work holds
+an application reference and a stop token, never the view. Completion marshals once to the UI dispatcher and
+checks cancellation before resolving the weak view. Closing/releasing the view requests cancellation before
+resetting the application endpoint. An old cancelled completion cannot clear a new request's spinner or render
+its result. WinUI rendering and dispatcher failure still require platform acceptance; core projection tests do
+not prove the complete window lifecycle.
+
 ## Distribution
 
 Store and Windows App Installer own application updates. The application performs no release lookup, update

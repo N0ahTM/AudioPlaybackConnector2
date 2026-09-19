@@ -893,30 +893,6 @@ bool DeviceService::IsDeviceBusy(std::wstring_view deviceId) const {
            iter->State == DeviceLifecycleState::WaitingForReconnect;
 }
 
-device_picker::DeviceActivitySnapshot DeviceService::GetDevicePickerActivitySnapshot() const {
-    device_picker::DeviceActivitySnapshot result;
-    auto const snapshot = Snapshot();
-    for (auto const& session : snapshot.Sessions) {
-        if (session.State == DeviceLifecycleState::Connected) result.ConnectedIds.insert(session.DeviceId);
-        if (session.State == DeviceLifecycleState::Connecting || session.State == DeviceLifecycleState::Disconnecting ||
-            session.State == DeviceLifecycleState::WaitingForReconnect) {
-            result.BusyIds.insert(session.DeviceId);
-        }
-    }
-    return result;
-}
-
-device_picker::DeviceInventorySnapshot DeviceService::GetDevicePickerInventorySnapshot() const {
-    return Snapshot().Inventory;
-}
-
-std::optional<device_picker::DeviceInventorySnapshot>
-DeviceService::GetDevicePickerInventorySnapshotIfChanged(std::uint64_t knownGeneration) const {
-    auto const inventory = Snapshot().Inventory;
-    if (inventory.Generation == knownGeneration) return std::nullopt;
-    return inventory;
-}
-
 DeviceTrayPresentationSnapshot DeviceService::GetTrayPresentationSnapshot() const {
     DeviceTrayPresentationSnapshot result;
     auto const snapshot = Snapshot();

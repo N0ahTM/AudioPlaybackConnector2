@@ -224,6 +224,7 @@ struct DeviceSnapshot {
     // richer lifecycle state used to render progress and failure.
     bool IsConnected = false;
     bool IsBusy = false;
+    bool IsAvailable = false;
 
     friend bool operator==(DeviceSnapshot const&, DeviceSnapshot const&) = default;
 };
@@ -308,6 +309,7 @@ struct AppSnapshot {
     std::optional<StartupTaskSnapshot> StartupTask;
     std::uint64_t SettingsRevision = 0;
     std::uint64_t DeviceGeneration = 0;
+    bool InventoryComplete = false;
 
     friend bool operator==(AppSnapshot const&, AppSnapshot const&) = default;
 };

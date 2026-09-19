@@ -93,7 +93,7 @@
     <ClCompile Include="src\EventTests.cpp" />
     <ClCompile Include="src\SettingsDiagnosticsReportBuilderTests.cpp" />
     <ClCompile Include="src\SettingsStoreTests.cpp" />
-    <ClCompile Include="src\DevicePickerSnapshotTests.cpp" />
+    <ClCompile Include="src\DevicePickerViewStateTests.cpp" />
     <ClCompile Include="src\LatestStartupTaskRequestStateTests.cpp" />
     <ClCompile Include="src\AppControllerUseCasesTests.cpp" />
     <ClCompile Include="src\ProtocolBoundaryTests.cpp" />
@@ -133,7 +133,6 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceWatcher.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\ui\DiagnosticsLogCollector.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\ui\TrayPrimaryActivation.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceInventoryGeneration.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DevicePickerTypes.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsLimits.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsStore.hpp" />
@@ -144,7 +143,6 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\SingleInstanceGuard.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\StartupTaskCoordinator.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\UiRefreshCoalescer.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DevicePickerSnapshot.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\ReconnectPolicy.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\util\Event.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\util\RuntimeApartment.hpp" />

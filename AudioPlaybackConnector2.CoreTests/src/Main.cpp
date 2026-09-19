@@ -36,7 +36,7 @@ int RunDiagnosticsLogCollectorTests();
 int RunEventTests();
 int RunSettingsDiagnosticsReportBuilderTests();
 int RunSettingsStoreTests();
-int RunDevicePickerSnapshotTests();
+int RunDevicePickerViewStateTests();
 int RunLatestStartupTaskRequestStateTests();
 int RunAppControllerUseCasesTests();
 int RunReconnectPolicyTests();
@@ -123,7 +123,7 @@ int main(int argc, char** argv) {
         Suite{"Event", RunEventTests},
         Suite{"SettingsDiagnosticsReportBuilder", RunSettingsDiagnosticsReportBuilderTests},
         Suite{"SettingsStore", RunSettingsStoreTests},
-        Suite{"DevicePickerSnapshot", RunDevicePickerSnapshotTests},
+        Suite{"DevicePickerViewState", RunDevicePickerViewStateTests},
         Suite{"LatestStartupTaskRequestState", RunLatestStartupTaskRequestStateTests},
         Suite{"AppControllerUseCases", RunAppControllerUseCasesTests},
         Suite{"ReconnectPolicy", RunReconnectPolicyTests},

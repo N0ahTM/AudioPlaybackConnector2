@@ -123,7 +123,12 @@ public:
     // Shutdown has one executor; concurrent callers receive its stored core result and wait for publication
     // drain unless they are the active publisher invoking shutdown from a callback.
     [[nodiscard]] bool FlushNow(unsigned int maximumAttempts = 1) noexcept;
-    [[nodiscard]] bool Shutdown(SettingsShutdownMode mode, unsigned int maximumAttempts = 3) noexcept;
+    // One total budget covers I/O, worker completion, concurrent shutdown and callback drain. False means
+    // incomplete persistence/drain; admission is nevertheless closed. Already-entered storage/callback code
+    // retains its state until it returns. No later completion may change the public settings snapshot.
+    [[nodiscard]] bool Shutdown(SettingsShutdownMode mode,
+                                unsigned int maximumAttempts = 3,
+                                std::chrono::milliseconds timeBudget = std::chrono::seconds(2)) noexcept;
 
 private:
     struct Impl;

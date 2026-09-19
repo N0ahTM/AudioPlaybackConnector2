@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <fstream>
 #include <format>
+#include <future>
 #include <iterator>
 #include <iostream>
 #include <memory>
@@ -29,6 +30,11 @@ void Check(bool condition, char const* message) {
 
 class ControlledStorage final : public SettingsStoreStorage {
 public:
+    ~ControlledStorage() override {
+        if (Destroyed) Destroyed->set_value();
+    }
+
+    std::shared_ptr<std::promise<void>> Destroyed;
     std::optional<std::string> Read(std::filesystem::path const&) override {
         bool waitedForReadRelease = false;
         const auto finish = wil::scope_exit([&] {
@@ -944,6 +950,122 @@ void TestNormalShutdownFlushAndNoLateCallback() {
     Check(callbackCount == callbacksBeforeLateMutation, "shutdown must suppress callbacks after it returns");
 }
 
+void TestShutdownBudgetFencesBlockedLoad() {
+    auto storage = std::make_shared<ControlledStorage>();
+    storage->SetInput(R"({"language":"ko"})");
+    storage->BlockReads();
+    SettingsStore store({}, storage);
+    std::jthread loading([&] { store.Load(); });
+    storage->WaitForRead();
+    const auto before = store.Snapshot();
+    std::promise<bool> completed;
+    auto result = completed.get_future();
+    std::jthread shuttingDown(
+        [&] { completed.set_value(store.Shutdown(SettingsShutdownMode::Flush, 3, std::chrono::milliseconds(30))); });
+    const auto returned = result.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    Check(returned, "shutdown must return while an admitted read remains blocked");
+    storage->ReleaseReads();
+    loading.join();
+    shuttingDown.join();
+    Check(!result.get(), "blocked load must report incomplete shutdown");
+    Check(store.Snapshot() == before, "load completion after timeout must not change the public snapshot");
+    Check(store.SetLanguage(L"de").Status == SettingsMutationStatus::Rejected,
+          "load timeout must permanently close mutation admission");
+}
+
+void TestShutdownBudgetRetainsBlockedWriterLifetime() {
+    auto storage = std::make_shared<ControlledStorage>();
+    auto destroyed = std::make_shared<std::promise<void>>();
+    auto released = destroyed->get_future();
+    storage->Destroyed = destroyed;
+    storage->BlockWrites();
+    auto store = std::make_unique<SettingsStore>(std::filesystem::path{}, storage);
+    static_cast<void>(store->SetLanguage(L"de"));
+    std::promise<bool> completed;
+    auto result = completed.get_future();
+    std::jthread shuttingDown(
+        [&] { completed.set_value(store->Shutdown(SettingsShutdownMode::Flush, 3, std::chrono::milliseconds(30))); });
+    storage->WaitForWrite();
+    const auto returned = result.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    Check(returned, "shutdown must not join a persistence worker blocked in storage");
+    if (!returned) storage->ReleaseWrites();
+    shuttingDown.join();
+    Check(!result.get(), "blocked final write must report incomplete shutdown");
+    Check(store->Snapshot().IsDirty, "a timed-out write must not report persistence success");
+    store.reset();
+    Check(released.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready,
+          "storage must remain alive after facade destruction while its write is blocked");
+    storage->ReleaseWrites();
+    storage.reset();
+    Check(released.wait_for(std::chrono::seconds(2)) == std::future_status::ready,
+          "the final writer must release retained state without a worker ownership cycle");
+}
+
+void TestShutdownBudgetFencesLateWriteCompletion() {
+    auto storage = std::make_shared<ControlledStorage>();
+    storage->BlockWrites();
+    SettingsStore store({}, storage);
+    static_cast<void>(store.SetLanguage(L"fr"));
+    std::promise<bool> completed;
+    auto result = completed.get_future();
+    std::jthread shuttingDown(
+        [&] { completed.set_value(store.Shutdown(SettingsShutdownMode::Flush, 1, std::chrono::milliseconds(30))); });
+    storage->WaitForWrite();
+    const auto returned = result.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    Check(returned, "a blocked write must not consume an unlimited shutdown budget");
+    const auto before = store.Snapshot();
+    storage->ReleaseWrites();
+    shuttingDown.join();
+    storage->WaitForCompletedWrites(1);
+    Check(!result.get(), "the write timeout must remain observable after its I/O completes");
+    Check(store.Snapshot() == before, "late write completion must not update revision or dirty state");
+}
+
+void TestShutdownBudgetIncludesBlockedSubscriber() {
+    auto storage = std::make_shared<ControlledStorage>();
+    SettingsStore store({}, storage);
+    CallbackGate gate;
+    auto subscription = store.Subscribe([&](SettingsSnapshot const&) { gate.EnterAndWait(); });
+    std::jthread mutating([&] { static_cast<void>(store.SetLanguage(L"ja")); });
+    gate.WaitForEntry();
+    std::promise<bool> completed;
+    auto result = completed.get_future();
+    std::jthread shuttingDown(
+        [&] { completed.set_value(store.Shutdown(SettingsShutdownMode::Flush, 1, std::chrono::milliseconds(30))); });
+    const auto returned = result.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    Check(returned, "publication drain must share the total shutdown budget");
+    gate.Release();
+    mutating.join();
+    shuttingDown.join();
+    Check(!result.get(), "an executing subscriber must make shutdown report incomplete drain");
+    Check(store.SetLanguage(L"de").Status == SettingsMutationStatus::Rejected,
+          "publication timeout must not reopen mutation admission");
+    subscription.Reset();
+}
+
+void TestConcurrentShutdownCallerHasItsOwnBudget() {
+    auto storage = std::make_shared<ControlledStorage>();
+    storage->BlockWrites();
+    SettingsStore store({}, storage);
+    static_cast<void>(store.SetLanguage(L"fr"));
+    bool firstResult = false;
+    std::jthread first([&] { firstResult = store.Shutdown(SettingsShutdownMode::Flush, 1, std::chrono::seconds(5)); });
+    storage->WaitForWrite();
+    std::promise<bool> completed;
+    auto secondResult = completed.get_future();
+    std::jthread second([&] {
+        completed.set_value(
+            store.Shutdown(SettingsShutdownMode::DiscardStartupFailure, 1, std::chrono::milliseconds(30)));
+    });
+    const auto returned = secondResult.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    Check(returned, "a second shutdown caller must not inherit the executor's longer deadline");
+    storage->ReleaseWrites();
+    first.join();
+    second.join();
+    Check(!secondResult.get() && firstResult,
+          "a caller timeout must not change the first caller's flush policy or successful result");
+}
+
 } // namespace
 
 int RunSettingsStoreTests() {
@@ -979,5 +1101,10 @@ int RunSettingsStoreTests() {
     TestConcurrentShutdownCallersShareCoreResult();
     TestRetryAndDiscardShutdown();
     TestNormalShutdownFlushAndNoLateCallback();
+    TestShutdownBudgetFencesBlockedLoad();
+    TestShutdownBudgetRetainsBlockedWriterLifetime();
+    TestShutdownBudgetFencesLateWriteCompletion();
+    TestShutdownBudgetIncludesBlockedSubscriber();
+    TestConcurrentShutdownCallerHasItsOwnBudget();
     return g_failures;
 }

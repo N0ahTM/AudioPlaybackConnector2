@@ -40,6 +40,8 @@ if ($metadata.ApplicationPackages.Count -ne $expectedArchitectures.Count) {
     throw "MSIX bundle contains $($metadata.ApplicationPackages.Count) application packages; expected $($expectedArchitectures.Count)."
 }
 
+Assert-AppBundleNotices -BundlePath $metadata.Path -SourceDirectory (Join-Path $PSScriptRoot '../..')
+
 if ($RequireSignature) {
     if ([string]::IsNullOrWhiteSpace($ExpectedCertificatePath)) {
         throw 'ExpectedCertificatePath is required when RequireSignature is used.'

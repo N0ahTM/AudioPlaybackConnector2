@@ -52,6 +52,10 @@ Review the draft:
 
 Never move or recreate a published release tag. Fix source or metadata with a newer version.
 
+The bundle verifier checks `LICENSE` and `THIRD_PARTY_NOTICES.md` in every embedded application package.
+Each must occur exactly once and its SHA256 must match the release checkout. Both GitHub and Store bundle
+verification enforce this requirement. Run `pwsh ./scripts/test-package-notices.ps1` for its local regression tests.
+
 ## Publish
 
 Run the **Release** workflow manually with:

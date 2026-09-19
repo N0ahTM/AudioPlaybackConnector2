@@ -3,6 +3,7 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
+Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.Security
 
 function Read-AppPackage {
@@ -144,6 +145,44 @@ function Read-AppBundle {
     }
 }
 
+function Assert-AppBundleNotices {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)] [string]$BundlePath,
+        [Parameter(Mandatory = $true)] [string]$SourceDirectory
+    )
+
+    $bundle = Read-AppBundle -Path $BundlePath
+    $expectedHashes = @{}
+    foreach ($name in @('LICENSE', 'THIRD_PARTY_NOTICES.md')) {
+        $expectedHashes[$name] = (Get-FileHash -LiteralPath (Join-Path $SourceDirectory $name) -Algorithm SHA256).Hash
+    }
+    $archive = [IO.Compression.ZipFile]::OpenRead($bundle.Metadata.Path)
+    try {
+        foreach ($packageName in $bundle.Metadata.ApplicationPackages) {
+            $entries = @($archive.Entries | Where-Object { $_.FullName -ieq $packageName })
+            if ($entries.Count -ne 1) { throw "Application package '$packageName' must occur exactly once in the bundle." }
+            $stream = $entries[0].Open()
+            try {
+                $package = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Read, $true)
+                try {
+                    foreach ($name in $expectedHashes.Keys) {
+                        $notices = @($package.Entries | Where-Object { $_.FullName -ieq $name })
+                        if ($notices.Count -ne 1) { throw "Notice '$name' must occur exactly once in '$packageName'." }
+                        $noticeStream = $notices[0].Open()
+                        try {
+                            $actualHash = (Get-FileHash -InputStream $noticeStream -Algorithm SHA256).Hash
+                            if ($actualHash -ne $expectedHashes[$name]) {
+                                throw "Notice '$name' in '$packageName' differs from the release source."
+                            }
+                        } finally { $noticeStream.Dispose() }
+                    }
+                } finally { $package.Dispose() }
+            } finally { $stream.Dispose() }
+        }
+    } finally { $archive.Dispose() }
+}
+
 function Get-AppPackageSigner {
     [CmdletBinding()]
     param(
@@ -251,4 +290,4 @@ function Test-AppPackageIntegrity {
     }
 }
 
-Export-ModuleMember -Function Read-AppPackage, Read-AppBundle, Test-AppPackageIntegrity
+Export-ModuleMember -Function Read-AppPackage, Read-AppBundle, Test-AppPackageIntegrity, Assert-AppBundleNotices

@@ -7,6 +7,7 @@
 - [Architecture](ARCHITECTURE.md): current components, ownership, and dependency boundaries
 - [Translating](TRANSLATING.md): improving a locale or adding a language
 - [Releasing](RELEASING.md): maintainer checklist and recovery procedures
+- [Bugfix tracking](BUGFIXES.md): technical Unreleased findings, status, fix references, and verification evidence (German)
 
 Contributor setup and checks are in [CONTRIBUTING.md](../CONTRIBUTING.md). User-visible history is in the [changelog](../CHANGELOG.md).
 

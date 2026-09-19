@@ -101,9 +101,6 @@
     <ClCompile Include="src\ui\SettingsDiagnosticsReportBuilder.cpp">
       <Filter>src\ui</Filter>
     </ClCompile>
-    <ClCompile Include="src\ui\SettingsViewModel.cpp">
-      <Filter>src\ui</Filter>
-    </ClCompile>
     <ClCompile Include="src\ui\TrayIcon.cpp">
       <Filter>src\ui</Filter>
     </ClCompile>
@@ -260,9 +257,6 @@
       <Filter>include\ui</Filter>
     </ClInclude>
     <ClInclude Include="include\ui\SettingsDiagnosticsReport.hpp">
-      <Filter>include\ui</Filter>
-    </ClInclude>
-    <ClInclude Include="include\ui\SettingsViewModel.hpp">
       <Filter>include\ui</Filter>
     </ClInclude>
     <ClInclude Include="include\ui\SettingsDeviceViewModel.hpp">

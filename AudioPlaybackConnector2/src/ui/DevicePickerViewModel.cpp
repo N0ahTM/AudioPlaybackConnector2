@@ -6,7 +6,7 @@
 #include <core/SettingsStore.hpp>
 #include <core/StringResources.hpp>
 #include <app/AppController.hpp>
-#include <ui/SettingsViewModel.hpp>
+#include <core/DeviceDisplay.hpp>
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
@@ -28,16 +28,24 @@ std::optional<DeviceOptionsViewModel> DevicePickerViewModel::DeviceOptions(std::
     auto controller = m_appController.lock();
     if (!controller || id.empty()) return std::nullopt;
     const auto settings = controller->Snapshot().Settings;
-    auto devices = SettingsViewModel::BuildDeviceItems(settings);
-    auto const saved = std::ranges::find(devices, id, &SettingsDeviceViewModel::Id);
+    auto const saved = std::ranges::find(settings.Devices, id, &DeviceSettings::Id);
     auto const& items = m_cache.CachedSnapshot().Items;
     auto const discovered = std::ranges::find(items, id, &apc::device_picker::DeviceSnapshotItem::Id);
-    if (saved == devices.end() && discovered == items.end()) return std::nullopt;
+    if (saved == settings.Devices.end() && discovered == items.end()) return std::nullopt;
 
     DeviceOptionsViewModel result;
-    if (saved != devices.end())
-        result.Device = *saved;
-    else {
+    if (saved != settings.Devices.end()) {
+        result.Device = {
+            .Id = saved->Id,
+            .Alias = saved->Alias,
+            .DisplayName =
+                apc::display::DeviceNameOrId(saved->Id, saved->Name, saved->Alias, settings.PrivacyModeEnabled),
+            .ConnectOnStartup = saved->ConnectOnStartup,
+            .ReconnectOnConnectionLoss = saved->ReconnectOnConnectionLoss,
+            .IsDefaultDevice =
+                settings.DefaultDevice == DefaultDeviceMode::SpecificDevice && settings.DefaultDeviceId == id,
+        };
+    } else {
         result.Device.Id = discovered->Id;
         result.Device.DisplayName = discovered->DisplayName;
         result.Device.IsDefaultDevice =
@@ -47,7 +55,7 @@ std::optional<DeviceOptionsViewModel> DevicePickerViewModel::DeviceOptions(std::
     result.GlobalReconnectOnConnectionLoss = settings.GlobalReconnectOnConnectionLoss;
     if (auto service = m_service.lock()) {
         const auto activity = service->GetDevicePickerActivitySnapshot();
-        result.CanForget = saved != devices.end() && !activity.ConnectedIds.contains(result.Device.Id) &&
+        result.CanForget = saved != settings.Devices.end() && !activity.ConnectedIds.contains(result.Device.Id) &&
                            !activity.BusyIds.contains(result.Device.Id);
     }
     return result;

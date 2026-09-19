@@ -1381,7 +1381,9 @@ void ApplicationHost::HandleAppEvent(apc::app::AppController::EventNotification 
 bool ApplicationHost::ShowSettingsWindow() {
     if (m_exiting.load()) return false;
     DebugTrace(L"[App] ShowSettingsWindow()");
-    return m_settingsWindowPresenter.Show(m_appController, m_trayController);
+    auto placement =
+        m_trayController ? m_trayController->GetSettingsWindowPlacement() : util::CalculateSettingsWindowPlacement();
+    return m_settingsWindowPresenter.Show(m_appController, placement);
 }
 
 void ApplicationHost::ExitApplication() noexcept {

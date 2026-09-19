@@ -3,7 +3,6 @@
 #include <app/SettingsWindowPresenter.hpp>
 
 #include <SettingsWindow/SettingsWindow.xaml.h>
-#include <services/TrayController.hpp>
 #include <ui/XamlWindowInterop.hpp>
 #include <util/Util.hpp>
 
@@ -52,7 +51,7 @@ bool SettingsWindowPresenter::ShowHelp() {
 }
 
 bool SettingsWindowPresenter::Show(std::shared_ptr<apc::app::AppController> appController,
-                                   std::shared_ptr<TrayController> trayController) {
+                                   util::SettingsWindowPlacement defaultPlacement) {
     DebugTrace(L"[SettingsWindowPresenter] Show()");
     auto owner = m_state;
     if (!owner) return false;
@@ -96,8 +95,6 @@ bool SettingsWindowPresenter::Show(std::shared_ptr<apc::app::AppController> appC
         candidate->Window = winrt::AudioPlaybackConnector2::SettingsWindow();
         owner->Current = candidate;
 
-        auto defaultPlacement =
-            trayController ? trayController->GetSettingsWindowPlacement() : util::CalculateSettingsWindowPlacement();
         auto placement = defaultPlacement;
         std::optional<SettingsData> initialSettings;
 

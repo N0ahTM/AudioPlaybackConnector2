@@ -1,11 +1,11 @@
 #pragma once
 
 #include <memory>
+#include <ui/WindowPlacement.hpp>
 
 namespace apc::app {
 class AppController;
 }
-class TrayController;
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Settings Window Presenter /////////////////////////////////////////////////////////////////////////*/
@@ -21,7 +21,7 @@ public:
     ~SettingsWindowPresenter();
 
     [[nodiscard]] bool Show(std::shared_ptr<apc::app::AppController> appController,
-                            std::shared_ptr<TrayController> trayController);
+                            util::SettingsWindowPlacement defaultPlacement);
     [[nodiscard]] bool Close() noexcept;
     [[nodiscard]] bool ShowHelp();
 

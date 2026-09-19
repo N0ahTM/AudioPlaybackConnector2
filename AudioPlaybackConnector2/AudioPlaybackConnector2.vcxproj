@@ -13,6 +13,9 @@
   <PropertyGroup Label="Globals">
     <CppWinRTOptimized>true</CppWinRTOptimized>
     <CppWinRTRootNamespaceAutoMerge>true</CppWinRTRootNamespaceAutoMerge>
+    <!-- XAML/IDL always produces metadata. Inferring this through project references re-enters
+         GetResolvedWinMD when packaging and the app are evaluated concurrently. -->
+    <CppWinRTGenerateWindowsMetadata>true</CppWinRTGenerateWindowsMetadata>
     <MinimalCoreWin>true</MinimalCoreWin>
     <ProjectGuid>{ce789cd7-3a08-4b7d-9425-fe92984a66f9}</ProjectGuid>
     <ProjectName>AudioPlaybackConnector2</ProjectName>

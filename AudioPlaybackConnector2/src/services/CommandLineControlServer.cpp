@@ -1,4 +1,5 @@
 #include <control/CommandPipeSecurity.hpp>
+#include <control/PipeSecurityAttributes.hpp>
 #include <services/CommandLineControlServer.hpp>
 #include <util/RuntimeApartment.hpp>
 

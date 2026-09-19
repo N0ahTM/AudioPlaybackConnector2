@@ -1,11 +1,14 @@
 #include "TestCheck.hpp"
 
 #include <control/CommandPipeSecurity.hpp>
+#include <control/PipeSecurityAttributes.hpp>
 #include <control/CommandProtocol.hpp>
 #include <app/LegacyAppUseCaseBridge.hpp>
 #include <services/CommandLineControlServer.hpp>
 
 #include <aclapi.h>
+#include <appmodel.h>
+#include <wil/resource.h>
 
 #include <algorithm>
 #include <atomic>
@@ -806,11 +809,17 @@ void TestStartupSquattingAndSecurityDescriptor() {
                 Check(ace->Mask == clientAccess, "pipe DACL must grant client I/O without FILE_CREATE_PIPE_INSTANCE");
                 Check((ace->Mask & FILE_CREATE_PIPE_INSTANCE) == 0,
                       "pipe clients must not be able to create rogue server instances");
-                auto const* self = apc::control::details::CurrentProcessIdentity();
+                wil::unique_handle token;
+                Check(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, token.put()) != FALSE,
+                      "the DACL test must open the real current-process token");
+                DWORD required = 0;
+                GetTokenInformation(token.get(), TokenUser, nullptr, 0, &required);
+                std::vector<std::byte> userBuffer(required);
+                auto const queried =
+                    GetTokenInformation(token.get(), TokenUser, userBuffer.data(), required, &required);
+                auto const* user = reinterpret_cast<TOKEN_USER const*>(userBuffer.data());
                 auto* aceSid = reinterpret_cast<PSID>(const_cast<DWORD*>(&ace->SidStart));
-                Check(self && IsValidSid(aceSid) &&
-                          EqualSid(reinterpret_cast<PSID>(const_cast<std::byte*>(self->UserSid.data())), aceSid) !=
-                              FALSE,
+                Check(queried && IsValidSid(aceSid) && EqualSid(user->User.Sid, aceSid) != FALSE,
                       "pipe DACL ACE must target the current user SID");
             }
         }
@@ -846,8 +855,7 @@ void TestStartupSquattingAndSecurityDescriptor() {
     Check(apc::control::IsTrustedPeerProcess(GetCurrentProcessId()), "current process identity must trust itself");
     Check(apc::control::IsTrustedPeerProcess(GetCurrentProcess(), GetCurrentProcessId()),
           "an already-open current-process handle must trust itself without reopening the process");
-    auto currentImage = apc::control::details::ProcessImagePath(GetCurrentProcess());
-    auto currentIdentity = currentImage ? apc::control::ExecutableIdentityFromPath(*currentImage) : std::nullopt;
+    auto currentIdentity = apc::control::ProcessExecutableIdentity(GetCurrentProcess());
     Check(currentIdentity.has_value(), "the executable file identity must be available for the trust checks");
 #if defined(_DEBUG)
     Check(apc::control::IsTrustedPeerProcess(GetCurrentProcess(), GetCurrentProcessId(), currentIdentity),
@@ -977,8 +985,8 @@ void TestStrictCommandSemantics() {
 }
 
 void TestProductionTrustRejectsUnpackagedClientBeforeHandler() {
-    Check(apc::control::details::ProcessPackageIdentity(GetCurrentProcess()).State ==
-              apc::control::details::PackageIdentityState::Unpackaged,
+    UINT32 packageLength = 0;
+    Check(GetCurrentPackageFamilyName(&packageLength, nullptr) == APPMODEL_ERROR_NO_PACKAGE,
           "the bounded test host must run without package identity");
     auto expectedIdentity = apc::control::ProcessExecutableIdentity(GetCurrentProcess());
     Check(expectedIdentity.has_value(), "the negative trust test must resolve its own executable identity");

@@ -85,6 +85,7 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\SingleInstanceGuard.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandClient.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandPipeSecurity.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\control\PipeSecurityAttributes.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandProtocol.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\ControlTargetMatcher.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\AudioConnectionService.hpp" />
@@ -141,6 +142,8 @@
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\TrayTooltipBuilder.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\SettingsStore.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\StringResources.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\control\CommandPipeSecurity.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\control\PipeSecurityAttributes.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\CommandLineControlServer.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\SettingsController.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\StartupTaskController.cpp" />

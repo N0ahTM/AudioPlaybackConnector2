@@ -14,6 +14,27 @@
 
 namespace apc::device {
 
+// Only the serialized device owner resolves an operation. Its first terminal result is immutable, even when the
+// session subsequently disconnects or starts a new epoch. Waiters never infer completion from a later snapshot.
+struct DeviceOperationCompletion {
+    std::weak_ptr<void> Owner;
+    std::wstring DeviceId;
+    std::uint64_t Epoch = 0;
+    bool OwnsCancellation = false;
+    std::mutex Mutex;
+    std::condition_variable_any Changed;
+    std::optional<DeviceOperationStatus> Status;
+
+    void Resolve(DeviceOperationStatus status) {
+        {
+            std::lock_guard guard(Mutex);
+            if (Status) return;
+            Status = status;
+        }
+        Changed.notify_all();
+    }
+};
+
 struct DeviceService::State : std::enable_shared_from_this<DeviceService::State> {
     using Task = std::function<void()>;
 
@@ -54,6 +75,7 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
     std::unique_ptr<DeviceTimerPlatform> TimerPlatform;
     std::unique_ptr<DeviceWatcher> Watcher;
     std::unordered_map<std::wstring, std::shared_ptr<DeviceSession>> Sessions;
+    std::vector<std::weak_ptr<DeviceOperationCompletion>> PendingOperations;
     std::unordered_set<std::wstring> IndividuallyReconnectEnabled;
     std::unordered_map<std::wstring, std::uint64_t> PowerTransitionRecoveryEpochs;
     FactSink Subscriber;
@@ -83,7 +105,7 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
 
     // The queue lock protects queue bookkeeping only. Tasks, platform calls, and fact publication run after it is
     // released.
-    [[nodiscard]] bool Post(Task task) {
+    [[nodiscard]] bool Post(Task task, bool waitForCompletion = true) {
         bool runsHere = false;
         bool waitsForCompletion = false;
         auto completion = std::make_shared<Completion>();
@@ -94,7 +116,7 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
                 IsExecuting = true;
                 ExecutorThread = std::this_thread::get_id();
                 runsHere = true;
-            } else if (ExecutorThread != std::this_thread::get_id()) {
+            } else if (waitForCompletion && ExecutorThread != std::this_thread::get_id()) {
                 waitsForCompletion = true;
             }
         }
@@ -146,8 +168,36 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
             snapshot.Sessions.push_back(session->Snapshot());
         }
         std::ranges::sort(snapshot.Sessions, {}, &DeviceSessionSnapshot::DeviceId);
-        std::lock_guard guard(SnapshotMutex);
-        PublishedSnapshot = std::move(snapshot);
+        {
+            std::lock_guard guard(SnapshotMutex);
+            PublishedSnapshot = std::move(snapshot);
+        }
+        std::erase_if(PendingOperations, [this](auto const& weak) {
+            auto completion = weak.lock();
+            return !completion || ResolveOperation(*completion);
+        });
+    }
+
+    [[nodiscard]] bool ResolveOperation(DeviceOperationCompletion& completion) const {
+        auto const session = Sessions.find(completion.DeviceId);
+        if (IsShutdown || session == Sessions.end()) {
+            completion.Resolve(DeviceOperationStatus::Cancelled);
+            return true;
+        }
+        auto const snapshot = session->second->Snapshot();
+        if (snapshot.OperationEpoch != completion.Epoch || snapshot.State == DeviceLifecycleState::Idle) {
+            completion.Resolve(DeviceOperationStatus::Cancelled);
+            return true;
+        }
+        if (snapshot.State == DeviceLifecycleState::Connected) {
+            completion.Resolve(DeviceOperationStatus::Succeeded);
+            return true;
+        }
+        if (snapshot.State == DeviceLifecycleState::Failed) {
+            completion.Resolve(DeviceOperationStatus::Failed);
+            return true;
+        }
+        return false;
     }
 
     void Publish(DeviceFactKind kind,
@@ -230,7 +280,7 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
     }
 
     [[nodiscard]] DeviceCommandResult
-    Result(DeviceCommandKind command, DeviceCommandResultKind kind, std::wstring deviceId = {}) const {
+    Result(DeviceCommandKind command, DeviceCommandResultKind kind, std::wstring deviceId = {}) {
         DeviceCommandResult result;
         result.Command = command;
         result.Kind = kind;
@@ -239,6 +289,17 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
             if (auto existing = Sessions.find(result.DeviceId); existing != Sessions.end()) {
                 result.OperationEpoch = existing->second->Snapshot().OperationEpoch;
             }
+        }
+        if ((command == DeviceCommandKind::Connect || command == DeviceCommandKind::Reconnect) &&
+            (kind == DeviceCommandResultKind::Accepted || kind == DeviceCommandResultKind::Coalesced)) {
+            auto completion = std::make_shared<DeviceOperationCompletion>();
+            completion->Owner = shared_from_this();
+            completion->DeviceId = result.DeviceId;
+            completion->Epoch = result.OperationEpoch;
+            completion->OwnsCancellation = kind == DeviceCommandResultKind::Accepted;
+            std::erase_if(PendingOperations, [](auto const& weak) { return weak.expired(); });
+            if (!ResolveOperation(*completion)) PendingOperations.push_back(completion);
+            result.Completion = std::move(completion);
         }
         return result;
     }
@@ -290,26 +351,6 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
         }
         Publish(DeviceFactKind::SessionChanged);
         return recoveryDeviceIds;
-    }
-
-    winrt::Windows::Foundation::IAsyncAction AwaitTerminal(std::wstring deviceId, std::uint64_t operationEpoch) {
-        auto const cancellation = co_await winrt::get_cancellation_token();
-
-        for (;;) {
-            if (cancellation()) co_return;
-            auto const snapshot = Snapshot();
-            if (snapshot.IsShutdown) throw winrt::hresult_error(E_ABORT);
-
-            auto const iter = std::ranges::find(snapshot.Sessions, deviceId, &DeviceSessionSnapshot::DeviceId);
-            if (iter == snapshot.Sessions.end() || iter->OperationEpoch != operationEpoch) {
-                throw winrt::hresult_error(E_ABORT);
-            }
-            if (iter->State == DeviceLifecycleState::Connected) co_return;
-            if (iter->State == DeviceLifecycleState::Failed) throw winrt::hresult_error(E_FAIL);
-            if (iter->State == DeviceLifecycleState::Idle) throw winrt::hresult_error(E_ABORT);
-
-            co_await winrt::resume_after(std::chrono::milliseconds(25));
-        }
     }
 };
 
@@ -725,42 +766,39 @@ void DeviceService::SetReconnectOnConnectionLoss(std::wstring deviceId, bool ena
     }));
 }
 
-winrt::Windows::Foundation::IAsyncAction DeviceService::ConnectAsync(winrt::hstring deviceId) {
+DeviceOperationStatus DeviceService::WaitForCompletion(DeviceCommandResult const& command,
+                                                       std::stop_token stopToken,
+                                                       std::chrono::steady_clock::time_point deadline) {
     auto const state = m_state;
-    if (!state || deviceId.empty()) co_return;
-    auto const cancellation = co_await winrt::get_cancellation_token();
-    auto const result = Connect(std::wstring(deviceId));
-    if (result.Kind == DeviceCommandResultKind::Rejected) throw winrt::hresult_error(E_ABORT);
-    if (result.Kind == DeviceCommandResultKind::Accepted) {
-        auto const weak = state->weak_from_this();
-        cancellation.callback([weak, deviceId = std::wstring(deviceId), operationEpoch = result.OperationEpoch] {
-            if (auto current = weak.lock()) {
-                static_cast<void>(current->Post(
-                    [current, deviceId, operationEpoch] { current->CancelOperation(deviceId, operationEpoch); }));
-            }
-        });
+    auto const completion = command.Completion;
+    if (!state || !completion || completion->Owner.lock() != state) return DeviceOperationStatus::Rejected;
+    {
+        std::lock_guard guard(state->QueueMutex);
+        // A fact handler must not block the context that must deliver this operation's terminal transition.
+        if (state->IsExecuting && state->ExecutorThread == std::this_thread::get_id())
+            return DeviceOperationStatus::Rejected;
     }
-    cancellation.enable_propagation();
-    co_await state->AwaitTerminal(std::wstring(deviceId), result.OperationEpoch);
-}
-
-winrt::Windows::Foundation::IAsyncAction DeviceService::ReconnectAsync(winrt::hstring deviceId) {
-    auto const state = m_state;
-    if (!state || deviceId.empty()) co_return;
-    auto const cancellation = co_await winrt::get_cancellation_token();
-    auto const result = Reconnect(std::wstring(deviceId));
-    if (result.Kind == DeviceCommandResultKind::Rejected) throw winrt::hresult_error(E_ABORT);
-    if (result.Kind == DeviceCommandResultKind::Accepted) {
-        auto const weak = state->weak_from_this();
-        cancellation.callback([weak, deviceId = std::wstring(deviceId), operationEpoch = result.OperationEpoch] {
-            if (auto current = weak.lock()) {
-                static_cast<void>(current->Post(
-                    [current, deviceId, operationEpoch] { current->CancelOperation(deviceId, operationEpoch); }));
-            }
-        });
+    DeviceOperationStatus outcome;
+    {
+        std::unique_lock lock(completion->Mutex);
+        if (completion->Changed.wait_until(lock, stopToken, deadline, [&] { return completion->Status.has_value(); }))
+            return *completion->Status;
+        outcome = stopToken.stop_requested() ? DeviceOperationStatus::Cancelled : DeviceOperationStatus::TimedOut;
     }
-    cancellation.enable_propagation();
-    co_await state->AwaitTerminal(std::wstring(deviceId), result.OperationEpoch);
+    if (completion->OwnsCancellation) {
+        // Queue cancellation without waiting behind another publisher. The epoch and terminal check protect a
+        // replacement operation and an operation which completed while this cancellation was queued.
+        (void)state->Post(
+            [state, completion] {
+                {
+                    std::lock_guard guard(completion->Mutex);
+                    if (completion->Status) return;
+                }
+                state->CancelOperation(completion->DeviceId, completion->Epoch);
+            },
+            false);
+    }
+    return outcome;
 }
 
 winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>

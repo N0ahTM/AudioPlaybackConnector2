@@ -128,6 +128,27 @@ and releases its late completion under the process watchdog. Native callbacks in
 apartment. Cancellation disarms queued callbacks and drains their admission phase; it does not wait for foreign
 delivery code that has already been disassociated.
 
+## Device operation completion
+
+Connect and reconnect return an epoch-bound completion alongside command admission. The serialized device owner
+alone resolves that completion. Its first terminal outcome is immutable: subsequent disconnect, replacement or
+shutdown cannot turn an already successful command into a failure. Pending completions retain only a weak owner
+reference; the service retains only weak completion references. Detached calls therefore leave no pending waiter
+ownership behind.
+
+`WaitForCompletion` uses a predicate-protected condition variable with a stop token and a steady-clock deadline.
+There is no timer polling or WinRT coroutine between connection commands and the application caller. A published
+terminal result wins over a later cancellation or expired deadline. Waiting from the serialized publisher itself
+is rejected. Completion notification precedes the foreign fact subscriber and runs without the queue or snapshot
+lock held.
+
+Only a caller whose command was accepted owns cancellation of the underlying epoch. A coalesced caller may stop
+waiting without cancelling the shared operation. Cancellation queues an epoch-fenced mutation without waiting
+behind another publisher; the mutation rechecks terminal completion before acting. If the context is idle, the
+caller drains the queue as for other device commands, so this does not promise a bound on native platform calls.
+Shutdown resolves all pending completions as cancelled. Deterministic tests cover retained success, shutdown,
+coalesced cancellation, deadline cancellation, reentrant waits and cancellation behind a blocked subscriber.
+
 ## Distribution
 
 Store and Windows App Installer own application updates. The application performs no release lookup, update

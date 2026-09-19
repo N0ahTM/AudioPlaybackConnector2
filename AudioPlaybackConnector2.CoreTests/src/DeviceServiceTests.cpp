@@ -9,6 +9,8 @@
 #include <array>
 #include <condition_variable>
 #include <iostream>
+#include <future>
+#include <semaphore>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -30,6 +32,7 @@ using apc::device::DeviceFact;
 using apc::device::DeviceFactKind;
 using apc::device::DeviceLifecycleState;
 using apc::device::DeviceOpenResult;
+using apc::device::DeviceOperationStatus;
 using apc::device::DeviceService;
 using apc::device::DeviceServiceDependencies;
 using apc::device::DeviceTimer;
@@ -233,6 +236,8 @@ struct Fixture {
         (void)Service.Subscribe([this](DeviceFact const& fact) { Facts.push_back(fact); });
     }
 
+    ~Fixture() { Service.Shutdown(); }
+
     std::unique_ptr<FakeConnectionPlatform> Connections;
     std::unique_ptr<FakeTimerPlatform> Timers;
     std::unique_ptr<FakeWatcherPlatform> Watchers;
@@ -265,6 +270,110 @@ void CompleteCloseAndCooldown(Fixture& fixture, FakeConnectionState* connection)
     connection->CompleteClose();
     auto* const cooldown = fixture.TimerAccess->LastTimer;
     if (cooldown && cooldown->Delay == std::chrono::milliseconds(1500)) cooldown->FireEvenIfCancelled();
+}
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Operation Completion //////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
+void TestCompletionRetainsFirstTerminalResult() {
+    Fixture fixture;
+    auto const command = fixture.Service.Connect(L"latched");
+    auto* const connection = fixture.ConnectionAccess->LastConnection;
+    connection->CompleteStart(DeviceConnectionResult::Success);
+    connection->CompleteOpen(DeviceConnectionResult::Success);
+    (void)fixture.Service.Disconnect(L"latched");
+    CompleteCloseAndCooldown(fixture, connection);
+    auto const replacement = fixture.Service.Connect(L"latched");
+    std::stop_source cancelled;
+    cancelled.request_stop();
+    Check(fixture.Service.WaitForCompletion(command, cancelled.get_token(), std::chrono::steady_clock::now()) ==
+              DeviceOperationStatus::Succeeded,
+          "a completed epoch must retain success after disconnect, replacement, cancellation and deadline");
+    Check(StateFor(fixture.Service, L"latched") == DeviceLifecycleState::Connecting &&
+              replacement.OperationEpoch > command.OperationEpoch,
+          "waiting on an old result must not cancel its replacement");
+    fixture.Service.Shutdown();
+    Check(fixture.Service.WaitForCompletion(replacement) == DeviceOperationStatus::Cancelled,
+          "shutdown must resolve every pending operation");
+    Check(fixture.Service.WaitForCompletion(command) == DeviceOperationStatus::Succeeded,
+          "shutdown must not rewrite already completed operations");
+}
+
+void TestCompletionCancellationOwnershipAndDeadline() {
+    Fixture fixture;
+    auto const owner = fixture.Service.Connect(L"shared");
+    auto const observer = fixture.Service.Connect(L"shared");
+    auto* const connection = fixture.ConnectionAccess->LastConnection;
+    std::stop_source cancellation;
+    cancellation.request_stop();
+    Check(observer.Kind == DeviceCommandResultKind::Coalesced &&
+              fixture.Service.WaitForCompletion(observer, cancellation.get_token()) == DeviceOperationStatus::Cancelled,
+          "a coalesced caller must be able to stop waiting independently");
+    Check(connection->CloseCalls == 0 && StateFor(fixture.Service, L"shared") == DeviceLifecycleState::Connecting,
+          "cancelling a coalesced wait must not cancel the accepted owner's operation");
+    Check(fixture.Service.WaitForCompletion(owner, {}, std::chrono::steady_clock::now()) ==
+              DeviceOperationStatus::TimedOut,
+          "an elapsed deadline must return timeout and cancel the accepted operation");
+    Check(connection->CloseCalls == 1, "the accepted operation's deadline must start exactly one close");
+    CompleteCloseAndCooldown(fixture, connection);
+    Check(fixture.Service.WaitForCompletion(observer) == DeviceOperationStatus::Cancelled,
+          "the shared epoch must eventually publish cancellation to its remaining waiters");
+    Fixture other;
+    Check(other.Service.WaitForCompletion(owner) == DeviceOperationStatus::Rejected,
+          "a completion must only be consumed through its owning device service");
+}
+
+void TestCompletionWakesWaitersAndRejectsReentrantWait() {
+    Fixture fixture;
+    auto const command = fixture.Service.Connect(L"wake");
+    auto* const connection = fixture.ConnectionAccess->LastConnection;
+    std::binary_semaphore entered(0);
+    auto waiter = std::async(std::launch::async, [&] {
+        entered.release();
+        return fixture.Service.WaitForCompletion(
+            command, {}, std::chrono::steady_clock::now() + std::chrono::seconds(2));
+    });
+    entered.acquire();
+    DeviceOperationStatus reentrant = DeviceOperationStatus::Succeeded;
+    auto const subscription =
+        fixture.Service.Subscribe([&](DeviceFact const&) { reentrant = fixture.Service.WaitForCompletion(command); });
+    connection->CompleteStart(DeviceConnectionResult::Success);
+    connection->CompleteOpen(DeviceConnectionResult::Success);
+    Check(waiter.get() == DeviceOperationStatus::Succeeded,
+          "terminal publication must wake a waiter without a lost notification");
+    Check(reentrant == DeviceOperationStatus::Rejected,
+          "a publisher must not wait for work on its own serialized context");
+    fixture.Service.Unsubscribe(subscription);
+}
+
+void TestCancellationDoesNotWaitBehindBlockedPublisher() {
+    Fixture fixture;
+    auto const command = fixture.Service.Connect(L"blocked-publication");
+    auto* const connection = fixture.ConnectionAccess->LastConnection;
+    std::binary_semaphore entered(0);
+    std::binary_semaphore release(0);
+    bool blockedOnce = false;
+    auto const subscription = fixture.Service.Subscribe([&](DeviceFact const&) {
+        if (blockedOnce) return;
+        blockedOnce = true;
+        entered.release();
+        release.acquire();
+    });
+    // This produces a session mutation on the owned context while the accepted connect is still pending.
+    std::jthread publisher([&] { fixture.Service.SetReconnectOnConnectionLoss(L"blocked-publication", true); });
+    entered.acquire();
+    std::stop_source cancellation;
+    cancellation.request_stop();
+    auto waiter = std::async(std::launch::async,
+                             [&] { return fixture.Service.WaitForCompletion(command, cancellation.get_token()); });
+    auto const completedBeforeRelease = waiter.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    release.release();
+    publisher.join();
+    Check(completedBeforeRelease && waiter.get() == DeviceOperationStatus::Cancelled,
+          "cancellation must enqueue the owned mutation without waiting behind a blocked subscriber");
+    Check(connection->CloseCalls == 1, "queued cancellation must close its epoch after the subscriber returns");
+    fixture.Service.Unsubscribe(subscription);
 }
 
 void TestOperationEpochRejectsStaleCompletion() {
@@ -356,11 +465,9 @@ void TestCloseBarrierTimeoutRetainsTheOldConnectionUntilLateCompletion() {
     Check(StateFor(fixture.Service, L"close-timeout") == DeviceLifecycleState::Failed &&
               SessionFor(fixture.Service, L"close-timeout").OperationEpoch == timedOutEpoch,
           "bulk and internal disconnect callers must retain an abandoned close's terminal state");
-    auto reconnectAfterDisconnect = fixture.Service.ReconnectAsync(L"close-timeout");
-    Check(
-        reconnectAfterDisconnect.Status() == winrt::Windows::Foundation::AsyncStatus::Error &&
-            reconnectAfterDisconnect.ErrorCode() == E_FAIL,
-        "an async reconnect after an abandoned close and explicit disconnect must complete with the terminal failure");
+    auto reconnectAfterDisconnect = fixture.Service.Reconnect(L"close-timeout");
+    Check(fixture.Service.WaitForCompletion(reconnectAfterDisconnect) == DeviceOperationStatus::Failed,
+          "an reconnect after an abandoned close and explicit disconnect must complete with the terminal failure");
     (void)fixture.Service.Reconnect(L"close-timeout");
     Check(fixture.ConnectionAccess->Connections.size() == createCount,
           "a command issued while a timed-out close remains unconfirmed must not create a replacement");
@@ -389,7 +496,7 @@ void TestCloseBarrierTimeoutRetainsTheOldConnectionUntilLateCompletion() {
           "the close timeout must publish a deterministic terminal timeout fact");
 }
 
-void TestCloseBarrierTimeoutTerminatesReconnectAsyncWithoutOverlappingConnection() {
+void TestCloseBarrierTimeoutTerminatesReconnectWithoutOverlappingConnection() {
     Fixture fixture;
     ConnectSuccessfully(fixture, L"async-close-timeout");
     auto* const oldConnection = fixture.ConnectionAccess->LastConnection;
@@ -400,19 +507,14 @@ void TestCloseBarrierTimeoutTerminatesReconnectAsyncWithoutOverlappingConnection
     Check(StateFor(fixture.Service, L"async-close-timeout") == DeviceLifecycleState::Failed,
           "a missing close callback must make the timed-out operation terminal while retaining its barrier");
 
-    auto reconnect = fixture.Service.ReconnectAsync(L"async-close-timeout");
-    Check(reconnect.Status() == winrt::Windows::Foundation::AsyncStatus::Error,
-          "a reconnect async operation issued after a close timeout must terminate instead of polling indefinitely");
-    if (reconnect.Status() == winrt::Windows::Foundation::AsyncStatus::Error) {
-        Check(reconnect.ErrorCode() == E_FAIL,
-              "a close-barrier timeout must surface the terminal failed async outcome until close completion is "
-              "confirmed");
-    }
+    auto reconnect = fixture.Service.Reconnect(L"async-close-timeout");
+    Check(fixture.Service.WaitForCompletion(reconnect) == DeviceOperationStatus::Failed,
+          "a reconnect after close timeout must retain the terminal failure until close is confirmed");
     Check(fixture.ConnectionAccess->Connections.size() == createCount && oldConnection->CloseCalls == 1,
-          "the terminal async outcome must not weaken the close-before-reconnect barrier");
+          "the terminal outcome must not weaken the close-before-reconnect barrier");
 }
 
-void TestCloseBarrierTimerSetupFailureTerminatesReconnectAsyncWithoutOverlappingConnection() {
+void TestCloseBarrierTimerSetupFailureTerminatesReconnectWithoutOverlappingConnection() {
     Fixture fixture;
     ConnectSuccessfully(fixture, L"async-close-timer-failure");
     auto* const oldConnection = fixture.ConnectionAccess->LastConnection;
@@ -423,13 +525,9 @@ void TestCloseBarrierTimerSetupFailureTerminatesReconnectAsyncWithoutOverlapping
     Check(StateFor(fixture.Service, L"async-close-timer-failure") == DeviceLifecycleState::Failed,
           "a missing close-barrier timer must make the reconnect operation terminal");
 
-    auto reconnect = fixture.Service.ReconnectAsync(L"async-close-timer-failure");
-    Check(reconnect.Status() == winrt::Windows::Foundation::AsyncStatus::Error,
-          "a reconnect async operation after close-barrier timer setup failure must terminate instead of polling");
-    if (reconnect.Status() == winrt::Windows::Foundation::AsyncStatus::Error) {
-        Check(reconnect.ErrorCode() == E_FAIL,
-              "a close-barrier timer setup failure must surface the terminal failed async outcome");
-    }
+    auto reconnect = fixture.Service.Reconnect(L"async-close-timer-failure");
+    Check(fixture.Service.WaitForCompletion(reconnect) == DeviceOperationStatus::Failed,
+          "a reconnect after close timer failure must retain the terminal failure until close is confirmed");
     Check(fixture.ConnectionAccess->Connections.size() == createCount && oldConnection->CloseCalls == 1,
           "a terminal timer setup failure must retain the close barrier without creating a replacement");
 
@@ -1058,10 +1156,14 @@ void TestTerminalOutgoingPathsRestoreIncomingListener() {
         auto* const listener = fixture.ConnectionAccess->LastConnection;
         listener->CompleteStart(DeviceConnectionResult::Success);
 
-        auto operation = fixture.Service.ConnectAsync(L"restore-after-cancellation");
+        auto operation = fixture.Service.Connect(L"restore-after-cancellation");
         CompleteCloseAndCooldown(fixture, listener);
         auto* const outgoing = fixture.ConnectionAccess->LastConnection;
-        operation.Cancel();
+        std::stop_source cancellation;
+        cancellation.request_stop();
+        Check(fixture.Service.WaitForCompletion(operation, cancellation.get_token()) ==
+                  DeviceOperationStatus::Cancelled,
+              "cancelling an accepted operation must report cancellation");
         Check(outgoing->CloseCalls == 1,
               "cancelling a replacement outgoing connection must close it before restoring the listener");
         CompleteCloseAndCooldown(fixture, outgoing);
@@ -1074,29 +1176,21 @@ void TestTerminalOutgoingPathsRestoreIncomingListener() {
     }
 }
 
-void TestAsyncConnectAndReconnectRejectCloseBarrierOverlap() {
+void TestConnectAndReconnectRejectCloseBarrierOverlap() {
     Fixture fixture;
     ConnectSuccessfully(fixture, L"async-close-barrier-overlap");
     auto* const connection = fixture.ConnectionAccess->LastConnection;
     (void)fixture.Service.Reconnect(L"async-close-barrier-overlap");
 
-    auto connect = fixture.Service.ConnectAsync(L"async-close-barrier-overlap");
-    auto reconnect = fixture.Service.ReconnectAsync(L"async-close-barrier-overlap");
-    Check(connect.Status() == winrt::Windows::Foundation::AsyncStatus::Error &&
-              reconnect.Status() == winrt::Windows::Foundation::AsyncStatus::Error,
-          "async commands coalesced behind an active close barrier must complete with an explicit busy result");
-    if (connect.Status() == winrt::Windows::Foundation::AsyncStatus::Error) {
-        Check(connect.ErrorCode() == E_ABORT,
-              "a rejected connect overlap must report E_ABORT instead of waiting forever");
-    }
-    if (reconnect.Status() == winrt::Windows::Foundation::AsyncStatus::Error) {
-        Check(reconnect.ErrorCode() == E_ABORT,
-              "a rejected reconnect overlap must report E_ABORT instead of waiting for an idle epoch");
-    }
+    auto connect = fixture.Service.Connect(L"async-close-barrier-overlap");
+    auto reconnect = fixture.Service.Reconnect(L"async-close-barrier-overlap");
+    Check(fixture.Service.WaitForCompletion(connect) == DeviceOperationStatus::Rejected &&
+              fixture.Service.WaitForCompletion(reconnect) == DeviceOperationStatus::Rejected,
+          "overlapping commands must return rejection without waiting for another command's close barrier");
 
     CompleteCloseAndCooldown(fixture, connection);
     Check(StateFor(fixture.Service, L"async-close-barrier-overlap") == DeviceLifecycleState::Connecting,
-          "the original reconnect must retain ownership after overlapping async commands are rejected");
+          "the original reconnect must retain ownership after overlapping commands are rejected");
 }
 
 void TestRetryTimerAndManualCancellationRejectStaleTimerCallbacks() {
@@ -1127,7 +1221,7 @@ void TestRetryTimerAndManualCancellationRejectStaleTimerCallbacks() {
           "a cancelled pending timer must not create or count another automatic attempt");
 }
 
-void TestManualAsyncCommandsCancelSupersededReconnectEpochs() {
+void TestManualCommandsCancelSupersededReconnectEpochs() {
     for (auto const& [deviceId, command] : std::vector<std::pair<std::wstring, DeviceCommandKind>>{
              {L"cancel-manual-connect", DeviceCommandKind::Connect},
              {L"cancel-manual-reconnect", DeviceCommandKind::Reconnect},
@@ -1139,33 +1233,31 @@ void TestManualAsyncCommandsCancelSupersededReconnectEpochs() {
         Check(StateFor(fixture.Service, deviceId) == DeviceLifecycleState::WaitingForReconnect,
               "a lost connection must wait before the manual supersession test");
 
-        auto operation = command == DeviceCommandKind::Connect
-                             ? fixture.Service.ConnectAsync(winrt::hstring(deviceId))
-                             : fixture.Service.ReconnectAsync(winrt::hstring(deviceId));
+        auto operation = command == DeviceCommandKind::Connect ? fixture.Service.Connect(deviceId)
+                                                               : fixture.Service.Reconnect(deviceId);
         auto* const manualConnection = fixture.ConnectionAccess->LastConnection;
         Check(SessionFor(fixture.Service, deviceId).OperationEpoch > waitingEpoch &&
                   StateFor(fixture.Service, deviceId) == DeviceLifecycleState::Connecting,
               "a manual command from WaitingForReconnect must own a new operation epoch");
 
-        operation.Cancel();
+        std::stop_source cancellation;
+        cancellation.request_stop();
+        Check(fixture.Service.WaitForCompletion(operation, cancellation.get_token()) ==
+                  DeviceOperationStatus::Cancelled,
+              "cancelling an accepted operation must report cancellation");
         Check(manualConnection->CloseCalls == 1 &&
                   StateFor(fixture.Service, deviceId) == DeviceLifecycleState::Disconnecting,
-              "cancelling a superseding manual async command must close its exact operation");
+              "cancelling a superseding manual command must close its exact operation");
 
         manualConnection->CompleteStart(DeviceConnectionResult::Success);
         manualConnection->CompleteOpen(DeviceConnectionResult::Success);
         Check(StateFor(fixture.Service, deviceId) == DeviceLifecycleState::Disconnecting,
-              "late start and open completions after async cancellation must not reconnect the session");
+              "late start and open completions after cancellation must not reconnect the session");
         CompleteCloseAndCooldown(fixture, manualConnection);
         Check(StateFor(fixture.Service, deviceId) == DeviceLifecycleState::Idle,
               "the cancelled manual operation must settle without a replacement connection");
-        auto const completionDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-        while (operation.Status() == winrt::Windows::Foundation::AsyncStatus::Started &&
-               std::chrono::steady_clock::now() < completionDeadline) {
-            std::this_thread::yield();
-        }
-        Check(operation.Status() != winrt::Windows::Foundation::AsyncStatus::Started,
-              "a cancelled manual async command must complete before its fixture is destroyed");
+        Check(fixture.Service.WaitForCompletion(operation) == DeviceOperationStatus::Cancelled,
+              "a cancelled operation must settle before its fixture is destroyed");
     }
 }
 
@@ -1479,7 +1571,7 @@ void TestTransientOpenRetryTimingUsesTheLegacyMaximum() {
     }
 }
 
-void TestManualAsyncCommandsSupersedeDelayedPowerRecoveryDuringCloseBarrier() {
+void TestManualCommandsSupersedeDelayedPowerRecoveryDuringCloseBarrier() {
     for (auto const& [deviceId, command] : std::vector<std::pair<std::wstring, DeviceCommandKind>>{
              {L"power-manual-connect-async", DeviceCommandKind::Connect},
              {L"power-manual-reconnect-async", DeviceCommandKind::Reconnect},
@@ -1491,30 +1583,24 @@ void TestManualAsyncCommandsSupersedeDelayedPowerRecoveryDuringCloseBarrier() {
 
         fixture.Service.SuspendForPowerTransition();
         fixture.Service.ResumeAfterPowerTransition();
-        auto operation = command == DeviceCommandKind::Connect
-                             ? fixture.Service.ConnectAsync(winrt::hstring(deviceId))
-                             : fixture.Service.ReconnectAsync(winrt::hstring(deviceId));
-        Check(operation.Status() == winrt::Windows::Foundation::AsyncStatus::Started &&
+        auto operation = command == DeviceCommandKind::Connect ? fixture.Service.Connect(deviceId)
+                                                               : fixture.Service.Reconnect(deviceId);
+        Check(operation.Kind == DeviceCommandResultKind::Accepted &&
                   fixture.ConnectionAccess->Connections.size() == connectionCount,
-              "a manual async command must wait for, rather than overlap, a suspend close barrier");
+              "a manual command must wait for, rather than overlap, a suspend close barrier");
 
         CompleteCloseAndCooldown(fixture, connection);
         Check(fixture.ConnectionAccess->Connections.size() == connectionCount + 1,
-              "a manual async command must start after superseding the suspend close barrier");
+              "a manual command must start after superseding the suspend close barrier");
         fixture.Service.ResumeSuspendedSessions({deviceId});
         Check(fixture.ConnectionAccess->Connections.size() == connectionCount + 1,
-              "a stale delayed recovery callback must not resurrect an async superseded session");
+              "a stale delayed recovery callback must not resurrect an superseded session");
 
         fixture.ConnectionAccess->LastConnection->CompleteStart(DeviceConnectionResult::Success);
         fixture.ConnectionAccess->LastConnection->CompleteOpen(DeviceConnectionResult::Success);
-        auto const completionDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-        while (operation.Status() == winrt::Windows::Foundation::AsyncStatus::Started &&
-               std::chrono::steady_clock::now() < completionDeadline) {
-            std::this_thread::yield();
-        }
-        Check(operation.Status() == winrt::Windows::Foundation::AsyncStatus::Completed &&
+        Check(fixture.Service.WaitForCompletion(operation) == DeviceOperationStatus::Succeeded &&
                   StateFor(fixture.Service, deviceId) == DeviceLifecycleState::Connected,
-              "a superseding manual async command must complete at its terminal connected outcome");
+              "a superseding manual command must complete at its terminal connected outcome");
     }
 }
 
@@ -1687,12 +1773,16 @@ void TestOperationFailuresRemainOperationFailuresWithoutDisconnectReason() {
 } // namespace
 
 int RunDeviceServiceTests() {
+    TestCompletionRetainsFirstTerminalResult();
+    TestCompletionCancellationOwnershipAndDeadline();
+    TestCompletionWakesWaitersAndRejectsReentrantWait();
+    TestCancellationDoesNotWaitBehindBlockedPublisher();
     TestOperationEpochRejectsStaleCompletion();
     TestReconnectWaitsForCloseAndRevokesTheOldToken();
     TestDuplicateConnectCoalescesWithoutReplacingConnectedSession();
     TestCloseBarrierTimeoutRetainsTheOldConnectionUntilLateCompletion();
-    TestCloseBarrierTimeoutTerminatesReconnectAsyncWithoutOverlappingConnection();
-    TestCloseBarrierTimerSetupFailureTerminatesReconnectAsyncWithoutOverlappingConnection();
+    TestCloseBarrierTimeoutTerminatesReconnectWithoutOverlappingConnection();
+    TestCloseBarrierTimerSetupFailureTerminatesReconnectWithoutOverlappingConnection();
     TestResumeWatcherFailureClearsRunningStateAndAllowsRetry();
     TestIncomingCallbackOrderingAndLossFollowReconnectPolicy();
     TestDisablingReconnectRestoresPendingIncomingListenerAfterCloseBarrier();
@@ -1709,9 +1799,9 @@ int RunDeviceServiceTests() {
     TestAutomaticPreEstablishmentCloseCountsEachAttemptOnce();
     TestPreEstablishmentClosePublishesOperationFailure();
     TestTerminalOutgoingPathsRestoreIncomingListener();
-    TestAsyncConnectAndReconnectRejectCloseBarrierOverlap();
+    TestConnectAndReconnectRejectCloseBarrierOverlap();
     TestRetryTimerAndManualCancellationRejectStaleTimerCallbacks();
-    TestManualAsyncCommandsCancelSupersededReconnectEpochs();
+    TestManualCommandsCancelSupersededReconnectEpochs();
     TestReconnectPolicyAndUserCancellationRemainDistinct();
     TestConcurrentCommandWaitsForSerializedMutation();
     TestBulkSuspendResumeAndShutdownCannotResurrectSessions();
@@ -1720,7 +1810,7 @@ int RunDeviceServiceTests() {
     TestPowerTransitionRecoveryTargetsIncludeIncomingAndPendingReconnectWithoutConnectedSessions();
     TestPowerTransitionDoesNotReleaseCloseInFlightBeforeDelayedResume();
     TestManualCommandsDuringDelayedPowerRecoverySupersedeRecovery();
-    TestManualAsyncCommandsSupersedeDelayedPowerRecoveryDuringCloseBarrier();
+    TestManualCommandsSupersedeDelayedPowerRecoveryDuringCloseBarrier();
     TestPowerTransitionRecoveryCaptureRejectsStaleDelayedIntent();
     TestUnmatchedPowerResumeRestartsWatcherWithoutResurrectingSessions();
     TestStopAndShutdownReturnNormalizedTerminalResults();

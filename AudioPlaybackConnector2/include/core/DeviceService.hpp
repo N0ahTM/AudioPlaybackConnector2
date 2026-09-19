@@ -9,11 +9,13 @@
 #include <winrt/Windows.Foundation.h>
 
 #include <cstdint>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <stop_token>
 #include <vector>
 
 namespace apc::device {
@@ -31,13 +33,17 @@ enum class DeviceCommandKind {
     Shutdown
 };
 enum class DeviceCommandResultKind { Accepted, Coalesced, Rejected, Cancelled };
+enum class DeviceOperationStatus { Succeeded, Failed, Cancelled, TimedOut, Rejected };
 enum class DeviceFactKind { InventoryChanged, SessionChanged, OperationFailed, Shutdown };
+
+struct DeviceOperationCompletion;
 
 struct DeviceCommandResult {
     DeviceCommandKind Command = DeviceCommandKind::Connect;
     DeviceCommandResultKind Kind = DeviceCommandResultKind::Rejected;
     std::wstring DeviceId;
     std::uint64_t OperationEpoch = 0;
+    std::shared_ptr<DeviceOperationCompletion> Completion;
 };
 
 struct DeviceServiceSnapshot {
@@ -110,8 +116,10 @@ public:
     /*//////// Operation Completion //////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    winrt::Windows::Foundation::IAsyncAction ConnectAsync(winrt::hstring deviceId);
-    winrt::Windows::Foundation::IAsyncAction ReconnectAsync(winrt::hstring deviceId);
+    [[nodiscard]] DeviceOperationStatus
+    WaitForCompletion(DeviceCommandResult const& command,
+                      std::stop_token stopToken = {},
+                      std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::time_point::max());
     winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
     RefreshDevicesAsync();
 

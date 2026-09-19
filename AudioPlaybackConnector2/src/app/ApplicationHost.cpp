@@ -94,6 +94,17 @@ apc::app::AppSnapshot::ResourceStatusSnapshot::UserActivity ToAppUserActivity(Us
     return UserActivity::Unknown;
 }
 
+OperationStatus ToControlOperationStatus(apc::device::DeviceOperationStatus status) noexcept {
+    switch (status) {
+        case apc::device::DeviceOperationStatus::Succeeded: return OperationStatus::Succeeded;
+        case apc::device::DeviceOperationStatus::Cancelled: return OperationStatus::Cancelled;
+        case apc::device::DeviceOperationStatus::TimedOut: return OperationStatus::TimedOut;
+        case apc::device::DeviceOperationStatus::Failed:
+        case apc::device::DeviceOperationStatus::Rejected: return OperationStatus::Failed;
+    }
+    return OperationStatus::Failed;
+}
+
 template <typename TAsync>
 OperationStatus WaitForControlAsync(TAsync const& operation, apc::app::AppCommandContext const& context) {
     std::shared_ptr<void> completed(CreateEventW(nullptr, TRUE, FALSE, nullptr), [](void* handle) noexcept {
@@ -736,15 +747,9 @@ void ApplicationHost::InitializeAppController() {
         Bridge::OperationResult result;
         auto self = weak.lock();
         if (!self || !self->m_deviceService) return result;
-        try {
-            result.Status = WaitForControlAsync(self->m_deviceService->ConnectAsync(winrt::hstring(deviceId)), context);
-        } catch (winrt::hresult_error const& ex) {
-            util::DebugTraceException(L"[App] Control command connect failed", ex);
-        } catch (std::exception const& ex) {
-            util::DebugTraceException(L"[App] Control command connect failed", ex);
-        } catch (...) {
-            util::DebugTraceUnknownException(L"[App] Control command connect failed");
-        }
+        auto const command = self->m_deviceService->Connect(std::wstring(deviceId));
+        result.Status = ToControlOperationStatus(
+            self->m_deviceService->WaitForCompletion(command, context.StopToken, context.Deadline));
         return result;
     };
     operations.ConnectDetached = [weak](std::wstring_view deviceId) {
@@ -756,16 +761,9 @@ void ApplicationHost::InitializeAppController() {
         Bridge::OperationResult result;
         auto self = weak.lock();
         if (!self || !self->m_deviceService) return result;
-        try {
-            result.Status =
-                WaitForControlAsync(self->m_deviceService->ReconnectAsync(winrt::hstring(deviceId)), context);
-        } catch (winrt::hresult_error const& ex) {
-            util::DebugTraceException(L"[App] Control command reconnect failed", ex);
-        } catch (std::exception const& ex) {
-            util::DebugTraceException(L"[App] Control command reconnect failed", ex);
-        } catch (...) {
-            util::DebugTraceUnknownException(L"[App] Control command reconnect failed");
-        }
+        auto const command = self->m_deviceService->Reconnect(std::wstring(deviceId));
+        result.Status = ToControlOperationStatus(
+            self->m_deviceService->WaitForCompletion(command, context.StopToken, context.Deadline));
         return result;
     };
     operations.ReconnectDetached = [weak](std::wstring_view deviceId) {

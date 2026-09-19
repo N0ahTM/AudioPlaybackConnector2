@@ -122,7 +122,11 @@ void TrayController::SetSystemBackdropEffectsEnabled(bool enabled) noexcept try 
 }
 
 void TrayController::Teardown() noexcept try {
-    m_isTearingDown.store(true);
+    {
+        std::scoped_lock lock(m_pickerOpenedMutex);
+        m_isTearingDown.store(true);
+    }
+    m_pickerOpenedChanged.notify_all();
 
     // Marshal to UI thread if necessary so XAML objects are destroyed on the correct thread.
     if (m_mainWindow) {
@@ -666,6 +670,16 @@ uint64_t TrayController::DevicePickerOpenedGeneration() const noexcept {
     return m_pickerOpenedGeneration.load();
 }
 
+bool TrayController::WaitForDevicePickerOpened(std::uint64_t previousGeneration,
+                                               std::stop_token stop,
+                                               std::chrono::steady_clock::time_point deadline) {
+    std::unique_lock lock(m_pickerOpenedMutex);
+    m_pickerOpenedChanged.wait_until(lock, stop, deadline, [&] {
+        return m_isTearingDown.load() || m_pickerOpenedGeneration.load() != previousGeneration;
+    });
+    return m_pickerOpenedGeneration.load() != previousGeneration;
+}
+
 void TrayController::ReleaseDevicePicker() noexcept {
     try {
         if (m_isTearingDown.load() || !m_devicePickerView) {
@@ -789,7 +803,11 @@ Controls::Flyout TrayController::CreatePickerFlyout() {
             auto openedFlyout = sender.template try_as<Controls::Flyout>();
             if (self && !self->m_isTearingDown.load() && openedFlyout && self->m_pickerFlyout == openedFlyout) {
                 self->m_pickerFlyoutState.store(PickerFlyoutState::Open);
-                self->m_pickerOpenedGeneration.fetch_add(1);
+                {
+                    std::scoped_lock lock(self->m_pickerOpenedMutex);
+                    self->m_pickerOpenedGeneration.fetch_add(1);
+                }
+                self->m_pickerOpenedChanged.notify_all();
                 if (std::exchange(self->m_pickerRefreshPending, false)) {
                     if (!self->RefreshDevicePickerState()) self->m_pickerRefreshPending = true;
                 }

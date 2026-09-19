@@ -324,6 +324,12 @@ real controller and picker projection. A failed connection stays busy through na
 completion then clears busy state and changes the generation, without a UI timeout. Presentation changes
 (language, navigation and saved-device expansion) explicitly rebuild the list even at the same generation.
 
+Control callers waiting for the picker to open use its generation condition variable, not polling. Opened and
+teardown publish their predicate changes under the wait mutex and then notify; cancellation and deadlines use
+the stop-aware timed wait. Teardown wakes an unacknowledged caller as indeterminate. A caller on the UI thread
+never blocks for an Opened event that requires that dispatcher; detached tray activation remains nonblocking.
+This WinUI path has source and build verification; headless control tests do not exercise the actual flyout event.
+
 ## Distribution
 
 Store and Windows App Installer own application updates. The application performs no release lookup, update

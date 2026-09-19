@@ -550,19 +550,13 @@ apc::app::AppUiActionResult ApplicationHost::PresentDevicePicker(apc::app::Devic
         return result;
     }
 
-    while (!wasVisible && tray->DevicePickerOpenedGeneration() == openedGeneration) {
-        if (context.IsCancellationRequested()) {
-            // ShowDevicePicker has already begun. The caller cannot know
-            // whether the UI transition will publish its generation after
-            // this return, so a definite cancellation would be unsafe.
+    if (!wasVisible && tray->DevicePickerOpenedGeneration() == openedGeneration) {
+        // A synchronous caller on the UI thread cannot wait for its own Opened event.
+        if (m_dispatcherQueue.HasThreadAccess() ||
+            !tray->WaitForDevicePickerOpened(openedGeneration, context.StopToken, context.Deadline)) {
             result.Status = OperationStatus::Indeterminate;
             return result;
         }
-        if (context.IsExpired(apc::app::AppCommandContext::Clock::now())) {
-            result.Status = OperationStatus::Indeterminate;
-            return result;
-        }
-        Sleep(1);
     }
     result.Status = OperationStatus::Succeeded;
     result.DevicePickerOpenedGeneration = tray->DevicePickerOpenedGeneration();

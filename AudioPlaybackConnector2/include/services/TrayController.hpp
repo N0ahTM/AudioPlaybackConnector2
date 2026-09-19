@@ -11,6 +11,10 @@
 #include <core/ThemeHelper.hpp>
 
 #include <functional>
+#include <condition_variable>
+#include <mutex>
+#include <chrono>
+#include <stop_token>
 #include <atomic>
 #include <cstdint>
 #include <string_view>
@@ -53,6 +57,10 @@ public:
     [[nodiscard]] bool IsDevicePickerPreloadInitialized() const noexcept;
     [[nodiscard]] bool IsDevicePickerVisibleOrTransitioning() const noexcept;
     [[nodiscard]] uint64_t DevicePickerOpenedGeneration() const noexcept;
+    // Background control callers only; the Opened event needs the UI dispatcher.
+    [[nodiscard]] bool WaitForDevicePickerOpened(std::uint64_t previousGeneration,
+                                                 std::stop_token stop,
+                                                 std::chrono::steady_clock::time_point deadline);
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Callbacks /////////////////////////////////////////////////////////////////////////////////////////*/
@@ -134,6 +142,8 @@ private:
     };
     std::atomic<PickerFlyoutState> m_pickerFlyoutState{PickerFlyoutState::Closed};
     std::atomic_uint64_t m_pickerOpenedGeneration{0};
+    std::mutex m_pickerOpenedMutex;
+    std::condition_variable_any m_pickerOpenedChanged;
 
     bool m_devicePickerPreloadInitialized = false;
     bool m_releaseDevicePickerPending = false;

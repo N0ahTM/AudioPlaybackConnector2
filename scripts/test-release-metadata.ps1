@@ -45,3 +45,4 @@ try {
     Remove-Item -LiteralPath $resolvedTestDirectory -Recurse -Force
 }
 Write-Host 'Release metadata regression tests passed.'
+exit 0

@@ -3,6 +3,10 @@
     {
       "name": "nlohmann-json",
       "version>=": "3.12.0"
+    },
+    {
+      "name": "cli11",
+      "version>=": "2.6.2"
     }
   ],
   "overrides": [
@@ -10,6 +14,10 @@
       "name": "nlohmann-json",
       "version": "3.12.0",
       "port-version": 2
+    },
+    {
+      "name": "cli11",
+      "version": "2.6.2"
     }
   ]
 }

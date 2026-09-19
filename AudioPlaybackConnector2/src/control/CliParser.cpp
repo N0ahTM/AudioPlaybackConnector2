@@ -1,9 +1,12 @@
 #include <control/CliParser.hpp>
+#include <CLI/CLI.hpp>
 
 #include <algorithm>
 #include <cwctype>
 #include <optional>
 #include <utility>
+#include <iterator>
+#include <vector>
 
 namespace apc::control::cli {
 namespace {
@@ -94,212 +97,179 @@ std::optional<std::wstring> ReadOptionValue(int& index, int argc, wchar_t const*
     return std::wstring(value);
 }
 
-ParseResult
-ParseTargetOptions(apc::control::CommandType command, int startIndex, int argc, wchar_t const* const* argv) {
-    apc::control::Request request;
-    request.Command = command;
-    request.Target = apc::control::TargetKind::None;
-    const bool allowsRelativeTarget =
-        command == apc::control::CommandType::Connect || command == apc::control::CommandType::Disconnect ||
-        command == apc::control::CommandType::Reconnect || command == apc::control::CommandType::ToggleLast;
+struct ParseFailure {
+    std::wstring Message;
+};
+struct OptionInput {
+    std::wstring_view Name;
+    std::optional<std::wstring> Value;
+};
+struct Selector {
+    std::wstring_view Name;
+    TargetKind Kind;
+};
+constexpr Selector c_selectors[]{{L"--id", TargetKind::Id},
+                                 {L"--name", TargetKind::Name},
+                                 {L"--mac", TargetKind::Mac},
+                                 {L"--alias", TargetKind::Alias}};
+struct CommandSpec {
+    std::wstring_view Name;
+    std::wstring_view Subcommand;
+    CommandType Kind;
+};
+constexpr CommandSpec c_commands[]{
+    {L"show", L"", CommandType::Show},
+    {L"settings", L"", CommandType::Settings},
+    {L"status", L"", CommandType::Status},
+    {L"list", L"", CommandType::List},
+    {L"disconnect-all", L"", CommandType::DisconnectAll},
+    {L"reconnect-all", L"", CommandType::ReconnectAll},
+    {L"connect", L"", CommandType::Connect},
+    {L"disconnect", L"", CommandType::Disconnect},
+    {L"reconnect", L"", CommandType::Reconnect},
+    {L"toggle", L"", CommandType::ToggleLast},
+    {L"default", L"show", CommandType::DefaultShow},
+    {L"default", L"clear", CommandType::DefaultClear},
+    {L"default", L"set", CommandType::DefaultSet},
+    {L"alias", L"list", CommandType::AliasList},
+    {L"alias", L"clear", CommandType::AliasClear},
+    {L"alias", L"set", CommandType::AliasSet},
+};
 
-    std::optional<std::wstring> positionalTarget;
-    bool optionsEnded = false;
-    for (int i = startIndex; i < argc; ++i) {
-        auto arg = ToView(argv[i]);
-        if (!optionsEnded && arg == L"--") {
-            optionsEnded = true;
-        } else if (!optionsEnded && EqualsIgnoreCase(arg, L"--json")) {
-            request.Flags |= apc::control::CommandFlagJson;
-        } else if (!optionsEnded && EqualsIgnoreCase(arg, L"--raw")) {
-            request.Flags |= apc::control::CommandFlagRaw;
-        } else if (!optionsEnded && EqualsIgnoreCase(arg, L"--last")) {
-            if (!allowsRelativeTarget) return Error(3, L"This command requires an explicit device target.\n");
-            if (request.Target != apc::control::TargetKind::None || positionalTarget) {
-                return Error(3, L"Only one device target selector is supported.\n");
-            }
-            request.Target = apc::control::TargetKind::Last;
-            request.Payload.clear();
-        } else if (!optionsEnded && EqualsIgnoreCase(arg, L"--default")) {
-            if (!allowsRelativeTarget) return Error(3, L"This command requires an explicit device target.\n");
-            if (request.Target != apc::control::TargetKind::None || positionalTarget) {
-                return Error(3, L"Only one device target selector is supported.\n");
-            }
-            request.Target = apc::control::TargetKind::Default;
-            request.Payload.clear();
-        } else if (!optionsEnded && (EqualsIgnoreCase(arg, L"--id") || EqualsIgnoreCase(arg, L"--name") ||
-                                     EqualsIgnoreCase(arg, L"--mac") || EqualsIgnoreCase(arg, L"--alias"))) {
-            if (request.Target != apc::control::TargetKind::None || positionalTarget) {
-                return Error(3, L"Only one device target selector is supported.\n");
-            }
-            auto value = ReadOptionValue(i, argc, argv);
-            if (!value || value->empty()) return Error(3, L"Missing value for " + std::wstring(arg) + L".\n");
-            request.Payload = std::move(*value);
-            if (EqualsIgnoreCase(arg, L"--id")) request.Target = apc::control::TargetKind::Id;
-            if (EqualsIgnoreCase(arg, L"--name")) request.Target = apc::control::TargetKind::Name;
-            if (EqualsIgnoreCase(arg, L"--mac")) request.Target = apc::control::TargetKind::Mac;
-            if (EqualsIgnoreCase(arg, L"--alias")) request.Target = apc::control::TargetKind::Alias;
-        } else if (!optionsEnded && !arg.empty() && arg.front() == L'-') {
-            return Error(3, L"Unknown option: " + std::wstring(arg) + L"\n");
-        } else if (request.Target != apc::control::TargetKind::None) {
-            return Error(3, L"A positional target cannot be combined with a target selector.\n");
-        } else if (!positionalTarget) {
-            positionalTarget = std::wstring(arg);
+ParseResult ParseWithCli(CommandSpec const& spec, int argc, wchar_t const* const* argv) {
+    const bool relative = spec.Kind == CommandType::Connect || spec.Kind == CommandType::Disconnect ||
+                          spec.Kind == CommandType::Reconnect || spec.Kind == CommandType::ToggleLast;
+    const bool aliasValue = spec.Kind == CommandType::AliasSet;
+    const bool targets =
+        relative || aliasValue || spec.Kind == CommandType::DefaultSet || spec.Kind == CommandType::AliasClear;
+    auto narrowName = [](std::wstring_view name) {
+        std::string text;
+        for (auto character : name)
+            text.push_back(static_cast<char>(character));
+        return text;
+    };
+    std::vector<OptionInput> inputs;
+    std::vector<std::string> tokens{narrowName(spec.Name)};
+    if (!spec.Subcommand.empty()) tokens.push_back(narrowName(spec.Subcommand));
+    bool ended = false;
+    // CLI11 sees generated indexes for values, preserving opaque UTF-16 and the
+    // public escape grammar without allowing values to become parser syntax.
+    for (int i = spec.Subcommand.empty() ? 2 : 3; i < argc; ++i) {
+        const auto arg = ToView(argv[i]);
+        if (targets && !ended && arg == L"--") {
+            ended = true;
+            continue;
+        }
+        const auto selector =
+            std::ranges::find_if(c_selectors, [&](auto const& value) { return EqualsIgnoreCase(arg, value.Name); });
+        if (!ended && (EqualsIgnoreCase(arg, L"--json") || EqualsIgnoreCase(arg, L"--raw"))) {
+            tokens.push_back(EqualsIgnoreCase(arg, L"--json") ? "--json" : "--raw");
+            continue;
+        }
+        if (!ended && targets && !aliasValue &&
+            (EqualsIgnoreCase(arg, L"--last") || EqualsIgnoreCase(arg, L"--default"))) {
+            tokens.push_back(EqualsIgnoreCase(arg, L"--last") ? "--last" : "--default");
+            continue;
+        }
+        const auto index = "v" + std::to_string(inputs.size());
+        if (!ended && targets &&
+            (selector != std::end(c_selectors) || (aliasValue && EqualsIgnoreCase(arg, L"--value")))) {
+            inputs.push_back({arg, ReadOptionValue(i, argc, argv)});
+            tokens.push_back((selector != std::end(c_selectors) ? narrowName(selector->Name) : "--value") + "=" +
+                             index);
         } else {
-            return Error(3, L"Only one positional target is supported.\n");
+            inputs.push_back({arg, std::wstring(arg)});
+            tokens.push_back(!targets || (!ended && !arg.empty() && arg.front() == L'-') ? "--invalid=" + index
+                                                                                         : index);
         }
     }
-
-    if (request.Target == apc::control::TargetKind::None && positionalTarget) {
-        request.Target = apc::control::TargetKind::Auto;
-        request.Payload = std::move(*positionalTarget);
+    Request request;
+    request.Command = spec.Kind;
+    std::optional<std::wstring> positional, alias;
+    auto fail = [](std::wstring message) { throw ParseFailure{std::move(message)}; };
+    auto input = [&](std::string const& index) -> OptionInput const& { return inputs.at(std::stoul(index.substr(1))); };
+    auto select = [&](TargetKind kind) {
+        if (request.Target != TargetKind::None || positional) fail(L"Only one device target selector is supported.\n");
+        request.Target = kind;
+    };
+    CLI::App parser;
+    parser.set_help_flag();
+    auto* command = parser.add_subcommand(narrowName(spec.Name));
+    if (!spec.Subcommand.empty()) command = command->add_subcommand(narrowName(spec.Subcommand));
+    command->add_flag_callback("--json", [&] { request.Flags |= CommandFlagJson; })->trigger_on_parse();
+    command->add_flag_callback("--raw", [&] { request.Flags |= CommandFlagRaw; })->trigger_on_parse();
+    command
+        ->add_option_function<std::string>(
+            "--invalid",
+            [&](auto const& value) { fail(L"Unknown option: " + std::wstring(input(value).Name) + L"\n"); })
+        ->trigger_on_parse();
+    for (auto const& selector : c_selectors) {
+        command
+            ->add_option_function<std::string>(narrowName(selector.Name),
+                                               [&, kind = selector.Kind](auto const& value) {
+                                                   select(kind);
+                                                   auto const& option = input(value);
+                                                   if (!option.Value || option.Value->empty())
+                                                       fail(L"Missing value for " + std::wstring(option.Name) + L".\n");
+                                                   request.Payload = *option.Value;
+                                               })
+            ->trigger_on_parse();
     }
-
-    if (request.Target == apc::control::TargetKind::None) {
-        if (command == apc::control::CommandType::ToggleLast) {
-            request.Target = apc::control::TargetKind::Default;
-        } else {
-            return Error(3, L"A device target is required.\n");
-        }
+    for (auto const& choice : {Selector{L"--last", TargetKind::Last}, Selector{L"--default", TargetKind::Default}}) {
+        command
+            ->add_flag_callback(narrowName(choice.Name),
+                                [&, kind = choice.Kind] {
+                                    if (!relative) fail(L"This command requires an explicit device target.\n");
+                                    select(kind);
+                                })
+            ->trigger_on_parse();
     }
-    if (request.Target != apc::control::TargetKind::Last && request.Target != apc::control::TargetKind::Default &&
-        request.Payload.empty()) {
-        return Error(3, L"A non-empty device target is required.\n");
+    command
+        ->add_option_function<std::string>("--value",
+                                           [&](auto const& value) {
+                                               auto const& option = input(value);
+                                               if (!option.Value || option.Value->empty())
+                                                   fail(L"Missing value for --value.\n");
+                                               if (alias) fail(L"Only one alias value is supported.\n");
+                                               alias = *option.Value;
+                                           })
+        ->trigger_on_parse();
+    command
+        ->add_option_function<std::string>(
+            "TARGET",
+            [&](auto const& value) {
+                if (request.Target == TargetKind::None && !positional)
+                    positional = *input(value).Value;
+                else if (aliasValue) {
+                    if (alias) fail(L"Only one alias value is supported.\n");
+                    alias = *input(value).Value;
+                } else
+                    fail(request.Target != TargetKind::None
+                             ? L"A positional target cannot be combined with a target selector.\n"
+                             : L"Only one positional target is supported.\n");
+            })
+        ->allow_extra_args()
+        ->trigger_on_parse();
+    std::reverse(tokens.begin(), tokens.end());
+    parser.parse(tokens);
+    if (positional) {
+        request.Target = TargetKind::Auto;
+        request.Payload = std::move(*positional);
     }
-
+    if (targets && request.Target == TargetKind::None) {
+        if (spec.Kind == CommandType::ToggleLast)
+            request.Target = TargetKind::Default;
+        else
+            fail(L"A device target is required.\n");
+    }
+    if (targets && request.Target != TargetKind::Last && request.Target != TargetKind::Default &&
+        request.Payload.empty())
+        fail(aliasValue ? L"A device target is required.\n" : L"A non-empty device target is required.\n");
+    if (aliasValue) {
+        if (!alias || alias->empty()) fail(L"A non-empty alias value is required.\n");
+        request.Payload += L"\n" + *alias;
+    }
     return {.Send = true, .Request = std::move(request)};
-}
-
-ParseResult ParseDefaultCommand(int startIndex, int argc, wchar_t const* const* argv) {
-    if (startIndex >= argc) return Error(3, L"default requires show, set, or clear.\n");
-
-    auto subcommand = ToView(argv[startIndex]);
-    if (EqualsIgnoreCase(subcommand, L"show")) {
-        apc::control::Request request;
-        request.Command = apc::control::CommandType::DefaultShow;
-        for (int i = startIndex + 1; i < argc; ++i) {
-            auto arg = ToView(argv[i]);
-            if (EqualsIgnoreCase(arg, L"--json")) {
-                request.Flags |= apc::control::CommandFlagJson;
-            } else if (EqualsIgnoreCase(arg, L"--raw")) {
-                request.Flags |= apc::control::CommandFlagRaw;
-            } else {
-                return Error(3, L"Unknown option: " + std::wstring(arg) + L"\n");
-            }
-        }
-        return {.Send = true, .Request = std::move(request)};
-    }
-
-    if (EqualsIgnoreCase(subcommand, L"clear")) {
-        apc::control::Request request;
-        request.Command = apc::control::CommandType::DefaultClear;
-        for (int i = startIndex + 1; i < argc; ++i) {
-            auto arg = ToView(argv[i]);
-            if (EqualsIgnoreCase(arg, L"--json")) {
-                request.Flags |= apc::control::CommandFlagJson;
-            } else if (EqualsIgnoreCase(arg, L"--raw")) {
-                request.Flags |= apc::control::CommandFlagRaw;
-            } else {
-                return Error(3, L"Unknown option: " + std::wstring(arg) + L"\n");
-            }
-        }
-        return {.Send = true, .Request = std::move(request)};
-    }
-
-    if (EqualsIgnoreCase(subcommand, L"set")) {
-        return ParseTargetOptions(apc::control::CommandType::DefaultSet, startIndex + 1, argc, argv);
-    }
-
-    return Error(3, L"Unknown default command: " + std::wstring(subcommand) + L"\n");
-}
-
-ParseResult ParseAliasSetOptions(int startIndex, int argc, wchar_t const* const* argv) {
-    apc::control::Request request;
-    request.Command = apc::control::CommandType::AliasSet;
-    request.Target = apc::control::TargetKind::None;
-
-    std::optional<std::wstring> positionalTarget;
-    std::optional<std::wstring> alias;
-    bool optionsEnded = false;
-    for (int i = startIndex; i < argc; ++i) {
-        auto arg = ToView(argv[i]);
-        if (!optionsEnded && arg == L"--") {
-            optionsEnded = true;
-        } else if (!optionsEnded && EqualsIgnoreCase(arg, L"--json")) {
-            request.Flags |= apc::control::CommandFlagJson;
-        } else if (!optionsEnded && EqualsIgnoreCase(arg, L"--raw")) {
-            request.Flags |= apc::control::CommandFlagRaw;
-        } else if (!optionsEnded && EqualsIgnoreCase(arg, L"--value")) {
-            auto value = ReadOptionValue(i, argc, argv);
-            if (!value || value->empty()) return Error(3, L"Missing value for --value.\n");
-            if (alias) return Error(3, L"Only one alias value is supported.\n");
-            alias = std::move(*value);
-        } else if (!optionsEnded && (EqualsIgnoreCase(arg, L"--id") || EqualsIgnoreCase(arg, L"--name") ||
-                                     EqualsIgnoreCase(arg, L"--mac") || EqualsIgnoreCase(arg, L"--alias"))) {
-            if (request.Target != apc::control::TargetKind::None || positionalTarget) {
-                return Error(3, L"Only one device target selector is supported.\n");
-            }
-            auto value = ReadOptionValue(i, argc, argv);
-            if (!value || value->empty()) return Error(3, L"Missing value for " + std::wstring(arg) + L".\n");
-            request.Payload = std::move(*value);
-            if (EqualsIgnoreCase(arg, L"--id")) request.Target = apc::control::TargetKind::Id;
-            if (EqualsIgnoreCase(arg, L"--name")) request.Target = apc::control::TargetKind::Name;
-            if (EqualsIgnoreCase(arg, L"--mac")) request.Target = apc::control::TargetKind::Mac;
-            if (EqualsIgnoreCase(arg, L"--alias")) request.Target = apc::control::TargetKind::Alias;
-        } else if (!optionsEnded && !arg.empty() && arg.front() == L'-') {
-            return Error(3, L"Unknown option: " + std::wstring(arg) + L"\n");
-        } else if (request.Target == apc::control::TargetKind::None && !positionalTarget) {
-            positionalTarget = std::wstring(arg);
-        } else if (!alias) {
-            alias = std::wstring(arg);
-        } else {
-            return Error(3, L"Only one alias value is supported.\n");
-        }
-    }
-
-    if (request.Target == apc::control::TargetKind::None && positionalTarget) {
-        request.Target = apc::control::TargetKind::Auto;
-        request.Payload = std::move(*positionalTarget);
-    }
-    if (request.Target == apc::control::TargetKind::None || request.Payload.empty()) {
-        return Error(3, L"A device target is required.\n");
-    }
-    if (!alias || alias->empty()) return Error(3, L"A non-empty alias value is required.\n");
-
-    request.Payload += L"\n";
-    request.Payload += *alias;
-    return {.Send = true, .Request = std::move(request)};
-}
-
-ParseResult ParseAliasCommand(int startIndex, int argc, wchar_t const* const* argv) {
-    if (startIndex >= argc) return Error(3, L"alias requires list, set, or clear.\n");
-
-    auto subcommand = ToView(argv[startIndex]);
-    if (EqualsIgnoreCase(subcommand, L"list")) {
-        apc::control::Request request;
-        request.Command = apc::control::CommandType::AliasList;
-        for (int i = startIndex + 1; i < argc; ++i) {
-            auto arg = ToView(argv[i]);
-            if (EqualsIgnoreCase(arg, L"--json")) {
-                request.Flags |= apc::control::CommandFlagJson;
-            } else if (EqualsIgnoreCase(arg, L"--raw")) {
-                request.Flags |= apc::control::CommandFlagRaw;
-            } else {
-                return Error(3, L"Unknown option: " + std::wstring(arg) + L"\n");
-            }
-        }
-        return {.Send = true, .Request = std::move(request)};
-    }
-
-    if (EqualsIgnoreCase(subcommand, L"set")) {
-        return ParseAliasSetOptions(startIndex + 1, argc, argv);
-    }
-
-    if (EqualsIgnoreCase(subcommand, L"clear")) {
-        return ParseTargetOptions(apc::control::CommandType::AliasClear, startIndex + 1, argc, argv);
-    }
-
-    return Error(3, L"Unknown alias command: " + std::wstring(subcommand) + L"\n");
 }
 
 } // namespace
@@ -341,57 +311,32 @@ std::wstring LocalError(bool jsonRequested, apc::control::ExitCode code, std::ws
 }
 
 ParseResult ParseCommandLine(int argc, wchar_t const* const* argv) {
-    if (argc <= 1) {
-        return Error(0, HelpText());
-    }
-
+    if (argc <= 1) return Error(0, HelpText());
     auto command = ToView(argv[1]);
-    if (EqualsIgnoreCase(command, L"help") || EqualsIgnoreCase(command, L"--help") ||
-        EqualsIgnoreCase(command, L"-h")) {
+    if (EqualsIgnoreCase(command, L"help") || EqualsIgnoreCase(command, L"--help") || EqualsIgnoreCase(command, L"-h"))
         return Error(0, HelpText());
-    }
-
-    apc::control::Request request;
-    if (EqualsIgnoreCase(command, L"show")) {
-        request.Command = apc::control::CommandType::Show;
-    } else if (EqualsIgnoreCase(command, L"settings")) {
-        request.Command = apc::control::CommandType::Settings;
-    } else if (EqualsIgnoreCase(command, L"status")) {
-        request.Command = apc::control::CommandType::Status;
-    } else if (EqualsIgnoreCase(command, L"list")) {
-        request.Command = apc::control::CommandType::List;
-    } else if (EqualsIgnoreCase(command, L"disconnect-all")) {
-        request.Command = apc::control::CommandType::DisconnectAll;
-    } else if (EqualsIgnoreCase(command, L"reconnect-all")) {
-        request.Command = apc::control::CommandType::ReconnectAll;
-    } else if (EqualsIgnoreCase(command, L"connect")) {
-        return ParseTargetOptions(apc::control::CommandType::Connect, 2, argc, argv);
-    } else if (EqualsIgnoreCase(command, L"disconnect")) {
-        return ParseTargetOptions(apc::control::CommandType::Disconnect, 2, argc, argv);
-    } else if (EqualsIgnoreCase(command, L"reconnect")) {
-        return ParseTargetOptions(apc::control::CommandType::Reconnect, 2, argc, argv);
-    } else if (EqualsIgnoreCase(command, L"toggle")) {
-        return ParseTargetOptions(apc::control::CommandType::ToggleLast, 2, argc, argv);
-    } else if (EqualsIgnoreCase(command, L"default")) {
-        return ParseDefaultCommand(2, argc, argv);
-    } else if (EqualsIgnoreCase(command, L"alias")) {
-        return ParseAliasCommand(2, argc, argv);
-    } else {
+    const bool family = EqualsIgnoreCase(command, L"default") || EqualsIgnoreCase(command, L"alias");
+    if (family && argc < 3)
+        return Error(3,
+                     EqualsIgnoreCase(command, L"default") ? L"default requires show, set, or clear.\n"
+                                                           : L"alias requires list, set, or clear.\n");
+    const auto subcommand = family ? ToView(argv[2]) : std::wstring_view{};
+    const auto spec = std::ranges::find_if(c_commands, [&](auto const& value) {
+        return EqualsIgnoreCase(command, value.Name) && EqualsIgnoreCase(subcommand, value.Subcommand);
+    });
+    if (spec == std::end(c_commands)) {
+        if (family)
+            return Error(3,
+                         std::wstring(EqualsIgnoreCase(command, L"default") ? L"Unknown default command: "
+                                                                            : L"Unknown alias command: ") +
+                             std::wstring(subcommand) + L"\n");
         return Error(3, L"Unknown command: " + std::wstring(command) + L"\n\n" + HelpText());
     }
-
-    for (int i = 2; i < argc; ++i) {
-        auto arg = ToView(argv[i]);
-        if (EqualsIgnoreCase(arg, L"--json")) {
-            request.Flags |= apc::control::CommandFlagJson;
-        } else if (EqualsIgnoreCase(arg, L"--raw")) {
-            request.Flags |= apc::control::CommandFlagRaw;
-        } else {
-            return Error(3, L"Unknown option: " + std::wstring(arg) + L"\n");
-        }
+    try {
+        return ParseWithCli(*spec, argc, argv);
+    } catch (ParseFailure const& failure) {
+        return Error(3, failure.Message);
     }
-
-    return {.Send = true, .Request = std::move(request)};
 }
 
 } // namespace apc::control::cli

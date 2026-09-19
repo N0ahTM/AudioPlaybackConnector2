@@ -41,6 +41,10 @@
     <IntDir>$(Platform)\$(Configuration)\$(ProjectName)\</IntDir>
   </PropertyGroup>
   <ItemDefinitionGroup>
+    <Lib>
+      <AdditionalDependencies Condition="'$(Configuration)'=='Release'">$(VcpkgInstalledDir)$(VcpkgTriplet)\lib\CLI11.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies Condition="'$(Configuration)'=='Debug'">$(VcpkgInstalledDir)$(VcpkgTriplet)\debug\lib\CLI11.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Lib>
     <ClCompile>
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>

@@ -1,8 +1,8 @@
 # Dependency evaluation probes
 
 These isolated programs are the first stage of the rewrite's dependency evaluation.
-The JSON library is now used by the product settings codec and string loader; CLI11
-and spdlog remain probe-only. Product builds
+The JSON library is used by the product settings codec and string loader; CLI11
+is used by the product CLI parser. spdlog remains probe-only. Product builds
 continue to use the existing MSBuild solution; CMake is used only for these probes.
 
 Run locally with PowerShell 7, CMake 4.2 or newer and Visual Studio 2026 with v145,
@@ -70,8 +70,20 @@ rejects the other three. Both reject duplicate and missing values, but native
 CLI11 returns exit 114 with different diagnostic text; the product requires exit
 3 and its existing text. The product parser tests preserve those contracts.
 This measures native behavior, not the impossibility of an adapter. Adoption
-still requires explicit value/escape normalization, product error mapping and
-the full golden suite; the basic Unicode/exclusivity probe alone is insufficient.
+uses explicit value/escape normalization and ordered callbacks for product errors.
+The product golden suite covers these differences; the basic Unicode/exclusivity
+probe alone was insufficient. Final distribution and size checks remain open.
+
+The product integration also passed 12,000 sampled argument combinations with
+seed 919054 against the parser from commit `f96349c`: acceptance, command, target,
+flags, UTF-16 payload, diagnostic text and exit code matched in every case.
+The historical parser was compiled only in a temporary comparison program;
+the product and CoreTests still link one current CoreRuntime implementation.
+Full x64 and ARM64 product builds completed without warnings. Current MSIX sizes
+are 2,467,279 and 2,525,907 bytes respectively; both contain the exact updated
+notices including CLI11's complete BSD license. These are current sizes, not an
+isolated package delta against the previous parser. That comparison remains part
+of final dependency acceptance.
 
 - Compare adapters against the actual existing implementations, including net
   production logic removed and complete product package size. The settings codec

@@ -3,6 +3,7 @@
 #include <control/CommandPipeSecurity.hpp>
 #include <control/PipeSecurityAttributes.hpp>
 #include <control/CommandProtocol.hpp>
+#include <control/CommandPipeIo.hpp>
 #include <app/LegacyAppUseCaseBridge.hpp>
 #include <services/CommandLineControlServer.hpp>
 
@@ -819,7 +820,7 @@ void TestStartupSquattingAndSecurityDescriptor() {
               "the restricted DACL must reject same-user rogue server instances");
     }
     auto derivedPipeName = apc::control::PipeName();
-    Check(derivedPipeName && derivedPipeName->starts_with(apc::control::c_pipeNamePrefix),
+    Check(derivedPipeName && derivedPipeName->starts_with(LR"(\\.\pipe\AudioPlaybackConnector2.Control.v2.)"),
           "pipe namespace derivation must succeed without fallback identity");
     Check(apc::control::IsTrustedPeerProcess(GetCurrentProcessId()), "current process identity must trust itself");
     Check(apc::control::IsTrustedPeerProcess(GetCurrentProcess(), GetCurrentProcessId()),

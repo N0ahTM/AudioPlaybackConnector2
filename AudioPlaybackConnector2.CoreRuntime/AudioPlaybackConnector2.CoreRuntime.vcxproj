@@ -84,6 +84,7 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResourcePressureState.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\SingleInstanceGuard.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandClient.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandPipeIo.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandPipeSecurity.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\PipeSecurityAttributes.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandProtocol.hpp" />
@@ -131,6 +132,7 @@
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\ResourcePressureMonitor.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\ResourcePressureState.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\SingleInstanceGuard.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\control\CommandPipeIo.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\control\CommandClient.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\AudioConnectionService.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\DevicePickerSnapshot.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>

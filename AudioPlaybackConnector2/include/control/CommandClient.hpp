@@ -1,5 +1,7 @@
 #pragma once
 
+#include <windows.h>
+
 #include <control/CommandProtocol.hpp>
 
 #include <cstdint>

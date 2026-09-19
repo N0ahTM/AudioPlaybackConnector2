@@ -4,6 +4,7 @@
 #include <wil/resource.h>
 
 #include <control/CommandProtocol.hpp>
+#include <control/CommandPipeIo.hpp>
 
 #include <atomic>
 #include <chrono>

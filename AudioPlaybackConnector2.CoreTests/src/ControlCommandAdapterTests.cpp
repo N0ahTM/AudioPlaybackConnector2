@@ -1,6 +1,7 @@
 #include "TestCheck.hpp"
 
 #include <control/ControlCommandAdapter.hpp>
+#include <control/CommandPipeIo.hpp>
 
 #include <winrt/Windows.Data.Json.h>
 

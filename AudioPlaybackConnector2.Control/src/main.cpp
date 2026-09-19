@@ -6,6 +6,7 @@
 #include <control/CommandClient.hpp>
 #include <control/CommandPipeSecurity.hpp>
 #include <control/CommandProtocol.hpp>
+#include <control/CommandPipeIo.hpp>
 
 #include <algorithm>
 #include <atomic>

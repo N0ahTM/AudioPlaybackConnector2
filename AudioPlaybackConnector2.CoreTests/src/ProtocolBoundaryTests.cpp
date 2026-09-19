@@ -1,6 +1,7 @@
 #include "TestCheck.hpp"
 
 #include <control/CommandProtocol.hpp>
+#include <control/CommandPipeIo.hpp>
 #include <services/ToastXmlSanitizer.hpp>
 
 #include <atomic>

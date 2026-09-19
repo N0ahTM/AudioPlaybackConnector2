@@ -1,6 +1,7 @@
 #include "TestCheck.hpp"
 
 #include <control/CommandClient.hpp>
+#include <control/CommandPipeIo.hpp>
 
 #include <deque>
 #include <iostream>

@@ -1,4 +1,5 @@
 #include <control/ControlCommandAdapter.hpp>
+#include <control/CommandPipeIo.hpp>
 
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Data.Json.h>

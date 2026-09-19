@@ -138,7 +138,13 @@ Small documentation or single-language translation changes do not require an unr
 - **Ownership:** Give mutable state, asynchronous work, and cancellation one explicit owner. Do not forward unchanged global context through unrelated layers.
 - **Thread safety:** Protect shared mutable state at its owning boundary and do not expose references that outlive the lock or snapshot.
 - **Design:** Prefer the standard library in the configured C++26 draft mode for general-purpose behavior. Adopt a new C++26 facility only when the pinned toolchain supports it and it simplifies a real contract. Add a helper or abstraction only for a real responsibility, invariant, lifetime, platform boundary, or test seam.
-- **Comments:** Only where the *why* is non-obvious — well-named identifiers do the rest
+- **Comments:** Use the same three-line section banners throughout C++ headers and implementations. Keep section names consistent (`Types`, `Constructors`, `Public Interface`, `Helpers`, `Member Variables`) and add domain-specific sections where they help navigation. Explanatory comments describe invariants, ownership or a non-obvious reason.
+
+```cpp
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+```
 
 Maintainer releases follow [Releasing](docs/RELEASING.md). Contributors normally add user-visible changes beneath `[Unreleased]`; release preparation creates the dated version section.
 

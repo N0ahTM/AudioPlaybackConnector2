@@ -43,6 +43,33 @@ shutdown budgets, late completion fences, callback reentrancy, callback-driven f
 storage release after timeout. `FlushNow` is still an explicit synchronous I/O boundary: its retry count does not
 bound platform I/O duration. Callers must not hold application locks when invoking it.
 
+## Power recovery
+
+| State | Execution context and callers | Synchronization | Cancellation and shutdown |
+| --- | --- | --- | --- |
+| Suspend flag, duplicate-resume time and owned timer cancellation handle | Host UI context, including destruction | No cross-thread access | Cancel invalidates recovery before disarming the schedule |
+| Pending recovery targets, attempts, generation and active delivery sequence | Host lifecycle methods, timer callbacks and reconnect completions | `ResumeState::Mutex`, never nested | Only the current generation and its one outstanding delivery may record attempts |
+| Native periodic timer and immutable delivery callback | Cancellation handle and admitted threadpool callbacks | Shared context lifetime; Windows drains callbacks before cancellation returns | Callback retains its context before disassociating; timer closes after the final reference is released |
+
+Timer callbacks never capture the coordinator facade. The native timer uses one platform implementation and the
+same injectable scheduling contract in production and tests. The coordinator tests link its `CoreRuntime` object
+with the same pinned C++/WinRT projection instead of compiling a test variant. A failed schedule delivers once
+immediately. A working schedule ticks every ten seconds, admits one reconnect delivery at a time and stops after pending targets
+are acknowledged or each target has six actual attempts. Skipped targets retain their budget. Duplicate IDs in
+one completion count once; duplicate completions cannot consume budget or unlock a later delivery.
+
+Cancellation fences later state changes; a delivery already admitted may finish outside the state lock. Host
+delivery rechecks the recovery generation on the UI context before starting a device operation. Late completions
+and retained timer callbacks can outlive the facade and access only shared, invalidated recovery state. Callback
+captures are retired outside the lock, including on suspend and cancellation. Logging also runs unlocked.
+
+`AppWorkCoordinatorTests.cpp` covers scheduler failure, single-flight delivery, retry exhaustion, duplicate and
+stale completions, cancellation during blocked delivery, capture-destructor reentrancy and callbacks retained
+after facade destruction. A real native-timer test blocks an admitted delivery with semaphores, cancels the timer,
+and releases its late completion under the process watchdog. Native callbacks initialize their own runtime
+apartment. Cancellation disarms queued callbacks and drains their admission phase; it does not wait for foreign
+delivery code that has already been disassociated.
+
 ## Distribution
 
 Store and Windows App Installer own application updates. The application performs no release lookup, update

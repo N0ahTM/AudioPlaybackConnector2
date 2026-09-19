@@ -1,6 +1,7 @@
 #include "TestCheck.hpp"
 
 #include <windows.h>
+#include <objbase.h>
 
 #include <wil/resource.h>
 
@@ -16,11 +17,21 @@
 #include <cstdint>
 #include <iostream>
 #include <optional>
+#include <semaphore>
 #include <string_view>
 #include <thread>
 #include <vector>
 
 namespace {
+
+PowerTransitionCoordinator::CancelTimer UnavailableScheduler(std::chrono::milliseconds,
+                                                             PowerTransitionCoordinator::Tick) {
+    return {};
+}
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// UI Refresh Tests //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 void TestUiRefreshCoalescesFlagsAndDrainsExactlyOnce() {
     UiRefreshCoalescer coalescer;
@@ -164,6 +175,10 @@ void TestUiRefreshAbandonRetainsDirtyFlagsForANewRequest() {
     Check(!coalescer.CompleteDrain(), "the recovered abandoned schedule must drain cleanly");
 }
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Power Recovery Tests //////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 void TestResumeReconnectCountsOnlyActuallyStartedAttempts() {
     ResumeReconnectAttemptState state;
     state.BeginCycle({L"alpha", L"beta", L"alpha", L""});
@@ -205,12 +220,10 @@ void TestResumeReconnectPreservesPendingTargetsAcrossSuspendCycles() {
     Check(state.Empty(), "clearing resume state must remove all pending targets");
 }
 
-void TestResumeReconnectDeliversOnceWhenBothSchedulersAreUnavailable() {
+void TestResumeReconnectDeliversOnceWhenSchedulerIsUnavailable() {
     std::atomic_bool exiting = false;
-    PowerTransitionCoordinator coordinator(
-        exiting, PowerTransitionCoordinator::ResumeReconnectSchedulerModeForTesting::BothUnavailable);
-    coordinator.HandleSuspend({}, nullptr);
-    coordinator.AddSuspendedRecoveryTargetsForTesting({L"alpha", L"beta"});
+    PowerTransitionCoordinator coordinator(exiting, UnavailableScheduler);
+    coordinator.HandleSuspend({}, [] { return std::vector<std::wstring>{L"alpha", L"beta"}; });
 
     std::size_t callbackCount = 0;
     std::vector<std::wstring> deliveredIds;
@@ -225,7 +238,7 @@ void TestResumeReconnectDeliversOnceWhenBothSchedulersAreUnavailable() {
                                  completed(std::move(deviceIds));
                              });
 
-    Check(callbackCount == 1, "dual scheduler failure must deliver pending resume recovery once immediately");
+    Check(callbackCount == 1, "scheduler failure must deliver pending resume recovery once immediately");
     Check(deliveredIds == std::vector<std::wstring>({L"alpha", L"beta"}),
           "immediate resume recovery must retain every pending target");
     Check(generation.has_value() && coordinator.IsResumeReconnectGenerationCurrent(*generation),
@@ -240,10 +253,8 @@ void TestResumeReconnectDeliversOnceWhenBothSchedulersAreUnavailable() {
 
 void TestResumeReconnectFallbackRejectsStaleAndCancelledCompletions() {
     std::atomic_bool exiting = false;
-    PowerTransitionCoordinator coordinator(
-        exiting, PowerTransitionCoordinator::ResumeReconnectSchedulerModeForTesting::BothUnavailable);
-    coordinator.HandleSuspend({}, nullptr);
-    coordinator.AddSuspendedRecoveryTargetsForTesting({L"alpha"});
+    PowerTransitionCoordinator coordinator(exiting, UnavailableScheduler);
+    coordinator.HandleSuspend({}, [] { return std::vector<std::wstring>{L"alpha"}; });
 
     std::optional<PowerTransitionCoordinator::ResumeReconnectCompleted> staleCompletion;
     std::uint64_t staleGeneration = 0;
@@ -287,10 +298,8 @@ void TestResumeReconnectFallbackCompletionOutlivesCoordinatorSafely() {
     std::atomic_bool exiting = false;
     std::optional<PowerTransitionCoordinator::ResumeReconnectCompleted> retainedCompletion;
     {
-        PowerTransitionCoordinator coordinator(
-            exiting, PowerTransitionCoordinator::ResumeReconnectSchedulerModeForTesting::BothUnavailable);
-        coordinator.HandleSuspend({}, nullptr);
-        coordinator.AddSuspendedRecoveryTargetsForTesting({L"alpha"});
+        PowerTransitionCoordinator coordinator(exiting, UnavailableScheduler);
+        coordinator.HandleSuspend({}, [] { return std::vector<std::wstring>{L"alpha"}; });
         coordinator.HandleResume(nullptr,
                                  [&](std::vector<std::wstring>,
                                      std::uint64_t,
@@ -305,7 +314,143 @@ void TestResumeReconnectFallbackCompletionOutlivesCoordinatorSafely() {
           "a retained fallback completion must access only shared recovery state after coordinator teardown");
 }
 
+struct ManualResumeTimer {
+    PowerTransitionCoordinator::Tick Tick;
+    bool Cancelled = false;
+
+    PowerTransitionCoordinator::CancelTimer Schedule(std::chrono::milliseconds period,
+                                                     PowerTransitionCoordinator::Tick tick) {
+        Check(period == std::chrono::seconds{10}, "resume retry interval must remain ten seconds");
+        Tick = std::move(tick);
+        Cancelled = false;
+        return [this]() noexcept { Cancelled = true; };
+    }
+};
+
+void TestResumeDeliveryIsSingleFlightAndCompletionIsConsumedOnce() {
+    std::atomic_bool exiting = false;
+    ManualResumeTimer timer;
+    PowerTransitionCoordinator coordinator(
+        exiting, [&](auto period, auto tick) { return timer.Schedule(period, std::move(tick)); });
+    coordinator.HandleSuspend({}, [] { return std::vector<std::wstring>{L"alpha", L"alpha", L""}; });
+    std::vector<PowerTransitionCoordinator::ResumeReconnectCompleted> completions;
+    coordinator.HandleResume({}, [&](auto ids, auto, auto completed) {
+        Check(ids == std::vector<std::wstring>{L"alpha"}, "delivery must deduplicate nonempty recovery targets");
+        completions.push_back(std::move(completed));
+    });
+    Check(completions.empty(), "a working scheduler must preserve the reconnect delay");
+    Check(timer.Tick(), "first scheduled delivery must remain active");
+    Check(timer.Tick() && completions.size() == 1, "ticks must not overlap an outstanding delivery");
+    auto first = completions.front();
+    first({L"alpha", L"alpha"});
+    for (int duplicate = 0; duplicate < 8; ++duplicate)
+        first({L"alpha"});
+    Check(timer.Tick() && completions.size() == 2, "duplicate completions must not consume retry budget");
+    first({L"alpha"});
+    Check(timer.Tick() && completions.size() == 2, "an old completion must not finish the next delivery");
+    completions.back()({L"alpha"});
+    for (int attempt = 2; attempt < 6; ++attempt) {
+        Check(timer.Tick(), "each target retains six actual attempt opportunities");
+        completions.back()({L"alpha"});
+    }
+    Check(completions.size() == 6 && !timer.Tick(), "six completed attempts must stop the periodic schedule");
+}
+
+void TestResumeCancelDuringDeliveryRejectsLateCompletionAndTicks() {
+    std::atomic_bool exiting = false;
+    ManualResumeTimer timer;
+    PowerTransitionCoordinator coordinator(
+        exiting, [&](auto period, auto tick) { return timer.Schedule(period, std::move(tick)); });
+    coordinator.HandleSuspend({}, [] { return std::vector<std::wstring>{L"alpha"}; });
+    std::barrier admitted{2};
+    std::barrier release{2};
+    std::uint64_t generation = 0;
+    coordinator.HandleResume({}, [&](auto, auto deliveredGeneration, auto completed) {
+        generation = deliveredGeneration;
+        admitted.arrive_and_wait();
+        release.arrive_and_wait();
+        completed({L"alpha"});
+    });
+    std::jthread worker([tick = timer.Tick] { static_cast<void>(tick()); });
+    admitted.arrive_and_wait();
+    coordinator.Cancel();
+    Check(timer.Cancelled, "cancellation must disarm the owned schedule without waiting on foreign delivery");
+    release.arrive_and_wait();
+    worker.join();
+    Check(!coordinator.IsResumeReconnectGenerationCurrent(generation),
+          "late completion must not restore a cancelled cycle");
+    Check(!timer.Tick(), "a callback admitted before cancellation must reject later deliveries");
+}
+
+void TestResumeCallbackCaptureRetiresUnlockedAndTimerOutlivesFacade() {
+    std::atomic_bool exiting = false;
+    ManualResumeTimer timer;
+    bool captureRetired = false;
+    {
+        PowerTransitionCoordinator coordinator(
+            exiting, [&](auto period, auto tick) { return timer.Schedule(period, std::move(tick)); });
+        coordinator.HandleSuspend({}, [] { return std::vector<std::wstring>{L"alpha"}; });
+        auto capture = std::shared_ptr<int>(new int{0}, [&](int* value) {
+            captureRetired = true;
+            Check(!coordinator.IsResumeReconnectGenerationCurrent(1),
+                  "retired callback may reenter generation inspection");
+            delete value;
+        });
+        coordinator.HandleResume({}, [capture = std::move(capture)](auto, auto, auto) {});
+        coordinator.Cancel();
+        Check(captureRetired, "cancellation must release foreign captures outside the state lock");
+    }
+    Check(!timer.Tick(), "retained timer callback must safely reject delivery after facade destruction");
+}
+
+void TestSuspendCallbackCannotRestoreCancelledRecovery() {
+    std::atomic_bool exiting = false;
+    PowerTransitionCoordinator coordinator(exiting, UnavailableScheduler);
+    coordinator.HandleSuspend([&] { coordinator.Cancel(); }, [] { return std::vector<std::wstring>{L"alpha"}; });
+    bool delivered = false;
+    coordinator.HandleResume({}, [&](auto, auto, auto) { delivered = true; });
+    Check(!delivered, "cancellation reentered during suspend must fence the returned recovery targets");
+}
+
+void TestNativeResumeTimerCancelsWhileDeliveryIsBlocked() {
+    struct DeliveryProbe {
+        std::binary_semaphore Entered{0};
+        std::binary_semaphore Release{0};
+        std::binary_semaphore Finished{0};
+        std::uint64_t Generation = 0;
+    };
+    auto probe = std::make_shared<DeliveryProbe>();
+    std::atomic_bool exiting = false;
+    PowerTransitionCoordinator coordinator(exiting);
+    coordinator.HandleSuspend({}, [] { return std::vector<std::wstring>{L"alpha"}; });
+    coordinator.HandleResume({}, [probe](auto ids, auto generation, auto completed) {
+        APTTYPE apartment;
+        APTTYPEQUALIFIER qualifier;
+        Check(SUCCEEDED(CoGetApartmentType(&apartment, &qualifier)),
+              "native resume delivery must initialize its Windows Runtime apartment");
+        probe->Generation = generation;
+        probe->Entered.release();
+        probe->Release.acquire();
+        completed(std::move(ids));
+        probe->Finished.release();
+    });
+    bool const entered = probe->Entered.try_acquire_for(std::chrono::seconds{20});
+    Check(entered, "native resume timer must deliver after its ten-second delay");
+    coordinator.Cancel();
+    probe->Release.release();
+    if (entered) {
+        Check(probe->Finished.try_acquire_for(std::chrono::seconds{5}),
+              "admitted native delivery must finish safely after timer cancellation");
+        Check(!coordinator.IsResumeReconnectGenerationCurrent(probe->Generation),
+              "native late completion must not revive cancelled recovery");
+    }
+}
+
 } // namespace
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Test Entry Point //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 int RunAppWorkCoordinatorTests() {
     TestUiRefreshCoalescesFlagsAndDrainsExactlyOnce();
@@ -318,8 +463,13 @@ int RunAppWorkCoordinatorTests() {
     TestUiRefreshAbandonRetainsDirtyFlagsForANewRequest();
     TestResumeReconnectCountsOnlyActuallyStartedAttempts();
     TestResumeReconnectPreservesPendingTargetsAcrossSuspendCycles();
-    TestResumeReconnectDeliversOnceWhenBothSchedulersAreUnavailable();
+    TestResumeReconnectDeliversOnceWhenSchedulerIsUnavailable();
     TestResumeReconnectFallbackRejectsStaleAndCancelledCompletions();
     TestResumeReconnectFallbackCompletionOutlivesCoordinatorSafely();
+    TestResumeDeliveryIsSingleFlightAndCompletionIsConsumedOnce();
+    TestResumeCancelDuringDeliveryRejectsLateCompletionAndTicks();
+    TestResumeCallbackCaptureRetiresUnlockedAndTimerOutlivesFacade();
+    TestSuspendCallbackCannotRestoreCancelledRecovery();
+    TestNativeResumeTimerCancelsWhileDeliveryIsBlocked();
     return g_failures;
 }

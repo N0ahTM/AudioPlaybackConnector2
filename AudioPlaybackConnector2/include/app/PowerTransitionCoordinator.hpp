@@ -1,38 +1,37 @@
 #pragma once
 
-#include <app/ResumeReconnectAttemptState.hpp>
-#include <core/DeviceService.hpp>
-
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
 
-/*------------------------------------------------------------------------------------------------------------*/
-/*//////// Power Transition Coordinator //////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------*/
-
+// Lifecycle methods run on the host's UI context. Timer delivery and completions
+// use independent shared state; they never access the coordinator facade.
 class PowerTransitionCoordinator {
 public:
     /*------------------------------------------------------------------------------------------------------------*/
-    /*//////// Constructors /////////////////////////////////////////////////////////////////////////////////////*/
+    /*//////// Types /////////////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
     using ResumeReconnectCompleted = std::function<void(std::vector<std::wstring>)>;
     using ResumeReconnectCallback =
         std::function<void(std::vector<std::wstring>, std::uint64_t, ResumeReconnectCompleted)>;
+    using Tick = std::function<bool()>; // false stops the periodic schedule
+    using CancelTimer = std::move_only_function<void()>;
+    // Returns an empty cancellation handle on scheduling failure. The scheduler
+    // must not call Tick inline. Cancellation is noexcept and permits reentrancy
+    // from Tick; already admitted delivery may finish using its own shared state.
+    using Scheduler = std::move_only_function<CancelTimer(std::chrono::milliseconds, Tick)>;
 
-    explicit PowerTransitionCoordinator(std::atomic<bool>& exiting);
-#if defined(APC_POWER_TRANSITION_COORDINATOR_TESTING)
-    enum class ResumeReconnectSchedulerModeForTesting { Normal, BothUnavailable };
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Constructors /////////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
 
-    PowerTransitionCoordinator(std::atomic<bool>& exiting, ResumeReconnectSchedulerModeForTesting schedulerMode);
-#endif
+    explicit PowerTransitionCoordinator(std::atomic<bool>& exiting, Scheduler scheduler = {});
     ~PowerTransitionCoordinator();
 
     /*------------------------------------------------------------------------------------------------------------*/
@@ -41,40 +40,20 @@ public:
 
     void Cancel() noexcept;
     void HandleSuspend(std::function<void()> flushSettings,
-                       std::shared_ptr<apc::device::DeviceService> deviceService) noexcept;
-    void HandleResume(std::shared_ptr<apc::device::DeviceService> deviceService,
-                      ResumeReconnectCallback reconnectAfterDelay) noexcept;
+                       std::function<std::vector<std::wstring>()> suspendDevices) noexcept;
+    void HandleResume(std::function<void()> resumeDevices, ResumeReconnectCallback reconnectAfterDelay) noexcept;
     void NotifyDeviceConnected(std::wstring_view deviceId) noexcept;
     [[nodiscard]] bool IsResumeReconnectGenerationCurrent(std::uint64_t generation) const noexcept;
-#if defined(APC_POWER_TRANSITION_COORDINATOR_TESTING)
-    void AddSuspendedRecoveryTargetsForTesting(std::vector<std::wstring> deviceIds) noexcept;
-#endif
 
 private:
-    struct ResumeState;
-    enum class DeliveryResult { Continue, Stop, CallbackDisassociated };
-
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Helpers ///////////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
+    struct ResumeState;
     void CancelResumeReconnectTimer() noexcept;
-    [[nodiscard]] static DeliveryResult
-    DeliverResumeReconnect(std::shared_ptr<ResumeState> const& state,
-                           std::uint64_t generation,
-                           PTP_CALLBACK_INSTANCE callbackInstance = nullptr) noexcept;
-    static void CALLBACK NativeResumeReconnectTimerCallback(PTP_CALLBACK_INSTANCE,
-                                                            void* context,
-                                                            PTP_TIMER timer) noexcept;
-
-    struct ResumeState {
-        std::mutex Mutex;
-        ResumeReconnectAttemptState Attempts;
-        std::uint64_t Generation = 0;
-        ResumeReconnectCallback Reconnect;
-        bool DeliveryInFlight = false;
-        bool Cancelled = false;
-    };
+    [[nodiscard]] static bool DeliverResumeReconnect(std::shared_ptr<ResumeState> const& state,
+                                                     std::uint64_t generation) noexcept;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
@@ -84,10 +63,6 @@ private:
     bool m_powerSuspended = false;
     std::shared_ptr<ResumeState> m_resumeState;
     std::chrono::steady_clock::time_point m_lastResumeHandledAt{};
-    winrt::Windows::System::Threading::ThreadPoolTimer m_resumeReconnectTimer{nullptr};
-    wil::unique_threadpool_timer m_nativeResumeReconnectTimer;
-#if defined(APC_POWER_TRANSITION_COORDINATOR_TESTING)
-    ResumeReconnectSchedulerModeForTesting m_resumeReconnectSchedulerModeForTesting =
-        ResumeReconnectSchedulerModeForTesting::Normal;
-#endif
+    Scheduler m_schedule;
+    CancelTimer m_cancelTimer;
 };

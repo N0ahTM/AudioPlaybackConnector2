@@ -39,8 +39,8 @@ public:
     }
 
     void RecordAttempts(std::vector<std::wstring> const& attemptedIds) {
-        for (auto const& id : attemptedIds) {
-            if (std::ranges::find(m_deviceIds, id) != m_deviceIds.end()) ++m_attemptCounts[id];
+        for (auto const& id : m_deviceIds) {
+            if (std::ranges::find(attemptedIds, id) != attemptedIds.end()) ++m_attemptCounts[id];
         }
     }
 

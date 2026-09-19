@@ -1,6 +1,17 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
+#include <filesystem>
+#include <limits>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include <windows.h>
+#include <wil/result.h>
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// String Helpers ////////////////////////////////////////////////////////////////////////////////////*/

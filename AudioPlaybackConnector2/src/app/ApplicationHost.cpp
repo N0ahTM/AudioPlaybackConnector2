@@ -1213,21 +1213,21 @@ void ApplicationHost::HandlePowerSuspend() {
                 DebugTrace(L"[App] SettingsStore synchronous suspend flush failed after bounded attempts");
             }
         },
-        m_deviceService);
+        [service = m_deviceService]() {
+            return service ? service->SuspendForPowerTransition() : std::vector<std::wstring>{};
+        });
 }
 
 void ApplicationHost::HandlePowerResume() {
     auto weak = weak_from_this();
     m_powerTransitionCoordinator.HandleResume(
-        m_deviceService,
+        [service = m_deviceService]() {
+            if (service) service->ResumeAfterPowerTransition();
+        },
         [weak](std::vector<std::wstring> deviceIds,
                std::uint64_t generation,
                PowerTransitionCoordinator::ResumeReconnectCompleted completed) {
-            auto completionUsed = std::make_shared<std::atomic_bool>(false);
-            auto finish = [completed = std::move(completed),
-                           completionUsed](std::vector<std::wstring> attemptedIds) mutable noexcept {
-                if (!completionUsed->exchange(true) && completed) completed(std::move(attemptedIds));
-            };
+            auto finish = std::move(completed);
 
             auto self = weak.lock();
             if (!self) {

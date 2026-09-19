@@ -479,7 +479,7 @@ void ApplicationHost::InitializeTray() {
 
 void ApplicationHost::InitializeNotifications() {
     m_log.Trace(L"[App] InitializeNotifications()");
-    m_notificationService = std::make_shared<NotificationService>(m_log, m_strings);
+    m_notificationService = std::make_shared<NotificationService>(m_log, m_strings, m_dispatcherQueue);
     auto weak = weak_from_this();
     m_notificationService->SetShouldShowNotificationCallback([weak]() -> bool {
         if (auto self = weak.lock()) {
@@ -488,16 +488,10 @@ void ApplicationHost::InitializeNotifications() {
         return true;
     });
     m_notificationService->SetReconnectCallback([weak](winrt::hstring deviceId) {
-        if (auto self = weak.lock()) {
-            static_cast<void>(self->RunOnUIThread([weak, deviceId = std::move(deviceId)]() mutable {
-                if (auto self = weak.lock()) {
-                    if (self->m_exiting.load() || !self->m_appController) return;
-                    if (auto selector = apc::app::DeviceSelector::ById(std::wstring_view(deviceId))) {
-                        (void)self->m_appController->Reconnect(std::move(*selector),
-                                                               apc::app::AppCommandContext::Detached());
-                    }
-                }
-            }));
+        if (auto self = weak.lock(); self && !self->m_exiting.load() && self->m_appController) {
+            if (auto selector = apc::app::DeviceSelector::ById(std::wstring_view(deviceId))) {
+                (void)self->m_appController->Reconnect(std::move(*selector), apc::app::AppCommandContext::Detached());
+            }
         }
     });
     const auto notificationsAvailable =

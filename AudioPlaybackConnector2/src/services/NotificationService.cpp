@@ -47,7 +47,7 @@ NotificationService::~NotificationService() {
 /*------------------------------------------------------------------------------------------------------------*/
 
 bool NotificationService::Initialize(winrt::hstring const& appName, winrt::Windows::Foundation::Uri const& logoUri) {
-    std::lock_guard lifecycleLock(m_lifecycleMutex);
+    auto lifetime = shared_from_this();
     TeardownCore(false);
 
     try {
@@ -58,14 +58,19 @@ bool NotificationService::Initialize(winrt::hstring const& appName, winrt::Windo
 
         auto notificationManager = AppNotifications::AppNotificationManager::Default();
         auto weak = weak_from_this();
-        auto notificationInvokedToken =
-            notificationManager.NotificationInvoked([weak, log = m_log](auto const&, auto const& args) noexcept {
+        const auto generation = m_registrationGeneration;
+        auto notificationInvokedToken = notificationManager.NotificationInvoked(
+            [weak, dispatcher = m_dispatcher, generation, log = m_log](auto const&, auto const& args) noexcept {
                 try {
-                    if (auto self = weak.lock()) {
-                        self->OnNotificationInvoked(args);
-                    }
+                    const auto accepted = dispatcher.TryEnqueue([weak, generation, argument = args.Argument()] {
+                        if (auto self = weak.lock();
+                            self && !self->m_isTearingDown && generation == self->m_registrationGeneration) {
+                            self->OnNotificationInvoked(argument);
+                        }
+                    });
+                    if (!accepted) log.Trace(L"[NotificationService] activation discarded during dispatcher shutdown");
                 } catch (...) {
-                    log.UnknownException(L"[NotificationService] notification callback failed");
+                    log.UnknownException(L"[NotificationService] notification dispatch failed");
                 }
             });
         bool registrationAttempted = false;
@@ -97,13 +102,13 @@ bool NotificationService::Initialize(winrt::hstring const& appName, winrt::Windo
             notificationManager.Register(appName, logoUri);
         }
 
-        {
-            auto guard = m_lock.lock_exclusive();
-            m_notificationManager = notificationManager;
-            m_notificationInvokedToken = notificationInvokedToken;
-            m_notificationsRegistered = true;
-            m_isTearingDown = false;
-        }
+        // Register may pump the UI queue; teardown must remain authoritative.
+        if (generation != m_registrationGeneration) return false;
+
+        m_notificationManager = notificationManager;
+        m_notificationInvokedToken = notificationInvokedToken;
+        m_notificationsRegistered = true;
+        m_isTearingDown = false;
         registrationGuard.release();
         m_log.Trace(L"[NotificationService] AppNotificationManager registered");
         return true;
@@ -121,33 +126,22 @@ bool NotificationService::Initialize(winrt::hstring const& appName, winrt::Windo
 
 void NotificationService::Teardown() noexcept {
     try {
-        std::lock_guard lifecycleLock(m_lifecycleMutex);
         TeardownCore(true);
     } catch (...) {
     }
 }
 
 void NotificationService::TeardownCore(bool clearCallbacks) {
-    AppNotifications::AppNotificationManager notificationManager{nullptr};
-    winrt::event_token notificationInvokedToken{};
-    bool notificationsRegistered = false;
-
-    {
-        std::lock_guard statusLock(m_statusNotificationMutex);
-        {
-            auto guard = m_lock.lock_exclusive();
-            m_isTearingDown = true;
-            notificationManager = std::exchange(m_notificationManager, nullptr);
-            notificationInvokedToken = std::exchange(m_notificationInvokedToken, {});
-            notificationsRegistered = std::exchange(m_notificationsRegistered, false);
-            if (clearCallbacks) {
-                m_reconnectCallback = nullptr;
-                m_shouldShowNotificationCallback = nullptr;
-            }
-            m_statusNotificationTags.clear();
-            ++m_statusNotificationGeneration;
-        }
+    m_isTearingDown = true;
+    ++m_registrationGeneration;
+    auto notificationManager = std::exchange(m_notificationManager, nullptr);
+    auto notificationInvokedToken = std::exchange(m_notificationInvokedToken, {});
+    const auto notificationsRegistered = std::exchange(m_notificationsRegistered, false);
+    if (clearCallbacks) {
+        m_reconnectCallback = nullptr;
+        m_shouldShowNotificationCallback = nullptr;
     }
+    m_statusNotificationTag = {};
 
     if (notificationManager && notificationInvokedToken.value) {
         try {
@@ -178,12 +172,10 @@ void NotificationService::TeardownCore(bool clearCallbacks) {
 /*------------------------------------------------------------------------------------------------------------*/
 
 void NotificationService::SetReconnectCallback(ReconnectRequestedCallback callback) {
-    auto guard = m_lock.lock_exclusive();
     m_reconnectCallback = std::move(callback);
 }
 
 void NotificationService::SetShouldShowNotificationCallback(ShouldShowNotificationCallback callback) {
-    auto guard = m_lock.lock_exclusive();
     m_shouldShowNotificationCallback = std::move(callback);
 }
 
@@ -191,36 +183,8 @@ void NotificationService::SetShouldShowNotificationCallback(ShouldShowNotificati
 /*//////// Internal Helpers //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-NotificationService::StatusNotificationTagReservation NotificationService::ReserveStatusNotificationTag() {
-    auto guard = m_lock.lock_exclusive();
-    const auto generation =
-        m_statusNotificationGeneration == std::numeric_limits<uint64_t>::max() ? 1 : m_statusNotificationGeneration + 1;
-    auto currentTag = winrt::hstring(kStatusNotificationTagPrefix) + winrt::hstring(std::to_wstring(generation));
-    std::vector<winrt::hstring> nextTags{currentTag};
-
-    StatusNotificationTagReservation reservation;
-    reservation.TagsToRemove = std::move(m_statusNotificationTags);
-    reservation.CurrentTag = std::move(currentTag);
-    reservation.Generation = generation;
-
-    m_statusNotificationTags = std::move(nextTags);
-    m_statusNotificationGeneration = generation;
-    return reservation;
-}
-
-void NotificationService::RollbackStatusNotificationTag(StatusNotificationTagReservation&& reservation) {
-    auto guard = m_lock.lock_exclusive();
-    if (reservation.Generation == m_statusNotificationGeneration) {
-        m_statusNotificationTags = std::move(reservation.TagsToRemove);
-    }
-}
-
 bool NotificationService::ShouldShowNotifications() const {
-    ShouldShowNotificationCallback callback;
-    {
-        auto guard = m_lock.lock_shared();
-        callback = m_shouldShowNotificationCallback;
-    }
+    auto callback = m_shouldShowNotificationCallback;
     if (!callback) return true;
     try {
         return callback();
@@ -237,13 +201,10 @@ bool NotificationService::ShouldShowNotifications() const {
 winrt::fire_and_forget
 NotificationService::RemoveStaleStatusToastsAsync(AppNotifications::AppNotificationManager notificationManager,
                                                   winrt::hstring group,
-                                                  // cppcheck-suppress passedByValue
-                                                  std::vector<winrt::hstring> tagsToRemove,
+                                                  winrt::hstring tagToRemove,
                                                   util::LogSink log) {
     try {
-        for (auto const& tagToRemove : tagsToRemove) {
-            if (!tagToRemove.empty()) co_await notificationManager.RemoveByTagAndGroupAsync(tagToRemove, group);
-        }
+        if (!tagToRemove.empty()) co_await notificationManager.RemoveByTagAndGroupAsync(tagToRemove, group);
     } catch (winrt::hresult_error const& ex) {
         log.Exception(L"[NotificationService] stale notification removal failed", ex);
     } catch (std::exception const& ex) {
@@ -255,148 +216,139 @@ NotificationService::RemoveStaleStatusToastsAsync(AppNotifications::AppNotificat
 
 bool NotificationService::ShowStatusToast(std::wstring const& xml,
                                           winrt::Windows::Foundation::DateTime const& expiration) {
-    AppNotifications::AppNotificationManager notificationManager{nullptr};
-    StatusNotificationTagReservation reservation;
-    {
-        std::lock_guard statusLock(m_statusNotificationMutex);
-        {
-            auto guard = m_lock.lock_shared();
-            if (m_isTearingDown || !m_notificationManager || !m_notificationsRegistered) {
-                return false;
-            }
-            notificationManager = m_notificationManager;
-        }
-
-        try {
-            reservation = ReserveStatusNotificationTag();
-        } catch (winrt::hresult_error const& ex) {
-            m_log.Exception(L"[NotificationService] failed to reserve notification tag", ex);
-            return false;
-        } catch (std::exception const& ex) {
-            m_log.Exception(L"[NotificationService] failed to reserve notification tag", ex);
-            return false;
-        } catch (...) {
-            m_log.UnknownException(L"[NotificationService] failed to reserve notification tag");
-            return false;
-        }
-        try {
-            AppNotifications::AppNotification notification{winrt::hstring(xml)};
-            notification.Group(kStatusNotificationGroup);
-            notification.Tag(reservation.CurrentTag);
-            notification.Expiration(expiration);
-            notification.ExpiresOnReboot(true);
-            notificationManager.Show(notification);
-        } catch (winrt::hresult_error const& ex) {
-            RollbackStatusNotificationTag(std::move(reservation));
-            m_log.Exception(L"[NotificationService] AppNotificationManager.Show failed", ex);
-            return false;
-        } catch (std::exception const& ex) {
-            RollbackStatusNotificationTag(std::move(reservation));
-            m_log.Exception(L"[NotificationService] AppNotificationManager.Show failed", ex);
-            return false;
-        } catch (...) {
-            RollbackStatusNotificationTag(std::move(reservation));
-            m_log.UnknownException(L"[NotificationService] AppNotificationManager.Show failed");
-            return false;
-        }
-    }
-
+    if (m_isTearingDown || !m_notificationManager || !m_notificationsRegistered || m_showInProgress) return false;
+    auto lifetime = shared_from_this();
+    m_showInProgress = true;
+    auto finish = wil::scope_exit([&] { m_showInProgress = false; });
+    const auto generation = m_registrationGeneration;
+    auto manager = m_notificationManager;
     try {
-        RemoveStaleStatusToastsAsync(
-            notificationManager, kStatusNotificationGroup, std::move(reservation.TagsToRemove), m_log);
+        // Never reuse a tag across registrations: delayed removal may outlive
+        // this service and must not delete a later service's notification.
+        GUID identity{};
+        winrt::check_hresult(CoCreateGuid(&identity));
+        wchar_t identityText[39]{};
+        StringFromGUID2(identity, identityText, static_cast<int>(std::size(identityText)));
+        auto tag = winrt::hstring(kStatusNotificationTagPrefix) + identityText;
+        AppNotifications::AppNotification notification{winrt::hstring(xml)};
+        notification.Group(kStatusNotificationGroup);
+        notification.Tag(tag);
+        notification.Expiration(expiration);
+        notification.ExpiresOnReboot(true);
+        manager.Show(notification);
+        if (m_isTearingDown || generation != m_registrationGeneration) {
+            RemoveStaleStatusToastsAsync(manager, kStatusNotificationGroup, tag, m_log);
+            return false;
+        }
+        auto previous = std::exchange(m_statusNotificationTag, std::move(tag));
+        RemoveStaleStatusToastsAsync(manager, kStatusNotificationGroup, std::move(previous), m_log);
+        return true;
+    } catch (winrt::hresult_error const& ex) {
+        m_log.Exception(L"[NotificationService] AppNotificationManager.Show failed", ex);
+    } catch (std::exception const& ex) {
+        m_log.Exception(L"[NotificationService] AppNotificationManager.Show failed", ex);
     } catch (...) {
-        m_log.UnknownException(L"[NotificationService] failed to schedule stale notification removal");
+        m_log.UnknownException(L"[NotificationService] AppNotificationManager.Show failed");
     }
-    return true;
+    return false;
 }
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Show Notifications ////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-void NotificationService::ShowAppStarted() {
+struct NotificationService::Content {
+    std::string_view title;
+    std::string_view body;
+    std::string_view caption;
+    std::wstring_view image;
+    std::wstring_view audio;
+    std::string_view actionText;
+    std::wstring_view action;
+    std::wstring_view duration;
+    std::chrono::seconds lifetime = std::chrono::minutes(1);
+};
+
+void NotificationService::ShowNotification(Content const& content,
+                                           winrt::hstring const& id,
+                                           winrt::hstring const& deviceName) {
     if (!ShouldShowNotifications()) return;
-    auto title = NotificationText(*m_strings, "Notification_AppStarted_Title");
-    auto body = NotificationText(*m_strings, "Notification_AppStarted_Body");
-    auto xml = ToastXmlBuilder{}
-                   .Title(title)
-                   .Body(body)
-                   .AppLogoOverride(L"ms-appx:///Images/ToastInfo.png")
-                   .SilentAudio()
-                   .Build();
-    ShowStatusToast(xml, ExpirationFromNow(std::chrono::seconds(7)));
+    auto xml = ToastXmlBuilder{};
+    xml.Title(NotificationText(*m_strings, content.title, deviceName)).AppLogoOverride(content.image);
+    if (!content.body.empty()) xml.Body(NotificationText(*m_strings, content.body));
+    if (!content.caption.empty()) xml.Caption(NotificationText(*m_strings, content.caption));
+    if (!content.action.empty()) {
+        xml.Action(NotificationText(*m_strings, content.actionText),
+                   ToastArguments{}.Action(content.action).DeviceId(id));
+    }
+    if (content.audio.empty())
+        xml.SilentAudio();
+    else
+        xml.Audio(content.audio);
+    xml.Duration(content.duration);
+    ShowStatusToast(xml.Build(), ExpirationFromNow(content.lifetime));
+}
+
+void NotificationService::ShowAppStarted() {
+    ShowNotification({.title = "Notification_AppStarted_Title",
+                      .body = "Notification_AppStarted_Body",
+                      .image = L"ms-appx:///Images/ToastInfo.png",
+                      .lifetime = std::chrono::seconds(7)});
 }
 
 void NotificationService::ShowDeviceConnected(winrt::hstring const& id, winrt::hstring const& deviceName) {
-    if (!ShouldShowNotifications()) return;
-    auto title = NotificationText(*m_strings, "Notification_Connected", deviceName);
-    auto xml =
-        ToastXmlBuilder{}
-            .Title(title)
-            .Caption(NotificationText(*m_strings, "Notification_Connected_Caption"))
-            .Action(NotificationText(*m_strings, "Reconnect"), ToastArguments{}.Action(L"reconnect").DeviceId(id))
-            .AppLogoOverride(L"ms-appx:///Images/ToastConnected.png")
-            .Audio(L"ms-winsoundevent:Notification.Default")
-            .Duration(L"long")
-            .Build();
-
-    ShowStatusToast(xml, ExpirationFromNow(std::chrono::minutes(1)));
+    ShowNotification({.title = "Notification_Connected",
+                      .caption = "Notification_Connected_Caption",
+                      .image = L"ms-appx:///Images/ToastConnected.png",
+                      .audio = L"ms-winsoundevent:Notification.Default",
+                      .actionText = "Reconnect",
+                      .action = L"reconnect",
+                      .duration = L"long"},
+                     id,
+                     deviceName);
 }
 
-void NotificationService::ShowDeviceDisconnected(winrt::hstring const&, winrt::hstring const& deviceName) {
-    if (!ShouldShowNotifications()) return;
-    auto title = NotificationText(*m_strings, "Notification_Disconnected", deviceName);
-    auto xml = ToastXmlBuilder{}
-                   .Title(title)
-                   .Body(NotificationText(*m_strings, "Notification_Disconnected_Body"))
-                   .AppLogoOverride(L"ms-appx:///Images/ToastWarning.png")
-                   .SilentAudio()
-                   .Build();
-
-    ShowStatusToast(xml, ExpirationFromNow(std::chrono::minutes(1)));
+void NotificationService::ShowDeviceDisconnected(winrt::hstring const& id, winrt::hstring const& deviceName) {
+    ShowNotification({.title = "Notification_Disconnected",
+                      .body = "Notification_Disconnected_Body",
+                      .image = L"ms-appx:///Images/ToastWarning.png"},
+                     id,
+                     deviceName);
 }
 
-void NotificationService::ShowAutoReconnect(winrt::hstring const&, winrt::hstring const& deviceName) {
-    if (!ShouldShowNotifications()) return;
-    auto title = NotificationText(*m_strings, "Notification_AutoReconnect", deviceName);
-    auto xml = ToastXmlBuilder{}
-                   .Title(title)
-                   .Body(NotificationText(*m_strings, "Notification_AutoReconnect_Body"))
-                   .AppLogoOverride(L"ms-appx:///Images/ToastReconnect.png")
-                   .SilentAudio()
-                   .Build();
-
-    ShowStatusToast(xml, ExpirationFromNow(std::chrono::minutes(1)));
+void NotificationService::ShowAutoReconnect(winrt::hstring const& id, winrt::hstring const& deviceName) {
+    ShowNotification({.title = "Notification_AutoReconnect",
+                      .body = "Notification_AutoReconnect_Body",
+                      .image = L"ms-appx:///Images/ToastReconnect.png"},
+                     id,
+                     deviceName);
 }
 
 void NotificationService::ShowAutoReconnectFailed(winrt::hstring const& id, winrt::hstring const& deviceName) {
-    if (!ShouldShowNotifications()) return;
-    auto title = NotificationText(*m_strings, "Notification_AutoReconnectFailed_Title", deviceName);
-    auto xml =
-        ToastXmlBuilder{}
-            .Title(title)
-            .Body(NotificationText(*m_strings, "Notification_AutoReconnectFailed_Body"))
-            .Action(NotificationText(*m_strings, "Notification_Retry"), ToastArguments{}.Action(L"retry").DeviceId(id))
-            .AppLogoOverride(L"ms-appx:///Images/ToastError.png")
-            .Audio(L"ms-winsoundevent:Notification.Looping.Alarm2")
-            .Build();
-
-    ShowStatusToast(xml, ExpirationFromNow(std::chrono::hours(1)));
+    ShowNotification({.title = "Notification_AutoReconnectFailed_Title",
+                      .body = "Notification_AutoReconnectFailed_Body",
+                      .image = L"ms-appx:///Images/ToastError.png",
+                      .audio = L"ms-winsoundevent:Notification.Looping.Alarm2",
+                      .actionText = "Notification_Retry",
+                      .action = L"retry",
+                      .lifetime = std::chrono::hours(1)},
+                     id,
+                     deviceName);
 }
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Event Handler /////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-void NotificationService::OnNotificationInvoked(AppNotifications::AppNotificationActivatedEventArgs const& args) {
+void NotificationService::OnNotificationInvoked(winrt::hstring const& argument) {
     try {
-        auto parsedArguments = ToastArguments::Parse(args.Argument());
+        auto parsedArguments = ToastArguments::Parse(argument);
         auto action = ToastArguments::Find(parsedArguments, L"action");
         auto deviceId = ToastArguments::Find(parsedArguments, L"deviceId");
 
         if (!deviceId) {
             m_log.Trace(L"[NotificationService] App notification invoked without deviceId: {0}",
-                        std::wstring(args.Argument()));
+                        std::wstring(argument));
             return;
         }
 
@@ -405,12 +357,8 @@ void NotificationService::OnNotificationInvoked(AppNotifications::AppNotificatio
                     *deviceId);
 
         if (action && (*action == L"reconnect" || *action == L"retry")) {
-            ReconnectRequestedCallback reconnectCallback;
-            {
-                auto guard = m_lock.lock_shared();
-                if (m_isTearingDown) return;
-                reconnectCallback = m_reconnectCallback;
-            }
+            if (m_isTearingDown) return;
+            auto reconnectCallback = m_reconnectCallback;
             if (reconnectCallback) reconnectCallback(winrt::hstring(*deviceId));
         }
     } catch (winrt::hresult_error const& ex) {

@@ -412,3 +412,22 @@ possibly old resources. A window that is not loaded yet updates its pending init
 the current resources when Loaded runs. Tests embed the actual eight resource files and verify fallback,
 concurrent reading during replacement, owner independence and retained reader lifetime. Interactive
 WinUI localization and layout still require runtime inspection.
+
+## Notification ownership
+
+ApplicationHost constructs, calls and tears down NotificationService on its UI dispatcher. Native
+activation callbacks capture the dispatcher, weak service, registration generation and weak log sink.
+They copy arguments into the UI queue without acquiring the service on the native callback thread.
+Queued work checks the generation and teardown state before invoking the host's reconnect callback.
+There is no service mutex and no second dispatcher hop in the host callback.
+
+Teardown invalidates the generation and detaches the manager before revoking the native registration.
+Initialize and Show retain their UI owner across Windows calls that may pump messages. A returning
+registration cannot publish itself after teardown. Nested Show calls are best-effort and are declined
+while an outer Show is active. The last successful status tag changes only after Show returns; failure
+preserves the previous tag. Unique tags prevent delayed cleanup from deleting a later notification.
+Cleanup coroutines retain only manager, tag, group and log values, never the service or host.
+
+These ownership properties have a call-site review and product build/static-analysis verification.
+Headless tests do not instantiate AppNotificationManager. Interactive activation, shutdown during
+delivery and notification behavior on the supported packaged/unpackaged matrix remain runtime checks.

@@ -7,13 +7,15 @@
 
 #include <cstdint>
 #include <functional>
-#include <mutex>
-#include <vector>
+#include <winrt/Microsoft.UI.Dispatching.h>
+#include <winrt/Microsoft.Windows.AppNotifications.h>
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Notification Service //////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
+// Lifecycle, preferences and rendering belong to the host UI thread. Native
+// activation callbacks only enqueue immutable arguments for that same owner.
 class NotificationService : public std::enable_shared_from_this<NotificationService> {
 public:
     using ReconnectRequestedCallback = std::function<void(winrt::hstring deviceId)>;
@@ -23,8 +25,10 @@ public:
     /*//////// Lifecycle /////////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    explicit NotificationService(util::LogSink log, std::shared_ptr<StringResources const> strings)
-        : m_log(std::move(log)), m_strings(std::move(strings)) {}
+    explicit NotificationService(util::LogSink log,
+                                 std::shared_ptr<StringResources const> strings,
+                                 winrt::Microsoft::UI::Dispatching::DispatcherQueue dispatcher)
+        : m_log(std::move(log)), m_strings(std::move(strings)), m_dispatcher(std::move(dispatcher)) {}
     ~NotificationService();
 
     NotificationService(const NotificationService&) = delete;
@@ -52,28 +56,20 @@ public:
     void ShowAutoReconnect(winrt::hstring const& id, winrt::hstring const& deviceName);
     void ShowAutoReconnectFailed(winrt::hstring const& id, winrt::hstring const& deviceName);
 
-    void
-    OnNotificationInvoked(winrt::Microsoft::Windows::AppNotifications::AppNotificationActivatedEventArgs const& args);
-
 private:
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Internal Helpers //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    struct StatusNotificationTagReservation {
-        std::vector<winrt::hstring> TagsToRemove;
-        winrt::hstring CurrentTag;
-        uint64_t Generation = 0;
-    };
-
     void TeardownCore(bool clearCallbacks);
-    [[nodiscard]] StatusNotificationTagReservation ReserveStatusNotificationTag();
-    void RollbackStatusNotificationTag(StatusNotificationTagReservation&& reservation);
+    struct Content;
+    void ShowNotification(Content const& content, winrt::hstring const& id = {}, winrt::hstring const& deviceName = {});
+    void OnNotificationInvoked(winrt::hstring const& argument);
     [[nodiscard]] bool ShouldShowNotifications() const;
     static winrt::fire_and_forget RemoveStaleStatusToastsAsync(
         winrt::Microsoft::Windows::AppNotifications::AppNotificationManager notificationManager,
         winrt::hstring group,
-        std::vector<winrt::hstring> tagsToRemove,
+        winrt::hstring tagToRemove,
         util::LogSink log);
     bool ShowStatusToast(std::wstring const& xml, winrt::Windows::Foundation::DateTime const& expiration);
 
@@ -87,11 +83,10 @@ private:
     winrt::event_token m_notificationInvokedToken{};
     ReconnectRequestedCallback m_reconnectCallback;
     ShouldShowNotificationCallback m_shouldShowNotificationCallback;
-    std::vector<winrt::hstring> m_statusNotificationTags;
-    uint64_t m_statusNotificationGeneration = 0;
+    winrt::hstring m_statusNotificationTag;
+    bool m_showInProgress = false;
     bool m_notificationsRegistered = false;
     bool m_isTearingDown = false;
-    std::mutex m_lifecycleMutex;
-    std::mutex m_statusNotificationMutex;
-    mutable wil::srwlock m_lock;
+    winrt::Microsoft::UI::Dispatching::DispatcherQueue m_dispatcher{nullptr};
+    uint64_t m_registrationGeneration = 0;
 };

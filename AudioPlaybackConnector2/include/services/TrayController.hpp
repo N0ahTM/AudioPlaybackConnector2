@@ -1,5 +1,8 @@
 #pragma once
 
+#include <core/StringResources.hpp>
+#include <memory>
+
 #include <app/AppController.hpp>
 #include <ui/TrayIcon.hpp>
 #include <ui/TrayContextMenu.hpp>
@@ -8,7 +11,6 @@
 #include <core/ThemeHelper.hpp>
 
 #include <functional>
-#include <memory>
 #include <atomic>
 #include <cstdint>
 #include <string_view>
@@ -31,7 +33,7 @@ public:
     /*//////// Lifecycle /////////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    explicit TrayController(util::LogSink log);
+    explicit TrayController(util::LogSink log, std::shared_ptr<StringResources const> strings);
     ~TrayController();
 
     TrayController(const TrayController&) = delete;
@@ -100,6 +102,7 @@ private:
     /*------------------------------------------------------------------------------------------------------------*/
 
     util::LogSink m_log;
+    std::shared_ptr<StringResources const> m_strings;
     HWND m_hwnd = nullptr;
     winrt::Microsoft::UI::Xaml::Window m_mainWindow{nullptr};
 

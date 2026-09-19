@@ -89,8 +89,8 @@ void SetItemContent(NavigationViewItem const& item, std::wstring_view text) {
     item.Content(winrt::box_value(winrt::hstring(text)));
 }
 
-std::wstring BuildVersionText(util::LogSink const& log) {
-    std::wstring label(_("About_Version"));
+std::wstring BuildVersionText(util::LogSink const& log, StringResources const& strings) {
+    std::wstring label(strings.Get("About_Version"));
     try {
         auto version = winrt::Windows::ApplicationModel::Package::Current().Id().Version();
         auto versionText =
@@ -264,76 +264,92 @@ void SettingsWindow::CloseAfterInitializationFailure() noexcept {
     }
 }
 
+void SettingsWindow::ApplyLanguage(std::wstring_view language) {
+    if (m_initialSettingsSnapshot) m_initialSettingsSnapshot->Language = language;
+    if (!m_loaded || m_closed) return;
+    SelectLanguage(language);
+    LocalizeSettingsText();
+    ShowSettingsPage(m_currentPage);
+    UpdateContentPanelWidth();
+}
+
 void SettingsWindow::LocalizeSettingsText() {
-    this->Title(winrt::hstring(_("Settings_Title")));
-    apc::ui::SetButtonLabel(SettingsHelpButton(), winrt::hstring(_("Settings_Help")));
-    SettingsHelpText().Text(winrt::hstring(_("Settings_Help")));
-    apc::ui::SetButtonLabel(SettingsBackButton(), winrt::hstring(_("DeviceOptions_Back")));
-    DiagnosticsExpander().Header(box_value(winrt::hstring(_("Settings_Diagnostics"))));
-    SettingsPageTitle().Text(
-        winrt::hstring(m_currentPage == SettingsPage::App ? _("Settings_Title") : _("Settings_Help")));
-    ConnectionGroupText().Text(winrt::hstring(_("Settings_Connections")));
+    this->Title(winrt::hstring(m_strings->Get("Settings_Title")));
+    apc::ui::SetButtonLabel(SettingsHelpButton(), winrt::hstring(m_strings->Get("Settings_Help")));
+    SettingsHelpText().Text(winrt::hstring(m_strings->Get("Settings_Help")));
+    apc::ui::SetButtonLabel(SettingsBackButton(), winrt::hstring(m_strings->Get("DeviceOptions_Back")));
+    DiagnosticsExpander().Header(box_value(winrt::hstring(m_strings->Get("Settings_Diagnostics"))));
+    SettingsPageTitle().Text(winrt::hstring(m_currentPage == SettingsPage::App ? m_strings->Get("Settings_Title")
+                                                                               : m_strings->Get("Settings_Help")));
+    ConnectionGroupText().Text(winrt::hstring(m_strings->Get("Settings_Connections")));
 
-    ConnectOnStartupLabel().Text(winrt::hstring(_("Settings_ConnectOnStartup")));
-    apc::ui::SetTooltipText(ConnectOnStartupLabel(), winrt::hstring(_("Settings_ConnectOnStartup_Desc")));
-    ReconnectOnConnectionLossLabel().Text(winrt::hstring(_("Settings_ReconnectOnConnectionLoss")));
+    ConnectOnStartupLabel().Text(winrt::hstring(m_strings->Get("Settings_ConnectOnStartup")));
+    apc::ui::SetTooltipText(ConnectOnStartupLabel(), winrt::hstring(m_strings->Get("Settings_ConnectOnStartup_Desc")));
+    ReconnectOnConnectionLossLabel().Text(winrt::hstring(m_strings->Get("Settings_ReconnectOnConnectionLoss")));
     apc::ui::SetTooltipText(ReconnectOnConnectionLossLabel(),
-                            winrt::hstring(_("Settings_ReconnectOnConnectionLoss_Desc")));
-    AllowIncomingConnectionsLabel().Text(winrt::hstring(_("Settings_AllowIncomingConnections")));
+                            winrt::hstring(m_strings->Get("Settings_ReconnectOnConnectionLoss_Desc")));
+    AllowIncomingConnectionsLabel().Text(winrt::hstring(m_strings->Get("Settings_AllowIncomingConnections")));
     apc::ui::SetTooltipText(AllowIncomingConnectionsLabel(),
-                            winrt::hstring(_("Settings_AllowIncomingConnections_Desc")));
+                            winrt::hstring(m_strings->Get("Settings_AllowIncomingConnections_Desc")));
 
-    LanguageLabel().Text(winrt::hstring(_("Settings_Language")));
-    SetItemContent(LanguageSystemItem(), _("Settings_System"));
-    SetItemContent(LanguageEnglishItem(), _("Language_English"));
-    SetItemContent(LanguageGermanItem(), _("Language_German"));
-    SetItemContent(LanguageFrenchItem(), _("Language_French"));
-    SetItemContent(LanguageSpanishItem(), _("Language_Spanish"));
-    SetItemContent(LanguageJapaneseItem(), _("Language_Japanese"));
-    SetItemContent(LanguageKoreanItem(), _("Language_Korean"));
-    SetItemContent(LanguageChineseSimplifiedItem(), _("Language_ChineseSimplified"));
-    SetItemContent(LanguageChineseTraditionalItem(), _("Language_ChineseTraditional"));
-    StartWithWindowsLabel().Text(winrt::hstring(_("Settings_StartWithWindows")));
-    apc::ui::SetTooltipText(StartWithWindowsLabel(), winrt::hstring(_("Settings_StartWithWindows_Desc")));
-    ShowNotificationsLabel().Text(winrt::hstring(_("Settings_ShowNotifications")));
-    apc::ui::SetTooltipText(ShowNotificationsLabel(), winrt::hstring(_("Settings_ShowNotifications_Desc")));
-    SystemBackdropEffectsLabel().Text(winrt::hstring(_("Settings_SystemBackdropEffects")));
-    apc::ui::SetTooltipText(SystemBackdropEffectsLabel(), winrt::hstring(_("Settings_SystemBackdropEffects_Desc")));
-    WindowPlacementLabel().Text(winrt::hstring(_("Settings_WindowPlacement")));
-    apc::ui::SetTooltipText(WindowPlacementLabel(), winrt::hstring(_("Settings_WindowPlacement_Desc")));
-    apc::ui::SetButtonLabel(ResetWindowPlacementButton(), winrt::hstring(_("Settings_WindowPlacement_Reset")));
+    LanguageLabel().Text(winrt::hstring(m_strings->Get("Settings_Language")));
+    SetItemContent(LanguageSystemItem(), m_strings->Get("Settings_System"));
+    SetItemContent(LanguageEnglishItem(), m_strings->Get("Language_English"));
+    SetItemContent(LanguageGermanItem(), m_strings->Get("Language_German"));
+    SetItemContent(LanguageFrenchItem(), m_strings->Get("Language_French"));
+    SetItemContent(LanguageSpanishItem(), m_strings->Get("Language_Spanish"));
+    SetItemContent(LanguageJapaneseItem(), m_strings->Get("Language_Japanese"));
+    SetItemContent(LanguageKoreanItem(), m_strings->Get("Language_Korean"));
+    SetItemContent(LanguageChineseSimplifiedItem(), m_strings->Get("Language_ChineseSimplified"));
+    SetItemContent(LanguageChineseTraditionalItem(), m_strings->Get("Language_ChineseTraditional"));
+    StartWithWindowsLabel().Text(winrt::hstring(m_strings->Get("Settings_StartWithWindows")));
+    apc::ui::SetTooltipText(StartWithWindowsLabel(), winrt::hstring(m_strings->Get("Settings_StartWithWindows_Desc")));
+    ShowNotificationsLabel().Text(winrt::hstring(m_strings->Get("Settings_ShowNotifications")));
+    apc::ui::SetTooltipText(ShowNotificationsLabel(),
+                            winrt::hstring(m_strings->Get("Settings_ShowNotifications_Desc")));
+    SystemBackdropEffectsLabel().Text(winrt::hstring(m_strings->Get("Settings_SystemBackdropEffects")));
+    apc::ui::SetTooltipText(SystemBackdropEffectsLabel(),
+                            winrt::hstring(m_strings->Get("Settings_SystemBackdropEffects_Desc")));
+    WindowPlacementLabel().Text(winrt::hstring(m_strings->Get("Settings_WindowPlacement")));
+    apc::ui::SetTooltipText(WindowPlacementLabel(), winrt::hstring(m_strings->Get("Settings_WindowPlacement_Desc")));
+    apc::ui::SetButtonLabel(ResetWindowPlacementButton(),
+                            winrt::hstring(m_strings->Get("Settings_WindowPlacement_Reset")));
 
-    PrivacyModeLabel().Text(winrt::hstring(_("Settings_PrivacyMode")));
-    apc::ui::SetTooltipText(PrivacyModeLabel(), winrt::hstring(_("Settings_PrivacyMode_Desc")));
+    PrivacyModeLabel().Text(winrt::hstring(m_strings->Get("Settings_PrivacyMode")));
+    apc::ui::SetTooltipText(PrivacyModeLabel(), winrt::hstring(m_strings->Get("Settings_PrivacyMode_Desc")));
     xaml_automation::AutomationProperties::SetHelpText(PrivacyModeToggle(),
-                                                       winrt::hstring(_("Settings_PrivacyMode_Desc")));
+                                                       winrt::hstring(m_strings->Get("Settings_PrivacyMode_Desc")));
 
-    DiagnosticsPrivacyText().Text(winrt::hstring(_("Settings_Diagnostics_PrivacyNote")));
+    DiagnosticsPrivacyText().Text(winrt::hstring(m_strings->Get("Settings_Diagnostics_PrivacyNote")));
+    apc::ui::SetButtonLabel(TroubleshootingButton(),
+                            TroubleshootingButtonText(),
+                            winrt::hstring(m_strings->Get("Settings_Troubleshooting")));
+    apc::ui::SetButtonLabel(CopyDiagnosticsButton(),
+                            CopyDiagnosticsButtonText(),
+                            winrt::hstring(m_strings->Get("Settings_CopyDiagnostics")));
     apc::ui::SetButtonLabel(
-        TroubleshootingButton(), TroubleshootingButtonText(), winrt::hstring(_("Settings_Troubleshooting")));
+        ReportBugButton(), ReportBugButtonText(), winrt::hstring(m_strings->Get("Settings_ReportBug")));
     apc::ui::SetButtonLabel(
-        CopyDiagnosticsButton(), CopyDiagnosticsButtonText(), winrt::hstring(_("Settings_CopyDiagnostics")));
-    apc::ui::SetButtonLabel(ReportBugButton(), ReportBugButtonText(), winrt::hstring(_("Settings_ReportBug")));
-    apc::ui::SetButtonLabel(
-        FeatureRequestButton(), FeatureRequestButtonText(), winrt::hstring(_("Settings_FeatureRequest")));
+        FeatureRequestButton(), FeatureRequestButtonText(), winrt::hstring(m_strings->Get("Settings_FeatureRequest")));
     apc::ui::SetButtonLabel(OpenBluetoothSettingsButton(),
                             OpenBluetoothSettingsButtonText(),
-                            winrt::hstring(_("Settings_OpenBluetoothSettings")));
+                            winrt::hstring(m_strings->Get("Settings_OpenBluetoothSettings")));
     apc::ui::SetButtonLabel(
-        OpenLogFolderButton(), OpenLogFolderButtonText(), winrt::hstring(_("Settings_OpenLogFolder")));
+        OpenLogFolderButton(), OpenLogFolderButtonText(), winrt::hstring(m_strings->Get("Settings_OpenLogFolder")));
 
-    VersionText().Text(winrt::hstring(BuildVersionText(m_log)));
-    CopyrightText().Text(winrt::hstring(_("About_Copyright")));
-    apc::ui::SetButtonLabel(RepositoryButton(), RepositoryButtonText(), winrt::hstring(_("Settings_Repository")));
+    VersionText().Text(winrt::hstring(BuildVersionText(m_log, *m_strings)));
+    CopyrightText().Text(winrt::hstring(m_strings->Get("About_Copyright")));
+    apc::ui::SetButtonLabel(
+        RepositoryButton(), RepositoryButtonText(), winrt::hstring(m_strings->Get("Settings_Repository")));
 
-    SetAutomationName(ConnectOnStartupToggle(), _("Settings_ConnectOnStartup"));
-    SetAutomationName(ReconnectOnConnectionLossToggle(), _("Settings_ReconnectOnConnectionLoss"));
-    SetAutomationName(AllowIncomingConnectionsToggle(), _("Settings_AllowIncomingConnections"));
-    SetAutomationName(PrivacyModeToggle(), _("Settings_PrivacyMode"));
-    SetAutomationName(StartWithWindowsToggle(), _("Settings_StartWithWindows"));
-    SetAutomationName(ShowNotificationsToggle(), _("Settings_ShowNotifications"));
-    SetAutomationName(SystemBackdropEffectsToggle(), _("Settings_SystemBackdropEffects"));
-    SetAutomationName(LanguageComboBox(), _("Settings_Language"));
+    SetAutomationName(ConnectOnStartupToggle(), m_strings->Get("Settings_ConnectOnStartup"));
+    SetAutomationName(ReconnectOnConnectionLossToggle(), m_strings->Get("Settings_ReconnectOnConnectionLoss"));
+    SetAutomationName(AllowIncomingConnectionsToggle(), m_strings->Get("Settings_AllowIncomingConnections"));
+    SetAutomationName(PrivacyModeToggle(), m_strings->Get("Settings_PrivacyMode"));
+    SetAutomationName(StartWithWindowsToggle(), m_strings->Get("Settings_StartWithWindows"));
+    SetAutomationName(ShowNotificationsToggle(), m_strings->Get("Settings_ShowNotifications"));
+    SetAutomationName(SystemBackdropEffectsToggle(), m_strings->Get("Settings_SystemBackdropEffects"));
+    SetAutomationName(LanguageComboBox(), m_strings->Get("Settings_Language"));
 }
 
 void SettingsWindow::RevealAtTarget(HWND hwnd) {
@@ -475,7 +491,8 @@ void SettingsWindow::CopyDiagnosticsButton_Click(IInspectable const&, RoutedEven
         auto application = controller ? controller->Snapshot() : apc::app::AppSnapshot{};
         auto snapshot = std::move(application.Settings);
         auto connectedCount = application.Tray.ConnectedDevices.size();
-        auto context = apc::ui::CaptureSettingsDiagnosticsReportContext(BuildVersionText(m_log));
+        auto context =
+            apc::ui::CaptureSettingsDiagnosticsReportContext(BuildVersionText(m_log, *m_strings), *m_strings);
         auto logPath = m_log.Path();
         auto requestId = ++m_diagnosticsCopyRequestId;
         m_diagnosticsCopyInProgress = true;
@@ -500,8 +517,9 @@ void SettingsWindow::CopyDiagnosticsButton_Click(IInspectable const&, RoutedEven
     m_diagnosticsCopyInProgress = false;
     try {
         CopyDiagnosticsButton().IsEnabled(true);
-        ShowDiagnosticsInfo(
-            InfoBarSeverity::Error, _("Settings_ActionFailed_Title"), _("Settings_ActionFailed_Message"));
+        ShowDiagnosticsInfo(InfoBarSeverity::Error,
+                            m_strings->Get("Settings_ActionFailed_Title"),
+                            m_strings->Get("Settings_ActionFailed_Message"));
     } catch (...) {
     }
 }
@@ -534,9 +552,6 @@ void SettingsWindow::LanguageComboBox_SelectionChanged(IInspectable const&, Sele
     if (auto controller = m_appController) {
         controller->SetLanguage(std::wstring(language));
     }
-    LocalizeSettingsText();
-    ShowSettingsPage(m_currentPage);
-    UpdateContentPanelWidth();
 }
 
 void SettingsWindow::ResetWindowPlacement() {
@@ -770,8 +785,9 @@ winrt::fire_and_forget SettingsWindow::LaunchUri(std::wstring_view uri) {
         co_await uiThread;
         auto self = weak.get();
         if (self && !launched) {
-            self->ShowDiagnosticsInfo(
-                InfoBarSeverity::Error, _("Settings_ActionFailed_Title"), _("Settings_ActionFailed_Message"));
+            self->ShowDiagnosticsInfo(InfoBarSeverity::Error,
+                                      m_strings->Get("Settings_ActionFailed_Title"),
+                                      m_strings->Get("Settings_ActionFailed_Message"));
         }
     } catch (...) {
     }
@@ -781,8 +797,9 @@ void SettingsWindow::OpenLogFolder() {
     try {
         auto folder = m_log.Path().parent_path();
         if (folder.empty()) {
-            ShowDiagnosticsInfo(
-                InfoBarSeverity::Error, _("Settings_ActionFailed_Title"), _("Settings_ActionFailed_Message"));
+            ShowDiagnosticsInfo(InfoBarSeverity::Error,
+                                m_strings->Get("Settings_ActionFailed_Title"),
+                                m_strings->Get("Settings_ActionFailed_Message"));
             return;
         }
 
@@ -790,21 +807,25 @@ void SettingsWindow::OpenLogFolder() {
         std::filesystem::create_directories(folder, ec);
         auto result = ShellExecuteW(nullptr, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         if (reinterpret_cast<intptr_t>(result) <= 32) {
-            ShowDiagnosticsInfo(
-                InfoBarSeverity::Error, _("Settings_ActionFailed_Title"), _("Settings_ActionFailed_Message"));
+            ShowDiagnosticsInfo(InfoBarSeverity::Error,
+                                m_strings->Get("Settings_ActionFailed_Title"),
+                                m_strings->Get("Settings_ActionFailed_Message"));
         }
     } catch (winrt::hresult_error const& ex) {
         m_log.Exception(L"[SettingsWindow] OpenLogFolder failed", ex);
-        ShowDiagnosticsInfo(
-            InfoBarSeverity::Error, _("Settings_ActionFailed_Title"), _("Settings_ActionFailed_Message"));
+        ShowDiagnosticsInfo(InfoBarSeverity::Error,
+                            m_strings->Get("Settings_ActionFailed_Title"),
+                            m_strings->Get("Settings_ActionFailed_Message"));
     } catch (std::exception const& ex) {
         m_log.Exception(L"[SettingsWindow] OpenLogFolder failed", ex);
-        ShowDiagnosticsInfo(
-            InfoBarSeverity::Error, _("Settings_ActionFailed_Title"), _("Settings_ActionFailed_Message"));
+        ShowDiagnosticsInfo(InfoBarSeverity::Error,
+                            m_strings->Get("Settings_ActionFailed_Title"),
+                            m_strings->Get("Settings_ActionFailed_Message"));
     } catch (...) {
         m_log.UnknownException(L"[SettingsWindow] OpenLogFolder failed");
-        ShowDiagnosticsInfo(
-            InfoBarSeverity::Error, _("Settings_ActionFailed_Title"), _("Settings_ActionFailed_Message"));
+        ShowDiagnosticsInfo(InfoBarSeverity::Error,
+                            m_strings->Get("Settings_ActionFailed_Title"),
+                            m_strings->Get("Settings_ActionFailed_Message"));
     }
 }
 
@@ -862,9 +883,9 @@ void SettingsWindow::SelectLanguage(std::wstring_view language) {
 }
 
 std::wstring SettingsWindow::BuildReportBugUri() const {
-    auto body = std::wstring(_("Settings_ReportBug_BodyPrefix"));
-    return std::wstring(c_bugReportUrl) + L"&title=" + PercentEncode(_("Settings_ReportBug_DefaultTitle")) + L"&body=" +
-           PercentEncode(body);
+    auto body = std::wstring(m_strings->Get("Settings_ReportBug_BodyPrefix"));
+    return std::wstring(c_bugReportUrl) + L"&title=" +
+           PercentEncode(m_strings->Get("Settings_ReportBug_DefaultTitle")) + L"&body=" + PercentEncode(body);
 }
 
 void SettingsWindow::SetStartupTaskBusy(bool busy) {
@@ -924,14 +945,16 @@ winrt::fire_and_forget SettingsWindow::CopyDiagnosticsAsync(winrt::weak_ref<Sett
         auto self = weak.get();
         if (!self || requestId != self->m_diagnosticsCopyRequestId) co_return;
         if (diagnostics.empty() || !self->CopyTextToClipboard(diagnostics)) {
-            self->ShowDiagnosticsInfo(
-                InfoBarSeverity::Error, _("Settings_ActionFailed_Title"), _("Settings_ActionFailed_Message"));
+            self->ShowDiagnosticsInfo(InfoBarSeverity::Error,
+                                      self->m_strings->Get("Settings_ActionFailed_Title"),
+                                      self->m_strings->Get("Settings_ActionFailed_Message"));
             self->m_diagnosticsCopyInProgress = false;
             self->CopyDiagnosticsButton().IsEnabled(true);
             co_return;
         }
-        self->ShowDiagnosticsInfo(
-            InfoBarSeverity::Success, _("Settings_DiagnosticsCopied_Title"), _("Settings_DiagnosticsCopied_Message"));
+        self->ShowDiagnosticsInfo(InfoBarSeverity::Success,
+                                  self->m_strings->Get("Settings_DiagnosticsCopied_Title"),
+                                  self->m_strings->Get("Settings_DiagnosticsCopied_Message"));
         self->m_diagnosticsCopyInProgress = false;
         self->CopyDiagnosticsButton().IsEnabled(true);
         co_return;
@@ -949,8 +972,9 @@ winrt::fire_and_forget SettingsWindow::CopyDiagnosticsAsync(winrt::weak_ref<Sett
             if (self && requestId == self->m_diagnosticsCopyRequestId) {
                 self->m_diagnosticsCopyInProgress = false;
                 self->CopyDiagnosticsButton().IsEnabled(true);
-                self->ShowDiagnosticsInfo(
-                    InfoBarSeverity::Error, _("Settings_ActionFailed_Title"), _("Settings_ActionFailed_Message"));
+                self->ShowDiagnosticsInfo(InfoBarSeverity::Error,
+                                          self->m_strings->Get("Settings_ActionFailed_Title"),
+                                          self->m_strings->Get("Settings_ActionFailed_Message"));
             }
         } catch (...) {
         }
@@ -965,7 +989,10 @@ winrt::fire_and_forget SettingsWindow::CopyDiagnosticsAsync(winrt::weak_ref<Sett
 /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-void SettingsWindow::SetAppController(std::shared_ptr<apc::app::AppController> controller, util::LogSink log) {
+void SettingsWindow::SetAppController(std::shared_ptr<apc::app::AppController> controller,
+                                      util::LogSink log,
+                                      std::shared_ptr<StringResources const> strings) {
+    m_strings = std::move(strings);
     m_log = std::move(log);
     m_appController = std::move(controller);
 }
@@ -993,7 +1020,8 @@ void SettingsWindow::ShowSettingsPage(SettingsPage page) {
     AppSection().Visibility(page == SettingsPage::App ? Visibility::Visible : Visibility::Collapsed);
     SettingsBackButton().Visibility(page == SettingsPage::Help ? Visibility::Visible : Visibility::Collapsed);
     SettingsHelpButton().Visibility(page == SettingsPage::App ? Visibility::Visible : Visibility::Collapsed);
-    SettingsPageTitle().Text(winrt::hstring(page == SettingsPage::App ? _("Settings_Title") : _("Settings_Help")));
+    SettingsPageTitle().Text(
+        winrt::hstring(page == SettingsPage::App ? m_strings->Get("Settings_Title") : m_strings->Get("Settings_Help")));
     HelpSection().Visibility(page == SettingsPage::Help ? Visibility::Visible : Visibility::Collapsed);
     SettingsContentHost().ChangeView(nullptr, 0.0, nullptr);
     UpdateContentPanelWidth();

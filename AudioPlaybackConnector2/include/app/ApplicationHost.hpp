@@ -1,5 +1,7 @@
 #pragma once
 
+#include <core/StringResources.hpp>
+
 #include <app/AdaptiveResourcePolicy.hpp>
 #include <app/AdaptiveResourceDiagnostics.hpp>
 #include <app/AppController.hpp>
@@ -131,6 +133,7 @@ private:
     /*------------------------------------------------------------------------------------------------------------*/
 
     util::LogSink m_log;
+    std::shared_ptr<StringResources> m_strings = std::make_shared<StringResources>();
     util::EmergencyLog m_emergencyLog;
     winrt::Microsoft::UI::Xaml::Window m_mainWindow{nullptr};
     winrt::event_token m_mainWindowLoadedToken{};
@@ -191,5 +194,5 @@ private:
     std::mutex m_deviceVisualRefreshRetryTimerMutex;
     wil::unique_threadpool_timer m_deviceVisualRefreshRetryTimer;
     PowerTransitionCoordinator m_powerTransitionCoordinator{m_exiting, {}, m_log};
-    SettingsWindowPresenter m_settingsWindowPresenter{m_log};
+    SettingsWindowPresenter m_settingsWindowPresenter{m_log, m_strings};
 };

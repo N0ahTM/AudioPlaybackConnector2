@@ -8,11 +8,6 @@
 /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-StringResources& StringResources::Instance() {
-    static StringResources s_instance;
-    return s_instance;
-}
-
 void StringResources::Initialize(HINSTANCE hInst, std::wstring_view language, util::LogSink const& log) {
     LANGID langId = GetUserDefaultUILanguage();
     int resId = IDR_STRINGS_EN;
@@ -59,8 +54,8 @@ void StringResources::Initialize(HINSTANCE hInst, std::wstring_view language, ut
             if (!json.is_object()) return std::nullopt;
             decltype(m_map) strings;
             for (auto const& [key, text] : json.items()) {
-                if (text.is_string())
-                    strings.emplace(key, std::wstring(winrt::to_hstring(text.get_ref<std::string const&>())));
+                if (key.empty() || !text.is_string()) return std::nullopt;
+                strings.emplace(key, std::wstring(winrt::to_hstring(text.get_ref<std::string const&>())));
             }
             return strings;
         } catch (...) {

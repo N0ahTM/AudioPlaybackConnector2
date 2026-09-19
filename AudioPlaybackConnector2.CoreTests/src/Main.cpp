@@ -28,6 +28,7 @@ int RunAppWorkCoordinatorTests();
 int RunCommandClientTests();
 int RunCliParserTests();
 int RunLoggerTests();
+int RunStringResourcesTests();
 int RunCrashHandlerTests();
 int RunCrashHandlerChild();
 int RunCommandLineControlServerTests();
@@ -119,6 +120,7 @@ int main(int argc, char** argv) {
         Suite{"CommandClient", RunCommandClientTests},
         Suite{"CliParser", RunCliParserTests},
         Suite{"Logger", RunLoggerTests},
+        Suite{"StringResources", RunStringResourcesTests},
         Suite{"CrashHandler", RunCrashHandlerTests},
         Suite{"CommandLineControlServer", RunCommandLineControlServerTests},
         Suite{"ControlUiActionGate", RunControlUiActionGateTests},

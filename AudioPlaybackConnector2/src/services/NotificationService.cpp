@@ -17,8 +17,9 @@ namespace {
 constexpr wchar_t kStatusNotificationGroup[] = L"audioPlaybackConnectorStatus";
 constexpr wchar_t kStatusNotificationTagPrefix[] = L"currentStatus:";
 
-std::wstring NotificationText(std::string_view key, std::wstring_view replacement = {}) {
-    return util::ReplacePlaceholders(std::wstring(_(key)), replacement);
+std::wstring
+NotificationText(StringResources const& strings, std::string_view key, std::wstring_view replacement = {}) {
+    return util::ReplacePlaceholders(strings.Get(key), replacement);
 }
 
 winrt::Windows::Foundation::DateTime ExpirationFromNow(std::chrono::seconds seconds) {
@@ -315,8 +316,8 @@ bool NotificationService::ShowStatusToast(std::wstring const& xml,
 
 void NotificationService::ShowAppStarted() {
     if (!ShouldShowNotifications()) return;
-    auto title = NotificationText("Notification_AppStarted_Title");
-    auto body = NotificationText("Notification_AppStarted_Body");
+    auto title = NotificationText(*m_strings, "Notification_AppStarted_Title");
+    auto body = NotificationText(*m_strings, "Notification_AppStarted_Body");
     auto xml = ToastXmlBuilder{}
                    .Title(title)
                    .Body(body)
@@ -328,25 +329,26 @@ void NotificationService::ShowAppStarted() {
 
 void NotificationService::ShowDeviceConnected(winrt::hstring const& id, winrt::hstring const& deviceName) {
     if (!ShouldShowNotifications()) return;
-    auto title = NotificationText("Notification_Connected", deviceName);
-    auto xml = ToastXmlBuilder{}
-                   .Title(title)
-                   .Caption(NotificationText("Notification_Connected_Caption"))
-                   .Action(NotificationText("Reconnect"), ToastArguments{}.Action(L"reconnect").DeviceId(id))
-                   .AppLogoOverride(L"ms-appx:///Images/ToastConnected.png")
-                   .Audio(L"ms-winsoundevent:Notification.Default")
-                   .Duration(L"long")
-                   .Build();
+    auto title = NotificationText(*m_strings, "Notification_Connected", deviceName);
+    auto xml =
+        ToastXmlBuilder{}
+            .Title(title)
+            .Caption(NotificationText(*m_strings, "Notification_Connected_Caption"))
+            .Action(NotificationText(*m_strings, "Reconnect"), ToastArguments{}.Action(L"reconnect").DeviceId(id))
+            .AppLogoOverride(L"ms-appx:///Images/ToastConnected.png")
+            .Audio(L"ms-winsoundevent:Notification.Default")
+            .Duration(L"long")
+            .Build();
 
     ShowStatusToast(xml, ExpirationFromNow(std::chrono::minutes(1)));
 }
 
 void NotificationService::ShowDeviceDisconnected(winrt::hstring const&, winrt::hstring const& deviceName) {
     if (!ShouldShowNotifications()) return;
-    auto title = NotificationText("Notification_Disconnected", deviceName);
+    auto title = NotificationText(*m_strings, "Notification_Disconnected", deviceName);
     auto xml = ToastXmlBuilder{}
                    .Title(title)
-                   .Body(NotificationText("Notification_Disconnected_Body"))
+                   .Body(NotificationText(*m_strings, "Notification_Disconnected_Body"))
                    .AppLogoOverride(L"ms-appx:///Images/ToastWarning.png")
                    .SilentAudio()
                    .Build();
@@ -356,10 +358,10 @@ void NotificationService::ShowDeviceDisconnected(winrt::hstring const&, winrt::h
 
 void NotificationService::ShowAutoReconnect(winrt::hstring const&, winrt::hstring const& deviceName) {
     if (!ShouldShowNotifications()) return;
-    auto title = NotificationText("Notification_AutoReconnect", deviceName);
+    auto title = NotificationText(*m_strings, "Notification_AutoReconnect", deviceName);
     auto xml = ToastXmlBuilder{}
                    .Title(title)
-                   .Body(NotificationText("Notification_AutoReconnect_Body"))
+                   .Body(NotificationText(*m_strings, "Notification_AutoReconnect_Body"))
                    .AppLogoOverride(L"ms-appx:///Images/ToastReconnect.png")
                    .SilentAudio()
                    .Build();
@@ -369,14 +371,15 @@ void NotificationService::ShowAutoReconnect(winrt::hstring const&, winrt::hstrin
 
 void NotificationService::ShowAutoReconnectFailed(winrt::hstring const& id, winrt::hstring const& deviceName) {
     if (!ShouldShowNotifications()) return;
-    auto title = NotificationText("Notification_AutoReconnectFailed_Title", deviceName);
-    auto xml = ToastXmlBuilder{}
-                   .Title(title)
-                   .Body(NotificationText("Notification_AutoReconnectFailed_Body"))
-                   .Action(NotificationText("Notification_Retry"), ToastArguments{}.Action(L"retry").DeviceId(id))
-                   .AppLogoOverride(L"ms-appx:///Images/ToastError.png")
-                   .Audio(L"ms-winsoundevent:Notification.Looping.Alarm2")
-                   .Build();
+    auto title = NotificationText(*m_strings, "Notification_AutoReconnectFailed_Title", deviceName);
+    auto xml =
+        ToastXmlBuilder{}
+            .Title(title)
+            .Body(NotificationText(*m_strings, "Notification_AutoReconnectFailed_Body"))
+            .Action(NotificationText(*m_strings, "Notification_Retry"), ToastArguments{}.Action(L"retry").DeviceId(id))
+            .AppLogoOverride(L"ms-appx:///Images/ToastError.png")
+            .Audio(L"ms-winsoundevent:Notification.Looping.Alarm2")
+            .Build();
 
     ShowStatusToast(xml, ExpirationFromNow(std::chrono::hours(1)));
 }

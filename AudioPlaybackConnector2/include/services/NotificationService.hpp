@@ -1,10 +1,12 @@
 #pragma once
 
+#include <core/StringResources.hpp>
+#include <memory>
+
 #include <util/Logger.hpp>
 
 #include <cstdint>
 #include <functional>
-#include <memory>
 #include <mutex>
 #include <vector>
 
@@ -21,7 +23,8 @@ public:
     /*//////// Lifecycle /////////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    explicit NotificationService(util::LogSink log) : m_log(std::move(log)) {}
+    explicit NotificationService(util::LogSink log, std::shared_ptr<StringResources const> strings)
+        : m_log(std::move(log)), m_strings(std::move(strings)) {}
     ~NotificationService();
 
     NotificationService(const NotificationService&) = delete;
@@ -79,6 +82,7 @@ private:
     /*------------------------------------------------------------------------------------------------------------*/
 
     util::LogSink m_log;
+    std::shared_ptr<StringResources const> m_strings;
     winrt::Microsoft::Windows::AppNotifications::AppNotificationManager m_notificationManager{nullptr};
     winrt::event_token m_notificationInvokedToken{};
     ReconnectRequestedCallback m_reconnectCallback;

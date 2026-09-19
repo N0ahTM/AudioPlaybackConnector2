@@ -1,0 +1,10 @@
+#include "../AudioPlaybackConnector2/res/resource.h"
+
+IDR_STRINGS_EN JSON "../AudioPlaybackConnector2/res/strings/en.json"
+IDR_STRINGS_DE JSON "../AudioPlaybackConnector2/res/strings/de.json"
+IDR_STRINGS_FR JSON "../AudioPlaybackConnector2/res/strings/fr.json"
+IDR_STRINGS_ES JSON "../AudioPlaybackConnector2/res/strings/es.json"
+IDR_STRINGS_JA JSON "../AudioPlaybackConnector2/res/strings/ja.json"
+IDR_STRINGS_KO JSON "../AudioPlaybackConnector2/res/strings/ko.json"
+IDR_STRINGS_ZH_HANS JSON "../AudioPlaybackConnector2/res/strings/zh_hans.json"
+IDR_STRINGS_ZH_HANT JSON "../AudioPlaybackConnector2/res/strings/zh_hant.json"

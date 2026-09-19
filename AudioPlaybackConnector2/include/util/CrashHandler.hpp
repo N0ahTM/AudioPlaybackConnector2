@@ -1,5 +1,7 @@
 #pragma once
 
+class StringResources;
+
 #include <util/Logger.hpp>
 
 #include <filesystem>
@@ -28,6 +30,6 @@ private:
     std::unique_ptr<details::CrashContext> m_context;
 };
 
-void CheckAndPromptCrashReports(std::filesystem::path const& logPath);
+void CheckAndPromptCrashReports(std::filesystem::path const& logPath, StringResources const& strings);
 
 } // namespace util::crash

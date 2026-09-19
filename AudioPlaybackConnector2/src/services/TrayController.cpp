@@ -13,7 +13,8 @@ using namespace winrt::Microsoft::UI::Xaml::Controls;
 /*//////// Constructors / Destructor /////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-TrayController::TrayController(util::LogSink log) : m_log(std::move(log)) {}
+TrayController::TrayController(util::LogSink log, std::shared_ptr<StringResources const> strings)
+    : m_log(std::move(log)), m_strings(std::move(strings)) {}
 
 TrayController::~TrayController() {
     Teardown();
@@ -52,7 +53,7 @@ void TrayController::Initialize(HWND hwnd,
 
     auto root = m_mainWindow.Content().as<Controls::Grid>();
     if (root && root.XamlRoot()) {
-        m_contextMenu = std::make_unique<TrayContextMenu>(m_log);
+        m_contextMenu = std::make_unique<TrayContextMenu>(m_log, m_strings);
         m_contextMenu->Initialize(
             root,
             [weak]() {
@@ -610,7 +611,8 @@ bool TrayController::EnsureDevicePickerViewCreated() noexcept {
                 if (auto self = weak.lock(); self && !self->m_isTearingDown.load())
                     self->ShowSettingsAfterPickerClosed();
             },
-            m_log);
+            m_log,
+            m_strings);
         m_devicePickerView = std::move(pickerView);
         m_releaseDevicePickerPending = false;
         return true;

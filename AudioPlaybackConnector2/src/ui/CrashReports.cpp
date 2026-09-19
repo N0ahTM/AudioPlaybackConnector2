@@ -10,8 +10,8 @@ constexpr std::size_t c_maxRetainedCrashReports = 5;
 /*//////// Getter / Setter ///////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-inline std::wstring SafeResource(std::string_view key, std::wstring_view fallback) {
-    auto value = _(key);
+inline std::wstring SafeResource(StringResources const& strings, std::string_view key, std::wstring_view fallback) {
+    auto value = strings.Get(key);
     if (!value.empty()) {
         return std::wstring(value);
     }
@@ -311,9 +311,11 @@ inline std::wstring BuildIssueUrl(DWORD exceptionCode,
 inline void ShowCrashDialogAndOfferIssue(DWORD exceptionCode,
                                          std::filesystem::path const& reportPath,
                                          std::filesystem::path const& dumpPath,
-                                         std::filesystem::path const& logPath) {
-    auto title = SafeResource("CrashDialogTitle", L"AudioPlaybackConnector2 crashed");
+                                         std::filesystem::path const& logPath,
+                                         StringResources const& strings) {
+    auto title = SafeResource(strings, "CrashDialogTitle", L"AudioPlaybackConnector2 crashed");
     auto body = SafeResource(
+        strings,
         "CrashDialogBody",
         L"AudioPlaybackConnector2 crashed unexpectedly.\n\nError code: 0x{0:08X}\nCrash report: {1}\nMinidump: "
         L"{2}\n\nYes = Open prefilled GitHub issue\nNo = Open crash folder\nCancel = Close");
@@ -337,7 +339,7 @@ inline void ShowCrashDialogAndOfferIssue(DWORD exceptionCode,
 
 } // namespace details
 
-void CheckAndPromptCrashReports(std::filesystem::path const& logPath) {
+void CheckAndPromptCrashReports(std::filesystem::path const& logPath, StringResources const& strings) {
     try {
         auto crashDirectories = details::GetCrashDirectories(logPath);
         details::RetainNewestCrashReports(crashDirectories);
@@ -390,7 +392,7 @@ void CheckAndPromptCrashReports(std::filesystem::path const& logPath) {
             }
         }
 
-        details::ShowCrashDialogAndOfferIssue(exceptionCode, latestReport, latestDump, logPath);
+        details::ShowCrashDialogAndOfferIssue(exceptionCode, latestReport, latestDump, logPath, strings);
 
         auto promptedMarker = latestReport;
         promptedMarker.replace_extension(L".prompted");

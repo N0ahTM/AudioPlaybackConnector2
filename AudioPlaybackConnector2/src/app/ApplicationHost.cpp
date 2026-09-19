@@ -396,7 +396,7 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept tr
     m_log.Trace(L"[App] Settings loaded");
 
     const auto settingsSnapshot = m_settingsStore->Snapshot();
-    StringResources::Instance().Initialize(GetModuleHandleW(nullptr), settingsSnapshot.Data.Language, m_log);
+    m_strings->Initialize(GetModuleHandleW(nullptr), settingsSnapshot.Data.Language, m_log);
     m_log.Trace(L"[App] StringResources initialized");
 
     Gdiplus::GdiplusStartupInput gdiplusStartupInput;
@@ -432,7 +432,7 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept tr
     ScheduleDeviceVisualRefresh(false);
 
     s_wmTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
-    util::crash::CheckAndPromptCrashReports(m_log.Path());
+    util::crash::CheckAndPromptCrashReports(m_log.Path(), *m_strings);
     m_log.Trace(L"[App] Initialization complete");
 } catch (winrt::hresult_error const& ex) {
     m_log.Exception(L"[App] Initialization after MainWindow.Loaded failed", ex);
@@ -459,7 +459,7 @@ void ApplicationHost::FailStartup(std::wstring_view stage) noexcept {
 
 void ApplicationHost::InitializeTray() {
     m_log.Trace(L"[App] InitializeTray()");
-    m_trayController = std::make_shared<TrayController>(m_log);
+    m_trayController = std::make_shared<TrayController>(m_log, m_strings);
     auto weak = weak_from_this();
     m_trayController->Initialize(
         m_hwnd,
@@ -479,7 +479,7 @@ void ApplicationHost::InitializeTray() {
 
 void ApplicationHost::InitializeNotifications() {
     m_log.Trace(L"[App] InitializeNotifications()");
-    m_notificationService = std::make_shared<NotificationService>(m_log);
+    m_notificationService = std::make_shared<NotificationService>(m_log, m_strings);
     auto weak = weak_from_this();
     m_notificationService->SetShouldShowNotificationCallback([weak]() -> bool {
         if (auto self = weak.lock()) {
@@ -500,8 +500,9 @@ void ApplicationHost::InitializeNotifications() {
             }));
         }
     });
-    const auto notificationsAvailable = m_notificationService->Initialize(
-        winrt::hstring(_("AppName")), winrt::Windows::Foundation::Uri(L"ms-appx:///Images/Square44x44Logo.png"));
+    const auto notificationsAvailable =
+        m_notificationService->Initialize(winrt::hstring(m_strings->Get("AppName")),
+                                          winrt::Windows::Foundation::Uri(L"ms-appx:///Images/Square44x44Logo.png"));
     m_log.Trace(L"[App] Notifications available: {0}", notificationsAvailable);
 }
 
@@ -623,7 +624,9 @@ void ApplicationHost::InitializeAppController() {
     m_appController = std::make_shared<apc::app::AppController>(
         m_settingsStore, m_deviceService, weak_from_this(), m_startupTaskCoordinator);
     m_controlCommandAdapter = std::make_unique<apc::control::ControlCommandAdapter>(
-        *m_appController, apc::control::ControlCommandAdapter::Options{[](std::string_view key) { return _(key); }});
+        *m_appController,
+        apc::control::ControlCommandAdapter::Options{[strings = std::shared_ptr<StringResources const>(m_strings)](
+                                                         std::string_view key) { return strings->Get(key); }});
     m_log.Trace(L"[App] AppController and control adapter initialized");
 }
 
@@ -852,10 +855,10 @@ winrt::hstring ApplicationHost::ResolveKnownDeviceName(winrt::hstring const& id)
     auto it = std::ranges::find_if(settings.Devices, [&](const auto& device) { return device.Id == id; });
     if (it != settings.Devices.end()) {
         if (!it->Alias.empty()) return winrt::hstring(it->Alias);
-        if (settings.PrivacyModeEnabled) return winrt::hstring(_("Privacy_RedactedDevice"));
+        if (settings.PrivacyModeEnabled) return winrt::hstring(m_strings->Get("Privacy_RedactedDevice"));
         if (!it->Name.empty()) return winrt::hstring(it->Name);
     }
-    return settings.PrivacyModeEnabled ? winrt::hstring(_("Privacy_RedactedDevice")) : id;
+    return settings.PrivacyModeEnabled ? winrt::hstring(m_strings->Get("Privacy_RedactedDevice")) : id;
 }
 
 void ApplicationHost::HandlePowerSuspend() {
@@ -1143,7 +1146,8 @@ bool ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstri
     if (showTransientError && !m_transientTrayErrorTooltip.empty()) {
         m_trayController->UpdateTooltip(m_transientTrayErrorTooltip);
     } else {
-        m_trayController->UpdateTooltip(apc::tray::BuildTooltip(_("AppName"), _("Privacy_RedactedDevice"), snapshot));
+        m_trayController->UpdateTooltip(
+            apc::tray::BuildTooltip(m_strings->Get("AppName"), m_strings->Get("Privacy_RedactedDevice"), snapshot));
     }
     m_trayController->SetState(desiredState);
     auto const pickerUpdated = m_trayController->RefreshDevicePickerState();
@@ -1301,7 +1305,7 @@ void ApplicationHost::HandleAppEvent(apc::app::AppController::EventNotification 
                     }
                     return "UnknownError";
                 }();
-                OnConnectionError(winrt::hstring(event.Id.View()), winrt::hstring(_(key)));
+                OnConnectionError(winrt::hstring(event.Id.View()), winrt::hstring(m_strings->Get(key)));
             } else if constexpr (std::is_same_v<T, AutoReconnectTriggeredEvent>) {
                 OnAutoReconnectTriggered(winrt::hstring(event.Id.View()));
             } else if constexpr (std::is_same_v<T, AutoReconnectFailedEvent>) {
@@ -1315,8 +1319,9 @@ void ApplicationHost::HandleAppEvent(apc::app::AppController::EventNotification 
             } else if constexpr (std::is_same_v<T, SettingsChangedEvent>) {
                 if (m_appliedLanguage != event.Language) {
                     m_appliedLanguage = event.Language;
-                    StringResources::Instance().Initialize(GetModuleHandleW(nullptr), event.Language, m_log);
+                    m_strings->Initialize(GetModuleHandleW(nullptr), event.Language, m_log);
                     if (m_trayController) m_trayController->ApplyLanguage();
+                    m_settingsWindowPresenter.ApplyLanguage(event.Language);
                 }
                 if (m_appliedBackdrop != event.UseSystemBackdropEffects) {
                     m_appliedBackdrop = event.UseSystemBackdropEffects;
@@ -1408,7 +1413,7 @@ void ApplicationHost::OnDeviceDisconnected(winrt::hstring const& id, bool notify
 void ApplicationHost::OnConnectionError(winrt::hstring const& id, winrt::hstring msg) {
     if (m_exiting.load()) return;
     m_log.Trace(L"[App] OnConnectionError: {0} - {1}", std::wstring(id), std::wstring(msg));
-    m_transientTrayErrorTooltip = std::wstring(_("AppName")) + L"\n" + std::wstring(msg);
+    m_transientTrayErrorTooltip = std::wstring(m_strings->Get("AppName")) + L"\n" + std::wstring(msg);
     ScheduleDeviceVisualRefresh(true);
 }
 

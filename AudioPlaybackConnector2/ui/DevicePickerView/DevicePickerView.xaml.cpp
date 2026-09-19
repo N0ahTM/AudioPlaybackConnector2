@@ -24,7 +24,7 @@ constexpr double c_pickerMinWidth = 260.0;
 constexpr double c_pickerMaxWidth = 520.0;
 constexpr double c_globalActionsChromeWidth = 82.0;
 
-double DevicePickerWidth(bool showGlobalActions) {
+double DevicePickerWidth(bool showGlobalActions, StringResources const& strings) {
     const auto measureText = [](std::wstring_view text, double fontSize = 14.0) {
         auto block = TextBlock();
         block.Text(winrt::hstring(text));
@@ -34,12 +34,13 @@ double DevicePickerWidth(bool showGlobalActions) {
         return block.DesiredSize().Width;
     };
     // Both pages share a width based on localized controls; long names use their full tooltip.
-    auto labelWidth = std::max({measureText(_("Settings_DefaultDevice")),
-                                measureText(_("DeviceOptions_Startup")),
-                                measureText(_("DeviceOptions_Reconnect"))});
+    auto labelWidth = std::max({measureText(strings.Get("Settings_DefaultDevice")),
+                                measureText(strings.Get("DeviceOptions_Startup")),
+                                measureText(strings.Get("DeviceOptions_Reconnect"))});
     auto desiredWidth = std::clamp(labelWidth + 100.0, 280.0, c_pickerMaxWidth);
     if (showGlobalActions) {
-        auto actionWidth = std::max(measureText(_("DisconnectAll"), 12.0), measureText(_("ReconnectAll"), 12.0));
+        auto actionWidth =
+            std::max(measureText(strings.Get("DisconnectAll"), 12.0), measureText(strings.Get("ReconnectAll"), 12.0));
         desiredWidth = std::max(desiredWidth, 2.0 * actionWidth + c_globalActionsChromeWidth);
     }
     return std::clamp(desiredWidth, c_pickerMinWidth, c_pickerMaxWidth);
@@ -170,7 +171,9 @@ DevicePickerView::~DevicePickerView() {
 void DevicePickerView::Initialize(std::weak_ptr<apc::app::AppController> controller,
                                   std::function<void()> onClose,
                                   std::function<void()> showSettings,
-                                  util::LogSink log) {
+                                  util::LogSink log,
+                                  std::shared_ptr<StringResources const> strings) {
+    m_strings = std::move(strings);
     m_log = std::move(log);
     m_appController = std::move(controller);
     m_onClose = std::move(onClose);
@@ -233,7 +236,7 @@ void DevicePickerView::CancelLoadDevices() {
 std::optional<DeviceOptionsViewModel> DevicePickerView::DeviceOptions(std::wstring_view id) const {
     auto controller = m_appController.lock();
     if (!controller) return std::nullopt;
-    return BuildDeviceOptionsViewState(controller->Snapshot(), id, _("Privacy_RedactedDevice"));
+    return BuildDeviceOptionsViewState(controller->Snapshot(), id, m_strings->Get("Privacy_RedactedDevice"));
 }
 
 void DevicePickerView::PrepareForRelease() noexcept {
@@ -274,28 +277,32 @@ void DevicePickerView::RefreshDeviceStates() {
 
 void DevicePickerView::ApplyLanguage() {
     if (m_preparedForRelease) return;
-    TitleText().Text(winrt::hstring(_("TrayMenu_SelectDevice")));
-    auto closeText = winrt::hstring(_("Close"));
-    auto disconnectAllText = winrt::hstring(_("DisconnectAll"));
-    auto reconnectAllText = winrt::hstring(_("ReconnectAll"));
+    TitleText().Text(winrt::hstring(m_strings->Get("TrayMenu_SelectDevice")));
+    auto closeText = winrt::hstring(m_strings->Get("Close"));
+    auto disconnectAllText = winrt::hstring(m_strings->Get("DisconnectAll"));
+    auto reconnectAllText = winrt::hstring(m_strings->Get("ReconnectAll"));
     apc::ui::SetButtonLabel(CloseButton(), closeText);
     DisconnectAllText().Text(disconnectAllText);
     ReconnectAllText().Text(reconnectAllText);
     apc::ui::SetButtonLabel(DisconnectAllButton(), disconnectAllText);
     apc::ui::SetButtonLabel(ReconnectAllButton(), reconnectAllText);
-    apc::ui::SetButtonLabel(BackButton(), winrt::hstring(_("DeviceOptions_Back")));
-    apc::ui::SetButtonLabel(SettingsButton(), winrt::hstring(_("Settings_Title")));
-    apc::ui::SetButtonLabel(SavedDevicesButton(), SavedDevicesText(), winrt::hstring(_("DeviceOptions_Saved")));
-    apc::ui::SetButtonLabel(ClearAliasButton(), winrt::hstring(_("DeviceOptions_ResetName")));
-    apc::ui::SetButtonLabel(ForgetDeviceButton(), winrt::hstring(_("DeviceOptions_Forget")));
-    DeviceAliasLabel().Text(winrt::hstring(_("DeviceOptions_Name")));
-    DefaultDeviceText().Text(winrt::hstring(_("Settings_DefaultDevice")));
-    DeviceStartupText().Text(winrt::hstring(_("DeviceOptions_Startup")));
-    DeviceReconnectText().Text(winrt::hstring(_("DeviceOptions_Reconnect")));
-    Automation::AutomationProperties::SetName(DeviceAliasBox(), winrt::hstring(_("DeviceOptions_Name")));
-    Automation::AutomationProperties::SetName(DefaultDeviceToggle(), winrt::hstring(_("Settings_DefaultDevice")));
-    Automation::AutomationProperties::SetName(DeviceStartupToggle(), winrt::hstring(_("DeviceOptions_Startup")));
-    Automation::AutomationProperties::SetName(DeviceReconnectToggle(), winrt::hstring(_("DeviceOptions_Reconnect")));
+    apc::ui::SetButtonLabel(BackButton(), winrt::hstring(m_strings->Get("DeviceOptions_Back")));
+    apc::ui::SetButtonLabel(SettingsButton(), winrt::hstring(m_strings->Get("Settings_Title")));
+    apc::ui::SetButtonLabel(
+        SavedDevicesButton(), SavedDevicesText(), winrt::hstring(m_strings->Get("DeviceOptions_Saved")));
+    apc::ui::SetButtonLabel(ClearAliasButton(), winrt::hstring(m_strings->Get("DeviceOptions_ResetName")));
+    apc::ui::SetButtonLabel(ForgetDeviceButton(), winrt::hstring(m_strings->Get("DeviceOptions_Forget")));
+    DeviceAliasLabel().Text(winrt::hstring(m_strings->Get("DeviceOptions_Name")));
+    DefaultDeviceText().Text(winrt::hstring(m_strings->Get("Settings_DefaultDevice")));
+    DeviceStartupText().Text(winrt::hstring(m_strings->Get("DeviceOptions_Startup")));
+    DeviceReconnectText().Text(winrt::hstring(m_strings->Get("DeviceOptions_Reconnect")));
+    Automation::AutomationProperties::SetName(DeviceAliasBox(), winrt::hstring(m_strings->Get("DeviceOptions_Name")));
+    Automation::AutomationProperties::SetName(DefaultDeviceToggle(),
+                                              winrt::hstring(m_strings->Get("Settings_DefaultDevice")));
+    Automation::AutomationProperties::SetName(DeviceStartupToggle(),
+                                              winrt::hstring(m_strings->Get("DeviceOptions_Startup")));
+    Automation::AutomationProperties::SetName(DeviceReconnectToggle(),
+                                              winrt::hstring(m_strings->Get("DeviceOptions_Reconnect")));
     for (auto const& toggle : {DefaultDeviceToggle(), DeviceStartupToggle(), DeviceReconnectToggle()}) {
         toggle.OnContent(box_value(L""));
         toggle.OffContent(box_value(L""));
@@ -325,8 +332,8 @@ void DevicePickerView::ReturnToDeviceList() {
     DeviceOptionsPanel().Visibility(Visibility::Collapsed);
     DeviceListPanel().Visibility(Visibility::Visible);
     BackButton().Visibility(Visibility::Collapsed);
-    TitleText().Text(winrt::hstring(_("TrayMenu_SelectDevice")));
-    apc::ui::SetTooltipText(TitleText(), winrt::hstring(_("TrayMenu_SelectDevice")));
+    TitleText().Text(winrt::hstring(m_strings->Get("TrayMenu_SelectDevice")));
+    apc::ui::SetTooltipText(TitleText(), winrt::hstring(m_strings->Get("TrayMenu_SelectDevice")));
     RenderDeviceList(false, true);
     AnimateNavigation(previousHeight);
     for (auto const& entry : DeviceList().Items()) {
@@ -410,7 +417,7 @@ void DevicePickerView::RefreshDeviceOptions(bool resetAlias) {
     auto const& device = options->Device;
     TitleText().Text(winrt::hstring(device.DisplayName));
     apc::ui::SetTooltipText(TitleText(), winrt::hstring(device.DisplayName));
-    RootGrid().Width(DevicePickerWidth(m_viewState.ConnectedDeviceCount > 1));
+    RootGrid().Width(DevicePickerWidth(m_viewState.ConnectedDeviceCount > 1, *m_strings));
     if (resetAlias || std::wstring(DeviceAliasBox().Text()) == m_savedAlias) {
         m_savedAlias = device.Alias;
         DeviceAliasBox().Text(winrt::hstring(device.Alias));
@@ -422,9 +429,10 @@ void DevicePickerView::RefreshDeviceOptions(bool resetAlias) {
     DeviceStartupToggle().IsEnabled(!options->GlobalConnectOnStartup);
     DeviceReconnectToggle().IsOn(options->GlobalReconnectOnConnectionLoss || device.ReconnectOnConnectionLoss);
     DeviceReconnectToggle().IsEnabled(!options->GlobalReconnectOnConnectionLoss);
-    auto startupHelp = winrt::hstring(options->GlobalConnectOnStartup ? _("DeviceOptions_GlobalPolicy") : L"");
+    auto startupHelp =
+        winrt::hstring(options->GlobalConnectOnStartup ? m_strings->Get("DeviceOptions_GlobalPolicy") : L"");
     auto reconnectHelp =
-        winrt::hstring(options->GlobalReconnectOnConnectionLoss ? _("DeviceOptions_GlobalPolicy") : L"");
+        winrt::hstring(options->GlobalReconnectOnConnectionLoss ? m_strings->Get("DeviceOptions_GlobalPolicy") : L"");
     apc::ui::SetTooltipText(DeviceStartupText(), startupHelp);
     apc::ui::SetTooltipText(DeviceReconnectText(), reconnectHelp);
     Automation::AutomationProperties::SetHelpText(DeviceStartupToggle(), startupHelp);
@@ -457,8 +465,8 @@ bool DevicePickerView::SaveDeviceAlias() {
 }
 
 void DevicePickerView::ShowDeviceOptionsError() {
-    DeviceOptionsError().Title(winrt::hstring(_("Settings_ActionFailed_Title")));
-    DeviceOptionsError().Message(winrt::hstring(_("Settings_ActionFailed_Message")));
+    DeviceOptionsError().Title(winrt::hstring(m_strings->Get("Settings_ActionFailed_Title")));
+    DeviceOptionsError().Message(winrt::hstring(m_strings->Get("Settings_ActionFailed_Message")));
     DeviceOptionsError().IsOpen(true);
 }
 
@@ -487,7 +495,7 @@ void DevicePickerView::RenderDeviceList(bool reconcilePendingActions, bool force
     if (!controller) return;
     auto application = controller->Snapshot();
     if (!application.IsRunning) return;
-    m_viewState = BuildDevicePickerViewState(application, _("Privacy_RedactedDevice"));
+    m_viewState = BuildDevicePickerViewState(application, m_strings->Get("Privacy_RedactedDevice"));
     RefreshDeviceOptions();
     auto const& snapshot = m_viewState;
     auto const& items = snapshot.Items;
@@ -523,14 +531,14 @@ void DevicePickerView::RenderDeviceList(bool reconcilePendingActions, bool force
     for (auto const& device : items) {
         if (device.IsAvailable || m_savedDevicesExpanded) visibleItems.push_back(device);
     }
-    if (m_optionsDeviceId.empty()) RootGrid().Width(DevicePickerWidth(connectedCount > 1));
+    if (m_optionsDeviceId.empty()) RootGrid().Width(DevicePickerWidth(connectedCount > 1, *m_strings));
     const bool hasSavedDevices = std::ranges::any_of(items, [](auto const& device) { return !device.IsAvailable; });
     SavedDevicesButton().Visibility(hasSavedDevices ? Visibility::Visible : Visibility::Collapsed);
     SavedDevicesChevron().Glyph(m_savedDevicesExpanded ? L"\xE70E" : L"\xE70D");
 
     if (visibleItems.empty()) {
         auto emptyMsg = TextBlock();
-        emptyMsg.Text(winrt::hstring(_("TrayMenu_NoDevices")));
+        emptyMsg.Text(winrt::hstring(m_strings->Get("TrayMenu_NoDevices")));
         emptyMsg.Foreground(
             apc::ui::ThemeBrushOrFallback(L"TextFillColorSecondaryBrush", winrt::Windows::UI::Colors::Gray()));
         emptyMsg.TextWrapping(TextWrapping::Wrap);
@@ -572,12 +580,13 @@ ListViewItem DevicePickerView::BuildDeviceListItem(apc::device_picker::DeviceSna
     primary.Padding({8, 6, 8, 6});
     primary.MinHeight(36);
     primary.IsEnabled(device.IsAvailable && !isBusy);
-    apc::ui::SetButtonLabel(primary,
-                            winrt::hstring(std::format(L"{}: {}",
-                                                       device.DisplayName,
-                                                       device.IsConnected   ? _("Disconnect")
-                                                       : device.IsAvailable ? _("Connect")
-                                                                            : _("DeviceOptions_Unavailable"))));
+    apc::ui::SetButtonLabel(
+        primary,
+        winrt::hstring(std::format(L"{}: {}",
+                                   device.DisplayName,
+                                   device.IsConnected   ? m_strings->Get("Disconnect")
+                                   : device.IsAvailable ? m_strings->Get("Connect")
+                                                        : m_strings->Get("DeviceOptions_Unavailable"))));
     primary.Click([weak, id](auto const&, auto const&) {
         if (auto self = weak.get()) self->OnDeviceToggle(id);
     });
@@ -643,7 +652,7 @@ ListViewItem DevicePickerView::BuildDeviceListItem(apc::device_picker::DeviceSna
         star.Glyph(L"\xE735");
         star.FontSize(12);
         star.Foreground(apc::ui::TryThemeBrush(L"AccentTextFillColorPrimaryBrush"));
-        apc::ui::SetTooltipText(star, winrt::hstring(_("Settings_DefaultDevice_Current")));
+        apc::ui::SetTooltipText(star, winrt::hstring(m_strings->Get("Settings_DefaultDevice_Current")));
         Grid::SetColumn(star, 2);
         primaryContent.Children().Append(star);
     }
@@ -655,7 +664,8 @@ ListViewItem DevicePickerView::BuildDeviceListItem(apc::device_picker::DeviceSna
         reconnectOptions.Width = 32;
         reconnectOptions.Height = 32;
         reconnectOptions.Foreground = apc::ui::TryThemeBrush(L"TextFillColorPrimaryBrush");
-        auto reconnectBtn = apc::ui::CreateIconButton(L"\xE72C", winrt::hstring(_("Reconnect")), reconnectOptions);
+        auto reconnectBtn =
+            apc::ui::CreateIconButton(L"\xE72C", winrt::hstring(m_strings->Get("Reconnect")), reconnectOptions);
         reconnectBtn.IsEnabled(!isBusy);
         reconnectBtn.Click([weak, id](auto const&, auto const&) {
             if (auto self = weak.get()) self->OnDeviceReconnectClicked(id);
@@ -668,7 +678,9 @@ ListViewItem DevicePickerView::BuildDeviceListItem(apc::device_picker::DeviceSna
     options.Width = 32;
     options.Height = 32;
     auto optionsButton = apc::ui::CreateIconButton(
-        L"\xE712", winrt::hstring(std::format(L"{}: {}", _("DeviceOptions_Title"), device.DisplayName)), options);
+        L"\xE712",
+        winrt::hstring(std::format(L"{}: {}", m_strings->Get("DeviceOptions_Title"), device.DisplayName)),
+        options);
     optionsButton.Click([weak, id](auto const&, auto const&) {
         if (auto self = weak.get()) self->ShowDeviceOptions(std::wstring(id));
     });

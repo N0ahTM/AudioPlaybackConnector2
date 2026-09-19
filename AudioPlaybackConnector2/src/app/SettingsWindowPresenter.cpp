@@ -24,8 +24,14 @@ struct SettingsWindowPresenter::PresenterState {
 /*//////// Constructors / Destructor /////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-SettingsWindowPresenter::SettingsWindowPresenter(util::LogSink log)
-    : m_log(std::move(log)), m_state(std::make_shared<PresenterState>()) {}
+SettingsWindowPresenter::SettingsWindowPresenter(util::LogSink log, std::shared_ptr<StringResources const> strings)
+    : m_log(std::move(log)), m_strings(std::move(strings)), m_state(std::make_shared<PresenterState>()) {}
+
+void SettingsWindowPresenter::ApplyLanguage(std::wstring_view language) {
+    const auto state = m_state->Current;
+    if (!state || state->Closed || state->Closing || !state->Window) return;
+    state->Window.as<winrt::AudioPlaybackConnector2::implementation::SettingsWindow>()->ApplyLanguage(language);
+}
 
 SettingsWindowPresenter::~SettingsWindowPresenter() {
     auto owner = std::exchange(m_state, nullptr);
@@ -111,7 +117,7 @@ bool SettingsWindowPresenter::Show(std::shared_ptr<apc::app::AppController> appC
         }
 
         auto impl = candidate->Window.as<winrt::AudioPlaybackConnector2::implementation::SettingsWindow>();
-        impl->SetAppController(std::move(appController), m_log);
+        impl->SetAppController(std::move(appController), m_log, m_strings);
         if (initialSettings) impl->SetInitialSettingsSnapshot(std::move(*initialSettings));
         impl->SetDefaultPlacement(defaultPlacement);
         impl->SetTargetPlacement(placement);

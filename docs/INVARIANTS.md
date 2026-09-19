@@ -391,3 +391,24 @@ changes that value. Teardown and delivery share that UI context; no global subsc
 lease, mutex or cross-thread unsubscribe exists. The taskbar recreation path retains its forced refresh.
 GetSystemTheme only queries Windows and owns no mutable state. This contract has a call-site audit and
 product build verification; an actual interactive WinUI theme switch remains a manual runtime check.
+
+## Localization ownership
+
+ApplicationHost constructs and owns StringResources. It is the sole production language publisher and
+initializes the English baseline and selected overlay before constructing localized UI services.
+Consumers retain shared_ptr<const StringResources>; the command adapter captures that read-only handle,
+not the host or a singleton. A late reader can retain text storage but cannot retain the application,
+logger worker or UI owner. Independent instances cannot change one another's language.
+
+JSON parsing, Unicode conversion and candidate construction occur outside the publication lock. An
+invalid baseline leaves the previous complete map intact. Invalid or missing regional data keeps the
+English baseline. Empty keys and non-string values reject a resource rather than silently omitting it.
+The short map swap publishes a complete candidate; Get copies one value under the reader lock. This
+is a per-value read guarantee, not a snapshot across several background lookup calls.
+
+The host publishes a language change before directly updating the tray and settings window on the UI
+thread. The settings selection handler submits its command without independently relocalizing against
+possibly old resources. A window that is not loaded yet updates its pending initial language and uses
+the current resources when Loaded runs. Tests embed the actual eight resource files and verify fallback,
+concurrent reading during replacement, owner independence and retained reader lifetime. Interactive
+WinUI localization and layout still require runtime inspection.

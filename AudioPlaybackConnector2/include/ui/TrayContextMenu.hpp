@@ -1,5 +1,8 @@
 #pragma once
 
+#include <core/StringResources.hpp>
+#include <memory>
+
 #include <util/Logger.hpp>
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -8,7 +11,8 @@
 
 class TrayContextMenu {
 public:
-    explicit TrayContextMenu(util::LogSink log) : m_log(std::move(log)) {}
+    explicit TrayContextMenu(util::LogSink log, std::shared_ptr<StringResources const> strings)
+        : m_log(std::move(log)), m_strings(std::move(strings)) {}
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
@@ -30,6 +34,7 @@ private:
 
     winrt::Microsoft::UI::Xaml::Controls::MenuFlyout m_menu{nullptr};
     util::LogSink m_log;
+    std::shared_ptr<StringResources const> m_strings;
     winrt::Microsoft::UI::Xaml::FrameworkElement m_anchor{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::MenuFlyoutItem m_settingsItem{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::MenuFlyoutItem m_helpItem{nullptr};

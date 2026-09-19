@@ -1,7 +1,9 @@
 #pragma once
 
-#include <util/Logger.hpp>
+#include <core/StringResources.hpp>
 #include <memory>
+
+#include <util/Logger.hpp>
 #include <ui/WindowPlacement.hpp>
 
 namespace apc::app {
@@ -18,13 +20,14 @@ public:
     /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    explicit SettingsWindowPresenter(util::LogSink log);
+    explicit SettingsWindowPresenter(util::LogSink log, std::shared_ptr<StringResources const> strings);
     ~SettingsWindowPresenter();
 
     [[nodiscard]] bool Show(std::shared_ptr<apc::app::AppController> appController,
                             util::SettingsWindowPlacement defaultPlacement);
     [[nodiscard]] bool Close() noexcept;
     [[nodiscard]] bool ShowHelp();
+    void ApplyLanguage(std::wstring_view language);
 
 private:
     /*------------------------------------------------------------------------------------------------------------*/
@@ -43,5 +46,6 @@ private:
                               std::shared_ptr<WindowState> const& state) noexcept;
 
     util::LogSink m_log;
+    std::shared_ptr<StringResources const> m_strings;
     std::shared_ptr<PresenterState> m_state;
 };

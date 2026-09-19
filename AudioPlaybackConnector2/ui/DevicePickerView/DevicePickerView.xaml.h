@@ -1,5 +1,8 @@
 #pragma once
 
+#include <core/StringResources.hpp>
+#include <memory>
+
 #include <util/Logger.hpp>
 
 #include <app/AppController.hpp>
@@ -25,7 +28,8 @@ struct DevicePickerView : DevicePickerViewT<DevicePickerView> {
     void Initialize(std::weak_ptr<apc::app::AppController> controller,
                     std::function<void()> onClose,
                     std::function<void()> showSettings,
-                    util::LogSink log);
+                    util::LogSink log,
+                    std::shared_ptr<StringResources const> strings);
     [[nodiscard]] bool LoadDevices();
     void CancelLoadDevices();
     void PrepareForRelease() noexcept;
@@ -71,6 +75,7 @@ private:
     void SetRefreshIndicators(bool refreshing, bool blockingRefresh);
 
     util::LogSink m_log;
+    std::shared_ptr<StringResources const> m_strings;
     std::weak_ptr<apc::app::AppController> m_appController;
     DevicePickerViewState m_viewState;
     std::function<void()> m_onClose;

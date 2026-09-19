@@ -41,7 +41,7 @@ void TrayContextMenu::Initialize(winrt::Microsoft::UI::Xaml::FrameworkElement an
             action();
     };
     MenuFlyoutItem settingsItem;
-    settingsItem.Text(winrt::hstring(_("OpenSettings")));
+    settingsItem.Text(winrt::hstring(m_strings->Get("OpenSettings")));
     FontIcon settingsIcon;
     settingsIcon.Glyph(L"\xE713");
     settingsItem.Icon(settingsIcon);
@@ -49,12 +49,12 @@ void TrayContextMenu::Initialize(winrt::Microsoft::UI::Xaml::FrameworkElement an
 
     MenuFlyoutItem btItem;
     MenuFlyoutItem helpItem;
-    helpItem.Text(winrt::hstring(_("Settings_Help")));
+    helpItem.Text(winrt::hstring(m_strings->Get("Settings_Help")));
     FontIcon helpIcon;
     helpIcon.Glyph(L"\xE897");
     helpItem.Icon(helpIcon);
     helpItem.Click([onHelp, invokeAfterClose](auto, auto) { invokeAfterClose(onHelp); });
-    btItem.Text(winrt::hstring(_("BluetoothSettings")));
+    btItem.Text(winrt::hstring(m_strings->Get("BluetoothSettings")));
     FontIcon btIcon;
     btIcon.Glyph(L"\xE702");
     btItem.Icon(btIcon);
@@ -63,7 +63,7 @@ void TrayContextMenu::Initialize(winrt::Microsoft::UI::Xaml::FrameworkElement an
     MenuFlyoutSeparator sep;
 
     MenuFlyoutItem exitItem;
-    exitItem.Text(winrt::hstring(_("Exit")));
+    exitItem.Text(winrt::hstring(m_strings->Get("Exit")));
     FontIcon exitIcon;
     exitIcon.Glyph(L"\xE8BB");
     exitItem.Icon(exitIcon);
@@ -90,10 +90,10 @@ void TrayContextMenu::Initialize(winrt::Microsoft::UI::Xaml::FrameworkElement an
 }
 
 void TrayContextMenu::ApplyLanguage() {
-    if (m_settingsItem) m_settingsItem.Text(winrt::hstring(_("OpenSettings")));
-    if (m_helpItem) m_helpItem.Text(winrt::hstring(_("Settings_Help")));
-    if (m_bluetoothItem) m_bluetoothItem.Text(winrt::hstring(_("BluetoothSettings")));
-    if (m_exitItem) m_exitItem.Text(winrt::hstring(_("Exit")));
+    if (m_settingsItem) m_settingsItem.Text(winrt::hstring(m_strings->Get("OpenSettings")));
+    if (m_helpItem) m_helpItem.Text(winrt::hstring(m_strings->Get("Settings_Help")));
+    if (m_bluetoothItem) m_bluetoothItem.Text(winrt::hstring(m_strings->Get("BluetoothSettings")));
+    if (m_exitItem) m_exitItem.Text(winrt::hstring(m_strings->Get("Exit")));
 }
 
 void TrayContextMenu::SetSystemBackdropEffectsEnabled(bool enabled) noexcept {

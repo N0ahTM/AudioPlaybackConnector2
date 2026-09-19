@@ -1,5 +1,8 @@
 #pragma once
 
+#include <core/StringResources.hpp>
+#include <memory>
+
 #include <util/Logger.hpp>
 
 #include <SettingsWindow.g.h>
@@ -43,8 +46,11 @@ struct SettingsWindow : SettingsWindowT<SettingsWindow> {
                                          winrt::Microsoft::UI::Xaml::SizeChangedEventArgs const& e);
     void LanguageComboBox_SelectionChanged(winrt::Windows::Foundation::IInspectable const& sender,
                                            winrt::Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const& e);
-    void SetAppController(std::shared_ptr<apc::app::AppController> controller, util::LogSink log);
+    void SetAppController(std::shared_ptr<apc::app::AppController> controller,
+                          util::LogSink log,
+                          std::shared_ptr<StringResources const> strings);
     void SetInitialSettingsSnapshot(SettingsData snapshot);
+    void ApplyLanguage(std::wstring_view language);
     void SetDefaultPlacement(util::SettingsWindowPlacement placement);
     void ShowHelpPage();
     void SetTargetPlacement(util::SettingsWindowPlacement placement);
@@ -100,6 +106,7 @@ private:
     std::uint64_t m_diagnosticsCopyRequestId = 0;
     bool m_diagnosticsCopyInProgress = false;
     util::LogSink m_log;
+    std::shared_ptr<StringResources const> m_strings;
     std::shared_ptr<apc::app::AppController> m_appController;
     apc::app::AppController::Subscription m_appSubscription;
     std::uint64_t m_lastAppRevision = 0;

@@ -17,6 +17,29 @@ that the complete cross-owner application snapshot is atomic; the controller pub
 its own consolidation. Regression coverage includes delayed facts, session removal without presentation delivery,
 and session changes during inventory refresh.
 
+## Controller event delivery
+
+Each controller assigns monotonically increasing publication revisions under its event mutex. Publication
+captures the current recipients and enters one FIFO queue. One drainer invokes handlers in registration order,
+outside the mutex. Concurrent and reentrant publications enqueue without overlapping the current callback or
+overtaking earlier events. A subscriber added after publication cannot receive that older queued event.
+
+| State | Owner and synchronization | Lifetime boundary |
+| --- | --- | --- |
+| Next revision, recipients, pending queue and drainer identity | `AppController::EventState::Mutex` | Closing rejects registration and publication and discards queued delivery |
+| Subscription activity and in-flight admission | The same event mutex | Reset disables admission before waiting for an active callback; reset on the drainer never waits on itself |
+| Handler captures and current delivery | Shared registration and the one active drainer | Capture destruction happens outside the mutex; reentrant registration and reset are allowed |
+
+Controller destruction closes all registrations and drains a callback on another thread. Destruction from the
+callback itself invalidates remaining recipients and queued work without waiting for its own stack; the drainer
+retains the closed event state until it returns. Observer exceptions do not interrupt subsequent recipients.
+The tests exercise simultaneous and reentrant publication, admission timing, reset with queued work, both
+destruction paths and reentrant capture destruction.
+
+Publication revisions currently order events only. They do not yet certify an atomic application snapshot or
+close the separate snapshot/registration gap; the concrete controller-owner integration must establish that
+contract before the complete rewrite is accepted.
+
 ## Settings persistence
 
 `SettingsStore` owns the current immutable `SettingsData` reference, revision and persisted revision. Changes stage

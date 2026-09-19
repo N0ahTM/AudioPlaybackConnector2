@@ -1,13 +1,20 @@
 #include <app/AppController.hpp>
 
 #include <algorithm>
-#include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <thread>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 #include <vector>
 
 namespace apc::app {
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Ordered Event Delivery ////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 struct AppController::EventState {
     struct Entry {
@@ -15,24 +22,99 @@ struct AppController::EventState {
 
         SubscriptionId Id;
         EventHandler Handler;
-        std::atomic_bool Active = true;
+        bool Active = true;
+        bool InFlight = false;
+    };
+
+    struct Delivery {
+        EventNotification Notification;
+        std::vector<std::shared_ptr<Entry>> Recipients;
     };
 
     void Remove(SubscriptionId id) noexcept {
-        try {
-            std::scoped_lock lock(Mutex);
-            auto const entry =
-                std::ranges::find_if(Handlers, [id](auto const& candidate) { return candidate->Id == id; });
-            if (entry == Handlers.end()) return;
-            (*entry)->Active.store(false, std::memory_order_release);
-            Handlers.erase(entry);
-        } catch (...) {
+        std::shared_ptr<Entry> removed;
+        {
+            std::unique_lock lock(Mutex);
+            auto const found = std::ranges::find_if(Handlers, [id](auto const& entry) { return entry->Id == id; });
+            if (found == Handlers.end()) return;
+            removed = std::move(*found);
+            Handlers.erase(found);
+            removed->Active = false;
+            if (DrainThread != std::this_thread::get_id()) Changed.wait(lock, [&] { return !removed->InFlight; });
+        }
+        // Handler captures may own another subscription or reenter application code when released.
+    }
+
+    void Close() noexcept {
+        std::vector<std::shared_ptr<Entry>> removed;
+        std::deque<Delivery> discarded;
+        {
+            std::unique_lock lock(Mutex);
+            Closed = true;
+            for (auto const& entry : Handlers)
+                entry->Active = false;
+            removed.swap(Handlers);
+            discarded.swap(Pending);
+            if (DrainThread != std::this_thread::get_id()) Changed.wait(lock, [this] { return !Draining; });
         }
     }
 
-    mutable std::mutex Mutex;
+    void Publish(AppEvent const& event) {
+        {
+            std::lock_guard lock(Mutex);
+            if (Closed || NextRevision == 0) return;
+            Pending.push_back({{NextRevision, event}, Handlers});
+            ++NextRevision;
+            if (Draining) return;
+            Draining = true;
+            DrainThread = std::this_thread::get_id();
+        }
+        for (;;) {
+            std::optional<Delivery> delivery;
+            {
+                std::lock_guard lock(Mutex);
+                if (Pending.empty()) {
+                    Draining = false;
+                    DrainThread = {};
+                    Changed.notify_all();
+                    return;
+                }
+                delivery.emplace(std::move(Pending.front()));
+                Pending.pop_front();
+            }
+            for (auto const& entry : delivery->Recipients) {
+                {
+                    std::lock_guard lock(Mutex);
+                    if (!entry->Active || Closed) continue;
+                    entry->InFlight = true;
+                }
+                try {
+                    entry->Handler(delivery->Notification);
+                } catch (...) {
+                    // An observer failure must not interrupt ordered delivery to the remaining observers.
+                }
+                {
+                    std::lock_guard lock(Mutex);
+                    entry->InFlight = false;
+                }
+                Changed.notify_all();
+            }
+        }
+    }
+
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
+
+    std::mutex Mutex;
+    std::condition_variable Changed;
     std::vector<std::shared_ptr<Entry>> Handlers;
+    std::deque<Delivery> Pending;
     SubscriptionId NextId = 1;
+    std::uint64_t NextRevision = 1;
+    std::thread::id DrainThread;
+    bool Draining = false;
+    bool Closed = false;
 };
 
 AppController::AppController(Executor executor, SnapshotProvider snapshotProvider)
@@ -40,6 +122,10 @@ AppController::AppController(Executor executor, SnapshotProvider snapshotProvide
       m_eventState(std::make_shared<EventState>()) {
     if (!m_executor) throw std::invalid_argument("app controller executor is required");
     if (!m_snapshotProvider) throw std::invalid_argument("app controller snapshot provider is required");
+}
+
+AppController::~AppController() {
+    m_eventState->Close();
 }
 
 AppResult AppController::Execute(AppCommand command, AppCommandContext context) const noexcept {
@@ -192,10 +278,12 @@ AppController::Subscription AppController::Subscribe(EventHandler handler) {
     auto const state = m_eventState;
     if (!state) return {};
 
+    auto entry = std::make_shared<EventState::Entry>(0, std::move(handler));
     std::scoped_lock lock(state->Mutex);
-    if (state->NextId == 0) return {};
+    if (state->Closed || state->NextId == 0) return {};
     auto const id = state->NextId++;
-    state->Handlers.push_back(std::make_shared<EventState::Entry>(id, std::move(handler)));
+    entry->Id = id;
+    state->Handlers.push_back(entry);
     return Subscription(state, id);
 }
 
@@ -203,24 +291,10 @@ void AppController::Publish(AppEvent const& event) const noexcept {
     auto const state = m_eventState;
     if (!state) return;
 
-    std::vector<std::shared_ptr<EventState::Entry>> handlers;
     try {
-        {
-            std::scoped_lock lock(state->Mutex);
-            handlers = state->Handlers;
-        }
+        state->Publish(event);
     } catch (...) {
-        return;
-    }
-
-    for (auto const& entry : handlers) {
-        if (!entry->Active.load(std::memory_order_acquire)) continue;
-        try {
-            entry->Handler(event);
-        } catch (...) {
-            // One observer cannot prevent the remaining observers from seeing
-            // the fact or turn a presentation failure into a command failure.
-        }
+        // Allocation failure cannot escape a device fact callback.
     }
 }
 

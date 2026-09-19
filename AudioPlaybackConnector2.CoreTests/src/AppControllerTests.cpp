@@ -4,6 +4,9 @@
 #include <ui/TrayPrimaryActivation.hpp>
 
 #include <chrono>
+#include <future>
+#include <semaphore>
+#include <thread>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -193,15 +196,16 @@ void TestEventOrderingAndReentrantUnsubscribe() {
 
     std::vector<int> order;
     std::optional<AppController::Subscription> selfSubscription;
-    selfSubscription.emplace(controller.Subscribe([&](AppEvent const&) {
+    selfSubscription.emplace(controller.Subscribe([&](AppController::EventNotification const&) {
         order.push_back(1);
         selfSubscription->Reset();
     }));
-    auto throwingSubscription = controller.Subscribe([&](AppEvent const&) {
+    auto throwingSubscription = controller.Subscribe([&](AppController::EventNotification const&) {
         order.push_back(2);
         throw std::runtime_error("observer failure");
     });
-    auto remainingSubscription = controller.Subscribe([&](AppEvent const&) { order.push_back(3); });
+    auto remainingSubscription =
+        controller.Subscribe([&](AppController::EventNotification const&) { order.push_back(3); });
 
     AppEvent event = DeviceConnectedEvent{*id};
     controller.Publish(event);
@@ -211,6 +215,156 @@ void TestEventOrderingAndReentrantUnsubscribe() {
           "events must preserve registration order and safely continue after reentrant unsubscribe/throws");
     Check(selfSubscription && !*selfSubscription && throwingSubscription && remainingSubscription,
           "subscription tokens must expose active ownership until reset or scope exit");
+}
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Subscription Concurrency //////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
+void TestConcurrentAndReentrantPublicationsHaveOneOrder() {
+    AppController controller([](AppCommand const&, AppCommandContext const&) { return AppResult{}; },
+                             [] { return AppSnapshot{}; });
+    AppEvent const event = apc::app::DeviceActivityChangedEvent{};
+    std::binary_semaphore entered(0);
+    std::binary_semaphore release(0);
+    std::vector<std::pair<int, std::uint64_t>> order;
+    auto first = controller.Subscribe([&](AppController::EventNotification const& notification) {
+        order.emplace_back(1, notification.Revision);
+        Check(std::holds_alternative<apc::app::DeviceActivityChangedEvent>(notification.Event),
+              "ordered notification must retain the original event payload");
+        if (notification.Revision == 1) {
+            entered.release();
+            release.acquire();
+            controller.Publish(event);
+        }
+    });
+    auto second = controller.Subscribe(
+        [&](AppController::EventNotification const& notification) { order.emplace_back(2, notification.Revision); });
+    std::jthread publisher([&] { controller.Publish(event); });
+    entered.acquire();
+    controller.Publish(event);
+    release.release();
+    publisher.join();
+    Check(order == std::vector<std::pair<int, std::uint64_t>>{{1, 1}, {2, 1}, {1, 2}, {2, 2}, {1, 3}, {2, 3}},
+          "concurrent and reentrant publications must preserve one revision and recipient order without overlap");
+}
+
+void TestResetDrainsAdmittedCallbackAndSkipsQueuedDelivery() {
+    AppController controller([](AppCommand const&, AppCommandContext const&) { return AppResult{}; },
+                             [] { return AppSnapshot{}; });
+    AppEvent const event = apc::app::DeviceActivityChangedEvent{};
+    std::binary_semaphore entered(0);
+    std::binary_semaphore release(0);
+    std::binary_semaphore resetting(0);
+    int calls = 0;
+    auto subscription = controller.Subscribe([&](AppController::EventNotification const&) {
+        if (++calls == 1) {
+            entered.release();
+            release.acquire();
+        }
+    });
+    std::jthread publisher([&] { controller.Publish(event); });
+    entered.acquire();
+    controller.Publish(event);
+    auto reset = std::async(std::launch::async, [&] {
+        resetting.release();
+        subscription.Reset();
+    });
+    resetting.acquire();
+    auto const drained = reset.wait_for(std::chrono::milliseconds(100)) == std::future_status::timeout;
+    release.release();
+    reset.get();
+    publisher.join();
+    controller.Publish(event);
+    Check(drained && calls == 1 && !subscription,
+          "reset must drain an admitted callback and prevent both queued and later callbacks");
+}
+
+void TestSubscriptionsCaptureAdmissionAtPublication() {
+    AppController controller([](AppCommand const&, AppCommandContext const&) { return AppResult{}; },
+                             [] { return AppSnapshot{}; });
+    AppEvent const event = apc::app::DeviceActivityChangedEvent{};
+    std::optional<AppController::Subscription> late;
+    std::vector<std::uint64_t> received;
+    auto original = controller.Subscribe([&](AppController::EventNotification const& notification) {
+        if (notification.Revision != 1) return;
+        controller.Publish(event);
+        late.emplace(controller.Subscribe(
+            [&](AppController::EventNotification const& next) { received.push_back(next.Revision); }));
+        controller.Publish(event);
+    });
+    controller.Publish(event);
+    Check(received == std::vector<std::uint64_t>{3},
+          "a new subscription must receive publications admitted after registration, not older queued events");
+}
+
+void TestReentrantControllerDestructionCancelsRemainingDelivery() {
+    auto controller = std::make_unique<AppController>(
+        [](AppCommand const&, AppCommandContext const&) { return AppResult{}; }, [] { return AppSnapshot{}; });
+    AppEvent const event = apc::app::DeviceActivityChangedEvent{};
+    int calls = 0;
+    auto first = controller->Subscribe([&](AppController::EventNotification const&) {
+        ++calls;
+        controller->Publish(event);
+        controller.reset();
+    });
+    auto second = controller->Subscribe([&](AppController::EventNotification const&) { ++calls; });
+    controller->Publish(event);
+    first.Reset();
+    second.Reset();
+    Check(!controller && calls == 1,
+          "destruction inside a callback must invalidate queued and remaining recipients without self-deadlock");
+}
+
+void TestControllerDestructionDrainsForeignCallback() {
+    auto controller = std::make_unique<AppController>(
+        [](AppCommand const&, AppCommandContext const&) { return AppResult{}; }, [] { return AppSnapshot{}; });
+    AppEvent const event = apc::app::DeviceActivityChangedEvent{};
+    std::binary_semaphore entered(0);
+    std::binary_semaphore release(0);
+    std::binary_semaphore closing(0);
+    int calls = 0;
+    auto subscription = controller->Subscribe([&](AppController::EventNotification const&) {
+        if (++calls == 1) {
+            entered.release();
+            release.acquire();
+        }
+    });
+    auto* const publisherFacade = controller.get();
+    std::jthread publisher([&] { publisherFacade->Publish(event); });
+    entered.acquire();
+    controller->Publish(event);
+    auto closed = std::async(std::launch::async, [&] {
+        closing.release();
+        controller.reset();
+    });
+    closing.acquire();
+    auto const drained = closed.wait_for(std::chrono::milliseconds(100)) == std::future_status::timeout;
+    release.release();
+    closed.get();
+    publisher.join();
+    subscription.Reset();
+    Check(drained && calls == 1,
+          "controller destruction must drain an admitted foreign callback and discard pending delivery");
+}
+
+void TestResetDestroysHandlerCapturesOutsideTheOwnerLock() {
+    AppController controller([](AppCommand const&, AppCommandContext const&) { return AppResult{}; },
+                             [] { return AppSnapshot{}; });
+    struct Capture {
+        AppController& Controller;
+        bool& Released;
+        ~Capture() {
+            auto subscription = Controller.Subscribe([](AppController::EventNotification const&) {});
+            Released = static_cast<bool>(subscription);
+        }
+    };
+    bool released = false;
+    auto capture = std::make_shared<Capture>(controller, released);
+    auto subscription = controller.Subscribe([capture](AppController::EventNotification const&) {});
+    capture.reset();
+    subscription.Reset();
+    Check(released, "handler capture destruction must be able to reenter registration and reset without an owner lock");
 }
 
 void TestDeviceSettingsUseControllerMethods() {
@@ -278,5 +432,11 @@ int RunAppControllerTests() {
     TestSnapshotIsReturnedByValue();
     TestEventOrderingAndReentrantUnsubscribe();
     TestDeviceSettingsUseControllerMethods();
+    TestConcurrentAndReentrantPublicationsHaveOneOrder();
+    TestResetDrainsAdmittedCallbackAndSkipsQueuedDelivery();
+    TestSubscriptionsCaptureAdmissionAtPublication();
+    TestReentrantControllerDestructionCancelsRemainingDelivery();
+    TestResetDestroysHandlerCapturesOutsideTheOwnerLock();
+    TestControllerDestructionDrainsForeignCallback();
     return g_failures;
 }

@@ -10,15 +10,18 @@
 
 namespace apc::app {
 
-// The controller is a transport- and UI-free boundary. The injected callbacks
-// let the migration bridge retain legacy use-case ownership until Phase 4.
+// The controller is a transport- and UI-free application boundary.
 class AppController final {
     struct EventState;
 
 public:
     using Executor = std::function<AppResult(AppCommand const&, AppCommandContext const&)>;
     using SnapshotProvider = std::function<AppSnapshot()>;
-    using EventHandler = std::function<void(AppEvent const&)>;
+    struct EventNotification {
+        std::uint64_t Revision = 0;
+        AppEvent Event;
+    };
+    using EventHandler = std::function<void(EventNotification const&)>;
     using SubscriptionId = std::uint64_t;
 
     class Subscription final {
@@ -45,7 +48,7 @@ public:
     };
 
     AppController(Executor executor, SnapshotProvider snapshotProvider);
-    ~AppController() = default;
+    ~AppController();
 
     AppController(AppController const&) = delete;
     AppController& operator=(AppController const&) = delete;
@@ -94,8 +97,8 @@ public:
     [[nodiscard]] AppResult ShowDefault(AppCommandContext context) const noexcept;
     [[nodiscard]] AppResult ListAliases(AppCommandContext context) const noexcept;
 
-    // The bridge publishes normalized facts here; UI and CLI consume the one
-    // typed subscription surface returned by Subscribe.
+    // Publications have one total revision order. Reentrant and concurrent publications queue behind the current
+    // delivery; callbacks never overlap. Reset drains an admitted callback, except when called by that callback.
     [[nodiscard]] Subscription Subscribe(EventHandler handler);
     void Publish(AppEvent const& event) const noexcept;
 

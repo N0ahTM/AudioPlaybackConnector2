@@ -858,39 +858,50 @@ void TestMaximumRequestAndIdleCachePruning() {
         server.Stop();
     }
 
-    {
+    for (bool acknowledge : {true, false}) {
         auto options = TestOptions(L"cache-idle-prune", 1);
         options.AcknowledgedRecordLifetime = 30ms;
-        Event cacheEmpty;
-        options.AfterRequestCachePruned = [&](std::size_t records, std::size_t bytes) noexcept {
-            if (records == 0 && bytes == 0) cacheEmpty.Signal();
+        options.RequestRecordLifetime = 60ms;
+        options.MaxRequestCacheBytes = 1; // Clamp to exactly one maximum request/response reservation.
+        std::atomic<std::int64_t> elapsedMs = 0;
+        options.CacheNow = [&]() noexcept {
+            return std::chrono::steady_clock::time_point{} + std::chrono::milliseconds(elapsedMs.load());
+        };
+        Event timerArmed;
+        Event timerIdle;
+        std::atomic_bool wasArmed = false;
+        options.SetCacheTimer = [&](PTP_TIMER timer, FILETIME* due) noexcept {
+            SetThreadpoolTimer(timer, due, 0, 0);
+            if (due) {
+                wasArmed = true;
+                timerArmed.Signal();
+            } else if (wasArmed.load()) {
+                timerIdle.Signal();
+            }
         };
         const auto pipeName = options.PipeName;
         CommandLineControlServer server(std::move(options));
-        server.Start([](apc::control::Request const&, std::stop_token, std::uint64_t) {
+        std::atomic_int handlerCalls = 0;
+        server.Start([&](apc::control::Request const&, std::stop_token, std::uint64_t) {
+            ++handlerCalls;
             return apc::control::Response{apc::control::ExitCode::Success, L"cached"};
         });
-        auto response = Exchange(pipeName, MakeRequest(301));
-        Check(response && response->Payload == L"cached", "cache-prune fixture must complete and acknowledge");
-        Check(cacheEmpty.Wait(2000), "idle request records must be released when their TTL expires");
-        server.Stop();
-    }
-
-    {
-        auto options = TestOptions(L"unacknowledged-cache-idle-prune", 1);
-        options.RequestRecordLifetime = 250ms;
-        Event cacheEmpty;
-        options.AfterRequestCachePruned = [&](std::size_t records, std::size_t bytes) noexcept {
-            if (records == 0 && bytes == 0) cacheEmpty.Signal();
-        };
-        const auto pipeName = options.PipeName;
-        CommandLineControlServer server(std::move(options));
-        server.Start([](apc::control::Request const&, std::stop_token, std::uint64_t) {
-            return apc::control::Response{apc::control::ExitCode::Success, L"unacknowledged"};
-        });
-        auto response = Exchange(pipeName, MakeRequest(302), false);
-        Check(response && response->Payload == L"unacknowledged", "unacknowledged prune fixture must complete");
-        Check(cacheEmpty.Wait(2000), "unacknowledged request records must be released when their TTL expires");
+        const auto request = MakeRequest(301);
+        auto response = Exchange(pipeName, request, acknowledge);
+        Check(response && response->Payload == L"cached", "expiry fixture must complete its first request");
+        Check(timerArmed.Wait(2000), "completed delivery must schedule cache expiry");
+        Check(!timerIdle.Wait(80), "native timer must retain the record while the cache clock has not advanced");
+        // No further client request or Stop can trigger pruning before this wait.
+        elapsedMs = acknowledge ? 31 : 61;
+        Check(timerIdle.Wait(2000), "idle timer must prune the expired record and disarm itself");
+        auto capacityProbe = MakeRequest(302, apc::control::CommandType::Connect);
+        capacityProbe.Target = apc::control::TargetKind::Name;
+        capacityProbe.Payload.assign(apc::control::c_maxPayloadBytes / sizeof(wchar_t), L'z');
+        Check(CompleteRoundTrip(pipeName, capacityProbe),
+              "idle pruning must restore the entire byte budget before the next request");
+        auto replay = Exchange(pipeName, request, acknowledge);
+        Check(replay && replay->Payload == L"cached" && handlerCalls.load() == 3,
+              "expired correlation must execute again for acknowledged and unacknowledged results");
         server.Stop();
     }
 }

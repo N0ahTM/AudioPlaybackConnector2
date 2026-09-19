@@ -212,7 +212,7 @@ CommandLineControlServer::~CommandLineControlServer() {
         m_startRetryTimer.reset();
     }
     if (m_requestPruneTimer) {
-        SetThreadpoolTimer(m_requestPruneTimer.get(), nullptr, 0, 0);
+        m_options.SetCacheTimer(m_requestPruneTimer.get(), nullptr);
         WaitForThreadpoolTimerCallbacks(m_requestPruneTimer.get(), TRUE);
         m_requestPruneTimer.reset();
     }
@@ -450,7 +450,7 @@ void CommandLineControlServer::Stop() noexcept {
                 entry->second->ActiveDeliveries = 0;
                 ++entry;
             }
-            ScheduleRequestPruneLocked(std::chrono::steady_clock::now());
+            ScheduleRequestPruneLocked(m_options.CacheNow());
         }
         {
             std::lock_guard lifecycleLock(m_lifecycleMutex);
@@ -801,29 +801,15 @@ void CALLBACK CommandLineControlServer::OnStartRetry(PTP_CALLBACK_INSTANCE, void
 void CALLBACK CommandLineControlServer::OnRequestPrune(PTP_CALLBACK_INSTANCE, void* context, PTP_TIMER) noexcept {
     auto* owner = static_cast<CommandLineControlServer*>(context);
     if (!owner) return;
-    std::size_t recordCount = 0;
-    std::size_t cacheBytes = 0;
     try {
         std::lock_guard requestLock(owner->m_requestMutex);
-        const auto now = std::chrono::steady_clock::now();
+        const auto now = owner->m_options.CacheNow();
         owner->PruneRequestRecords(now);
         owner->ScheduleRequestPruneLocked(now);
-        recordCount = owner->m_requestRecords.size();
-        cacheBytes = owner->m_requestCacheBytes;
     } catch (...) {
         owner->Trace(L"request-cache timer failed");
         return;
     }
-#ifdef APC_COMMAND_PIPE_SERVER_TESTING
-    try {
-        if (owner->m_options.AfterRequestCachePruned) {
-            owner->m_options.AfterRequestCachePruned(recordCount, cacheBytes);
-        }
-    } catch (...) {
-    }
-#endif
-    (void)recordCount;
-    (void)cacheBytes;
 }
 
 void CALLBACK CommandLineControlServer::OnDeferredStop(PTP_CALLBACK_INSTANCE, void* context, PTP_WORK) noexcept {
@@ -1054,7 +1040,7 @@ CommandLineControlServer::ExecuteOnce(apc::control::Request const& request,
                                       std::stop_token stopToken,
                                       std::uint64_t deadline,
                                       apc::control::Response& uncachedResponse) {
-    const auto now = std::chrono::steady_clock::now();
+    const auto now = m_options.CacheNow();
     const auto reservedBytes = RequestBytes(request) + sizeof(apc::control::Response) + apc::control::c_maxPayloadBytes;
     std::shared_ptr<RequestRecord> record;
 
@@ -1141,7 +1127,7 @@ CommandLineControlServer::ExecuteOnce(apc::control::Request const& request,
     {
         std::lock_guard requestLock(m_requestMutex);
         record->Response = std::move(response);
-        record->CompletedAt = std::chrono::steady_clock::now();
+        record->CompletedAt = m_options.CacheNow();
         record->IsComplete = true;
         ++record->ActiveDeliveries;
         const auto actualBytes = RequestBytes(record->Request) + ResponseBytes(record->Response);
@@ -1164,7 +1150,7 @@ void CommandLineControlServer::CompleteDelivery(apc::control::CorrelationId corr
             if (entry == m_requestRecords.end() || entry->second != record || !record->IsComplete) return;
             if (record->ActiveDeliveries > 0) --record->ActiveDeliveries;
             record->Acknowledged = record->Acknowledged || acknowledged;
-            record->LastDeliveryCompletedAt = std::chrono::steady_clock::now();
+            record->LastDeliveryCompletedAt = m_options.CacheNow();
             PruneRequestRecords(record->LastDeliveryCompletedAt);
             ScheduleRequestPruneLocked(record->LastDeliveryCompletedAt);
         }
@@ -1183,7 +1169,7 @@ void CommandLineControlServer::CompletePendingDelivery(apc::control::Correlation
         } else {
             m_pendingDeliveries.erase(pending);
         }
-        ScheduleRequestPruneLocked(std::chrono::steady_clock::now());
+        ScheduleRequestPruneLocked(m_options.CacheNow());
     } catch (...) {
         Trace(L"pending delivery cleanup failed");
     }
@@ -1222,11 +1208,11 @@ void CommandLineControlServer::ScheduleRequestPruneLocked(std::chrono::steady_cl
         if (!earliest || expires < *earliest) earliest = expires;
     }
     if (!earliest) {
-        SetThreadpoolTimer(m_requestPruneTimer.get(), nullptr, 0, 0);
+        m_options.SetCacheTimer(m_requestPruneTimer.get(), nullptr);
         return;
     }
     const auto remaining =
         *earliest > now ? std::chrono::duration_cast<std::chrono::milliseconds>(*earliest - now).count() : 1;
     auto due = RelativeDelay(static_cast<DWORD>(std::clamp<std::int64_t>(remaining, 1, MAXDWORD - 1)));
-    SetThreadpoolTimer(m_requestPruneTimer.get(), &due, 0, 0);
+    m_options.SetCacheTimer(m_requestPruneTimer.get(), &due);
 }

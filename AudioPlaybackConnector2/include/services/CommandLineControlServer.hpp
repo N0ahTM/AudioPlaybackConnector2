@@ -43,9 +43,13 @@ public:
         // must return immediately, preserve Win32 error semantics and never reenter.
         std::move_only_function<BOOL(HANDLE, LPOVERLAPPED) noexcept> ConnectPipe =
             [](HANDLE pipe, LPOVERLAPPED operation) noexcept { return ConnectNamedPipe(pipe, operation); };
-#ifdef APC_COMMAND_PIPE_SERVER_TESTING
-        std::function<void(std::size_t, std::size_t)> AfterRequestCachePruned;
-#endif
+        // Cache time and timer submission may run under the request lock. Like
+        // native timer submission they must not wait, throw or invoke callbacks inline.
+        std::move_only_function<std::chrono::steady_clock::time_point() noexcept> CacheNow = []() noexcept {
+            return std::chrono::steady_clock::now();
+        };
+        std::move_only_function<void(PTP_TIMER, FILETIME*) noexcept> SetCacheTimer =
+            [](PTP_TIMER timer, FILETIME* due) noexcept { SetThreadpoolTimer(timer, due, 0, 0); };
     };
 
     CommandLineControlServer();

@@ -235,6 +235,17 @@ a 4 KiB pipe buffer, completes the other client's ACK, attempts another request,
 It verifies a Busy response under pressure, an intact duplicate response, exactly one execution of that request,
 and restored cache capacity after both deliveries finish.
 
+Cache expiry uses a monotonic `CacheNow` clock and the nonblocking `SetCacheTimer` platform boundary.
+The default uses `steady_clock` and `SetThreadpoolTimer`; submissions run under the cache lock and must not
+wait, throw or invoke the timer callback inline. Clock reads must support concurrent callers. The server owns
+the native timer and drains callbacks before destruction. Tests keep the clock fixed across real timer ticks,
+then advance it past the acknowledged or unacknowledged retention period. Before any subsequent request or
+Stop, the real timer must become idle. A maximum-size request then verifies that the entire byte budget was
+released, and the expired correlation executes again. No test callback reads private cache fields.
+
+The pipe server is compiled only in CoreRuntime. CoreTests links that same implementation, with no alternate
+class layout, test macro or separately compiled server source.
+
 ## Power recovery
 
 | State | Execution context and callers | Synchronization | Cancellation and shutdown |

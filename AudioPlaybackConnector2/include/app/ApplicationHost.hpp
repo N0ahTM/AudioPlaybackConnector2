@@ -81,9 +81,13 @@ private:
     void HandlePowerResume();
     [[nodiscard]] bool RefreshTrayVisualState(bool forceErrorWhenIdle = false,
                                               std::wstring_view reason = L"unspecified");
-    void ScheduleDeviceVisualRefresh(bool forceErrorWhenIdle = false,
-                                     bool inventoryChanged = false,
-                                     bool refreshTray = true);
+    enum class VisualRefresh : UiRefreshCoalescer::Flags {
+        Tray = 1U << 0,
+        TrayWithError = (1U << 0) | (1U << 1),
+        Inventory = 1U << 2,
+        TrayAndInventory = (1U << 0) | (1U << 2)
+    };
+    void ScheduleDeviceVisualRefresh(VisualRefresh refresh);
     void QueueDeviceVisualRefreshDrain() noexcept;
     void DrainDeviceVisualRefresh() noexcept;
     [[nodiscard]] bool ScheduleNativeDeviceVisualRefreshRetry(std::chrono::milliseconds delay) noexcept;

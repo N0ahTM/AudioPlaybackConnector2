@@ -429,7 +429,7 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept tr
             m_log.UnknownException(L"[App] startup notification failed");
         }
     }
-    ScheduleDeviceVisualRefresh(false);
+    ScheduleDeviceVisualRefresh(VisualRefresh::Tray);
 
     s_wmTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
     util::crash::CheckAndPromptCrashReports(m_log.Path(), *m_strings);
@@ -1153,11 +1153,8 @@ bool ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstri
     return pickerUpdated && shellUpdated && timersReady;
 }
 
-void ApplicationHost::ScheduleDeviceVisualRefresh(bool forceErrorWhenIdle, bool inventoryChanged, bool refreshTray) {
-    auto flags = (refreshTray || forceErrorWhenIdle ? c_visualRefreshRequested : 0U) |
-                 (forceErrorWhenIdle ? c_visualRefreshForceError : 0U) |
-                 (inventoryChanged ? c_visualRefreshInventoryChanged : 0U);
-    if (flags == 0) return;
+void ApplicationHost::ScheduleDeviceVisualRefresh(VisualRefresh refresh) {
+    const auto flags = static_cast<UiRefreshCoalescer::Flags>(refresh);
     if (m_deviceVisualRefreshCoalescer.Request(flags)) {
         QueueDeviceVisualRefreshDrain();
     }
@@ -1269,7 +1266,7 @@ void ApplicationHost::SetupDeviceEvents() {
     m_appliedLanguage = observation.Snapshot.Settings.Language;
     m_appliedBackdrop = observation.Snapshot.Settings.UseSystemBackdropEffects;
     m_appEventSubscription = std::move(observation.Updates);
-    ScheduleDeviceVisualRefresh(false, true);
+    ScheduleDeviceVisualRefresh(VisualRefresh::TrayAndInventory);
 }
 
 void ApplicationHost::TeardownDeviceEvents() {
@@ -1305,11 +1302,12 @@ void ApplicationHost::HandleAppEvent(apc::app::AppController::EventNotification 
             } else if constexpr (std::is_same_v<T, AutoReconnectFailedEvent>) {
                 OnAutoReconnectFailed(winrt::hstring(event.Id.View()));
             } else if constexpr (std::is_same_v<T, DeviceStatusChangedEvent>) {
-                ScheduleDeviceVisualRefresh(event.State == DeviceConnectionState::Failed);
+                ScheduleDeviceVisualRefresh(event.State == DeviceConnectionState::Failed ? VisualRefresh::TrayWithError
+                                                                                         : VisualRefresh::Tray);
             } else if constexpr (std::is_same_v<T, DeviceInventoryChangedEvent>) {
-                ScheduleDeviceVisualRefresh(false, true, false);
+                ScheduleDeviceVisualRefresh(VisualRefresh::Inventory);
             } else if constexpr (std::is_same_v<T, DeviceActivityChangedEvent>) {
-                ScheduleDeviceVisualRefresh(false);
+                ScheduleDeviceVisualRefresh(VisualRefresh::Tray);
             } else if constexpr (std::is_same_v<T, SettingsChangedEvent>) {
                 if (m_appliedLanguage != event.Language) {
                     m_appliedLanguage = event.Language;
@@ -1322,7 +1320,7 @@ void ApplicationHost::HandleAppEvent(apc::app::AppController::EventNotification 
                     if (m_trayController)
                         m_trayController->SetSystemBackdropEffectsEnabled(event.UseSystemBackdropEffects);
                 }
-                ScheduleDeviceVisualRefresh(false, true);
+                ScheduleDeviceVisualRefresh(VisualRefresh::TrayAndInventory);
             }
         },
         notification.Event);
@@ -1383,14 +1381,14 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
         }
     }
 
-    ScheduleDeviceVisualRefresh(false);
+    ScheduleDeviceVisualRefresh(VisualRefresh::Tray);
 }
 
 void ApplicationHost::OnDeviceDisconnected(winrt::hstring const& id, bool notifyUser) {
     if (m_exiting.load()) return;
     m_log.Trace(L"[App] OnDeviceDisconnected: {0}", std::wstring(id));
 
-    ScheduleDeviceVisualRefresh(false);
+    ScheduleDeviceVisualRefresh(VisualRefresh::Tray);
     if (!notifyUser || !m_notificationService) return;
 
     try {
@@ -1408,7 +1406,7 @@ void ApplicationHost::OnConnectionError(winrt::hstring const& id, winrt::hstring
     if (m_exiting.load()) return;
     m_log.Trace(L"[App] OnConnectionError: {0} - {1}", std::wstring(id), std::wstring(msg));
     m_transientTrayErrorTooltip = std::wstring(m_strings->Get("AppName")) + L"\n" + std::wstring(msg);
-    ScheduleDeviceVisualRefresh(true);
+    ScheduleDeviceVisualRefresh(VisualRefresh::TrayWithError);
 }
 
 void ApplicationHost::OnAutoReconnectTriggered(winrt::hstring const& id) {
@@ -1506,14 +1504,14 @@ LRESULT CALLBACK ApplicationHost::SubclassProc(
         if (!host->m_trayController->AdvanceConnectingFrame()) {
             KillTimer(hwnd, c_timerAnimation);
             host->m_connectingAnimationTimerActive = false;
-            host->ScheduleDeviceVisualRefresh(false);
+            host->ScheduleDeviceVisualRefresh(VisualRefresh::Tray);
         }
         return 0;
     }
 
     if (msg == WM_TIMER && wParam == c_timerTransientTrayError) {
         KillTimer(hwnd, c_timerTransientTrayError);
-        host->ScheduleDeviceVisualRefresh(false);
+        host->ScheduleDeviceVisualRefresh(VisualRefresh::Tray);
         return 0;
     }
 
@@ -1534,7 +1532,7 @@ LRESULT CALLBACK ApplicationHost::SubclassProc(
         if (host->m_trayController) {
             host->m_trayController->Reregister();
             host->m_trayController->OnThemeChanged();
-            host->ScheduleDeviceVisualRefresh(false);
+            host->ScheduleDeviceVisualRefresh(VisualRefresh::Tray);
         }
         return 0;
     }

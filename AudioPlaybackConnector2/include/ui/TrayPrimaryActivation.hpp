@@ -1,30 +1,30 @@
 #pragma once
 
+#include <app/AppController.hpp>
 #include <app/AppModels.hpp>
 
 #include <functional>
+#include <memory>
+#include <utility>
 
 namespace apc::ui {
 
-// Tray primary activation is a UI intent, not an AppController dependency.
-// The UI boundary only receives a no-argument callback.  The executor seam
-// owns both the P09 toggle command and detached completion required when the
-// tray callback is already running on the XAML dispatcher thread.
-using TrayPrimaryActivationCallback = std::move_only_function<void()>;
-using TrayPrimaryActivationExecutor = std::move_only_function<void(apc::app::AppCommand, apc::app::AppCommandContext)>;
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Tray Primary Activation ////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
-[[nodiscard]] inline apc::app::AppCommand MakeTrayPrimaryActivationCommand() {
-    return {apc::app::AppCommandKind::ShowDevicePicker, {}, {}, apc::app::DevicePickerOpenMode::ToggleIfOpen};
-}
+using TrayPrimaryActivationCallback = std::move_only_function<void()>;
 
 [[nodiscard]] inline TrayPrimaryActivationCallback
-MakeTrayPrimaryActivationCallback(TrayPrimaryActivationExecutor executor) {
-    return [executor = std::move(executor)]() mutable {
-        if (!executor) return;
+MakeTrayPrimaryActivationCallback(std::weak_ptr<apc::app::AppController> controller) {
+    return [controller = std::move(controller)] {
+        auto owner = controller.lock();
+        if (!owner) return;
 
+        // The tray callback runs on the UI thread and cannot wait for its own Opened event.
         apc::app::AppCommandContext context;
         context.Completion = apc::app::AppCommandContext::CompletionMode::Detached;
-        executor(MakeTrayPrimaryActivationCommand(), context);
+        (void)owner->ShowDevicePicker(apc::app::DevicePickerOpenMode::ToggleIfOpen, context);
     };
 }
 

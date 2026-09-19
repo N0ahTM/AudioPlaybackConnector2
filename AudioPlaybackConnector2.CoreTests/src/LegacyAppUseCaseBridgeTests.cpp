@@ -1,5 +1,6 @@
 #include "TestCheck.hpp"
 
+#include <app/AppController.hpp>
 #include <app/LegacyAppUseCaseBridge.hpp>
 #include <app/DeviceFactPublicationFence.hpp>
 #include <ui/TrayPrimaryActivation.hpp>
@@ -943,9 +944,13 @@ void TestPickerOpenModePreservesTrayToggleAndControlEnsureOpen() {
           "control show must retain idempotent ensure-open picker semantics");
 
     apc::app::AppResult trayShow;
-    auto callback = apc::ui::MakeTrayPrimaryActivationCallback([&](AppCommand command, AppCommandContext context) {
-        trayShow = harness.Bridge.Execute(std::move(command), context);
-    });
+    auto controller = std::make_shared<apc::app::AppController>(
+        [&](AppCommand const& command, AppCommandContext const& context) {
+            trayShow = harness.Bridge.Execute(command, context);
+            return trayShow;
+        },
+        [&] { return harness.Bridge.Snapshot(); });
+    auto callback = apc::ui::MakeTrayPrimaryActivationCallback(controller);
     callback();
     Check(trayShow.Code == AppResultCode::Success && harness.PickerOpenModes.size() == 2 &&
               harness.PickerOpenModes.back() == DevicePickerOpenMode::ToggleIfOpen,

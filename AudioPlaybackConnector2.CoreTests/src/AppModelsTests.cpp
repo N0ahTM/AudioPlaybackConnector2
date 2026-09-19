@@ -1,7 +1,6 @@
 #include "TestCheck.hpp"
 
 #include <app/AppModels.hpp>
-#include <ui/TrayPrimaryActivation.hpp>
 
 #include <chrono>
 #include <iostream>
@@ -124,7 +123,7 @@ void TestCommandContractsAndNormalizedResults() {
     AppCommand missingToggleTarget{AppCommandKind::ToggleLast, {}, {}};
     Check(!missingToggleTarget.IsWellFormed(), "toggle-last must reject a missing selector");
 
-    auto trayActivation = apc::ui::MakeTrayPrimaryActivationCommand();
+    AppCommand trayActivation{AppCommandKind::ShowDevicePicker, {}, {}, apc::app::DevicePickerOpenMode::ToggleIfOpen};
     Check(trayActivation.IsWellFormed() &&
               trayActivation.PickerOpenMode == apc::app::DevicePickerOpenMode::ToggleIfOpen,
           "the tray activation command must allow toggle mode only for show-picker");

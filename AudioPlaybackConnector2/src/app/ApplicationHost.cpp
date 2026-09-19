@@ -568,12 +568,7 @@ void ApplicationHost::InitializeTray() {
                 self->ExecuteTrayCommand(apc::app::AppCommand{apc::app::AppCommandKind::ShowSettings, {}, {}});
             }
         },
-        apc::ui::MakeTrayPrimaryActivationCallback(
-            [weak](apc::app::AppCommand command, apc::app::AppCommandContext context) {
-                if (auto self = weak.lock()) {
-                    self->ExecuteTrayCommand(std::move(command), context.Completion);
-                }
-            }),
+        apc::ui::MakeTrayPrimaryActivationCallback(m_appController),
         [weak]() {
             if (auto self = weak.lock()) self->ExitApplication();
         },

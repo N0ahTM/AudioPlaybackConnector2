@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <stop_token>
@@ -59,7 +60,7 @@ void TestUiAndCliEquivalentCommandsUseOneExecutor() {
 void TestTrayPrimaryActivationUsesSharedExecutorAndDetachedUiIntent() {
     std::optional<AppCommand> executedCommand;
     std::optional<AppCommandContext> executedContext;
-    AppController controller(
+    auto controller = std::make_shared<AppController>(
         [&](AppCommand const& command, AppCommandContext const& context) {
             executedCommand = command;
             executedContext = context;
@@ -67,8 +68,7 @@ void TestTrayPrimaryActivationUsesSharedExecutorAndDetachedUiIntent() {
         },
         [] { return AppSnapshot{}; });
 
-    auto callback = apc::ui::MakeTrayPrimaryActivationCallback(
-        [&](AppCommand command, AppCommandContext context) { (void)controller.Execute(std::move(command), context); });
+    auto callback = apc::ui::MakeTrayPrimaryActivationCallback(controller);
     callback();
 
     Check(executedCommand && executedCommand->Kind == AppCommandKind::ShowDevicePicker,
@@ -78,6 +78,10 @@ void TestTrayPrimaryActivationUsesSharedExecutorAndDetachedUiIntent() {
     Check(
         executedContext && executedContext->Completion == AppCommandContext::CompletionMode::Detached,
         "tray primary activation must use detached completion so a UI-thread callback cannot wait on its Opened event");
+    controller.reset();
+    executedCommand.reset();
+    callback();
+    Check(!executedCommand, "a retained tray callback must not invoke an expired controller");
 }
 
 void TestMalformedCancelledAndExpiredCommandsShortCircuit() {

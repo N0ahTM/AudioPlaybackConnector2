@@ -807,44 +807,28 @@ SettingsMutationResult SettingsStore::ForgetDevice(std::wstring_view deviceId) {
         return defaultWasRemoved || before != data.Devices.size() + data.LastConnectedIds.size();
     });
 }
-RecordConnectedDeviceResult SettingsStore::RecordConnectedDevice(std::wstring_view deviceId,
-                                                                 std::wstring_view deviceName) {
-    RecordConnectedDeviceResult result;
+SettingsMutationResult SettingsStore::RecordConnectedDevice(std::wstring_view deviceId, std::wstring_view deviceName) {
     if (deviceId.empty() || !apc::limits::IsBoundedUtf16(deviceId, apc::limits::c_maxDeviceIdCharacters) ||
         !apc::limits::IsBoundedUtf16(deviceName, apc::limits::c_maxDeviceNameCharacters)) {
-        result.Mutation = {SettingsMutationStatus::Rejected, Snapshot().Revision};
-        return result;
+        return {SettingsMutationStatus::Rejected, Snapshot().Revision};
     }
-    result.Mutation =
-        m_impl->Commit([&result, deviceId = std::wstring(deviceId), deviceName = std::wstring(deviceName)](auto& data) {
-            result.EffectiveReconnectOnConnectionLoss = data.GlobalReconnectOnConnectionLoss;
-            auto* device = FindDevice(data, deviceId);
-            bool nameChanged = false;
-            if (!device) {
-                if (data.Devices.size() < apc::limits::c_maxPersistedDeviceCount) {
-                    data.Devices.push_back(
-                        {deviceId, deviceName, L"", data.GlobalConnectOnStartup, data.GlobalReconnectOnConnectionLoss});
-                    device = &data.Devices.back();
-                    result.AddedDevice = true;
-                    result.PresentationChanged = true;
-                }
-            } else if (!deviceName.empty() && device->Name != deviceName) {
-                device->Name = deviceName;
-                nameChanged = true;
-                result.PresentationChanged = device->Alias.empty() && !data.PrivacyModeEnabled;
-            }
-            if (device) {
-                result.ConnectOnStartup = device->ConnectOnStartup;
-                result.EffectiveReconnectOnConnectionLoss =
-                    result.EffectiveReconnectOnConnectionLoss || device->ReconnectOnConnectionLoss;
-            }
-            const auto before = data.LastConnectedIds;
-            std::erase(data.LastConnectedIds, deviceId);
-            data.LastConnectedIds.insert(data.LastConnectedIds.begin(), deviceId);
-            if (data.LastConnectedIds.size() > apc::limits::c_maxPersistedDeviceCount) data.LastConnectedIds.pop_back();
-            return result.AddedDevice || nameChanged || data.LastConnectedIds != before;
-        });
-    return result;
+    return m_impl->Commit([deviceId = std::wstring(deviceId), deviceName = std::wstring(deviceName)](auto& data) {
+        auto* device = FindDevice(data, deviceId);
+        bool changed = false;
+        if (!device && data.Devices.size() < apc::limits::c_maxPersistedDeviceCount) {
+            data.Devices.push_back(
+                {deviceId, deviceName, L"", data.GlobalConnectOnStartup, data.GlobalReconnectOnConnectionLoss});
+            changed = true;
+        } else if (device && !deviceName.empty() && device->Name != deviceName) {
+            device->Name = deviceName;
+            changed = true;
+        }
+        const auto before = data.LastConnectedIds;
+        std::erase(data.LastConnectedIds, deviceId);
+        data.LastConnectedIds.insert(data.LastConnectedIds.begin(), deviceId);
+        if (data.LastConnectedIds.size() > apc::limits::c_maxPersistedDeviceCount) data.LastConnectedIds.pop_back();
+        return changed || data.LastConnectedIds != before;
+    });
 }
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Flush and Shutdown ////////////////////////////////////////////////////////////////////////////////*/

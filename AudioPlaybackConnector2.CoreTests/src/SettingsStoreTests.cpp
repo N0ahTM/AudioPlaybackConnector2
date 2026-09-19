@@ -530,7 +530,7 @@ void TestDeviceSettingsBeforeFirstConnection() {
               "all pre-connection preferences must survive persistence");
     }
     const auto connection = reader.RecordConnectedDevice(L"new", L"Phone renamed by OS");
-    Check(!connection.AddedDevice && connection.EffectiveReconnectOnConnectionLoss,
+    Check(connection.IsApplied() && reader.Snapshot().Data.Devices.front().ReconnectOnConnectionLoss,
           "the first real connection must reuse configured preferences");
     restored = reader.Snapshot().Data;
     Check(restored.Devices.size() == 1 && restored.Devices.front().Alias == L"Desk" &&
@@ -540,27 +540,28 @@ void TestDeviceSettingsBeforeFirstConnection() {
     static_cast<void>(reader.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
 }
 
-void TestRecordConnectedDeviceEffectiveReconnectPolicy() {
+void TestRecordedPreferencesAndNames() {
     auto storage = std::make_shared<ControlledStorage>();
     SettingsStore store({}, storage);
     const auto first = store.RecordConnectedDevice(L"known", L"Known");
-    Check(first.AddedDevice && !first.EffectiveReconnectOnConnectionLoss,
+    Check(first.IsApplied() && !store.Snapshot().Data.Devices.front().ReconnectOnConnectionLoss,
           "new devices must start with the global reconnect policy");
     Check(store.SetDeviceReconnectOnConnectionLoss(L"known", true).IsApplied(),
           "an existing per-device reconnect policy must apply");
     const auto known = store.RecordConnectedDevice(L"known", L"Known");
-    Check(known.EffectiveReconnectOnConnectionLoss,
-          "recording a known device must OR its per-device policy with the global policy");
+    Check(known.Status == SettingsMutationStatus::Unchanged &&
+              store.Snapshot().Data.Devices.front().ReconnectOnConnectionLoss,
+          "recording a known device must preserve its configured policy");
     Check(store.SetDeviceAlias(L"known", L"Desk").Mutation.IsApplied(),
           "an alias must be persisted before testing hidden name updates");
     const auto aliasedName = store.RecordConnectedDevice(L"known", L"Renamed");
-    Check(aliasedName.Mutation.IsApplied() && !aliasedName.PresentationChanged,
+    Check(aliasedName.IsApplied() && store.Snapshot().Data.Devices.front().Alias == L"Desk",
           "a renamed aliased device must persist its name without changing its visible presentation");
     Check(store.Snapshot().Data.Devices.front().Name == L"Renamed",
           "a renamed aliased device must update its stored name");
     Check(store.SetPrivacyModeEnabled(true).IsApplied(), "privacy mode must apply before the second hidden rename");
     const auto privateName = store.RecordConnectedDevice(L"known", L"PrivateName");
-    Check(privateName.Mutation.IsApplied() && !privateName.PresentationChanged,
+    Check(privateName.IsApplied() && store.Snapshot().Data.PrivacyModeEnabled,
           "a renamed private device must persist its name without changing its visible presentation");
     Check(store.Snapshot().Data.Devices.front().Name == L"PrivateName",
           "a renamed private device must update its stored name");
@@ -568,7 +569,7 @@ void TestRecordConnectedDeviceEffectiveReconnectPolicy() {
     for (std::size_t index = 1; index < apc::limits::c_maxPersistedDeviceCount; ++index) {
         const auto id = L"device-" + std::to_wstring(index);
         const auto added = store.RecordConnectedDevice(id, L"Device");
-        Check(added.Mutation.Status == SettingsMutationStatus::Applied,
+        Check(added.Status == SettingsMutationStatus::Applied,
               "the bounded device table must accept each unique device up to its limit");
     }
     Check(store.Snapshot().Data.Devices.size() == apc::limits::c_maxPersistedDeviceCount,
@@ -579,8 +580,9 @@ void TestRecordConnectedDeviceEffectiveReconnectPolicy() {
     Check(store.SetGlobalReconnectOnConnectionLoss(true).IsApplied(),
           "the global reconnect policy must apply before the overflow record");
     const auto overflow = store.RecordConnectedDevice(L"overflow", L"Overflow");
-    Check(!overflow.AddedDevice && overflow.EffectiveReconnectOnConnectionLoss,
-          "an overflow device must still report the global effective reconnect policy");
+    Check(overflow.IsApplied() && store.Snapshot().Data.Devices.size() == apc::limits::c_maxPersistedDeviceCount &&
+              store.Snapshot().Data.LastConnectedIds.front() == L"overflow",
+          "connection history remains bounded and current even when the saved-device table is full");
     Check(store.FlushNow(2), "hidden device-name mutations must flush successfully");
     storage->SetInput(storage->Output());
     static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
@@ -876,13 +878,13 @@ void TestPersistedMutationRoundTrip() {
     Check(writer.SetPrivacyModeEnabled(true).IsApplied(), "privacy preference must persist");
     Check(writer.SetSettingsWindowBounds(PersistedWindowBounds{1, 2, 320, 240, 144}).IsApplied(),
           "validated window bounds must persist");
-    Check(writer.RecordConnectedDevice(L"primary", L"Primary").AddedDevice, "recorded device data must persist");
+    Check(writer.RecordConnectedDevice(L"primary", L"Primary").IsApplied(), "recorded device data must persist");
     Check(writer.SetDeviceConnectOnStartup(L"primary", false).IsApplied(),
           "per-device startup policy mutation must persist");
     Check(writer.SetDeviceReconnectOnConnectionLoss(L"primary", false).IsApplied(),
           "per-device reconnect policy mutation must persist");
     Check(writer.SetDeviceAlias(L"primary", L"Desk").Mutation.IsApplied(), "device alias mutation must persist");
-    Check(writer.RecordConnectedDevice(L"removed", L"Removed").AddedDevice,
+    Check(writer.RecordConnectedDevice(L"removed", L"Removed").IsApplied(),
           "a second device must exercise forget-device persistence");
     Check(writer.ForgetDevice(L"removed").IsApplied(), "forget-device mutation must persist its removal");
     Check(writer.SetDefaultDevice(L"primary").IsApplied(), "default-device mutation must persist");
@@ -1188,7 +1190,7 @@ int RunSettingsStoreTests() {
     TestNoOpAndTypedMutationResults();
     TestDeviceIdValidationRejectsWithoutRevision();
     TestDeviceSettingsBeforeFirstConnection();
-    TestRecordConnectedDeviceEffectiveReconnectPolicy();
+    TestRecordedPreferencesAndNames();
     TestMutationDuringBlockedWriteAndFinalFlush();
     TestDebouncedWorkerWaitsForSynchronousWriter();
     TestManualDebounceAndIdleWait();

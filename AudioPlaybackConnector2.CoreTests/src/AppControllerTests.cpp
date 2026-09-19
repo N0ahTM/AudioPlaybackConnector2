@@ -30,6 +30,72 @@ using apc::app::DeviceConnectedEvent;
 using apc::app::DevicePickerOpenMode;
 using apc::app::DeviceSelector;
 
+void TestConnectionFactsRecordPreferencesBeforeNotification() {
+    apc::tests::AppFixture fixture;
+    (void)fixture.Controller.SetGlobalConnectOnStartup(true);
+    (void)fixture.Service->Start();
+    fixture.Devices->WatcherAccess->LastWatcher->Add(L"device-a", L"Speaker");
+    bool persistedBeforeNotification = false;
+    auto observation = fixture.Controller.SnapshotAndSubscribe([&](auto const& event) {
+        if (!std::holds_alternative<DeviceConnectedEvent>(event.Event)) return;
+        auto const saved = fixture.Settings->Snapshot();
+        persistedBeforeNotification = saved.Data.LastConnectedIds == std::vector<std::wstring>{L"device-a"} &&
+                                      saved.Data.Devices.size() == 1 && saved.Data.Devices.front().Name == L"Speaker";
+    });
+    apc::tests::device::ConnectSuccessfully(*fixture.Devices, L"device-a");
+    auto const connected = fixture.Controller.Snapshot();
+    Check(persistedBeforeNotification && connected.Settings.Devices.front().ConnectOnStartup,
+          "a real connection must record its name, defaults and history before notifying application observers");
+    auto const revision = fixture.Settings->Snapshot().Revision;
+    (void)fixture.Controller.SetDeviceReconnectOnConnectionLoss(L"device-a", true);
+    Check(fixture.Settings->Snapshot().Revision == revision + 1 &&
+              fixture.Settings->Snapshot().Data.LastConnectedIds == std::vector<std::wstring>{L"device-a"},
+          "a policy-induced repeated connected fact must not create another settings commit");
+}
+
+void TestShutdownDrainsDeviceFactSettingsCommit() {
+    apc::tests::AppFixture fixture;
+    (void)fixture.Service->Connect(L"device-a");
+    auto* connection = fixture.Devices->ConnectionAccess->LastConnection;
+    connection->CompleteStart(apc::device::DeviceConnectionResult::Success);
+    std::binary_semaphore entered(0), release(0), joining(0);
+    auto blocker = fixture.Settings->Subscribe([&](auto const& snapshot) {
+        if (snapshot.Data.LastConnectedIds.empty()) return;
+        entered.release();
+        release.acquire();
+    });
+    auto completion =
+        std::async(std::launch::async, [&] { connection->CompleteOpen(apc::device::DeviceConnectionResult::Success); });
+    entered.acquire();
+    fixture.Controller.RequestStop();
+    auto shutdown = std::async(std::launch::async, [&] {
+        joining.release();
+        fixture.Controller.Shutdown();
+    });
+    joining.acquire();
+    auto const waited = shutdown.wait_for(std::chrono::milliseconds(100)) == std::future_status::timeout;
+    release.release();
+    completion.get();
+    shutdown.get();
+    Check(waited && fixture.Settings->Snapshot().Data.LastConnectedIds == std::vector<std::wstring>{L"device-a"},
+          "shutdown must drain an admitted device-fact commit even when no controller command is active");
+}
+
+void TestConnectionObserverCanRequestStopAndLateFactsCannotPersist() {
+    apc::tests::AppFixture fixture;
+    auto observation = fixture.Controller.SnapshotAndSubscribe([&](auto const& event) {
+        if (std::holds_alternative<DeviceConnectedEvent>(event.Event)) fixture.Controller.RequestStop();
+    });
+    apc::tests::device::ConnectSuccessfully(*fixture.Devices, L"device-a");
+    fixture.Controller.Shutdown();
+    auto const stopped = fixture.Settings->Snapshot();
+    apc::tests::device::ConnectSuccessfully(*fixture.Devices, L"late-device");
+    Check(!fixture.Controller.Snapshot().IsRunning &&
+              stopped.Data.LastConnectedIds == std::vector<std::wstring>{L"device-a"} &&
+              fixture.Settings->Snapshot() == stopped,
+          "callback stop must not wait on itself, and later native connections must not mutate settings");
+}
+
 void TestConcreteOwnersAndExplicitUseCases() {
     apc::tests::AppFixture fixture;
     auto& controller = fixture.Controller;
@@ -434,6 +500,9 @@ void TestShutdownDrainsAnObservationBeingCaptured() {
 } // namespace
 
 int RunAppControllerTests() {
+    TestConnectionFactsRecordPreferencesBeforeNotification();
+    TestShutdownDrainsDeviceFactSettingsCommit();
+    TestConnectionObserverCanRequestStopAndLateFactsCannotPersist();
     TestSnapshotRegistrationReconcilesChangesDuringCapture();
     TestSnapshotRegistrationDoesNotReceiveOlderQueuedDelivery();
     TestUnstableOrStoppedObservationCannotInstallAnObserver();

@@ -866,13 +866,6 @@ bool DeviceService::IsDeviceConnected(std::wstring_view deviceId) const {
     return iter != snapshot.Sessions.end() && iter->State == DeviceLifecycleState::Connected;
 }
 
-std::optional<std::wstring> DeviceService::GetConnectionDisplayName(std::wstring_view deviceId) const {
-    auto const snapshot = Snapshot();
-    auto const iter = std::ranges::find(snapshot.Sessions, deviceId, &DeviceSessionSnapshot::DeviceId);
-    if (iter == snapshot.Sessions.end() || iter->State != DeviceLifecycleState::Connected) return std::nullopt;
-    return iter->DeviceName;
-}
-
 bool DeviceService::HasConnections() const {
     return !GetConnectedDevices().empty();
 }

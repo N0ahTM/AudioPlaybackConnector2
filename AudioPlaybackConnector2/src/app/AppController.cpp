@@ -1,6 +1,8 @@
 #include <app/AppController.hpp>
 #include <app/StartupTaskCoordinator.hpp>
 #include <core/DeviceService.hpp>
+#include <core/SettingsLimits.hpp>
+#include <wil/resource.h>
 
 #include <algorithm>
 #include <condition_variable>
@@ -30,6 +32,8 @@ apc::device::DeviceSettingsPolicy DevicePolicy(SettingsSnapshot const& snapshot)
 /*------------------------------------------------------------------------------------------------------------*/
 
 struct AppController::EventState {
+    explicit EventState(std::shared_ptr<SettingsStore> settings) : Settings(std::move(settings)) {}
+
     struct Entry {
         Entry(SubscriptionId id, EventHandler handler) : Id(id), Handler(std::move(handler)) {}
 
@@ -74,7 +78,9 @@ struct AppController::EventState {
 
     void Drain() noexcept {
         std::unique_lock lock(Mutex);
-        if (DrainThread != std::this_thread::get_id()) Changed.wait(lock, [this] { return !Draining; });
+        Changed.wait(lock, [this] {
+            return ActiveDeviceObservations == 0 && (!Draining || DrainThread == std::this_thread::get_id());
+        });
     }
 
     void Publish(AppEvent const& event, std::optional<DeviceFactPublicationFence::Token> token = {}) {
@@ -130,7 +136,13 @@ struct AppController::EventState {
         {
             std::lock_guard lock(Mutex);
             if (Closed) return;
+            ++ActiveDeviceObservations;
         }
+        auto finished = wil::scope_exit([this] {
+            std::lock_guard lock(Mutex);
+            --ActiveDeviceObservations;
+            Changed.notify_all();
+        });
         if (fact.Kind == DeviceFactKind::Shutdown) return;
         if (fact.Kind == DeviceFactKind::InventoryChanged) {
             Publish(DeviceInventoryChangedEvent{});
@@ -159,6 +171,10 @@ struct AppController::EventState {
         }();
         auto const observed = DeviceFence.Observe(fact.DeviceId, status);
         if (!observed.WasConnected && status == Status::Connected) {
+            // The native owner serializes connection facts. Persist each real
+            // connected transition before publishing it to UI/transport observers.
+            auto const name = apc::limits::TruncateUtf16(session->DeviceName, apc::limits::c_maxDeviceNameCharacters);
+            (void)Settings->RecordConnectedDevice(fact.DeviceId, name);
             Publish(DeviceConnectedEvent{*id}, observed.Connection);
         } else if (observed.WasConnected && status != Status::Connected &&
                    fact.DisconnectReason != DeviceDisconnectReason::None) {
@@ -188,6 +204,10 @@ struct AppController::EventState {
     /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
+    // Admitted device callbacks retain this state until shutdown has drained
+    // their settings commits. Store subscriptions capture only a weak EventState.
+    std::shared_ptr<SettingsStore> Settings;
+    std::size_t ActiveDeviceObservations = 0;
     DeviceFactPublicationFence DeviceFence;
     std::stop_source SettingsCancellation;
     std::mutex Mutex;
@@ -207,7 +227,7 @@ AppController::AppController(std::shared_ptr<SettingsStore> settings,
                              std::weak_ptr<AppPresentation> presentation,
                              std::shared_ptr<StartupTaskCoordinator> startupTask)
     : m_settings(std::move(settings)), m_presentation(std::move(presentation)),
-      m_eventState(std::make_shared<EventState>()), m_devices(std::move(devices)),
+      m_eventState(std::make_shared<EventState>(m_settings)), m_devices(std::move(devices)),
       m_startupTask(std::move(startupTask)) {
     if (!m_settings || !m_devices) throw std::invalid_argument("application owners are required");
     std::weak_ptr<EventState> weak = m_eventState;

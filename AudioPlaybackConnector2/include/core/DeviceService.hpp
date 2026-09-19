@@ -138,7 +138,6 @@ public:
     [[nodiscard]] std::vector<DeviceSessionSnapshot> GetConnectedDevices() const;
     [[nodiscard]] std::vector<std::wstring> GetPowerTransitionRecoveryDeviceIds() const;
     [[nodiscard]] bool IsDeviceConnected(std::wstring_view deviceId) const;
-    [[nodiscard]] std::optional<std::wstring> GetConnectionDisplayName(std::wstring_view deviceId) const;
     [[nodiscard]] bool HasConnections() const;
     [[nodiscard]] bool HasBusyOperations() const;
     [[nodiscard]] bool IsDeviceBusy(std::wstring_view deviceId) const;

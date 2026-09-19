@@ -26,10 +26,15 @@ The controller retains concrete `SettingsStore` and `DeviceService` owners. Comm
 an admission lease before accessing them. `RequestStop` monotonically closes command and event admission,
 invalidates queued recipients and cancels pending settings policy without waiting for calls or observers.
 It is safe inside an admitted call's observer; that call may still finish and retain its committed result.
-`Shutdown` requests stop, then drains outstanding leases and event delivery without holding owner locks.
+`Shutdown` requests stop, then drains outstanding leases, admitted device-fact processing and event delivery
+without holding owner locks. A device fact admitted before stop may finish its settings commit; later facts
+cannot start one. The device-fact counter uses the event mutex only for admission and completion, never for
+store calls or observer delivery.
 This lifecycle join must run outside admitted controller calls and owner/observer callbacks; such callbacks
 use `RequestStop`. The caller retains the controller until admitted calls return. Tests cover a stop request
-inside a settings commit callback, a foreign blocked callback and the subsequent lifecycle join.
+inside a settings commit callback, a foreign blocked callback and the subsequent lifecycle join. A separate
+test blocks the settings observer of a native connection without an active controller command and verifies
+that shutdown still waits for that admitted commit.
 The host requests transport cancellation before
 draining the controller. The presentation boundary is weakly held and contains only UI admission, window
 acknowledgement and presentation diagnostics; it cannot mutate device or persistence state.
@@ -51,9 +56,11 @@ overtaking earlier events. A subscriber added after publication cannot receive t
 | Subscription activity and in-flight admission | The same event mutex | Reset disables admission before waiting for an active callback; reset on the drainer never waits on itself |
 | Handler captures and current delivery | Shared registration and the one active drainer | Capture destruction happens outside the mutex; reentrant registration and reset are allowed |
 
-Controller shutdown closes all registrations and drains a callback on another thread. Destruction from the
-callback itself invalidates remaining recipients and queued work without waiting for its own stack; the drainer
-retains the closed event state until it returns. Observer exceptions do not interrupt subsequent recipients.
+Controller shutdown closes all registrations and drains a callback on another thread. For direct publication
+outside an admitted command or native fact, destruction from the callback itself invalidates remaining
+recipients and queued work without waiting for its own stack; the drainer retains the closed event state until
+it returns. Callbacks of admitted work must use `RequestStop` and retain the controller until that work returns.
+Observer exceptions do not interrupt subsequent recipients.
 The tests exercise simultaneous and reentrant publication, admission timing, reset with queued work, both
 destruction paths and reentrant capture destruction.
 
@@ -84,6 +91,14 @@ The controller subscribes directly to the concrete `DeviceService` fact stream. 
 connection/status publication history and identifies superseded presentation work. Session snapshots remain
 the authority for application device state. Normalization runs on the device context without localization or
 UI dispatch. Events carry typed failure reasons and disconnect notification intent.
+
+Each actual transition into connected state records the native name, initial device preferences and recent
+connection history in `SettingsStore` before publishing `DeviceConnectedEvent`. Repeated connected facts do
+not repeat the mutation. An empty native name preserves a saved name. The store returns its ordinary mutation
+result; presentation visibility and effective reconnect policy are not persistence results. Settings changes
+reach the device owner through the existing revisioned policy subscription, without waiting on the native
+fact drainer. The host only presents the resulting connection event. Tests verify headless persistence before
+notification, repeated facts, callback stop requests and suppression of persistence after shutdown.
 
 The host subscribes to the controller and marshals each notification once to its UI context. Before presenting
 device work it validates the notification's fence token; a queued connected event cannot revive a disconnected

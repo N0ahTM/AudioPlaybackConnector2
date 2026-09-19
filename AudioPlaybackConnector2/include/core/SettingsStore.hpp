@@ -38,14 +38,6 @@ struct DeviceAliasResult {
     bool DeviceExists = false;
 };
 
-struct RecordConnectedDeviceResult {
-    SettingsMutationResult Mutation;
-    bool AddedDevice = false;
-    bool PresentationChanged = false;
-    bool ConnectOnStartup = false;
-    bool EffectiveReconnectOnConnectionLoss = false;
-};
-
 enum class SettingsShutdownMode { Flush, DiscardStartupFailure };
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -132,8 +124,8 @@ public:
     [[nodiscard]] SettingsMutationResult SetDefaultDevice(std::wstring_view deviceId);
     [[nodiscard]] SettingsMutationResult ClearDefaultDevice();
     [[nodiscard]] SettingsMutationResult ForgetDevice(std::wstring_view deviceId);
-    [[nodiscard]] RecordConnectedDeviceResult RecordConnectedDevice(std::wstring_view deviceId,
-                                                                    std::wstring_view deviceName);
+    [[nodiscard]] SettingsMutationResult RecordConnectedDevice(std::wstring_view deviceId,
+                                                               std::wstring_view deviceName);
     // A synchronous boundary for suspend and normal shutdown. It waits for the active attempt,
     // then writes the newest captured revision without ever overlapping the background worker.
     // Shutdown has one executor; concurrent callers receive its stored core result and wait for publication

@@ -6,7 +6,6 @@
 #include <MainWindow/MainWindow.xaml.h>
 #include <app/AutoReconnectPlanner.hpp>
 #include <core/DeviceService.hpp>
-#include <core/SettingsLimits.hpp>
 #include <core/SettingsStore.hpp>
 #include <core/StringResources.hpp>
 #include <core/ThemeHelper.hpp>
@@ -1387,55 +1386,6 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
         return;
     }
     m_powerTransitionCoordinator.NotifyDeviceConnected(std::wstring_view(id));
-    if (!m_settingsStore) return;
-
-    winrt::hstring rawDeviceName = id;
-    if (auto displayName = m_deviceService->GetConnectionDisplayName(std::wstring_view(id))) {
-        rawDeviceName = winrt::hstring(*displayName);
-    }
-
-    auto const idString = std::wstring(id);
-    auto deviceName =
-        apc::limits::TruncateUtf16(std::wstring_view(rawDeviceName), apc::limits::c_maxDeviceNameCharacters);
-    if (deviceName.empty()) {
-        deviceName = apc::limits::TruncateUtf16(idString, apc::limits::c_maxDeviceNameCharacters);
-    }
-    RecordConnectedDeviceResult record;
-    try {
-        record = m_settingsStore->RecordConnectedDevice(idString, deviceName);
-    } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[App] OnDeviceConnected settings update ERROR", ex);
-        return;
-    } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[App] OnDeviceConnected settings update ERROR", ex);
-        return;
-    } catch (...) {
-        util::DebugTraceUnknownException(L"[App] OnDeviceConnected settings update ERROR");
-        return;
-    }
-
-    if (record.Mutation.IsApplied()) {
-        if (record.AddedDevice) {
-            DebugTrace(L"[App] New device added to settings: {0}", std::wstring(rawDeviceName));
-        }
-    }
-
-    try {
-        const auto settingsSnapshot = m_settingsStore->Snapshot();
-        bool reconnectOnConnectionLoss = settingsSnapshot.Data.GlobalReconnectOnConnectionLoss;
-        auto it = std::ranges::find_if(settingsSnapshot.Data.Devices, [&](const auto& d) { return d.Id == id; });
-        if (it != settingsSnapshot.Data.Devices.end()) {
-            reconnectOnConnectionLoss = reconnectOnConnectionLoss || it->ReconnectOnConnectionLoss;
-        }
-        m_deviceService->SetReconnectOnConnectionLoss(std::wstring(id), reconnectOnConnectionLoss);
-    } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[App] OnDeviceConnected reconnect-on-loss sync ERROR", ex);
-    } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[App] OnDeviceConnected reconnect-on-loss sync ERROR", ex);
-    } catch (...) {
-        util::DebugTraceUnknownException(L"[App] OnDeviceConnected reconnect-on-loss sync ERROR");
-    }
-
     if (m_notificationService) {
         try {
             m_notificationService->ShowDeviceConnected(id, ResolveKnownDeviceName(id));

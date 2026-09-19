@@ -957,7 +957,7 @@ void TestPickerOpenModePreservesTrayToggleAndControlEnsureOpen() {
           "tray primary activation must carry toggle-if-open semantics through the shared bridge");
 }
 
-void TestObservedFactsNormalizeAndOverlayWithoutInjection() {
+void TestObservedFactsNormalizeWithoutOwningSessionState() {
     Harness harness;
     harness.AddSettingsDevice(Device(L"target", L"Target"));
     const auto before = harness.Bridge.Snapshot().Generation;
@@ -969,9 +969,8 @@ void TestObservedFactsNormalizeAndOverlayWithoutInjection() {
           "legacy status facts must normalize to typed status events");
     auto afterStatus = harness.Bridge.Snapshot();
     Check(afterStatus.Generation > before && afterStatus.Devices.size() == 1 &&
-              afterStatus.Devices.front().State == DeviceConnectionState::Connecting &&
-              afterStatus.Devices.front().IsBusy,
-          "observed status must advance generation and overlay an existing snapshot record");
+              afterStatus.Devices.front().State == DeviceConnectionState::Idle && !afterStatus.Devices.front().IsBusy,
+          "observed status must advance publication generation without inventing a session state");
 
     auto eventOnly = harness.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceStatusChanged,
                                              L"event-only",
@@ -1151,50 +1150,66 @@ void TestFactsAfterShutdownDoNotPublishOrChangeBridgeState() {
           "facts arriving after shutdown must be rejected without publication or state/generation changes");
 }
 
-void TestTerminalFactsClearObservedBusyState() {
+void TestSessionStateDoesNotDependOnFactDelivery() {
     Harness harness;
+    harness.GlobalBusy = true;
     harness.AddSettingsDevice(Device(L"target", L"Target"));
+    harness.LiveDevices = {Device(L"target", L"Target", {}, false, true, true)};
+    harness.LiveDevices.front().State = DeviceConnectionState::WaitingForReconnect;
 
-    (void)harness.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::AutoReconnectTriggered,
-                                  L"target",
-                                  DeviceConnectionState::Idle,
-                                  AppResultCode::OperationFailed});
     auto waiting = harness.Bridge.Snapshot();
     Check(waiting.Devices.front().State == DeviceConnectionState::WaitingForReconnect && waiting.Devices.front().IsBusy,
-          "an auto-reconnect trigger must expose a busy waiting state");
+          "a session's reconnect wait must be visible before presentation facts are delivered");
 
-    (void)harness.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceStatusChanged,
+    (void)harness.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::ConnectionError,
                                   L"target",
                                   DeviceConnectionState::Failed,
                                   AppResultCode::OperationFailed});
-    auto failedStatus = harness.Bridge.Snapshot();
-    Check(failedStatus.Devices.front().State == DeviceConnectionState::Failed && !failedStatus.Devices.front().IsBusy,
-          "a terminal failed status must clear the observed waiting/busy state");
+    auto afterOldFailure = harness.Bridge.Snapshot();
+    Check(afterOldFailure.Devices.front().State == DeviceConnectionState::WaitingForReconnect &&
+              afterOldFailure.Devices.front().IsBusy,
+          "a delayed failure fact must not overwrite a newer waiting session");
+
+    harness.LiveDevices.front().State = DeviceConnectionState::Failed;
+    harness.LiveDevices.front().IsBusy = false;
+    auto failed = harness.Bridge.Snapshot();
+    Check(failed.Devices.front().State == DeviceConnectionState::Failed && !failed.Devices.front().IsBusy &&
+              !failed.Tray.HasBusyOperations,
+          "terminal session state must clear busy before the terminal fact reaches presentation");
 
     (void)harness.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::AutoReconnectTriggered,
                                   L"target",
                                   DeviceConnectionState::Idle,
-                                  AppResultCode::OperationFailed});
-    (void)harness.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::ConnectionError,
-                                  L"target",
-                                  DeviceConnectionState::Idle,
-                                  AppResultCode::OperationFailed});
-    auto failedError = harness.Bridge.Snapshot();
-    Check(failedError.Devices.front().State == DeviceConnectionState::Failed && !failedError.Devices.front().IsBusy,
-          "a connection error must clear a prior reconnect wait instead of leaving the tray busy");
+                                  AppResultCode::Success});
+    auto afterOldRetry = harness.Bridge.Snapshot();
+    Check(afterOldRetry.Devices.front().State == DeviceConnectionState::Failed && !afterOldRetry.Devices.front().IsBusy,
+          "a delayed retry fact must not revive a terminal session's busy state");
 
-    (void)harness.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::AutoReconnectTriggered,
-                                  L"target",
-                                  DeviceConnectionState::Idle,
-                                  AppResultCode::OperationFailed});
-    (void)harness.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::AutoReconnectFailed,
-                                  L"target",
-                                  DeviceConnectionState::Idle,
-                                  AppResultCode::OperationFailed});
-    auto failedReconnect = harness.Bridge.Snapshot();
-    Check(failedReconnect.Devices.front().State == DeviceConnectionState::Failed &&
-              !failedReconnect.Devices.front().IsBusy,
-          "auto-reconnect failure must clear any observed retry/busy state");
+    harness.LiveDevices.clear();
+    auto removed = harness.Bridge.Snapshot();
+    Check(removed.Devices.front().State == DeviceConnectionState::Idle && !removed.Devices.front().IsBusy &&
+              !removed.Devices.front().IsConnected,
+          "removing a session must discard its runtime state even without a disconnected fact");
+}
+
+void TestRefreshUsesSessionStateAfterEnumerationCompletes() {
+    bool connected = true;
+    SettingsData settings;
+    settings.Devices.push_back({L"target", L"Target", {}, false, false});
+    LegacyAppUseCaseBridge::Operations operations;
+    operations.ReadSettings = [&] { return SettingsSnapshot{settings, 0, false}; };
+    operations.ReadConnectedDevices = [&] {
+        return std::vector<DeviceRecord>{Device(L"target", L"Target", {}, connected)};
+    };
+    operations.Refresh = [&](AppCommandContext const&) {
+        connected = false;
+        return LegacyAppUseCaseBridge::RefreshResult{OperationStatus::Succeeded, {Device(L"target", L"Discovered")}};
+    };
+    LegacyAppUseCaseBridge bridge(std::move(operations));
+    const auto result = bridge.Execute(Command(AppCommandKind::ListDevices));
+    Check(result.Succeeded() && result.Devices.size() == 1 && !result.Devices.front().IsConnected &&
+              result.Devices.front().State == DeviceConnectionState::Idle,
+          "a refresh must use session truth read after enumeration, not an earlier connected snapshot");
 }
 
 void TestMissingMutationCallbacksFailClosed() {
@@ -1233,6 +1248,8 @@ void TestExternalSnapshotIdPreservesP01LengthAndBoundedConversion() {
 
     Harness disconnected;
     disconnected.AddSettingsDevice(Device(longId, L"Long device"));
+    disconnected.LiveDevices = {Device(longId, L"Long device", {}, false, true, true)};
+    disconnected.LiveDevices.front().State = DeviceConnectionState::Connecting;
     const auto event = disconnected.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceStatusChanged,
                                                     longId,
                                                     DeviceConnectionState::Connecting,
@@ -1243,10 +1260,10 @@ void TestExternalSnapshotIdPreservesP01LengthAndBoundedConversion() {
     const auto afterEventSnapshot = disconnected.Bridge.Snapshot();
     Check(afterEventSnapshot.Devices.size() == 1 && afterEventSnapshot.Devices.front().Id.View() == longId &&
               afterEventSnapshot.Devices.front().State == DeviceConnectionState::Connecting,
-          "long-ID event state must remain visible in an immutable snapshot");
+          "long-ID owner state must remain visible in an immutable snapshot");
 }
 
-void TestSessionTruthReconcilesObservedConnectionOverlays() {
+void TestSessionTruthIgnoresDelayedConnectionFacts() {
     Harness disconnect;
     disconnect.LiveDevices = {Device(L"target", L"Target", {}, true)};
     disconnect.AddSettingsDevice(disconnect.LiveDevices.front());
@@ -1311,11 +1328,15 @@ void TestSessionTruthReconcilesObservedConnectionOverlays() {
 
     Harness transient;
     transient.AddSettingsDevice(Device(L"target", L"Target"));
+    transient.LiveDevices = {Device(L"target", L"Target", {}, false, true, true)};
+    transient.LiveDevices.front().State = DeviceConnectionState::Connecting;
     (void)transient.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceStatusChanged,
                                     L"target",
                                     DeviceConnectionState::Connecting,
                                     AppResultCode::Success});
     const auto connectingSnapshot = transient.Bridge.Snapshot();
+    transient.LiveDevices.front().State = DeviceConnectionState::Failed;
+    transient.LiveDevices.front().IsBusy = false;
     (void)transient.Bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceStatusChanged,
                                     L"target",
                                     DeviceConnectionState::Failed,
@@ -1325,7 +1346,7 @@ void TestSessionTruthReconcilesObservedConnectionOverlays() {
               !connectingSnapshot.Devices.front().IsConnected && connectingSnapshot.Devices.front().IsBusy &&
               failedSnapshot.Devices.front().State == DeviceConnectionState::Failed &&
               !failedSnapshot.Devices.front().IsConnected && !failedSnapshot.Devices.front().IsBusy,
-          "compatible non-connected observed states must still enrich a source-disconnected record");
+          "non-connected session states must remain visible through the presentation merge");
 }
 
 void TestAuthoritativeBusyFactSurvivesSnapshotNormalization() {
@@ -1387,6 +1408,8 @@ void TestQueuedConnectedFactCannotResurrectClosedSnapshot() {
 void TestQueuedStatusFactCannotOverwriteNewerStatus() {
     Harness harness;
     harness.AddSettingsDevice(Device(L"target", L"Target"));
+    harness.LiveDevices = {Device(L"target", L"Target")};
+    harness.LiveDevices.front().State = DeviceConnectionState::Failed;
     DeviceFactPublicationFence fence;
 
     const auto queuedConnected = fence.RecordConnected(L"target");
@@ -1450,16 +1473,17 @@ int RunLegacyAppUseCaseBridgeTests() {
     TestUnpersistableExternalDefaultRetainsP01Success();
     TestSnapshotPrivacyResourcePickerAndStableGeneration();
     TestPickerOpenModePreservesTrayToggleAndControlEnsureOpen();
-    TestObservedFactsNormalizeAndOverlayWithoutInjection();
+    TestObservedFactsNormalizeWithoutOwningSessionState();
     TestReadFailuresAndCommandReadScope();
     TestSettingsReadCallbackIsRequired();
     TestShutdownIsMonotonicAndRejectsCallbacks();
     TestShutdownClosesAdmissionBeforeTearingDownCallbacks();
     TestFactsAfterShutdownDoNotPublishOrChangeBridgeState();
-    TestTerminalFactsClearObservedBusyState();
+    TestSessionStateDoesNotDependOnFactDelivery();
+    TestRefreshUsesSessionStateAfterEnumerationCompletes();
     TestMissingMutationCallbacksFailClosed();
     TestExternalSnapshotIdPreservesP01LengthAndBoundedConversion();
-    TestSessionTruthReconcilesObservedConnectionOverlays();
+    TestSessionTruthIgnoresDelayedConnectionFacts();
     TestAuthoritativeBusyFactSurvivesSnapshotNormalization();
     TestQueuedConnectedFactCannotResurrectClosedSnapshot();
     TestQueuedStatusFactCannotOverwriteNewerStatus();

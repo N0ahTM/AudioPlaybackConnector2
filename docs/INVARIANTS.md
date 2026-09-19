@@ -3,6 +3,20 @@
 This document records contracts verified against implementation and tests. It does not certify the whole
 application as free of concurrency defects; owners outside the table below still require a complete audit.
 
+## Device snapshot authority
+
+Application snapshots obtain connection state and busy flags from the DeviceService session snapshot.
+Presentation facts advance publication and describe events; they do not maintain a second runtime device map.
+A delayed failed, connected or retry event cannot overwrite a newer session state, recreate a removed session,
+or keep a terminal session busy. Tray busy state is derived from the same session records as the device rows.
+Command admission may independently consult the current busy state; that read does not alter the snapshot.
+
+After an awaited inventory refresh, session state is read again before merging discovery and saved labels.
+The session read therefore cannot predate a disconnect that completed during enumeration. This does not claim
+that the complete cross-owner application snapshot is atomic; the controller publication contract still needs
+its own consolidation. Regression coverage includes delayed facts, session removal without presentation delivery,
+and session changes during inventory refresh.
+
 ## Settings persistence
 
 `SettingsStore` owns the current immutable `SettingsData` reference, revision and persisted revision. Changes stage

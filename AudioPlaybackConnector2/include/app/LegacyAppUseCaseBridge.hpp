@@ -12,7 +12,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <vector>
 
 namespace apc::app {
@@ -150,9 +149,9 @@ public:
     [[nodiscard]] AppResult Execute(AppCommand const& command, AppCommandContext context = {}) noexcept;
     [[nodiscard]] AppSnapshot Snapshot() const noexcept;
 
-    // Normalize one legacy fact, update bridge-owned state, and return the
-    // exact typed fact for the host to pass to AppController::Publish. The
-    // returned value owns all data and creates no observer/lifetime cycle.
+    // Normalize a fact and advance its publication generation. Session state
+    // is read from the device owner; delayed facts never become snapshot state.
+    // The returned value owns all data and creates no observer/lifetime cycle.
     [[nodiscard]] std::optional<AppEvent> Observe(DeviceFact fact) noexcept;
 
     // Runtime teardown is a composition concern, but the snapshot must stop
@@ -264,14 +263,13 @@ private:
                                               DeviceSelectorKind selectorKind = DeviceSelectorKind::Id) noexcept;
     [[nodiscard]] static AppCommandContext CappedRefreshContext(AppCommandContext const& context);
     static void AdvanceGeneration(std::uint64_t& generation) noexcept;
-    void ApplyObservedStates(std::vector<DeviceRecord>& devices,
-                             std::vector<DeviceRecord> const& connectedDevices) const;
+    void ApplySessionStates(std::vector<DeviceRecord>& devices,
+                            std::vector<DeviceRecord> const& connectedDevices) const;
     [[nodiscard]] bool PrivacyMode(SettingsData const& settings) const noexcept;
 
     Operations m_operations;
     mutable std::mutex m_stateMutex;
     mutable std::condition_variable m_noActiveCalls;
-    mutable std::unordered_map<std::wstring, DeviceRecord> m_observedStates;
     mutable std::optional<std::uint64_t> m_lastSettingsRevision;
     mutable std::uint64_t m_generation = 0;
     std::uint64_t m_pickerGeneration = 0;

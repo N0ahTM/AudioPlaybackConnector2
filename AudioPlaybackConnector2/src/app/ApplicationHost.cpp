@@ -666,10 +666,9 @@ void ApplicationHost::InitializeAppController() {
         auto self = weak.lock();
         if (!self || !self->m_deviceService) return devices;
 
-        for (auto const& connection : self->m_deviceService->GetConnectionSessions()) {
+        const auto snapshot = self->m_deviceService->Snapshot();
+        for (auto const& connection : snapshot.Sessions) {
             if (connection.DeviceId.empty()) continue;
-            const auto id = winrt::hstring(connection.DeviceId);
-            const auto isBusy = self->m_deviceService->IsDeviceBusy(id);
             const auto state = [&] {
                 switch (connection.State) {
                     case apc::device::DeviceLifecycleState::Connected:
@@ -678,8 +677,9 @@ void ApplicationHost::InitializeAppController() {
                         return apc::app::DeviceConnectionState::WaitingForReconnect;
                     case apc::device::DeviceLifecycleState::Failed: return apc::app::DeviceConnectionState::Failed;
                     case apc::device::DeviceLifecycleState::Connecting:
-                    case apc::device::DeviceLifecycleState::Disconnecting:
                         return apc::app::DeviceConnectionState::Connecting;
+                    case apc::device::DeviceLifecycleState::Disconnecting:
+                        return apc::app::DeviceConnectionState::Disconnecting;
                     case apc::device::DeviceLifecycleState::Idle: return apc::app::DeviceConnectionState::Idle;
                 }
                 return apc::app::DeviceConnectionState::Idle;
@@ -690,7 +690,9 @@ void ApplicationHost::InitializeAppController() {
                                .State = state,
                                .IsConnected = state == apc::app::DeviceConnectionState::Connected,
                                .IsKnown = true,
-                               .IsBusy = isBusy});
+                               .IsBusy = state == apc::app::DeviceConnectionState::Connecting ||
+                                         state == apc::app::DeviceConnectionState::Disconnecting ||
+                                         state == apc::app::DeviceConnectionState::WaitingForReconnect});
         }
         return devices;
     };

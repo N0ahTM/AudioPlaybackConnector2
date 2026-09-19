@@ -144,30 +144,6 @@ std::optional<AppEvent> LegacyAppUseCaseBridge::Observe(DeviceFact fact) noexcep
             if (!id) return std::nullopt;
         }
 
-        if (id) {
-            std::scoped_lock lock(m_stateMutex);
-            if (fact.Kind == FactKind::DeviceDisconnected) {
-                m_observedStates.erase(fact.Id);
-            } else if (fact.Kind == FactKind::DeviceConnected) {
-                m_observedStates[fact.Id] =
-                    DeviceRecord{fact.Id, {}, {}, DeviceConnectionState::Connected, true, true, false};
-            } else if (fact.Kind == FactKind::DeviceStatusChanged) {
-                m_observedStates[fact.Id] = DeviceRecord{fact.Id,
-                                                         {},
-                                                         {},
-                                                         fact.State,
-                                                         fact.State == DeviceConnectionState::Connected,
-                                                         true,
-                                                         IsBusyState(fact.State)};
-            } else if (fact.Kind == FactKind::ConnectionError || fact.Kind == FactKind::AutoReconnectFailed) {
-                m_observedStates[fact.Id] =
-                    DeviceRecord{fact.Id, {}, {}, DeviceConnectionState::Failed, false, true, false};
-            } else if (fact.Kind == FactKind::AutoReconnectTriggered) {
-                m_observedStates[fact.Id] =
-                    DeviceRecord{fact.Id, {}, {}, DeviceConnectionState::WaitingForReconnect, false, true, true};
-            }
-        }
-
         std::optional<AppEvent> event;
         switch (fact.Kind) {
             case FactKind::DeviceConnected: event = DeviceConnectedEvent{*id}; break;
@@ -824,7 +800,6 @@ LegacyAppUseCaseBridge::Resolution LegacyAppUseCaseBridge::Resolve(DeviceSelecto
 
 std::vector<LegacyAppUseCaseBridge::DeviceRecord>
 LegacyAppUseCaseBridge::BuildDevices(bool refresh, AppCommandContext const& context, SettingsData const& settings) {
-    auto connected = ReadConnectedDevices();
     std::vector<DeviceRecord> refreshed;
     if (refresh && m_operations.Refresh) {
         auto refreshContext = CappedRefreshContext(context);
@@ -841,7 +816,7 @@ LegacyAppUseCaseBridge::BuildDevices(bool refresh, AppCommandContext const& cont
             refreshed = refreshResult.Devices;
         }
     }
-    return MergeDevices(std::move(refreshed), std::move(connected), settings);
+    return MergeDevices(std::move(refreshed), ReadConnectedDevices(), settings);
 }
 
 std::vector<LegacyAppUseCaseBridge::DeviceRecord>
@@ -922,15 +897,14 @@ std::vector<LegacyAppUseCaseBridge::DeviceRecord> LegacyAppUseCaseBridge::MergeD
 
     for (auto& device : refreshed)
         upsert(std::move(device));
-    // ApplyObservedStates needs the unmodified session records below: they
-    // remain the authority for connection truth after the presentation merge.
+    // Keep session state available until the presentation labels have been merged.
     for (auto const& device : connected)
         upsert(device);
     for (auto const& device : settings.Devices) {
         upsert(DeviceRecord{device.Id, device.Name, device.Alias, DeviceConnectionState::Idle, false, true, false});
     }
 
-    ApplyObservedStates(merged, connected);
+    ApplySessionStates(merged, connected);
     std::ranges::sort(merged, [](auto const& left, auto const& right) {
         const auto leftLabel = LowerInvariant(DeviceLabel(left));
         const auto rightLabel = LowerInvariant(DeviceLabel(right));
@@ -987,12 +961,6 @@ AppSnapshot LegacyAppUseCaseBridge::BuildSnapshot(std::vector<DeviceRecord> devi
     snapshot.Tray.Generation = generation;
     snapshot.Tray.DevicePickerOpenedGeneration = pickerGeneration;
     snapshot.Tray.HasBusyOperations = std::ranges::any_of(devices, [](auto const& device) { return device.IsBusy; });
-    if (m_operations.HasBusy) {
-        try {
-            snapshot.Tray.HasBusyOperations = m_operations.HasBusy();
-        } catch (...) {
-        }
-    }
     for (auto const& device : snapshot.Devices) {
         if (device.IsConnected) snapshot.Tray.ConnectedDevices.push_back(device);
     }
@@ -1186,14 +1154,8 @@ LegacyAppUseCaseBridge::MutationAdmissionFailure(AppCommandContext const& contex
     return std::nullopt;
 }
 
-void LegacyAppUseCaseBridge::ApplyObservedStates(std::vector<DeviceRecord>& devices,
-                                                 std::vector<DeviceRecord> const& connectedDevices) const {
-    std::unordered_map<std::wstring, DeviceRecord> observed;
-    {
-        std::scoped_lock lock(m_stateMutex);
-        observed = m_observedStates;
-    }
-
+void LegacyAppUseCaseBridge::ApplySessionStates(std::vector<DeviceRecord>& devices,
+                                                std::vector<DeviceRecord> const& connectedDevices) const {
     for (auto& current : devices) {
         const auto source = FindById(connectedDevices, current.Id);
         // The session map is authoritative for whether a device is connected.
@@ -1208,22 +1170,8 @@ void LegacyAppUseCaseBridge::ApplyObservedStates(std::vector<DeviceRecord>& devi
         }
 
         current.IsConnected = false;
-        if (current.State == DeviceConnectionState::Connected) {
-            current.State = DeviceConnectionState::Idle;
-        }
-
-        auto observedState = std::ranges::find_if(
-            observed, [&current](auto const& entry) { return EqualsIgnoreCase(entry.first, current.Id); });
-        if (observedState == observed.end()) continue;
-
-        auto const& state = observedState->second;
-        if (current.Name.empty()) current.Name = state.Name;
-        if (current.Alias.empty()) current.Alias = state.Alias;
-        current.IsKnown = current.IsKnown || state.IsKnown;
-        if (state.IsConnected) continue;
-
-        current.State = state.State;
-        if (IsBusyState(state.State)) current.IsBusy = true;
+        current.State = DeviceConnectionState::Idle;
+        current.IsBusy = false;
     }
 }
 

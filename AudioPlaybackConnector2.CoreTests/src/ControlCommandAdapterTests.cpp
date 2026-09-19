@@ -1,4 +1,6 @@
 #include "TestCheck.hpp"
+#include "AppTestFixture.hpp"
+#include <semaphore>
 
 #include <control/ControlCommandAdapter.hpp>
 #include <control/CommandPipeIo.hpp>
@@ -138,356 +140,162 @@ Request MakeRequest(CommandType command,
 }
 
 struct Harness {
-    std::mutex Mutex;
-    std::condition_variable Changed;
-    std::vector<AppCommand> Commands;
-    std::vector<AppCommandContext> Contexts;
-    AppResult Result;
-    AppSnapshot Snapshot = FixtureSnapshot();
-    AppController Controller;
-    ControlCommandAdapter Adapter;
-
-    Harness()
-        : Controller(
-              [this](AppCommand const& command, AppCommandContext const& context) {
-                  {
-                      std::lock_guard lock(Mutex);
-                      Commands.push_back(command);
-                      Contexts.push_back(context);
-                  }
-                  Changed.notify_all();
-                  auto result = Result;
-                  result.Command = command.Kind;
-                  return result;
-              },
-              [this] {
-                  std::lock_guard lock(Mutex);
-                  return Snapshot;
-              }),
-          Adapter(Controller, ControlCommandAdapter::Options{Localize}) {
-        Result.Code = AppResultCode::Success;
-    }
-
-    void ClearCommands() {
-        std::lock_guard lock(Mutex);
-        Commands.clear();
-        Contexts.clear();
+    apc::tests::AppFixture Fixture;
+    AppController& Controller = Fixture.Controller;
+    ControlCommandAdapter Adapter{Controller, {Localize}};
+    Harness() {
+        (void)Fixture.Settings->RecordConnectedDevice(L"device-a", L"Headphones");
+        (void)Fixture.Settings->RememberDevice(L"device-b", L"Speaker");
+        (void)Fixture.Settings->SetDeviceAlias(L"device-a", L"Desk");
+        (void)Fixture.Settings->SetDefaultDevice(L"device-a");
+        apc::tests::device::ConnectSuccessfully(*Fixture.Devices, L"device-a");
     }
 };
 
-void TestAllCommandMappingsAndTargets() {
+void TestMappingsUseConcreteOwners() {
     Harness harness;
-    struct Case {
-        Request RequestValue;
-        AppCommandKind Kind;
-    };
-    const std::vector<Case> cases{
-        {MakeRequest(CommandType::List), AppCommandKind::ListDevices},
-        {MakeRequest(CommandType::Status), AppCommandKind::Status},
-        {MakeRequest(CommandType::Connect, TargetKind::Id, L"device-a"), AppCommandKind::Connect},
-        {MakeRequest(CommandType::Disconnect, TargetKind::Name, L"Headphones"), AppCommandKind::Disconnect},
-        {MakeRequest(CommandType::Reconnect, TargetKind::Mac, L"AABBCC"), AppCommandKind::Reconnect},
-        {MakeRequest(CommandType::ToggleLast, TargetKind::Default), AppCommandKind::ToggleLast},
-        {MakeRequest(CommandType::Connect, TargetKind::Last), AppCommandKind::Connect},
-        {MakeRequest(CommandType::DisconnectAll), AppCommandKind::DisconnectAll},
-        {MakeRequest(CommandType::ReconnectAll), AppCommandKind::ReconnectAll},
-        {MakeRequest(CommandType::Show), AppCommandKind::ShowDevicePicker},
-        {MakeRequest(CommandType::Settings), AppCommandKind::ShowSettings},
-        {MakeRequest(CommandType::DefaultShow), AppCommandKind::ShowDefault},
-        {MakeRequest(CommandType::DefaultSet, TargetKind::Auto, L"headphones"), AppCommandKind::SetDefault},
-        {MakeRequest(CommandType::DefaultClear), AppCommandKind::ClearDefault},
-        {MakeRequest(CommandType::AliasSet, TargetKind::Id, L"device-a\nDesk"), AppCommandKind::SetAlias},
-        {MakeRequest(CommandType::AliasClear, TargetKind::Alias, L"Desk"), AppCommandKind::ClearAlias},
-        {MakeRequest(CommandType::AliasList), AppCommandKind::ListAliases},
-    };
-
-    for (auto const& test : cases) {
-        harness.ClearCommands();
-        const auto response = harness.Adapter.Handle(test.RequestValue, {}, apc::control::DeadlineAfter(1000));
-        Check(response.Code == ExitCode::Success, "each valid control command must produce a success response");
-        std::lock_guard lock(harness.Mutex);
-        Check(harness.Commands.size() == 1, "each valid control command must call AppController once");
-        if (harness.Commands.empty()) continue;
-        const auto& command = harness.Commands.front();
-        Check(command.Kind == test.Kind, "wire command must map to the matching typed application command");
-        if (test.RequestValue.Command == CommandType::AliasSet) {
-            Check(command.Alias == L"Desk" && command.Target && command.Target->IdText() == L"device-a",
-                  "AliasSet must split target and alias without changing either value");
-        }
-        if (test.RequestValue.Command == CommandType::ToggleLast) {
-            Check(command.Target && command.Target->Kind() == apc::app::DeviceSelectorKind::Default,
-                  "CLI bare toggle normalization must arrive at the adapter as the Default selector");
-        }
+    for (auto command : {CommandType::Show,
+                         CommandType::Settings,
+                         CommandType::List,
+                         CommandType::Status,
+                         CommandType::DefaultShow,
+                         CommandType::AliasList}) {
+        Check(harness.Adapter.Handle(MakeRequest(command), {}, apc::control::DeadlineAfter(1000)).Code ==
+                  ExitCode::Success,
+              "queries and UI commands must reach the concrete application owners");
+    }
+    Check(harness.Fixture.Presentation->Modes == std::vector{apc::app::DevicePickerOpenMode::EnsureOpen} &&
+              harness.Fixture.Presentation->SettingsCalls == 1,
+          "control presentation must retain ensure-open picker semantics");
+    auto response = harness.Adapter.Handle(
+        MakeRequest(CommandType::AliasSet, TargetKind::Id, L"device-a\nOffice"), {}, apc::control::DeadlineAfter(1000));
+    Check(response.Code == ExitCode::Success &&
+              harness.Fixture.Settings->Snapshot().Data.Devices.front().Alias == L"Office",
+          "AliasSet must split target and alias and persist the requested value");
+    response = harness.Adapter.Handle(
+        MakeRequest(CommandType::DefaultSet, TargetKind::Name, L"Speaker"), {}, apc::control::DeadlineAfter(1000));
+    Check(response.Code == ExitCode::Success &&
+              harness.Fixture.Settings->Snapshot().Data.DefaultDeviceId == L"device-b",
+          "named DefaultSet must resolve and persist the matching identity");
+    response = harness.Adapter.Handle(
+        MakeRequest(CommandType::Connect, TargetKind::Last), {}, apc::control::DeadlineAfter(1000));
+    Check(response.Code == ExitCode::Success && response.Payload == L"Already connected: Office",
+          "Last must resolve the recorded connected target rather than the selected default");
+    response = harness.Adapter.Handle(
+        MakeRequest(CommandType::Disconnect, TargetKind::Alias, L"Office"), {}, apc::control::DeadlineAfter(1000));
+    Check(response.Code == ExitCode::Success && !harness.Fixture.Service->IsDeviceConnected(L"device-a"),
+          "alias disconnect must mutate the resolved concrete session");
+    apc::tests::device::CompleteCloseAndCooldown(*harness.Fixture.Devices,
+                                                 harness.Fixture.Devices->ConnectionAccess->LastConnection);
+    for (auto command :
+         {CommandType::DefaultClear, CommandType::AliasClear, CommandType::DisconnectAll, CommandType::ReconnectAll}) {
+        auto request = command == CommandType::AliasClear ? MakeRequest(command, TargetKind::Id, L"device-a")
+                                                          : MakeRequest(command);
+        Check(harness.Adapter.Handle(request, {}, apc::control::DeadlineAfter(1000)).Code == ExitCode::Success,
+              "clear and bulk commands must execute through concrete owners");
     }
 }
 
 void TestInvalidRequestsAndCompatibilityGrammar() {
     Harness harness;
-    auto invalid = MakeRequest(CommandType::Status, TargetKind::Id, L"device-a");
-    auto response = harness.Adapter.Handle(invalid, {}, apc::control::DeadlineAfter(1000));
-    Check(response.Code == ExitCode::InvalidRequest, "unexpected target shape must be rejected as InvalidRequest");
-    Check(harness.Commands.empty(), "invalid control input must not reach AppController");
-
-    harness.ClearCommands();
-    auto alias = MakeRequest(CommandType::AliasSet, TargetKind::Id, L"device-a");
-    response = harness.Adapter.Handle(alias, {}, apc::control::DeadlineAfter(1000));
-    Check(response.Code == ExitCode::InvalidRequest && harness.Commands.empty(),
-          "AliasSet without a target-newline-alias payload must be rejected");
-
-    harness.ClearCommands();
+    auto const before = harness.Fixture.Settings->Snapshot().Revision;
+    for (auto const& request : {MakeRequest(CommandType::Status, TargetKind::Id, L"device-a"),
+                                MakeRequest(CommandType::AliasSet, TargetKind::Id, L"device-a"),
+                                MakeRequest(CommandType::ToggleLast)}) {
+        Check(harness.Adapter.Handle(request, {}, apc::control::DeadlineAfter(1000)).Code == ExitCode::InvalidRequest,
+              "invalid wire grammar must be rejected before application actions");
+    }
+    Check(harness.Fixture.Settings->Snapshot().Revision == before, "invalid requests must not mutate settings");
     std::wstring invalidUtf16(1, static_cast<wchar_t>(0xD800));
-    auto compatible = MakeRequest(CommandType::Connect, TargetKind::Name, invalidUtf16);
-    response = harness.Adapter.Handle(compatible, {}, apc::control::DeadlineAfter(1000));
-    Check(response.Code == ExitCode::Success && harness.Commands.size() == 1,
-          "bounded invalid UTF-16 accepted by IsRequestValid must remain transport-compatible at the model boundary");
-
-    harness.ClearCommands();
-    auto bareToggle = MakeRequest(CommandType::ToggleLast);
-    response = harness.Adapter.Handle(bareToggle, {}, apc::control::DeadlineAfter(1000));
-    Check(response.Code == ExitCode::InvalidRequest && harness.Commands.empty(),
-          "wire-level bare Toggle must remain invalid; the CLI parser supplies Default before transport");
-}
-
-void TestNonDeviceCommandsDoNotRequireInventorySnapshot() {
-    std::size_t snapshotCalls = 0;
-    std::size_t executeCalls = 0;
-    AppController controller(
-        [&](AppCommand const& command, AppCommandContext const&) {
-            ++executeCalls;
-            AppResult result;
-            result.Code = AppResultCode::Success;
-            result.Command = command.Kind;
-            result.PrivacyModeEnabled = false;
-            switch (command.Kind) {
-                case AppCommandKind::ShowDevicePicker: result.Reason = AppOutcomeReason::ShowOpened; break;
-                case AppCommandKind::ShowSettings: result.Reason = AppOutcomeReason::SettingsOpened; break;
-                case AppCommandKind::ClearDefault: result.Reason = AppOutcomeReason::DefaultCleared; break;
-                case AppCommandKind::DisconnectAll: result.Reason = AppOutcomeReason::DisconnectAllSucceeded; break;
-                default: break;
-            }
-            return result;
-        },
-        [&]() -> AppSnapshot {
-            ++snapshotCalls;
-            throw std::runtime_error("device enumeration failed");
-        });
-    ControlCommandAdapter adapter(controller, ControlCommandAdapter::Options{Localize});
-
-    const std::vector<Request> requests{MakeRequest(CommandType::Show),
-                                        MakeRequest(CommandType::Settings),
-                                        MakeRequest(CommandType::DefaultClear),
-                                        MakeRequest(CommandType::DisconnectAll)};
-    for (auto const& request : requests) {
-        const auto response = adapter.Handle(request, {}, apc::control::DeadlineAfter(1000));
-        Check(response.Code == ExitCode::Success,
-              "a non-device control command must execute when the inventory snapshot read fails");
-    }
-    Check(executeCalls == requests.size(),
-          "each non-device command must reach the shared AppController despite snapshot read failure");
-    Check(snapshotCalls == 0,
-          "non-device control commands must not obtain a device-enumerating snapshot for presentation");
-}
-
-void TestInventoryCommandsFailClosedOnSnapshotReadFailure() {
-    std::size_t snapshotCalls = 0;
-    std::size_t executeCalls = 0;
-    AppController controller(
-        [&](AppCommand const& command, AppCommandContext const&) {
-            ++executeCalls;
-            return AppResult{AppResultCode::Success, command.Kind};
-        },
-        [&]() -> AppSnapshot {
-            ++snapshotCalls;
-            throw std::runtime_error("device enumeration failed");
-        });
-    ControlCommandAdapter adapter(controller, ControlCommandAdapter::Options{Localize});
-
-    const std::vector<Request> requests{MakeRequest(CommandType::List),
-                                        MakeRequest(CommandType::Status),
-                                        MakeRequest(CommandType::DefaultShow),
-                                        MakeRequest(CommandType::AliasList)};
-    for (auto const& request : requests) {
-        const auto response = adapter.Handle(request, {}, apc::control::DeadlineAfter(1000));
-        Check(response.Code == ExitCode::Unavailable && response.Payload == L"Not ready",
-              "an inventory-backed control query must fail closed when its snapshot read fails");
-    }
-    Check(snapshotCalls == requests.size(), "each inventory-backed query must validate snapshot availability");
-    Check(executeCalls == 0, "a failed inventory snapshot must prevent query dispatch against partial state");
-}
-
-void TestUiAndCliTypedParityAndContextPropagation() {
-    Harness harness;
-    auto target = DeviceSelector::ById(L"device-a");
-    Check(target.has_value(), "parity fixture must have a valid device selector");
-    if (!target) return;
-    const AppCommand expected{AppCommandKind::Connect, *target, {}};
-
-    std::stop_source stop;
-    const auto response = harness.Adapter.Handle(MakeRequest(CommandType::Connect, TargetKind::Id, L"device-a"),
-                                                 stop.get_token(),
-                                                 apc::control::DeadlineAfter(1000));
-    Check(response.Code == ExitCode::Success, "a valid CLI command must execute successfully");
-    {
-        std::lock_guard lock(harness.Mutex);
-        Check(harness.Commands.size() == 1 && harness.Commands.front() == expected,
-              "CLI mapping must produce the same typed command a UI caller would send");
-        Check(harness.Contexts.size() == 1 && harness.Contexts.front().StopToken == stop.get_token(),
-              "the adapter must preserve the control stop token in the typed context");
-        Check(harness.Contexts.size() == 1 &&
-                  harness.Contexts.front().Completion == AppCommandContext::CompletionMode::WaitForCompletion,
-              "control commands must use the explicit wait-for-completion mode");
-        Check(harness.Contexts.size() == 1 && harness.Contexts.front().Deadline != AppCommandContext::TimePoint::max(),
-              "a finite control deadline must become a finite typed deadline");
-    }
-
-    harness.ClearCommands();
-    stop.request_stop();
-    auto cancelled = harness.Adapter.Handle(MakeRequest(CommandType::Connect, TargetKind::Id, L"device-a"),
-                                            stop.get_token(),
-                                            apc::control::DeadlineAfter(1000));
-    Check(cancelled.Code == ExitCode::Unavailable && harness.Commands.empty(),
-          "pre-dispatch control cancellation must preserve the legacy NotReady/Unavailable response");
-
-    harness.ClearCommands();
-    auto expired =
-        harness.Adapter.Handle(MakeRequest(CommandType::Connect, TargetKind::Id, L"device-a"), {}, GetTickCount64());
-    Check(expired.Code == ExitCode::Unavailable && harness.Commands.empty(),
-          "an expired absolute control deadline must stop before mutation dispatch");
+    auto response = harness.Adapter.Handle(
+        MakeRequest(CommandType::Connect, TargetKind::Name, invalidUtf16), {}, apc::control::DeadlineAfter(1000));
+    Check(response.Code == ExitCode::NotFound, "transport-compatible UTF-16 must reach target resolution");
 }
 
 void TestControllerPreDispatchTerminationIsUnavailableForEveryCommand() {
-    const std::vector<Request> requests{
-        MakeRequest(CommandType::Show),
-        MakeRequest(CommandType::Settings),
-        MakeRequest(CommandType::List),
-        MakeRequest(CommandType::Status),
-        MakeRequest(CommandType::DefaultShow),
-        MakeRequest(CommandType::DefaultSet, TargetKind::Id, L"device-a"),
-        MakeRequest(CommandType::DefaultClear),
-        MakeRequest(CommandType::AliasList),
-        MakeRequest(CommandType::AliasSet, TargetKind::Id, L"device-a\nDesk"),
-        MakeRequest(CommandType::AliasClear, TargetKind::Id, L"device-a"),
-        MakeRequest(CommandType::Connect, TargetKind::Id, L"device-a"),
-        MakeRequest(CommandType::Disconnect, TargetKind::Id, L"device-a"),
-        MakeRequest(CommandType::Reconnect, TargetKind::Id, L"device-a"),
-        MakeRequest(CommandType::ToggleLast, TargetKind::Default),
-        MakeRequest(CommandType::DisconnectAll),
-        MakeRequest(CommandType::ReconnectAll),
-    };
+    const std::vector<Request> requests{MakeRequest(CommandType::Show),
+                                        MakeRequest(CommandType::Settings),
+                                        MakeRequest(CommandType::List),
+                                        MakeRequest(CommandType::Status),
+                                        MakeRequest(CommandType::DefaultShow),
+                                        MakeRequest(CommandType::DefaultSet, TargetKind::Id, L"device-a"),
+                                        MakeRequest(CommandType::DefaultClear),
+                                        MakeRequest(CommandType::AliasList),
+                                        MakeRequest(CommandType::AliasSet, TargetKind::Id, L"device-a\nDesk"),
+                                        MakeRequest(CommandType::AliasClear, TargetKind::Id, L"device-a"),
+                                        MakeRequest(CommandType::Connect, TargetKind::Id, L"device-a"),
+                                        MakeRequest(CommandType::Disconnect, TargetKind::Id, L"device-a"),
+                                        MakeRequest(CommandType::Reconnect, TargetKind::Id, L"device-a"),
+                                        MakeRequest(CommandType::ToggleLast, TargetKind::Default),
+                                        MakeRequest(CommandType::DisconnectAll),
+                                        MakeRequest(CommandType::ReconnectAll)};
+    Harness harness;
+    auto const revision = harness.Fixture.Settings->Snapshot().Revision;
+    std::stop_source stop;
+    stop.request_stop();
     for (auto const& request : requests) {
-        Harness cancelled;
-        std::stop_source stop;
-        stop.request_stop();
-        const auto cancelledResponse = cancelled.Adapter.Handle(request, stop.get_token(), 0);
-        Check(cancelledResponse.Code == ExitCode::Unavailable,
-              "controller pre-dispatch cancellation must preserve exit 7 for every explicit controller method");
-        Check(cancelled.Commands.empty() && cancelled.Contexts.empty(),
-              "controller pre-dispatch cancellation must not enter the executor");
-
-        Harness expired;
-        const auto expiredResponse = expired.Adapter.Handle(request, {}, GetTickCount64());
-        Check(expiredResponse.Code == ExitCode::Unavailable,
-              "controller pre-dispatch deadline must preserve exit 7 for every explicit controller method");
-        Check(expired.Commands.empty() && expired.Contexts.empty(),
-              "controller pre-dispatch deadline must not enter the executor");
+        Check(harness.Adapter.Handle(request, stop.get_token(), 0).Code == ExitCode::Unavailable &&
+                  harness.Adapter.Handle(request, {}, GetTickCount64()).Code == ExitCode::Unavailable,
+              "pre-dispatch cancellation and deadline must preserve exit 7 for every command");
     }
+    Check(harness.Fixture.Settings->Snapshot().Revision == revision &&
+              harness.Fixture.Service->IsDeviceConnected(L"device-a") &&
+              harness.Fixture.Presentation->SettingsCalls == 0 && harness.Fixture.Presentation->Modes.empty(),
+          "preflight termination must not mutate any owner or enter presentation");
 }
 
 void TestControllerPostDispatchTerminationRemainsIndeterminate() {
-    const std::vector<std::pair<CommandType, AppResultCode>> cases{
-        {CommandType::Show, AppResultCode::Cancelled},
-        {CommandType::Show, AppResultCode::TimedOut},
-        {CommandType::Settings, AppResultCode::Cancelled},
-        {CommandType::Settings, AppResultCode::TimedOut},
-    };
-    for (const auto& [command, resultCode] : cases) {
+    for (auto status : {apc::app::AppActionStatus::Cancelled,
+                        apc::app::AppActionStatus::TimedOut,
+                        apc::app::AppActionStatus::Indeterminate}) {
         Harness harness;
-        harness.Result.Code = resultCode;
-        const auto response = harness.Adapter.Handle(MakeRequest(command), {}, apc::control::DeadlineAfter(1000));
-        Check(response.Code == ExitCode::Indeterminate,
-              "cancellation or deadline after controller dispatch must preserve exit 9");
-        Check(harness.Commands.size() == 1 && harness.Contexts.size() == 1,
-              "post-dispatch termination must prove the executor was entered");
+        harness.Fixture.Presentation->SettingsAction = [status](auto const&) {
+            return apc::app::AppUiActionResult{status, std::nullopt};
+        };
+        auto response =
+            harness.Adapter.Handle(MakeRequest(CommandType::Settings), {}, apc::control::DeadlineAfter(1000));
+        Check(response.Code == ExitCode::Indeterminate && harness.Fixture.Presentation->SettingsCalls == 1,
+              "a termination after presentation admission must preserve exit 9");
     }
 }
 
 void TestMutationBusyAndNonmutationConcurrency() {
-    std::mutex mutex;
-    std::condition_variable changed;
-    bool entered = false;
-    bool release = false;
-    std::vector<AppCommand> commands;
-    AppSnapshot snapshot = FixtureSnapshot();
-    AppController controller(
-        [&](AppCommand const& command, AppCommandContext const&) {
-            if (command.Kind == AppCommandKind::Connect) {
-                std::unique_lock lock(mutex);
-                entered = true;
-                changed.notify_all();
-                changed.wait(lock, [&] { return release; });
-            }
-            {
-                std::lock_guard lock(mutex);
-                commands.push_back(command);
-            }
-            return AppResult{AppResultCode::Success, command.Kind};
-        },
-        [&] { return snapshot; });
-    ControlCommandAdapter adapter(controller, ControlCommandAdapter::Options{Localize});
-
+    Harness harness;
+    std::binary_semaphore entered(0), release(0);
+    harness.Fixture.Devices->WatcherAccess->BeforeRefreshCompletion = [&] {
+        entered.release();
+        release.acquire();
+    };
     std::jthread first([&] {
-        (void)adapter.Handle(
-            MakeRequest(CommandType::Connect, TargetKind::Id, L"device-a"), {}, apc::control::DeadlineAfter(5000));
+        (void)harness.Adapter.Handle(
+            MakeRequest(CommandType::DefaultSet, TargetKind::Name, L"Speaker"), {}, apc::control::DeadlineAfter(5000));
     });
-    {
-        std::unique_lock lock(mutex);
-        Check(changed.wait_for(lock, std::chrono::seconds(2), [&] { return entered; }),
-              "first mutation must enter the typed executor before the busy probe");
-    }
-
-    const auto busy = adapter.Handle(
-        MakeRequest(CommandType::Disconnect, TargetKind::Id, L"device-a"), {}, apc::control::DeadlineAfter(1000));
-    Check(busy.Code == ExitCode::Busy, "a concurrent mutation must receive the control Busy result");
-    const auto status = adapter.Handle(MakeRequest(CommandType::Status), {}, apc::control::DeadlineAfter(1000));
-    Check(status.Code == ExitCode::Success, "a nonmutation query must proceed while a mutation is in flight");
-
-    {
-        std::lock_guard lock(mutex);
-        release = true;
-    }
-    changed.notify_all();
+    entered.acquire();
+    Check(harness.Adapter.Handle(MakeRequest(CommandType::DefaultClear), {}, apc::control::DeadlineAfter(1000)).Code ==
+              ExitCode::Busy,
+          "a concurrent mutation must receive Busy while another action is admitted");
+    Check(harness.Adapter.Handle(MakeRequest(CommandType::Status), {}, apc::control::DeadlineAfter(1000)).Code ==
+              ExitCode::Success,
+          "a read-only query must proceed while target resolution is blocked");
+    release.release();
     first.join();
 }
 
 void TestAdapterUsesTheProductionFormatter() {
     Harness harness;
-    harness.Snapshot.PrivacyModeEnabled = true;
-    harness.Result.PrivacyModeEnabled = true;
-    const std::vector<std::pair<Request, AppCommandKind>> cases{
-        {MakeRequest(CommandType::List), AppCommandKind::ListDevices},
-        {MakeRequest(CommandType::Status), AppCommandKind::Status},
-        {MakeRequest(CommandType::DefaultShow), AppCommandKind::ShowDefault},
-        {MakeRequest(CommandType::AliasList), AppCommandKind::ListAliases},
-        {MakeRequest(CommandType::Connect, TargetKind::Id, L"device-a"), AppCommandKind::Connect},
-    };
-    for (auto const& [request, kind] : cases) {
-        for (auto flags : std::array<std::uint32_t, 3>{0u, CommandFlagJson, CommandFlagJson | CommandFlagRaw}) {
-            auto input = request;
-            input.Flags = flags;
-            auto result = harness.Result;
-            result.Command = kind;
-            result.DispatchPhase = apc::app::AppDispatchPhase::Started;
-            const auto expected = ControlCommandAdapter::FormatResponse(input, result, harness.Snapshot, {Localize});
-            const auto actual = harness.Adapter.Handle(input, {}, apc::control::DeadlineAfter(1000));
-            Check(actual.Code == expected.Code && actual.Payload == expected.Payload &&
-                      actual.CorrelationId == expected.CorrelationId,
-                  "adapter responses must use the same formatter, localization and privacy flags as golden fixtures");
-        }
+    (void)harness.Fixture.Settings->SetPrivacyModeEnabled(true);
+    for (auto flags :
+         {std::uint32_t{0}, std::uint32_t{CommandFlagJson}, std::uint32_t{CommandFlagJson | CommandFlagRaw}}) {
+        auto input = MakeRequest(CommandType::Status, TargetKind::None, {}, flags);
+        auto result = harness.Controller.Status({});
+        auto expected = ControlCommandAdapter::FormatResponse(input, result, std::nullopt, {Localize});
+        auto actual = harness.Adapter.Handle(input, {}, apc::control::DeadlineAfter(1000));
+        Check(expected.Code == actual.Code && expected.Payload == actual.Payload &&
+                  actual.CorrelationId == input.CorrelationId,
+              "the live adapter must use the production formatter for typed results and privacy modes");
     }
 }
 
-// These fixtures represent results after dispatch. They exercise the production
-// formatter directly and require neither a controller nor an execution callback.
 struct FormattingFixture {
     AppResult Result;
     AppSnapshot Snapshot = FixtureSnapshot();
@@ -718,11 +526,8 @@ void TestLongSnapshotIdsRemainWireVisibleAndRedactable() {
 } // namespace
 
 int RunControlCommandAdapterTests() {
-    TestAllCommandMappingsAndTargets();
+    TestMappingsUseConcreteOwners();
     TestInvalidRequestsAndCompatibilityGrammar();
-    TestNonDeviceCommandsDoNotRequireInventorySnapshot();
-    TestInventoryCommandsFailClosedOnSnapshotReadFailure();
-    TestUiAndCliTypedParityAndContextPropagation();
     TestControllerPreDispatchTerminationIsUnavailableForEveryCommand();
     TestControllerPostDispatchTerminationRemainsIndeterminate();
     TestMutationBusyAndNonmutationConcurrency();

@@ -19,6 +19,18 @@ and session changes during inventory refresh.
 
 ## Controller event delivery
 
+The controller retains concrete `SettingsStore` and `DeviceService` owners. Commands and snapshots acquire
+an admission lease before accessing them. Shutdown closes admission monotonically, and every shutdown caller
+waits for outstanding leases without holding the state mutex, then closes event delivery. The host requests transport cancellation before
+draining the controller. The presentation boundary is weakly held and contains only UI admission, window
+acknowledgement and presentation diagnostics; it cannot mutate device or persistence state.
+
+Connection commands await the native device completion record. Inventory enumeration uses a completion
+notification with the caller's cancellation token and a capped deadline. Failed discovery falls back to saved
+labels and current sessions; mutation admission rechecks the original caller context after resolution. The
+controller tests exercise real owners with fake platform boundaries, including cancellation during enumeration,
+session changes during enumeration, committed settings after reentrant writes and pipe-driven shutdown.
+
 Each controller assigns monotonically increasing publication revisions under its event mutex. Publication
 captures the current recipients and enters one FIFO queue. One drainer invokes handlers in registration order,
 outside the mutex. Concurrent and reentrant publications enqueue without overlapping the current callback or
@@ -30,7 +42,7 @@ overtaking earlier events. A subscriber added after publication cannot receive t
 | Subscription activity and in-flight admission | The same event mutex | Reset disables admission before waiting for an active callback; reset on the drainer never waits on itself |
 | Handler captures and current delivery | Shared registration and the one active drainer | Capture destruction happens outside the mutex; reentrant registration and reset are allowed |
 
-Controller destruction closes all registrations and drains a callback on another thread. Destruction from the
+Controller shutdown closes all registrations and drains a callback on another thread. Destruction from the
 callback itself invalidates remaining recipients and queued work without waiting for its own stack; the drainer
 retains the closed event state until it returns. Observer exceptions do not interrupt subsequent recipients.
 The tests exercise simultaneous and reentrant publication, admission timing, reset with queued work, both

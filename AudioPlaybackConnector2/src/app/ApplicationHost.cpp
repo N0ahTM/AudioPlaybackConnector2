@@ -30,13 +30,11 @@ using namespace winrt::Microsoft::UI::Xaml;
 
 namespace {
 
-constexpr DWORD c_controlWaitPollMs = 50;
 constexpr int c_hiddenAnchorCoordinate = -32000;
 constexpr auto c_resourcePressureSnapshotMaximumAge = std::chrono::seconds{75};
 constexpr auto c_mainWindowLoadedTimeout = std::chrono::seconds{15};
 
-using Bridge = apc::app::LegacyAppUseCaseBridge;
-using OperationStatus = Bridge::OperationStatus;
+using OperationStatus = apc::app::AppActionStatus;
 
 OperationStatus ToUiActionStatus(ControlUiActionGate::Result result) noexcept {
     switch (result) {
@@ -81,62 +79,6 @@ apc::app::AppSnapshot::ResourceStatusSnapshot::UserActivity ToAppUserActivity(Us
         case UserActivityState::ImmersiveApp: return UserActivity::ImmersiveApp;
     }
     return UserActivity::Unknown;
-}
-
-OperationStatus ToControlOperationStatus(apc::device::DeviceOperationStatus status) noexcept {
-    switch (status) {
-        case apc::device::DeviceOperationStatus::Succeeded: return OperationStatus::Succeeded;
-        case apc::device::DeviceOperationStatus::Cancelled: return OperationStatus::Cancelled;
-        case apc::device::DeviceOperationStatus::TimedOut: return OperationStatus::TimedOut;
-        case apc::device::DeviceOperationStatus::Failed:
-        case apc::device::DeviceOperationStatus::Rejected: return OperationStatus::Failed;
-    }
-    return OperationStatus::Failed;
-}
-
-template <typename TAsync>
-OperationStatus WaitForControlAsync(TAsync const& operation, apc::app::AppCommandContext const& context) {
-    std::shared_ptr<void> completed(CreateEventW(nullptr, TRUE, FALSE, nullptr), [](void* handle) noexcept {
-        if (handle) CloseHandle(static_cast<HANDLE>(handle));
-    });
-    if (!completed) return OperationStatus::Failed;
-
-    operation.Completed(
-        [completed](auto const&, auto const&) noexcept { SetEvent(static_cast<HANDLE>(completed.get())); });
-    while (true) {
-        if (context.IsCancellationRequested()) {
-            operation.Cancel();
-            return OperationStatus::Cancelled;
-        }
-
-        DWORD remaining = INFINITE;
-        if (context.Deadline != apc::app::AppCommandContext::TimePoint::max()) {
-            const auto duration = context.Deadline - apc::app::AppCommandContext::Clock::now();
-            if (duration <= std::chrono::steady_clock::duration::zero()) {
-                operation.Cancel();
-                return OperationStatus::TimedOut;
-            }
-            const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-            remaining = static_cast<DWORD>(std::clamp<std::int64_t>(milliseconds, 1, INFINITE));
-        }
-        if (remaining == 0) {
-            operation.Cancel();
-            return OperationStatus::TimedOut;
-        }
-        const auto waitResult =
-            WaitForSingleObject(static_cast<HANDLE>(completed.get()), std::min<DWORD>(remaining, c_controlWaitPollMs));
-        if (waitResult == WAIT_OBJECT_0) break;
-        if (waitResult != WAIT_TIMEOUT) {
-            operation.Cancel();
-            return OperationStatus::Failed;
-        }
-    }
-
-    switch (operation.Status()) {
-        case winrt::Windows::Foundation::AsyncStatus::Completed: return OperationStatus::Succeeded;
-        case winrt::Windows::Foundation::AsyncStatus::Canceled: return OperationStatus::Cancelled;
-        default: return OperationStatus::Failed;
-    }
 }
 
 void LogMainWindowAnchor(HWND hwnd, std::wstring_view reason) noexcept {
@@ -236,12 +178,12 @@ void ApplicationHost::Start() {
 
 bool ApplicationHost::PerformTeardown(SettingsShutdownMode settingsShutdownMode) noexcept {
     if (m_exiting.exchange(true)) return m_teardownWindowCloseSucceeded.load();
-    // Request pipe-handler cancellation before waiting for bridge leases. A
+    // Request pipe-handler cancellation before waiting for controller calls. A
     // handler may be waiting for this UI thread to process show/settings work;
-    // Stop() still drains the server after the bridge has rejected new work.
+    // Stop() still drains the server after the controller has rejected new work.
     m_commandLineControlServer.RequestStop();
-    if (m_appBridge) {
-        m_appBridge->SetRunning(false);
+    if (m_appController) {
+        m_appController->Shutdown();
     }
 
     StopMainWindowLoadedWatchdog();
@@ -291,7 +233,6 @@ bool ApplicationHost::PerformTeardown(SettingsShutdownMode settingsShutdownMode)
     m_controlCommandAdapter.reset();
     TeardownDeviceEvents();
     m_appController.reset();
-    m_appBridge.reset();
     if (m_hwnd) {
         try {
             KillTimer(m_hwnd, c_timerAnimation);
@@ -653,280 +594,108 @@ void ApplicationHost::InitializeDeviceService() {
     DebugTrace(L"[App] DeviceService initialized");
 }
 
-void ApplicationHost::InitializeAppController() {
-    DebugTrace(L"[App] InitializeAppController()");
+apc::app::AppUiActionResult ApplicationHost::PresentDevicePicker(apc::app::DevicePickerOpenMode openMode,
+                                                                 apc::app::AppCommandContext const& context) {
     auto weak = weak_from_this();
-    Bridge::Operations operations;
-    operations.ReadSettings = [weak]() {
-        if (auto self = weak.lock(); self && self->m_settingsStore) return self->m_settingsStore->Snapshot();
-        throw std::runtime_error("ApplicationHost settings store unavailable");
-    };
-    operations.ReadConnectedDevices = [weak]() {
-        std::vector<Bridge::DeviceRecord> devices;
-        auto self = weak.lock();
-        if (!self || !self->m_deviceService) return devices;
+    apc::app::AppUiActionResult result;
+    auto self = weak.lock();
+    if (!self || !self->m_trayController) return result;
 
-        const auto snapshot = self->m_deviceService->Snapshot();
-        for (auto const& connection : snapshot.Sessions) {
-            if (connection.DeviceId.empty()) continue;
-            const auto state = [&] {
-                switch (connection.State) {
-                    case apc::device::DeviceLifecycleState::Connected:
-                        return apc::app::DeviceConnectionState::Connected;
-                    case apc::device::DeviceLifecycleState::WaitingForReconnect:
-                        return apc::app::DeviceConnectionState::WaitingForReconnect;
-                    case apc::device::DeviceLifecycleState::Failed: return apc::app::DeviceConnectionState::Failed;
-                    case apc::device::DeviceLifecycleState::Connecting:
-                        return apc::app::DeviceConnectionState::Connecting;
-                    case apc::device::DeviceLifecycleState::Disconnecting:
-                        return apc::app::DeviceConnectionState::Disconnecting;
-                    case apc::device::DeviceLifecycleState::Idle: return apc::app::DeviceConnectionState::Idle;
-                }
-                return apc::app::DeviceConnectionState::Idle;
-            }();
-            devices.push_back({.Id = connection.DeviceId,
-                               .Name = connection.DeviceName,
-                               .Alias = {},
-                               .State = state,
-                               .IsConnected = state == apc::app::DeviceConnectionState::Connected,
-                               .IsKnown = true,
-                               .IsBusy = state == apc::app::DeviceConnectionState::Connecting ||
-                                         state == apc::app::DeviceConnectionState::Disconnecting ||
-                                         state == apc::app::DeviceConnectionState::WaitingForReconnect});
-        }
-        return devices;
-    };
-    operations.Refresh = [weak](apc::app::AppCommandContext const& context) {
-        Bridge::RefreshResult result;
-        auto self = weak.lock();
-        if (!self || !self->m_deviceService) return result;
-
-        try {
-            auto operation = self->m_deviceService->RefreshDevicesAsync();
-            result.Status = WaitForControlAsync(operation, context);
-            if (result.Status != OperationStatus::Succeeded) return result;
-
-            auto devices = operation.GetResults();
-            if (!devices) return result;
-            result.Devices.reserve(devices.Size());
-            for (auto const& device : devices) {
-                const auto id = std::wstring(device.Id());
-                if (id.empty()) continue;
-                result.Devices.push_back({.Id = id,
-                                          .Name = std::wstring(device.Name()),
-                                          .Alias = {},
-                                          .State = apc::app::DeviceConnectionState::Idle,
-                                          .IsConnected = false,
-                                          .IsKnown = false,
-                                          .IsBusy = self->m_deviceService->IsDeviceBusy(id)});
-            }
-        } catch (winrt::hresult_error const& ex) {
-            util::DebugTraceException(L"[App] Control command device refresh failed", ex);
-            result.Status = OperationStatus::Failed;
-        } catch (std::exception const& ex) {
-            util::DebugTraceException(L"[App] Control command device refresh failed", ex);
-            result.Status = OperationStatus::Failed;
-        } catch (...) {
-            util::DebugTraceUnknownException(L"[App] Control command device refresh failed");
-            result.Status = OperationStatus::Failed;
-        }
+    auto tray = self->m_trayController;
+    const auto openedGeneration = tray->DevicePickerOpenedGeneration();
+    const auto wasVisible = tray->IsDevicePickerVisibleOrTransitioning();
+    const auto uiResult = self->RunControlUiAction(
+        [weak, openMode]() {
+            auto self = weak.lock();
+            return self && self->m_trayController &&
+                   self->m_trayController->ShowDevicePicker(openMode == apc::app::DevicePickerOpenMode::ToggleIfOpen);
+        },
+        context);
+    if (uiResult != ControlUiActionResult::Succeeded) {
+        // The gate records whether the dispatcher crossed TryBegin. A
+        // canceled or expired context alone cannot distinguish an action
+        // that never ran from one that may have already mutated the UI.
+        result.Status = ToUiActionStatus(uiResult);
         return result;
-    };
-    operations.Connect = [weak](std::wstring_view deviceId, apc::app::AppCommandContext const& context) {
-        Bridge::OperationResult result;
-        auto self = weak.lock();
-        if (!self || !self->m_deviceService) return result;
-        auto const command = self->m_deviceService->Connect(std::wstring(deviceId));
-        result.Status = ToControlOperationStatus(
-            self->m_deviceService->WaitForCompletion(command, context.StopToken, context.Deadline));
-        return result;
-    };
-    operations.ConnectDetached = [weak](std::wstring_view deviceId) {
-        if (auto self = weak.lock(); self && self->m_deviceService && !self->m_exiting.load()) {
-            (void)self->m_deviceService->Connect(std::wstring(deviceId));
-        }
-    };
-    operations.Reconnect = [weak](std::wstring_view deviceId, apc::app::AppCommandContext const& context) {
-        Bridge::OperationResult result;
-        auto self = weak.lock();
-        if (!self || !self->m_deviceService) return result;
-        auto const command = self->m_deviceService->Reconnect(std::wstring(deviceId));
-        result.Status = ToControlOperationStatus(
-            self->m_deviceService->WaitForCompletion(command, context.StopToken, context.Deadline));
-        return result;
-    };
-    operations.ReconnectDetached = [weak](std::wstring_view deviceId) {
-        if (auto self = weak.lock(); self && self->m_deviceService && !self->m_exiting.load()) {
-            (void)self->m_deviceService->Reconnect(std::wstring(deviceId));
-        }
-    };
-    operations.Disconnect = [weak](std::wstring_view deviceId) {
-        if (auto self = weak.lock(); self && self->m_deviceService && !self->m_exiting.load()) {
-            static_cast<void>(self->m_deviceService->Disconnect(std::wstring(deviceId)));
-        }
-    };
-    operations.DisconnectAll = [weak]() {
-        if (auto self = weak.lock(); self && self->m_deviceService && !self->m_exiting.load()) {
-            static_cast<void>(self->m_deviceService->DisconnectAll());
-        }
-    };
-    operations.ReconnectAllDetached = [weak]() {
-        if (auto self = weak.lock(); self && self->m_deviceService && !self->m_exiting.load()) {
-            static_cast<void>(self->m_deviceService->ReconnectAll());
-        }
-    };
-    operations.SetDefaultDevice = [weak](std::wstring_view deviceId) {
-        if (auto self = weak.lock(); self && self->m_settingsController) {
-            return self->m_settingsController->SetDefaultDeviceId(std::wstring(deviceId));
-        }
-        return false;
-    };
-    operations.ClearDefaultDevice = [weak]() {
-        if (auto self = weak.lock(); self && self->m_settingsController) {
-            return self->m_settingsController->ClearDefaultDevice();
-        }
-        return false;
-    };
-    operations.SetDeviceAlias =
-        [weak](std::wstring_view deviceId, std::wstring_view alias, std::wstring_view deviceName) {
-            if (auto self = weak.lock(); self && self->m_settingsController) {
-                return self->m_settingsController->SetDeviceAlias(
-                    std::wstring(deviceId), std::wstring(alias), std::wstring(deviceName));
-            }
-            // Preserve the legacy missing-controller success behavior.
-            return true;
-        };
-    operations.ShowDevicePicker = [weak](apc::app::DevicePickerOpenMode openMode,
-                                         apc::app::AppCommandContext const& context) {
-        Bridge::UiActionResult result;
-        auto self = weak.lock();
-        if (!self || !self->m_trayController) return result;
+    }
 
-        auto tray = self->m_trayController;
-        const auto openedGeneration = tray->DevicePickerOpenedGeneration();
-        const auto wasVisible = tray->IsDevicePickerVisibleOrTransitioning();
-        const auto uiResult = self->RunControlUiAction(
-            [weak, openMode]() {
-                auto self = weak.lock();
-                return self && self->m_trayController &&
-                       self->m_trayController->ShowDevicePicker(openMode ==
-                                                                apc::app::DevicePickerOpenMode::ToggleIfOpen);
-            },
-            context);
-        if (uiResult != ControlUiActionResult::Succeeded) {
-            // The gate records whether the dispatcher crossed TryBegin. A
-            // canceled or expired context alone cannot distinguish an action
-            // that never ran from one that may have already mutated the UI.
-            result.Status = ToUiActionStatus(uiResult);
-            return result;
-        }
-
-        // Tray activation is dispatched detached from the UI callback.  The
-        // flyout's Opened event is posted back to this same dispatcher, so a
-        // detached UI-thread command must not wait for its generation here.
-        // Control `show` remains WaitForCompletion and keeps the existing
-        // acknowledgement semantics below.
-        if (context.Completion == apc::app::AppCommandContext::CompletionMode::Detached) {
-            result.Status = OperationStatus::Succeeded;
-            result.DevicePickerOpenedGeneration = tray->DevicePickerOpenedGeneration();
-            return result;
-        }
-
-        while (!wasVisible && tray->DevicePickerOpenedGeneration() == openedGeneration) {
-            if (context.IsCancellationRequested()) {
-                // ShowDevicePicker has already begun. The caller cannot know
-                // whether the UI transition will publish its generation after
-                // this return, so a definite cancellation would be unsafe.
-                result.Status = OperationStatus::Indeterminate;
-                return result;
-            }
-            if (context.IsExpired(apc::app::AppCommandContext::Clock::now())) {
-                result.Status = OperationStatus::Indeterminate;
-                return result;
-            }
-            Sleep(1);
-        }
+    // Tray activation is dispatched detached from the UI callback.  The
+    // flyout's Opened event is posted back to this same dispatcher, so a
+    // detached UI-thread command must not wait for its generation here.
+    // Control `show` remains WaitForCompletion and keeps the existing
+    // acknowledgement semantics below.
+    if (context.Completion == apc::app::AppCommandContext::CompletionMode::Detached) {
         result.Status = OperationStatus::Succeeded;
         result.DevicePickerOpenedGeneration = tray->DevicePickerOpenedGeneration();
         return result;
-    };
-    operations.ShowSettings = [weak](apc::app::AppCommandContext const& context) {
-        Bridge::UiActionResult result;
-        auto self = weak.lock();
-        if (!self) return result;
-        const auto uiResult = self->RunControlUiAction(
-            [weak]() {
-                auto self = weak.lock();
-                return self && self->ShowSettingsWindow();
-            },
-            context);
-        // Preserve the gate's pre-dispatch versus in-flight distinction. The
-        // context state is not sufficient once the UI callback may have run.
-        result.Status = ToUiActionStatus(uiResult);
-        return result;
-    };
-    operations.ResourceStatus = [weak]() {
-        apc::app::AppSnapshot::ResourceStatusSnapshot result;
-        if (auto self = weak.lock()) {
-            AdaptiveResourceDiagnostics diagnostics;
-            {
-                std::scoped_lock lock(self->m_resourceAuthorizationMutex);
-                diagnostics = self->m_adaptiveResourceDiagnostics;
-            }
-            result.Evaluated = diagnostics.Evaluated;
-            result.ForegroundResidency = ToAppResidency(diagnostics.Residency);
-            result.BackgroundResidency = ToAppResidency(diagnostics.BackgroundResidency);
-            result.SnapshotFresh = diagnostics.SnapshotFresh;
-            result.PositiveAuthorizationCurrent = diagnostics.PositiveAuthorizationCurrent;
-            result.PreloadAllowed = diagnostics.PreloadAllowed;
-            result.UiResourcesLoaded = diagnostics.UiResourcesLoaded;
-            result.UiResourcesInitialized = diagnostics.UiResourcesInitialized;
-            result.Memory = ToAppMemoryPressure(diagnostics.Pressure.Memory);
-            result.Activity = ToAppUserActivity(diagnostics.Pressure.UserActivity);
-            result.EnergySaver = diagnostics.Pressure.EnergySaver;
-        }
-        return result;
-    };
-    operations.PickerOpenedGeneration = [weak]() {
-        if (auto self = weak.lock(); self && self->m_trayController) {
-            return self->m_trayController->DevicePickerOpenedGeneration();
-        }
-        return std::uint64_t{};
-    };
-    operations.Running = [weak]() {
-        if (auto self = weak.lock()) return !self->m_exiting.load();
-        return false;
-    };
-    operations.HasBusy = [weak]() {
-        if (auto self = weak.lock(); self && self->m_deviceService) {
-            return self->m_deviceService->HasBusyOperations();
-        }
-        return false;
-    };
-    operations.DeviceBusy = [weak](std::wstring_view deviceId) {
-        if (auto self = weak.lock(); self && self->m_deviceService) {
-            return self->m_deviceService->IsDeviceBusy(deviceId);
-        }
-        return false;
-    };
+    }
 
-    m_appBridge = std::make_shared<Bridge>(std::move(operations));
-    std::weak_ptr<Bridge> weakBridge = m_appBridge;
-    m_appController = std::make_shared<apc::app::AppController>(
-        [weakBridge](apc::app::AppCommand const& command, apc::app::AppCommandContext const& context) {
-            if (auto bridge = weakBridge.lock()) return bridge->Execute(command, context);
-            apc::app::AppResult result;
-            result.Code = apc::app::AppResultCode::Unavailable;
-            result.Command = command.Kind;
+    while (!wasVisible && tray->DevicePickerOpenedGeneration() == openedGeneration) {
+        if (context.IsCancellationRequested()) {
+            // ShowDevicePicker has already begun. The caller cannot know
+            // whether the UI transition will publish its generation after
+            // this return, so a definite cancellation would be unsafe.
+            result.Status = OperationStatus::Indeterminate;
             return result;
+        }
+        if (context.IsExpired(apc::app::AppCommandContext::Clock::now())) {
+            result.Status = OperationStatus::Indeterminate;
+            return result;
+        }
+        Sleep(1);
+    }
+    result.Status = OperationStatus::Succeeded;
+    result.DevicePickerOpenedGeneration = tray->DevicePickerOpenedGeneration();
+    return result;
+}
+
+apc::app::AppUiActionResult ApplicationHost::PresentSettings(apc::app::AppCommandContext const& context) {
+    auto weak = weak_from_this();
+    apc::app::AppUiActionResult result;
+    auto self = weak.lock();
+    if (!self) return result;
+    const auto uiResult = self->RunControlUiAction(
+        [weak]() {
+            auto self = weak.lock();
+            return self && self->ShowSettingsWindow();
         },
-        [weakBridge]() {
-            if (auto bridge = weakBridge.lock()) return bridge->Snapshot();
-            apc::app::AppSnapshot snapshot;
-            snapshot.IsRunning = false;
-            return snapshot;
-        },
-        m_deviceService);
+        context);
+    // Preserve the gate's pre-dispatch versus in-flight distinction. The
+    // context state is not sufficient once the UI callback may have run.
+    result.Status = ToUiActionStatus(uiResult);
+    return result;
+}
+
+apc::app::AppSnapshot::ResourceStatusSnapshot ApplicationHost::ResourceStatus() const {
+    auto weak = weak_from_this();
+    apc::app::AppSnapshot::ResourceStatusSnapshot result;
+    if (auto self = weak.lock()) {
+        AdaptiveResourceDiagnostics diagnostics;
+        {
+            std::scoped_lock lock(self->m_resourceAuthorizationMutex);
+            diagnostics = self->m_adaptiveResourceDiagnostics;
+        }
+        result.Evaluated = diagnostics.Evaluated;
+        result.ForegroundResidency = ToAppResidency(diagnostics.Residency);
+        result.BackgroundResidency = ToAppResidency(diagnostics.BackgroundResidency);
+        result.SnapshotFresh = diagnostics.SnapshotFresh;
+        result.PositiveAuthorizationCurrent = diagnostics.PositiveAuthorizationCurrent;
+        result.PreloadAllowed = diagnostics.PreloadAllowed;
+        result.UiResourcesLoaded = diagnostics.UiResourcesLoaded;
+        result.UiResourcesInitialized = diagnostics.UiResourcesInitialized;
+        result.Memory = ToAppMemoryPressure(diagnostics.Pressure.Memory);
+        result.Activity = ToAppUserActivity(diagnostics.Pressure.UserActivity);
+        result.EnergySaver = diagnostics.Pressure.EnergySaver;
+    }
+    return result;
+}
+
+std::uint64_t ApplicationHost::PickerOpenedGeneration() const {
+    return m_trayController ? m_trayController->DevicePickerOpenedGeneration() : 0;
+}
+
+void ApplicationHost::InitializeAppController() {
+    m_appController = std::make_shared<apc::app::AppController>(m_settingsStore, m_deviceService, weak_from_this());
     m_controlCommandAdapter = std::make_unique<apc::control::ControlCommandAdapter>(
         *m_appController, apc::control::ControlCommandAdapter::Options{[](std::string_view key) { return _(key); }});
     DebugTrace(L"[App] AppController and control adapter initialized");

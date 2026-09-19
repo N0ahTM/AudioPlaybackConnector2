@@ -38,7 +38,7 @@ int RunSettingsDiagnosticsReportBuilderTests();
 int RunSettingsStoreTests();
 int RunDevicePickerSnapshotTests();
 int RunLatestStartupTaskRequestStateTests();
-int RunLegacyAppUseCaseBridgeTests();
+int RunAppControllerUseCasesTests();
 int RunReconnectPolicyTests();
 int RunResourcePressureMonitorTests();
 int RunRuntimeApartmentTests();
@@ -125,7 +125,7 @@ int main(int argc, char** argv) {
         Suite{"SettingsStore", RunSettingsStoreTests},
         Suite{"DevicePickerSnapshot", RunDevicePickerSnapshotTests},
         Suite{"LatestStartupTaskRequestState", RunLatestStartupTaskRequestStateTests},
-        Suite{"LegacyAppUseCaseBridge", RunLegacyAppUseCaseBridgeTests},
+        Suite{"AppControllerUseCases", RunAppControllerUseCasesTests},
         Suite{"ReconnectPolicy", RunReconnectPolicyTests},
         Suite{"ResourcePressureMonitor", RunResourcePressureMonitorTests},
         Suite{"RuntimeApartment", RunRuntimeApartmentTests},

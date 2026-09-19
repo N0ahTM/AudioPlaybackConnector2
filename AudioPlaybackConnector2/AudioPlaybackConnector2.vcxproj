@@ -120,7 +120,7 @@
     <ClInclude Include="include\app\ApplicationHost.hpp" />
     <ClInclude Include="include\app\AppController.hpp" />
     <ClInclude Include="include\app\AppModels.hpp" />
-    <ClInclude Include="include\app\LegacyAppUseCaseBridge.hpp" />
+    <ClInclude Include="include\app\AppPresentation.hpp" />
     <ClInclude Include="include\app\AdaptiveActionRetryBackoff.hpp" />
     <ClInclude Include="include\app\AdaptiveResourceDiagnostics.hpp" />
     <ClInclude Include="include\app\AdaptiveResourcePolicy.hpp" />

@@ -179,67 +179,35 @@ struct AppController::EventState {
     bool Closed = false;
 };
 
-AppController::AppController(Executor executor,
-                             SnapshotProvider snapshotProvider,
-                             std::shared_ptr<apc::device::DeviceService> devices)
-    : m_executor(std::move(executor)), m_snapshotProvider(std::move(snapshotProvider)),
+AppController::AppController(std::shared_ptr<SettingsStore> settings,
+                             std::shared_ptr<apc::device::DeviceService> devices,
+                             std::weak_ptr<AppPresentation> presentation)
+    : m_settings(std::move(settings)), m_presentation(std::move(presentation)),
       m_eventState(std::make_shared<EventState>()), m_devices(std::move(devices)) {
-    if (!m_executor) throw std::invalid_argument("app controller executor is required");
-    if (!m_snapshotProvider) throw std::invalid_argument("app controller snapshot provider is required");
-    if (m_devices) {
-        std::weak_ptr<EventState> weak = m_eventState;
-        m_deviceSubscription = m_devices->Subscribe([weak](apc::device::DeviceFact const& fact) {
-            if (auto state = weak.lock()) state->ObserveDevice(fact);
-        });
-    }
+    if (!m_settings || !m_devices) throw std::invalid_argument("application owners are required");
+    std::weak_ptr<EventState> weak = m_eventState;
+    m_deviceSubscription = m_devices->Subscribe([weak](apc::device::DeviceFact const& fact) {
+        if (auto state = weak.lock()) state->ObserveDevice(fact);
+    });
 }
 
 AppController::~AppController() {
-    m_eventState->Close();
+    Shutdown();
     if (m_devices && m_deviceSubscription) m_devices->Unsubscribe(m_deviceSubscription);
 }
 
-AppResult AppController::Execute(AppCommand command, AppCommandContext context) const noexcept {
-    AppResult result;
-    result.Command = command.Kind;
-
-    // Keep preflight precedence stable for adapters: malformed input wins,
-    // followed by explicit cancellation, then the command deadline.
-    if (!command.IsWellFormed()) {
-        result.Code = AppResultCode::InvalidInput;
-        return result;
+void AppController::Shutdown() noexcept {
+    {
+        std::unique_lock lock(m_stateMutex);
+        // Every caller drains admission, including concurrent shutdown calls.
+        if (m_running) {
+            m_running = false;
+            AdvanceGeneration(m_generation);
+        }
+        m_noActiveCalls.wait(lock, [this] { return m_activeCalls == 0; });
     }
-    if (context.IsCancellationRequested()) {
-        result.Code = AppResultCode::Cancelled;
-        return result;
-    }
-    if (context.IsExpired(AppCommandContext::Clock::now())) {
-        result.Code = AppResultCode::TimedOut;
-        return result;
-    }
-
-    try {
-        result = m_executor(command, context);
-        result.Command = command.Kind;
-        result.DispatchPhase = AppDispatchPhase::Started;
-        return result;
-    } catch (...) {
-        result = {};
-        result.Code = AppResultCode::InternalError;
-        result.Command = command.Kind;
-        result.DispatchPhase = AppDispatchPhase::Started;
-        return result;
-    }
-}
-
-AppSnapshot AppController::Snapshot() const noexcept {
-    try {
-        return m_snapshotProvider();
-    } catch (...) {
-        AppSnapshot unavailable;
-        unavailable.IsRunning = false;
-        return unavailable;
-    }
+    // Closing delivery may wait for a foreign observer; it must run unlocked.
+    m_eventState->Close();
 }
 
 /*------------------------------------------------------------------------------------------------------------*/

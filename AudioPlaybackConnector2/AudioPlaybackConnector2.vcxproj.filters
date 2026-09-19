@@ -142,7 +142,7 @@
     <ClInclude Include="include\app\AppController.hpp">
       <Filter>include\app</Filter>
     </ClInclude>
-    <ClInclude Include="include\app\LegacyAppUseCaseBridge.hpp">
+    <ClInclude Include="include\app\AppPresentation.hpp">
       <Filter>include\app</Filter>
     </ClInclude>
     <ClInclude Include="include\control\ControlCommandAdapter.hpp">

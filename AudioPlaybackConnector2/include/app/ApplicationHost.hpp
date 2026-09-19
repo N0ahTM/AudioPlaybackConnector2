@@ -4,7 +4,6 @@
 #include <app/AdaptiveResourceDiagnostics.hpp>
 #include <app/AppController.hpp>
 #include <app/ControlUiActionGate.hpp>
-#include <app/LegacyAppUseCaseBridge.hpp>
 #include <app/PowerTransitionCoordinator.hpp>
 #include <app/ResourcePressureMonitor.hpp>
 #include <app/SettingsWindowPresenter.hpp>
@@ -36,8 +35,14 @@
 /*//////// Application Host //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-class ApplicationHost : public std::enable_shared_from_this<ApplicationHost> {
+class ApplicationHost : public std::enable_shared_from_this<ApplicationHost>, public apc::app::AppPresentation {
 public:
+    apc::app::AppUiActionResult PresentDevicePicker(apc::app::DevicePickerOpenMode mode,
+                                                    apc::app::AppCommandContext const& context) override;
+    apc::app::AppUiActionResult PresentSettings(apc::app::AppCommandContext const& context) override;
+    apc::app::AppSnapshot::ResourceStatusSnapshot ResourceStatus() const override;
+    std::uint64_t PickerOpenedGeneration() const override;
+
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Constructors / Destructor /////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
@@ -140,7 +145,6 @@ private:
 
     std::shared_ptr<NotificationService> m_notificationService;
     std::shared_ptr<TrayController> m_trayController;
-    std::shared_ptr<apc::app::LegacyAppUseCaseBridge> m_appBridge;
     std::shared_ptr<apc::app::AppController> m_appController;
     std::unique_ptr<apc::control::ControlCommandAdapter> m_controlCommandAdapter;
     CommandLineControlServer m_commandLineControlServer;
@@ -170,7 +174,7 @@ private:
     winrt::Microsoft::UI::Dispatching::DispatcherQueueTimer m_adaptiveResourceFallbackTimer{nullptr};
     AdaptiveActionRetryBackoff m_adaptiveActionRetryBackoff;
     AdaptiveScheduleState m_adaptiveScheduleState;
-    std::mutex m_resourceAuthorizationMutex;
+    mutable std::mutex m_resourceAuthorizationMutex;
     AdaptiveResourceDiagnostics m_adaptiveResourceDiagnostics;
     std::optional<AdaptiveResourcePolicy::TimePoint> m_lastResourcePressureObservedAt;
     std::uint64_t m_lastResourcePressureSequence = 0;

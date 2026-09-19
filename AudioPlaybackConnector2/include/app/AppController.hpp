@@ -1,6 +1,10 @@
 #pragma once
 
 #include <app/AppModels.hpp>
+#include <app/AppPresentation.hpp>
+#include <core/SettingsStore.hpp>
+#include <condition_variable>
+#include <mutex>
 #include <app/DeviceFactPublicationFence.hpp>
 
 #include <cstdint>
@@ -21,8 +25,6 @@ class AppController final {
     struct EventState;
 
 public:
-    using Executor = std::function<AppResult(AppCommand const&, AppCommandContext const&)>;
-    using SnapshotProvider = std::function<AppSnapshot()>;
     struct EventNotification {
         std::uint64_t Revision = 0;
         AppEvent Event;
@@ -54,9 +56,10 @@ public:
         SubscriptionId m_id = 0;
     };
 
-    AppController(Executor executor,
-                  SnapshotProvider snapshotProvider,
-                  std::shared_ptr<apc::device::DeviceService> devices = {});
+    AppController(std::shared_ptr<SettingsStore> settings,
+                  std::shared_ptr<apc::device::DeviceService> devices,
+                  std::weak_ptr<AppPresentation> presentation = {});
+    void Shutdown() noexcept;
     ~AppController();
 
     AppController(AppController const&) = delete;
@@ -113,10 +116,142 @@ public:
     [[nodiscard]] bool IsCurrent(EventNotification const& notification) const;
 
 private:
-    [[nodiscard]] AppResult Execute(AppCommand command, AppCommandContext context = {}) const noexcept;
+    [[nodiscard]] AppResult Execute(AppCommand const& command, AppCommandContext context = {}) const noexcept;
+    static constexpr auto c_refreshTimeout = std::chrono::milliseconds{2500};
+    using OperationStatus = AppActionStatus;
+    using UiActionResult = AppUiActionResult;
+    struct OperationResult {
+        OperationStatus Status = OperationStatus::Failed;
+    };
+    struct DeviceRecord {
+        // External identities remain opaque even when they exceed the
+        // persistence format's DeviceId bound.
+        std::wstring Id;
+        std::wstring Name;
+        std::wstring Alias;
+        DeviceConnectionState State = DeviceConnectionState::Idle;
+        bool IsConnected = false;
+        bool IsKnown = false;
+        bool IsBusy = false;
 
-    Executor m_executor;
-    SnapshotProvider m_snapshotProvider;
+        friend bool operator==(DeviceRecord const&, DeviceRecord const&) = default;
+    };
+
+    // Commands and snapshots acquire a lease before accessing their owners.
+    // Shutdown closes admission and waits for these leases before host teardown.
+    class CallLease final {
+    public:
+        explicit CallLease(AppController const& owner) noexcept;
+        CallLease(CallLease const&) = delete;
+        CallLease& operator=(CallLease const&) = delete;
+        ~CallLease();
+
+        [[nodiscard]] bool Acquired() const noexcept { return m_acquired; }
+
+    private:
+        AppController const& m_owner;
+        bool m_acquired = false;
+    };
+
+    struct Resolution {
+        AppResultCode Code = AppResultCode::Success;
+        AppOutcomeReason Reason = AppOutcomeReason::None;
+        std::wstring RequestedTarget;
+        std::optional<DeviceRecord> Device;
+        AppTargetSnapshot Target;
+        bool HasTarget = false;
+    };
+
+    [[nodiscard]] AppResult ExecuteCommand(AppCommand const& command,
+                                           AppCommandContext const& context,
+                                           SettingsData const& settings,
+                                           std::uint64_t settingsRevision) const;
+    [[nodiscard]] AppResult ExecuteTargetOperation(AppCommand const& command,
+                                                   AppCommandContext const& context,
+                                                   std::vector<DeviceRecord> const& devices,
+                                                   SettingsData const& settings) const;
+    [[nodiscard]] AppResult ExecuteToggle(AppCommand const& command,
+                                          AppCommandContext const& context,
+                                          std::vector<DeviceRecord> const& devices,
+                                          SettingsData const& settings) const;
+    [[nodiscard]] Resolution Resolve(DeviceSelector const& selector,
+                                     std::vector<DeviceRecord> const& devices,
+                                     SettingsData const& settings) const;
+
+    [[nodiscard]] std::vector<DeviceRecord>
+    BuildDevices(bool refresh, AppCommandContext const& context, SettingsData const& settings) const;
+    [[nodiscard]] std::vector<DeviceRecord> BuildDevicesWithoutRefresh(SettingsData const& settings) const;
+    [[nodiscard]] std::optional<SettingsSnapshot> ReadSettings() const noexcept;
+    // Concurrent readers may complete out of order. Retry outside the mutex
+    // when another reader has already observed a newer Store revision.
+    [[nodiscard]] std::optional<SettingsSnapshot> ReadCoherentSettings() const noexcept;
+    [[nodiscard]] bool IsCurrentSettingsRevision(std::uint64_t revision) const noexcept;
+    [[nodiscard]] std::vector<DeviceRecord> ReadConnectedDevices() const;
+    [[nodiscard]] AppSnapshot SnapshotFromDevices(std::vector<DeviceRecord> devices,
+                                                  SettingsData const& settings,
+                                                  std::uint64_t settingsRevision) const noexcept;
+    [[nodiscard]] std::vector<DeviceRecord> MergeDevices(std::vector<DeviceRecord> refreshed,
+                                                         std::vector<DeviceRecord> connected,
+                                                         SettingsData const& settings) const;
+    [[nodiscard]] AppSnapshot BuildSnapshot(std::vector<DeviceRecord> devices,
+                                            SettingsData const& settings,
+                                            std::uint64_t generation,
+                                            std::uint64_t pickerGeneration,
+                                            bool isRunning) const;
+
+    [[nodiscard]] AppResult MakeFailure(AppCommandKind command,
+                                        AppResultCode code,
+                                        AppOutcomeReason reason,
+                                        std::wstring requestedTarget = {}) const;
+    [[nodiscard]] AppResult MakeFailure(AppCommandKind command,
+                                        AppResultCode code,
+                                        AppOutcomeReason reason,
+                                        SettingsData const& settings,
+                                        std::wstring requestedTarget = {}) const;
+    [[nodiscard]] AppResult MakeTargetResult(AppCommandKind command,
+                                             Resolution const& resolution,
+                                             SettingsData const& settings,
+                                             AppResultCode code,
+                                             AppOutcomeReason reason) const;
+    [[nodiscard]] std::optional<DeviceSnapshot> ToSnapshot(DeviceRecord const& record) const;
+    [[nodiscard]] std::optional<AppTargetSnapshot> ToTarget(DeviceRecord const& record) const;
+    [[nodiscard]] std::optional<DeviceSnapshot> PostOperationDevice(std::wstring_view deviceId,
+                                                                    std::vector<DeviceRecord> const& devices) const;
+
+    [[nodiscard]] static std::wstring DeviceLabel(DeviceRecord const& device);
+    [[nodiscard]] static bool EqualsIgnoreCase(std::wstring_view left, std::wstring_view right);
+    [[nodiscard]] static bool ContainsIgnoreCase(std::wstring_view value, std::wstring_view query);
+    [[nodiscard]] static std::wstring NormalizeHex(std::wstring_view value);
+    [[nodiscard]] static std::optional<DeviceRecord> FindById(std::vector<DeviceRecord> const& devices,
+                                                              std::wstring_view id);
+    [[nodiscard]] static std::optional<apc::core::DeviceId> TryDeviceId(std::wstring_view id);
+    [[nodiscard]] static AppResultCode ToResultCode(OperationStatus status) noexcept;
+    [[nodiscard]] static AppOutcomeReason OperationReason(AppCommandKind command) noexcept;
+    [[nodiscard]] static bool IsSuccess(OperationStatus status) noexcept;
+    // A refresh may use a shorter private deadline and fall back to current
+    // inputs. Mutations recheck the caller's context after resolution so a
+    // cancelled command cannot act on that fallback.
+    [[nodiscard]] static std::optional<AppResultCode>
+    MutationAdmissionFailure(AppCommandContext const& context) noexcept;
+    [[nodiscard]] static bool IsRefreshNeeded(AppCommandKind command,
+                                              DeviceSelectorKind selectorKind = DeviceSelectorKind::Id) noexcept;
+    [[nodiscard]] static AppCommandContext CappedRefreshContext(AppCommandContext const& context);
+    static void AdvanceGeneration(std::uint64_t& generation) noexcept;
+    void ApplySessionStates(std::vector<DeviceRecord>& devices,
+                            std::vector<DeviceRecord> const& connectedDevices) const;
+    [[nodiscard]] bool PrivacyMode(SettingsData const& settings) const noexcept;
+
+    [[nodiscard]] OperationResult
+    PerformDeviceOperation(AppCommandKind command, std::wstring_view id, AppCommandContext const& context) const;
+    std::shared_ptr<SettingsStore> m_settings;
+    std::weak_ptr<AppPresentation> m_presentation;
+    mutable std::mutex m_stateMutex;
+    mutable std::condition_variable m_noActiveCalls;
+    mutable std::optional<std::uint64_t> m_lastSettingsRevision;
+    mutable std::uint64_t m_generation = 0;
+    mutable std::uint64_t m_pickerGeneration = 0;
+    mutable std::size_t m_activeCalls = 0;
+    bool m_running = true;
     std::shared_ptr<EventState> m_eventState;
     std::shared_ptr<apc::device::DeviceService> m_devices;
     std::uint64_t m_deviceSubscription = 0;

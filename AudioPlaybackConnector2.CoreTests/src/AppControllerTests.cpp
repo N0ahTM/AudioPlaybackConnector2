@@ -1,4 +1,5 @@
 #include "TestCheck.hpp"
+#include "AppTestFixture.hpp"
 
 #include <app/AppController.hpp>
 #include <ui/TrayPrimaryActivation.hpp>
@@ -31,165 +32,93 @@ using apc::app::DeviceConnectedEvent;
 using apc::app::DevicePickerOpenMode;
 using apc::app::DeviceSelector;
 
-AppCommand ConnectCommand() {
-    auto target = DeviceSelector::ById(L"device-a");
-    if (!target) throw std::logic_error("test command target must be valid");
-    return {AppCommandKind::Connect, std::move(*target), {}};
-}
-
-void TestUiAndCliEquivalentCommandsUseOneExecutor() {
-    std::vector<AppCommand> executed;
-    AppSnapshot snapshot;
-    auto const command = ConnectCommand();
-    AppController controller(
-        [&](AppCommand const& received, AppCommandContext const&) {
-            executed.push_back(received);
-            return AppResult{AppResultCode::Success, received.Kind};
-        },
-        [&]() { return snapshot; });
-
-    auto const uiResult = controller.Connect(*command.Target, {});
-    auto const cliResult = controller.Connect(*command.Target, {});
-
-    Check(uiResult == cliResult, "UI and CLI adapters must receive equivalent normalized results");
-    Check(uiResult.Code == AppResultCode::Success && uiResult.Command == AppCommandKind::Connect,
-          "a valid command must delegate and retain its command kind");
-    Check(uiResult.DispatchPhase == AppDispatchPhase::Started && cliResult.DispatchPhase == AppDispatchPhase::Started,
-          "delegated results must record that the application executor was entered");
-    Check(executed.size() == 2 && executed[0] == command && executed[1] == command,
-          "equivalent UI and CLI intents must use the same typed executor");
-}
-
-void TestTrayPrimaryActivationUsesSharedExecutorAndDetachedUiIntent() {
-    std::optional<AppCommand> executedCommand;
-    std::optional<AppCommandContext> executedContext;
-    auto controller = std::make_shared<AppController>(
-        [&](AppCommand const& command, AppCommandContext const& context) {
-            executedCommand = command;
-            executedContext = context;
-            return AppResult{AppResultCode::Success, command.Kind};
-        },
-        [] { return AppSnapshot{}; });
-
-    auto callback = apc::ui::MakeTrayPrimaryActivationCallback(controller);
-    callback();
-
-    Check(executedCommand && executedCommand->Kind == AppCommandKind::ShowDevicePicker,
-          "tray primary activation must dispatch the typed show-picker command");
-    Check(executedCommand && executedCommand->PickerOpenMode == DevicePickerOpenMode::ToggleIfOpen,
-          "tray primary activation must retain toggle semantics in the shared command");
-    Check(
-        executedContext && executedContext->Completion == AppCommandContext::CompletionMode::Detached,
-        "tray primary activation must use detached completion so a UI-thread callback cannot wait on its Opened event");
-    controller.reset();
-    executedCommand.reset();
-    callback();
-    Check(!executedCommand, "a retained tray callback must not invoke an expired controller");
-}
-
-void TestExplicitDeviceActionsPreserveDetachedContextAndTargets() {
-    std::vector<AppCommand> commands;
-    AppController controller(
-        [&](AppCommand const& command, AppCommandContext const& context) {
-            commands.push_back(command);
-            Check(context.Completion == AppCommandContext::CompletionMode::Detached,
-                  "UI device actions must retain nonblocking completion");
-            return AppResult{AppResultCode::OperationFailed, command.Kind};
-        },
-        [] { return AppSnapshot{}; });
+void TestConcreteOwnersAndExplicitUseCases() {
+    apc::tests::AppFixture fixture;
+    auto& controller = fixture.Controller;
+    (void)fixture.Settings->RememberDevice(L"device-a", L"Headphones");
     auto const target = *DeviceSelector::ById(L"device-a");
-    auto const context = AppCommandContext::Detached();
-    Check(controller.Connect(target, context).Code == AppResultCode::OperationFailed &&
-              controller.Disconnect(target, context).Code == AppResultCode::OperationFailed &&
-              controller.Reconnect(target, context).Code == AppResultCode::OperationFailed &&
-              controller.ToggleDefault(context).Code == AppResultCode::OperationFailed &&
-              controller.DisconnectAll(context).Code == AppResultCode::OperationFailed &&
-              controller.ReconnectAll(context).Code == AppResultCode::OperationFailed &&
-              controller.ShowSettings(context).Code == AppResultCode::OperationFailed,
-          "explicit actions must preserve backend failures");
-    Check(commands == std::vector<AppCommand>{{AppCommandKind::Connect, target, {}},
-                                              {AppCommandKind::Disconnect, target, {}},
-                                              {AppCommandKind::Reconnect, target, {}},
-                                              {AppCommandKind::ToggleLast, DeviceSelector::Default(), {}},
-                                              {AppCommandKind::DisconnectAll, {}, {}},
-                                              {AppCommandKind::ReconnectAll, {}, {}},
-                                              {AppCommandKind::ShowSettings, {}, {}}},
-          "explicit actions must preserve their targets and run each requested use case once");
+    auto const connected = controller.Connect(target, AppCommandContext::Detached());
+    Check(connected.Succeeded() && fixture.Devices->ConnectionAccess->Connections.size() == 1,
+          "connect must directly admit an operation on the concrete device owner");
+    fixture.Devices->ConnectionAccess->LastConnection->CompleteStart(apc::device::DeviceConnectionResult::Success);
+    fixture.Devices->ConnectionAccess->LastConnection->CompleteOpen(apc::device::DeviceConnectionResult::Success);
+    Check(controller.SetAlias(L"device-a", L"Desk").Succeeded() && controller.SetDefault(L"device-a").Succeeded(),
+          "device settings must commit through the concrete settings owner");
+    auto snapshot = controller.Snapshot();
+    Check(snapshot.Devices.size() == 1 && snapshot.Devices.front().IsConnected &&
+              snapshot.Devices.front().DisplayName == L"Desk" && snapshot.DefaultDevice &&
+              snapshot.DefaultDevice->IsConnected,
+          "application snapshots must merge authoritative sessions and committed settings");
+    snapshot.Devices.front().DisplayName = L"Copy";
+    Check(controller.Snapshot().Devices.front().DisplayName == L"Desk", "snapshots must own independent value data");
+    Check(controller.ClearAlias(L"device-a").Succeeded() && controller.ClearDefault().Succeeded(),
+          "explicit clear actions must use the same persistence owner");
+    Check(controller.Disconnect(target, {}).Succeeded() && !controller.Snapshot().Devices.front().IsConnected,
+          "disconnect results must reflect the device owner's close transition");
+    apc::tests::device::CompleteCloseAndCooldown(*fixture.Devices, fixture.Devices->ConnectionAccess->LastConnection);
 }
 
-void TestMalformedCancelledAndExpiredCommandsShortCircuit() {
-    std::size_t calls = 0;
-    AppController controller(
-        [&](AppCommand const&, AppCommandContext const&) {
-            ++calls;
-            return AppResult{AppResultCode::Success, AppCommandKind::Status};
-        },
-        [] { return AppSnapshot{}; });
-
-    auto const malformedResult = controller.SetDefault(std::wstring_view{});
-
-    std::stop_source stopSource;
-    stopSource.request_stop();
-    auto cancelledContext = AppCommandContext{stopSource.get_token(), AppCommandContext::TimePoint::max()};
-    auto const cancelledResult = controller.Connect(*ConnectCommand().Target, cancelledContext);
-
-    auto expiredContext = AppCommandContext{};
-    expiredContext.Deadline = AppCommandContext::TimePoint::min();
-    auto const expiredResult = controller.Connect(*ConnectCommand().Target, expiredContext);
-
-    Check(malformedResult.Code == AppResultCode::InvalidInput,
-          "malformed commands must normalize to invalid input before delegation");
-    Check(cancelledResult.Code == AppResultCode::Cancelled,
-          "cancelled commands must normalize to cancellation before delegation");
-    Check(expiredResult.Code == AppResultCode::TimedOut,
-          "expired commands must normalize to timeout before delegation");
-    Check(cancelledResult.DispatchPhase == AppDispatchPhase::NotStarted &&
-              expiredResult.DispatchPhase == AppDispatchPhase::NotStarted,
-          "pre-dispatch cancellation and deadline results must record that the executor was not entered");
-    Check(calls == 0, "malformed, cancelled, and expired commands must not invoke the executor");
+void TestPreflightAndShutdownCloseAdmission() {
+    apc::tests::AppFixture fixture;
+    auto& controller = fixture.Controller;
+    std::stop_source stop;
+    stop.request_stop();
+    AppCommandContext cancelled{stop.get_token(), AppCommandContext::TimePoint::max()};
+    AppCommandContext expired;
+    expired.Deadline = AppCommandContext::TimePoint::min();
+    auto target = *DeviceSelector::ById(L"device-a");
+    Check(controller.SetDefault(std::wstring_view{}).Code == AppResultCode::InvalidInput &&
+              controller.Connect(target, cancelled).Code == AppResultCode::Cancelled &&
+              controller.Connect(target, expired).Code == AppResultCode::TimedOut &&
+              fixture.Devices->ConnectionAccess->Connections.empty(),
+          "invalid, cancelled and expired actions must not enter device mutation");
+    Check(controller.SetAlias(L"device-a", L"bad\nalias").Code == AppResultCode::InvalidInput,
+          "invalid aliases must fail before settings mutation");
+    controller.Shutdown();
+    Check(controller.Connect(target, {}).Code == AppResultCode::Unavailable &&
+              controller.ShowSettings().Code == AppResultCode::Unavailable &&
+              fixture.Presentation->SettingsCalls == 0 && !controller.Snapshot().IsRunning,
+          "shutdown must close command and UI admission and publish an unavailable snapshot");
 }
 
-void TestExecutorExceptionsBecomeInternalErrors() {
-    AppController controller(
-        [](AppCommand const&, AppCommandContext const&) -> AppResult { throw std::runtime_error("backend failure"); },
-        [] { return AppSnapshot{}; });
-
-    auto const result = controller.Connect(*ConnectCommand().Target, {});
-
-    Check(result.Code == AppResultCode::InternalError,
-          "an executor exception must be contained as an internal error result");
-    Check(result.Command == AppCommandKind::Connect, "an exception result must retain the command that was attempted");
-    Check(result.DispatchPhase == AppDispatchPhase::Started,
-          "an executor exception must still record that dispatch began");
+void TestPresentationBoundaryRetainsPickerIntent() {
+    apc::tests::AppFixture fixture;
+    auto controller = std::make_shared<AppController>(fixture.Settings, fixture.Service, fixture.Presentation);
+    auto tray = apc::ui::MakeTrayPrimaryActivationCallback(controller);
+    tray();
+    Check(controller->ShowDevicePicker(DevicePickerOpenMode::EnsureOpen).Succeeded() &&
+              controller->ShowSettings().Succeeded(),
+          "explicit UI actions must use the presentation boundary");
+    Check(fixture.Presentation->Modes == std::vector<DevicePickerOpenMode>{DevicePickerOpenMode::ToggleIfOpen,
+                                                                           DevicePickerOpenMode::EnsureOpen} &&
+              fixture.Presentation->Contexts.front().Completion == AppCommandContext::CompletionMode::Detached,
+          "tray toggling and control ensure-open must preserve their distinct intent and completion contracts");
+    controller.reset();
+    auto const before = fixture.Presentation->Modes.size();
+    tray();
+    Check(fixture.Presentation->Modes.size() == before, "tray callback must not retain its controller");
 }
 
-void TestSnapshotIsReturnedByValue() {
-    auto id = apc::core::DeviceId::TryCreate(L"device-a");
-    Check(id.has_value(), "snapshot fixture must have a valid device ID");
-    if (!id) return;
-
-    AppSnapshot source;
-    source.Generation = 8;
-    source.Devices.push_back({*id, L"Headphones", {}, L"Headphones", {}, true, true, false});
-    AppController controller([](AppCommand const& command,
-                                AppCommandContext const&) { return AppResult{AppResultCode::Success, command.Kind}; },
-                             [&]() { return source; });
-
-    auto first = controller.Snapshot();
-    first.Generation = 99;
-    first.Devices.front().DisplayName = L"Changed copy";
-    auto const second = controller.Snapshot();
-
-    Check(source.Generation == 8 && source.Devices.front().DisplayName == L"Headphones",
-          "mutating a snapshot result must not mutate the provider-owned snapshot");
-    Check(second.Generation == 8 && second.Devices.front().DisplayName == L"Headphones",
-          "each snapshot call must return an independent immutable-value copy");
+void TestShutdownClosesEventAdmission() {
+    apc::tests::AppFixture fixture;
+    int delivered = 0;
+    auto subscription = fixture.Controller.Subscribe([&](auto const&) { ++delivered; });
+    auto const target = *DeviceSelector::ById(L"device-a");
+    (void)fixture.Controller.Connect(target, AppCommandContext::Detached());
+    Check(delivered != 0, "admitted device commands must publish their transition");
+    fixture.Controller.Shutdown();
+    auto const before = delivered;
+    auto* connection = fixture.Devices->ConnectionAccess->LastConnection;
+    connection->CompleteStart(apc::device::DeviceConnectionResult::Success);
+    connection->CompleteOpen(apc::device::DeviceConnectionResult::Success);
+    auto lateSubscription = fixture.Controller.Subscribe([&](auto const&) { ++delivered; });
+    Check(delivered == before && !lateSubscription && !fixture.Controller.Snapshot().IsRunning,
+          "shutdown must reject later device delivery and new observers without reviving the snapshot");
 }
 
 void TestEventOrderingAndReentrantUnsubscribe() {
-    AppController controller([](AppCommand const& command,
-                                AppCommandContext const&) { return AppResult{AppResultCode::Success, command.Kind}; },
-                             [] { return AppSnapshot{}; });
+    apc::tests::AppFixture fixture;
+    auto& controller = fixture.Controller;
     auto id = apc::core::DeviceId::TryCreate(L"device-a");
     Check(id.has_value(), "event fixture must have a valid device ID");
     if (!id) return;
@@ -222,8 +151,8 @@ void TestEventOrderingAndReentrantUnsubscribe() {
 /*------------------------------------------------------------------------------------------------------------*/
 
 void TestConcurrentAndReentrantPublicationsHaveOneOrder() {
-    AppController controller([](AppCommand const&, AppCommandContext const&) { return AppResult{}; },
-                             [] { return AppSnapshot{}; });
+    apc::tests::AppFixture fixture;
+    auto& controller = fixture.Controller;
     AppEvent const event = apc::app::DeviceActivityChangedEvent{};
     std::binary_semaphore entered(0);
     std::binary_semaphore release(0);
@@ -250,8 +179,8 @@ void TestConcurrentAndReentrantPublicationsHaveOneOrder() {
 }
 
 void TestResetDrainsAdmittedCallbackAndSkipsQueuedDelivery() {
-    AppController controller([](AppCommand const&, AppCommandContext const&) { return AppResult{}; },
-                             [] { return AppSnapshot{}; });
+    apc::tests::AppFixture fixture;
+    auto& controller = fixture.Controller;
     AppEvent const event = apc::app::DeviceActivityChangedEvent{};
     std::binary_semaphore entered(0);
     std::binary_semaphore release(0);
@@ -281,8 +210,8 @@ void TestResetDrainsAdmittedCallbackAndSkipsQueuedDelivery() {
 }
 
 void TestSubscriptionsCaptureAdmissionAtPublication() {
-    AppController controller([](AppCommand const&, AppCommandContext const&) { return AppResult{}; },
-                             [] { return AppSnapshot{}; });
+    apc::tests::AppFixture fixture;
+    auto& controller = fixture.Controller;
     AppEvent const event = apc::app::DeviceActivityChangedEvent{};
     std::optional<AppController::Subscription> late;
     std::vector<std::uint64_t> received;
@@ -299,8 +228,8 @@ void TestSubscriptionsCaptureAdmissionAtPublication() {
 }
 
 void TestReentrantControllerDestructionCancelsRemainingDelivery() {
-    auto controller = std::make_unique<AppController>(
-        [](AppCommand const&, AppCommandContext const&) { return AppResult{}; }, [] { return AppSnapshot{}; });
+    apc::tests::AppFixture fixture;
+    auto controller = std::make_unique<AppController>(fixture.Settings, fixture.Service);
     AppEvent const event = apc::app::DeviceActivityChangedEvent{};
     int calls = 0;
     auto first = controller->Subscribe([&](AppController::EventNotification const&) {
@@ -317,8 +246,8 @@ void TestReentrantControllerDestructionCancelsRemainingDelivery() {
 }
 
 void TestControllerDestructionDrainsForeignCallback() {
-    auto controller = std::make_unique<AppController>(
-        [](AppCommand const&, AppCommandContext const&) { return AppResult{}; }, [] { return AppSnapshot{}; });
+    apc::tests::AppFixture fixture;
+    auto controller = std::make_unique<AppController>(fixture.Settings, fixture.Service);
     AppEvent const event = apc::app::DeviceActivityChangedEvent{};
     std::binary_semaphore entered(0);
     std::binary_semaphore release(0);
@@ -349,8 +278,8 @@ void TestControllerDestructionDrainsForeignCallback() {
 }
 
 void TestResetDestroysHandlerCapturesOutsideTheOwnerLock() {
-    AppController controller([](AppCommand const&, AppCommandContext const&) { return AppResult{}; },
-                             [] { return AppSnapshot{}; });
+    apc::tests::AppFixture fixture;
+    auto& controller = fixture.Controller;
     struct Capture {
         AppController& Controller;
         bool& Released;
@@ -367,71 +296,14 @@ void TestResetDestroysHandlerCapturesOutsideTheOwnerLock() {
     Check(released, "handler capture destruction must be able to reenter registration and reset without an owner lock");
 }
 
-void TestDeviceSettingsUseControllerMethods() {
-    std::vector<AppCommand> executed;
-    const auto longDeviceId = std::wstring(513, L'd');
-    AppController controller(
-        [&](AppCommand const& command, AppCommandContext const&) {
-            const auto kind = command.Kind;
-            executed.push_back(command);
-            AppResult result;
-            result.Code = kind == AppCommandKind::SetAlias ? AppResultCode::OperationFailed : AppResultCode::Success;
-            result.Command = kind;
-            return result;
-        },
-        [] { return AppSnapshot{}; });
-
-    const auto clearDefault = controller.ClearDefault();
-    const auto setDefault = controller.SetDefault(longDeviceId);
-    const auto setAlias = controller.SetAlias(longDeviceId, L"Office");
-    const auto clearAlias = controller.ClearAlias(longDeviceId);
-    const auto emptyAlias = controller.SetAlias(longDeviceId, {});
-
-    Check(controller.SetDefault({}).Code == AppResultCode::InvalidInput &&
-              controller.SetAlias({}, L"Office").Code == AppResultCode::InvalidInput &&
-              controller.ClearAlias({}).Code == AppResultCode::InvalidInput &&
-              controller.SetAlias(longDeviceId, L"bad\nalias").Code == AppResultCode::InvalidInput,
-          "invalid device settings must be rejected before backend dispatch");
-
-    Check(clearDefault.Code == AppResultCode::Success && clearDefault.Command == AppCommandKind::ClearDefault,
-          "settings clear-default must return the shared executor result");
-    Check(setDefault.Code == AppResultCode::Success && setDefault.Command == AppCommandKind::SetDefault,
-          "settings set-default must return the shared executor result");
-    Check(setAlias.Code == AppResultCode::OperationFailed && setAlias.Command == AppCommandKind::SetAlias,
-          "settings alias failure must remain observable at the UI boundary");
-    Check(clearAlias.Code == AppResultCode::Success && clearAlias.Command == AppCommandKind::ClearAlias,
-          "settings clear-alias must return the shared executor result");
-    Check(emptyAlias.Code == AppResultCode::Success && emptyAlias.Command == AppCommandKind::ClearAlias,
-          "an empty settings alias must use the clear-alias command");
-    Check(executed.size() == 5, "each settings action must invoke the one shared executor exactly once");
-    if (executed.size() != 5) return;
-
-    Check(executed[0].Kind == AppCommandKind::ClearDefault && !executed[0].Target,
-          "clear-default must carry no target");
-    Check(executed[1].Kind == AppCommandKind::SetDefault && executed[1].Target &&
-              executed[1].Target->IdText() == longDeviceId,
-          "set-default must preserve the complete external device ID");
-    Check(executed[2].Kind == AppCommandKind::SetAlias && executed[2].Target &&
-              executed[2].Target->IdText() == longDeviceId && executed[2].Alias == L"Office",
-          "set-alias must preserve its typed target and alias");
-    Check(executed[3].Kind == AppCommandKind::ClearAlias && executed[3].Target &&
-              executed[3].Target->IdText() == longDeviceId && executed[3].Alias.empty(),
-          "clear-alias must carry an explicit typed target and no alias payload");
-    Check(executed[4].Kind == AppCommandKind::ClearAlias,
-          "empty alias submission must dispatch clear-alias instead of duplicating settings logic");
-}
-
 } // namespace
 
 int RunAppControllerTests() {
-    TestUiAndCliEquivalentCommandsUseOneExecutor();
-    TestTrayPrimaryActivationUsesSharedExecutorAndDetachedUiIntent();
-    TestExplicitDeviceActionsPreserveDetachedContextAndTargets();
-    TestMalformedCancelledAndExpiredCommandsShortCircuit();
-    TestExecutorExceptionsBecomeInternalErrors();
-    TestSnapshotIsReturnedByValue();
+    TestConcreteOwnersAndExplicitUseCases();
+    TestPreflightAndShutdownCloseAdmission();
+    TestPresentationBoundaryRetainsPickerIntent();
+    TestShutdownClosesEventAdmission();
     TestEventOrderingAndReentrantUnsubscribe();
-    TestDeviceSettingsUseControllerMethods();
     TestConcurrentAndReentrantPublicationsHaveOneOrder();
     TestResetDrainsAdmittedCallbackAndSkipsQueuedDelivery();
     TestSubscriptionsCaptureAdmissionAtPublication();

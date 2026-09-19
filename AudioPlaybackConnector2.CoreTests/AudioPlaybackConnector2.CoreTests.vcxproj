@@ -95,7 +95,7 @@
     <ClCompile Include="src\SettingsStoreTests.cpp" />
     <ClCompile Include="src\DevicePickerSnapshotTests.cpp" />
     <ClCompile Include="src\LatestStartupTaskRequestStateTests.cpp" />
-    <ClCompile Include="src\LegacyAppUseCaseBridgeTests.cpp" />
+    <ClCompile Include="src\AppControllerUseCasesTests.cpp" />
     <ClCompile Include="src\ProtocolBoundaryTests.cpp" />
     <ClCompile Include="src\ReconnectPolicyTests.cpp" />
     <ClCompile Include="src\ResourcePressureMonitorTests.cpp" />
@@ -108,11 +108,13 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\TestCheck.hpp" />
+    <ClInclude Include="src\AppTestFixture.hpp" />
+    <ClInclude Include="src\DeviceTestFixture.hpp" />
     <ClInclude Include="src\ManualSettingsWakeup.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveResourceDiagnostics.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppController.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\DeviceFactPublicationFence.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\app\LegacyAppUseCaseBridge.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppPresentation.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppModels.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveResourcePolicy.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveActionRetryBackoff.hpp" />

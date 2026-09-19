@@ -32,11 +32,8 @@ public:
     Handle(apc::control::Request const& request, std::stop_token stopToken, std::uint64_t deadline) const noexcept;
 
     // Formats a validated request's result without executing commands or reading owners.
-    // A query may use the supplied fallback snapshot when its result has no snapshot.
-    [[nodiscard]] static Response FormatResponse(Request const& request,
-                                                 apc::app::AppResult const& result,
-                                                 std::optional<apc::app::AppSnapshot> snapshot,
-                                                 Options const& options);
+    [[nodiscard]] static Response
+    FormatResponse(Request const& request, apc::app::AppResult const& result, Options const& options);
 
 private:
     apc::app::AppController const& m_controller;

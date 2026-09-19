@@ -127,10 +127,12 @@ public:
     [[nodiscard]] bool IsCurrent(EventNotification const& notification) const;
 
 private:
-    enum class SettingsRead { Once, Current };
     template <typename Action>
     [[nodiscard]] AppResult
-    WithSettings(AppCommandKind kind, AppCommandContext context, SettingsRead read, Action&& action) const noexcept;
+    WithAdmission(AppCommandKind kind, AppCommandContext context, Action&& action) const noexcept;
+    template <typename Action>
+    [[nodiscard]] AppResult
+    WithSettings(AppCommandKind kind, AppCommandContext context, Action&& action) const noexcept;
     [[nodiscard]] AppResult
     PresentationResult(AppCommandKind kind, AppUiActionResult const& action, SettingsData const& settings) const;
     [[nodiscard]] AppResult WriteAlias(AppCommandKind kind,
@@ -197,13 +199,9 @@ private:
     // Concurrent readers may complete out of order. Retry outside the mutex
     // when another reader has already observed a newer Store revision.
     [[nodiscard]] std::optional<SettingsSnapshot> ReadCoherentSettings() const noexcept;
-    [[nodiscard]] bool IsCurrentSettingsRevision(std::uint64_t revision) const noexcept;
-    [[nodiscard]] std::vector<DeviceRecord> ReadConnectedDevices() const;
     [[nodiscard]] static std::vector<DeviceRecord> SessionRecords(apc::device::DeviceServiceSnapshot const& snapshot);
     [[nodiscard]] AppSnapshot CaptureSnapshot() const;
-    [[nodiscard]] AppSnapshot SnapshotFromDevices(std::vector<DeviceRecord> devices,
-                                                  SettingsData const& settings,
-                                                  std::uint64_t settingsRevision) const noexcept;
+    void RefreshDevices(AppCommandContext const& context) const;
     [[nodiscard]] std::vector<DeviceRecord> MergeDevices(std::vector<DeviceRecord> refreshed,
                                                          std::vector<DeviceRecord> connected,
                                                          SettingsData const& settings) const;
@@ -213,8 +211,7 @@ private:
                                             std::uint64_t pickerGeneration,
                                             bool isRunning) const;
 
-    [[nodiscard]] AppResult DeviceQueryResult(std::vector<DeviceRecord> devices,
-                                              SettingsSnapshot const& settings) const;
+    [[nodiscard]] AppResult DeviceQueryResult(AppSnapshot snapshot) const;
     [[nodiscard]] AppResult MakeFailure(AppCommandKind command,
                                         AppResultCode code,
                                         AppOutcomeReason reason,
@@ -263,6 +260,7 @@ private:
     mutable std::mutex m_stateMutex;
     mutable std::condition_variable m_noActiveCalls;
     mutable std::optional<std::uint64_t> m_lastSettingsRevision;
+    mutable std::optional<std::uint64_t> m_lastDeviceGeneration;
     mutable std::uint64_t m_generation = 0;
     mutable std::uint64_t m_pickerGeneration = 0;
     mutable std::size_t m_activeCalls = 0;

@@ -301,6 +301,9 @@ struct AppSnapshot {
 
         friend bool operator==(ResourceStatusSnapshot const&, ResourceStatusSnapshot const&) = default;
     } AdaptiveResources;
+    // Versions of the concrete owners from the successful capture.
+    std::uint64_t SettingsRevision = 0;
+    std::uint64_t DeviceGeneration = 0;
 
     friend bool operator==(AppSnapshot const&, AppSnapshot const&) = default;
 };

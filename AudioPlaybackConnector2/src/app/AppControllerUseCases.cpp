@@ -1,6 +1,6 @@
 #include <app/AppController.hpp>
 #include <core/DeviceService.hpp>
-#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Windows.Foundation.h>
 
 #include <core/SettingsLimits.hpp>
 
@@ -69,10 +69,7 @@ AppController::CallLease::~CallLease() {
 }
 
 template <typename Action>
-AppResult AppController::WithSettings(AppCommandKind kind,
-                                      AppCommandContext context,
-                                      SettingsRead read,
-                                      Action&& action) const noexcept {
+AppResult AppController::WithAdmission(AppCommandKind kind, AppCommandContext context, Action&& action) const noexcept {
     AppResult preflight;
     preflight.Command = kind;
 
@@ -90,26 +87,25 @@ AppResult AppController::WithSettings(AppCommandKind kind,
     }
 
     try {
-        // Only read-only queries can be replayed after a newer Store revision
-        // overtakes their input. Commands with side effects run once; their
-        // post-mutation paths explicitly reread committed settings instead.
-        for (std::size_t attempt = 0; attempt != 3; ++attempt) {
-            const auto settings = ReadCoherentSettings();
-            if (!settings) {
-                return MakeFailure(kind, AppResultCode::InternalError, AppOutcomeReason::InternalError);
-            }
-            auto result = action(*settings);
-            result.Command = kind;
-            result.DispatchPhase = AppDispatchPhase::Started;
-            if (read == SettingsRead::Once || IsCurrentSettingsRevision(settings->Revision)) return result;
-        }
-        return MakeFailure(kind, AppResultCode::InternalError, AppOutcomeReason::InternalError);
+        auto result = action();
+        result.Command = kind;
+        result.DispatchPhase = AppDispatchPhase::Started;
+        return result;
     } catch (...) {
         preflight.DispatchPhase = AppDispatchPhase::Started;
         preflight.Code = AppResultCode::InternalError;
         preflight.Reason = AppOutcomeReason::InternalError;
         return preflight;
     }
+}
+
+template <typename Action>
+AppResult AppController::WithSettings(AppCommandKind kind, AppCommandContext context, Action&& action) const noexcept {
+    return WithAdmission(kind, context, [&] {
+        auto const settings = ReadCoherentSettings();
+        if (!settings) return MakeFailure(kind, AppResultCode::InternalError, AppOutcomeReason::InternalError);
+        return action(*settings);
+    });
 }
 
 AppSnapshot AppController::Snapshot() const noexcept {
@@ -158,8 +154,22 @@ AppSnapshot AppController::CaptureSnapshot() const {
         {
             std::scoped_lock lock(m_stateMutex);
             if (!m_running) break;
-            if (m_generation != generation) continue;
+            if (m_generation != generation || !m_lastSettingsRevision ||
+                *m_lastSettingsRevision != settings->Revision ||
+                (m_lastDeviceGeneration && *m_lastDeviceGeneration > deviceState.Generation))
+                continue;
+            if (m_lastDeviceGeneration && *m_lastDeviceGeneration != deviceState.Generation)
+                AdvanceGeneration(m_generation);
+            m_lastDeviceGeneration = deviceState.Generation;
+            if (pickerGeneration > m_pickerGeneration) {
+                m_pickerGeneration = pickerGeneration;
+                AdvanceGeneration(m_generation);
+            }
+            snapshot.Generation = m_generation;
+            snapshot.Tray.Generation = m_generation;
         }
+        snapshot.SettingsRevision = settings->Revision;
+        snapshot.DeviceGeneration = deviceState.Generation;
         return snapshot;
     }
     AppSnapshot unavailable;
@@ -173,7 +183,7 @@ AppSnapshot AppController::CaptureSnapshot() const {
 
 AppResult AppController::ShowDevicePicker(DevicePickerOpenMode mode, AppCommandContext context) const noexcept {
     constexpr auto kind = AppCommandKind::ShowDevicePicker;
-    return WithSettings(kind, context, SettingsRead::Once, [&](SettingsSnapshot const& input) {
+    return WithSettings(kind, context, [&](SettingsSnapshot const& input) {
         auto presentation = m_presentation.lock();
         if (!presentation) return MakeFailure(kind, AppResultCode::Unavailable, AppOutcomeReason::NotReady, input.Data);
         if (const auto code = MutationAdmissionFailure(context))
@@ -184,7 +194,7 @@ AppResult AppController::ShowDevicePicker(DevicePickerOpenMode mode, AppCommandC
 
 AppResult AppController::ShowSettings(AppCommandContext context) const noexcept {
     constexpr auto kind = AppCommandKind::ShowSettings;
-    return WithSettings(kind, context, SettingsRead::Once, [&](SettingsSnapshot const& input) {
+    return WithSettings(kind, context, [&](SettingsSnapshot const& input) {
         auto presentation = m_presentation.lock();
         if (!presentation) return MakeFailure(kind, AppResultCode::Unavailable, AppOutcomeReason::NotReady, input.Data);
         if (const auto code = MutationAdmissionFailure(context))
@@ -221,42 +231,22 @@ AppResult AppController::PresentationResult(AppCommandKind kind,
 /*------------------------------------------------------------------------------------------------------------*/
 
 AppResult AppController::ListDevices(AppCommandContext context) const noexcept {
-    return WithSettings(
-        AppCommandKind::ListDevices, context, SettingsRead::Current, [&](SettingsSnapshot const& input) {
-            return DeviceQueryResult(BuildDevices(true, context, input.Data), input);
-        });
+    return WithAdmission(AppCommandKind::ListDevices, context, [&] {
+        RefreshDevices(context);
+        return DeviceQueryResult(CaptureSnapshot());
+    });
 }
 
 AppResult AppController::Status(AppCommandContext context) const noexcept {
-    return WithSettings(AppCommandKind::Status, context, SettingsRead::Current, [&](SettingsSnapshot const& input) {
-        return DeviceQueryResult(BuildDevicesWithoutRefresh(input.Data), input);
-    });
+    return WithAdmission(AppCommandKind::Status, context, [&] { return DeviceQueryResult(CaptureSnapshot()); });
 }
 
 AppResult AppController::ListAliases(AppCommandContext context) const noexcept {
-    return WithSettings(
-        AppCommandKind::ListAliases, context, SettingsRead::Current, [&](SettingsSnapshot const& input) {
-            return DeviceQueryResult(BuildDevicesWithoutRefresh(input.Data), input);
-        });
+    return WithAdmission(AppCommandKind::ListAliases, context, [&] { return DeviceQueryResult(CaptureSnapshot()); });
 }
 
 AppResult AppController::ShowDefault(AppCommandContext context) const noexcept {
-    constexpr auto kind = AppCommandKind::ShowDefault;
-
-    return WithSettings(kind, context, SettingsRead::Current, [&](SettingsSnapshot const& input) {
-        auto const& settings = input.Data;
-        auto const settingsRevision = input.Revision;
-        auto devices = BuildDevicesWithoutRefresh(settings);
-
-        auto snapshot = SnapshotFromDevices(devices, settings, settingsRevision);
-        AppResult result;
-        result.Code = AppResultCode::Success;
-        result.Command = kind;
-        result.DefaultDevice = snapshot.DefaultDevice;
-        result.Snapshot = std::move(snapshot);
-        result.PrivacyModeEnabled = result.Snapshot->PrivacyModeEnabled;
-        return result;
-    });
+    return WithAdmission(AppCommandKind::ShowDefault, context, [&] { return DeviceQueryResult(CaptureSnapshot()); });
 }
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -266,7 +256,7 @@ AppResult AppController::ShowDefault(AppCommandContext context) const noexcept {
 AppResult AppController::SetDefault(DeviceSelector target, AppCommandContext context) const {
     constexpr auto kind = AppCommandKind::SetDefault;
     if (!IsExplicitTarget(target)) return InvalidInput(kind);
-    return WithSettings(kind, context, SettingsRead::Once, [&](SettingsSnapshot const& input) {
+    return WithSettings(kind, context, [&](SettingsSnapshot const& input) {
         auto const& settings = input.Data;
         auto devices = BuildDevices(IsRefreshNeeded(target.Kind()), context, settings);
 
@@ -302,10 +292,14 @@ AppResult AppController::SetDefault(DeviceSelector target, AppCommandContext con
             return MakeTargetResult(
                 kind, resolution, settings, AppResultCode::InternalError, AppOutcomeReason::InternalError);
         }
-        auto committedSnapshot = SnapshotFromDevices(devices, committedSettings->Data, committedSettings->Revision);
+        auto committedSnapshot = CaptureSnapshot();
+        if (!committedSnapshot.IsRunning)
+            return MakeFailure(
+                kind, AppResultCode::Indeterminate, AppOutcomeReason::InternalError, committedSettings->Data);
         auto result = MakeTargetResult(
             kind, resolution, committedSettings->Data, AppResultCode::Success, AppOutcomeReason::DefaultSet);
         result.DefaultDevice = committedSnapshot.DefaultDevice;
+        result.PrivacyModeEnabled = committedSnapshot.PrivacyModeEnabled;
         return result;
     });
 }
@@ -313,7 +307,7 @@ AppResult AppController::SetDefault(DeviceSelector target, AppCommandContext con
 AppResult AppController::ClearDefault(AppCommandContext context) const {
     constexpr auto kind = AppCommandKind::ClearDefault;
 
-    return WithSettings(kind, context, SettingsRead::Once, [&](SettingsSnapshot const& input) {
+    return WithSettings(kind, context, [&](SettingsSnapshot const& input) {
         auto const& settings = input.Data;
 
         if (const auto code = MutationAdmissionFailure(context)) {
@@ -327,13 +321,16 @@ AppResult AppController::ClearDefault(AppCommandContext context) const {
         if (!committedSettings) {
             return MakeFailure(kind, AppResultCode::InternalError, AppOutcomeReason::InternalError, settings);
         }
-        auto committedSnapshot = SnapshotFromDevices({}, committedSettings->Data, committedSettings->Revision);
+        auto committedSnapshot = CaptureSnapshot();
+        if (!committedSnapshot.IsRunning)
+            return MakeFailure(
+                kind, AppResultCode::Indeterminate, AppOutcomeReason::InternalError, committedSettings->Data);
         AppResult result;
         result.Code = AppResultCode::Success;
         result.Command = kind;
         result.Reason = AppOutcomeReason::DefaultCleared;
         result.DefaultDevice = committedSnapshot.DefaultDevice;
-        result.PrivacyModeEnabled = PrivacyMode(committedSettings->Data);
+        result.PrivacyModeEnabled = committedSnapshot.PrivacyModeEnabled;
         return result;
     });
 }
@@ -345,7 +342,7 @@ AppResult AppController::ClearDefault(AppCommandContext context) const {
 AppResult AppController::DisconnectAll(AppCommandContext context) const noexcept {
     constexpr auto kind = AppCommandKind::DisconnectAll;
 
-    return WithSettings(kind, context, SettingsRead::Once, [&](SettingsSnapshot const& input) {
+    return WithSettings(kind, context, [&](SettingsSnapshot const& input) {
         auto const& settings = input.Data;
 
         if (const auto code = MutationAdmissionFailure(context)) {
@@ -368,7 +365,7 @@ AppResult AppController::DisconnectAll(AppCommandContext context) const noexcept
 AppResult AppController::ReconnectAll(AppCommandContext context) const noexcept {
     constexpr auto kind = AppCommandKind::ReconnectAll;
 
-    return WithSettings(kind, context, SettingsRead::Once, [&](SettingsSnapshot const& input) {
+    return WithSettings(kind, context, [&](SettingsSnapshot const& input) {
         auto const& settings = input.Data;
         auto devices = BuildDevicesWithoutRefresh(settings);
 
@@ -452,7 +449,7 @@ AppResult AppController::WriteAlias(AppCommandKind kind,
                                     DeviceSelector const& target,
                                     std::wstring_view alias,
                                     AppCommandContext context) const {
-    return WithSettings(kind, context, SettingsRead::Once, [&](SettingsSnapshot const& input) {
+    return WithSettings(kind, context, [&](SettingsSnapshot const& input) {
         auto const& settings = input.Data;
         auto devices = BuildDevices(IsRefreshNeeded(target.Kind()), context, settings);
 
@@ -518,7 +515,7 @@ AppResult AppController::WriteAlias(AppCommandKind kind,
 AppResult AppController::Connect(DeviceSelector target, AppCommandContext context) const {
     constexpr auto kind = AppCommandKind::Connect;
 
-    return WithSettings(kind, context, SettingsRead::Once, [&](SettingsSnapshot const& input) {
+    return WithSettings(kind, context, [&](SettingsSnapshot const& input) {
         auto const& settings = input.Data;
         auto devices = BuildDevices(IsRefreshNeeded(target.Kind()), context, settings);
         return RunDeviceOperation(kind, target, context, devices, settings);
@@ -528,7 +525,7 @@ AppResult AppController::Connect(DeviceSelector target, AppCommandContext contex
 AppResult AppController::Disconnect(DeviceSelector target, AppCommandContext context) const {
     constexpr auto kind = AppCommandKind::Disconnect;
 
-    return WithSettings(kind, context, SettingsRead::Once, [&](SettingsSnapshot const& input) {
+    return WithSettings(kind, context, [&](SettingsSnapshot const& input) {
         auto const& settings = input.Data;
         auto devices = BuildDevices(IsRefreshNeeded(target.Kind()), context, settings);
         return RunDeviceOperation(kind, target, context, devices, settings);
@@ -538,7 +535,7 @@ AppResult AppController::Disconnect(DeviceSelector target, AppCommandContext con
 AppResult AppController::Reconnect(DeviceSelector target, AppCommandContext context) const {
     constexpr auto kind = AppCommandKind::Reconnect;
 
-    return WithSettings(kind, context, SettingsRead::Once, [&](SettingsSnapshot const& input) {
+    return WithSettings(kind, context, [&](SettingsSnapshot const& input) {
         auto const& settings = input.Data;
         auto devices = BuildDevices(IsRefreshNeeded(target.Kind()), context, settings);
         return RunDeviceOperation(kind, target, context, devices, settings);
@@ -548,7 +545,7 @@ AppResult AppController::Reconnect(DeviceSelector target, AppCommandContext cont
 AppResult AppController::Toggle(DeviceSelector target, AppCommandContext context) const {
     constexpr auto kind = AppCommandKind::ToggleLast;
 
-    return WithSettings(kind, context, SettingsRead::Once, [&](SettingsSnapshot const& input) {
+    return WithSettings(kind, context, [&](SettingsSnapshot const& input) {
         auto const& settings = input.Data;
         auto devices = BuildDevices(IsRefreshNeeded(target.Kind()), context, settings);
 
@@ -838,53 +835,44 @@ AppController::Resolution AppController::Resolve(DeviceSelector const& selector,
 
 std::vector<AppController::DeviceRecord>
 AppController::BuildDevices(bool refresh, AppCommandContext const& context, SettingsData const& settings) const {
-    std::vector<DeviceRecord> refreshed;
-    if (refresh) {
-        try {
-            auto const refreshContext = CappedRefreshContext(context);
-            auto operation = m_devices->RefreshDevicesAsync();
-            struct Completion {
-                std::mutex Mutex;
-                std::condition_variable_any Changed;
-                bool Done = false;
-            };
-            auto completion = std::make_shared<Completion>();
-            operation.Completed([completion](auto const&, auto const&) {
-                {
-                    std::lock_guard lock(completion->Mutex);
-                    completion->Done = true;
-                }
-                completion->Changed.notify_all();
-            });
-            std::unique_lock lock(completion->Mutex);
-            const bool completed = completion->Changed.wait_until(
-                lock, refreshContext.StopToken, refreshContext.Deadline, [&] { return completion->Done; });
-            lock.unlock();
-            if (!completed) operation.Cancel();
-            if (completed && operation.Status() == winrt::Windows::Foundation::AsyncStatus::Completed) {
-                if (auto inventory = operation.GetResults()) {
-                    for (auto const& device : inventory)
-                        refreshed.push_back({std::wstring(device.Id()),
-                                             std::wstring(device.Name()),
-                                             {},
-                                             DeviceConnectionState::Idle,
-                                             false,
-                                             true,
-                                             false});
-                }
+    if (refresh) RefreshDevices(context);
+    return BuildDevicesWithoutRefresh(settings);
+}
+
+void AppController::RefreshDevices(AppCommandContext const& context) const {
+    try {
+        auto const refreshContext = CappedRefreshContext(context);
+        auto operation = m_devices->RefreshDevicesAsync();
+        struct Completion {
+            std::mutex Mutex;
+            std::condition_variable_any Changed;
+            bool Done = false;
+        };
+        auto completion = std::make_shared<Completion>();
+        operation.Completed([completion](auto const&, auto const&) {
+            {
+                std::lock_guard lock(completion->Mutex);
+                completion->Done = true;
             }
-        } catch (winrt::hresult_error const&) {
-            // Discovery is optional: retain known settings and live sessions when
-            // Windows cannot enumerate devices. Mutation admission still checks
-            // the caller's cancellation and deadline after this fallback.
-            refreshed.clear();
-        }
+            completion->Changed.notify_all();
+        });
+        std::unique_lock lock(completion->Mutex);
+        const bool completed = completion->Changed.wait_until(
+            lock, refreshContext.StopToken, refreshContext.Deadline, [&] { return completion->Done; });
+        lock.unlock();
+        if (!completed) operation.Cancel();
+    } catch (winrt::hresult_error const&) {
+        // Discovery is optional; retain the device owner's known inventory.
+        // Mutations recheck the caller's context after resolution.
     }
-    return MergeDevices(std::move(refreshed), ReadConnectedDevices(), settings);
 }
 
 std::vector<AppController::DeviceRecord> AppController::BuildDevicesWithoutRefresh(SettingsData const& settings) const {
-    return MergeDevices({}, ReadConnectedDevices(), settings);
+    auto const snapshot = m_devices->Snapshot();
+    std::vector<DeviceRecord> inventory;
+    for (auto const& device : snapshot.Inventory.Devices)
+        inventory.push_back({device.Id, device.Name, {}, DeviceConnectionState::Idle, false, true, false});
+    return MergeDevices(std::move(inventory), SessionRecords(snapshot), settings);
 }
 
 std::optional<SettingsSnapshot> AppController::ReadSettings() const noexcept {
@@ -919,15 +907,6 @@ std::optional<SettingsSnapshot> AppController::ReadCoherentSettings() const noex
         if (m_lastSettingsRevision && snapshot->Revision == *m_lastSettingsRevision) return snapshot;
     }
     return std::nullopt;
-}
-
-bool AppController::IsCurrentSettingsRevision(std::uint64_t revision) const noexcept {
-    std::scoped_lock lock(m_stateMutex);
-    return m_lastSettingsRevision && revision == *m_lastSettingsRevision;
-}
-
-std::vector<AppController::DeviceRecord> AppController::ReadConnectedDevices() const {
-    return SessionRecords(m_devices->Snapshot());
 }
 
 std::vector<AppController::DeviceRecord>
@@ -1057,67 +1036,21 @@ AppSnapshot AppController::BuildSnapshot(std::vector<DeviceRecord> devices,
     return snapshot;
 }
 
-AppSnapshot AppController::SnapshotFromDevices(std::vector<DeviceRecord> devices,
-                                               SettingsData const& settings,
-                                               std::uint64_t settingsRevision) const noexcept {
-    try {
-        std::uint64_t generation = 0;
-        std::uint64_t pickerGeneration = 0;
-        bool isRunning = false;
-        {
-            std::scoped_lock lock(m_stateMutex);
-            generation = m_generation;
-            pickerGeneration = m_pickerGeneration;
-            isRunning = m_running;
-        }
-        if (!isRunning) {
-            AppSnapshot unavailable;
-            unavailable.Generation = generation;
-            unavailable.IsRunning = false;
-            return unavailable;
-        }
-
-        if (auto presentation = m_presentation.lock()) {
-            try {
-                pickerGeneration = std::max(pickerGeneration, presentation->PickerOpenedGeneration());
-            } catch (...) {
-            }
-        }
-
-        {
-            std::scoped_lock lock(m_stateMutex);
-            if (!m_running) isRunning = false;
-            // This is the snapshot's linearization point. A SettingsData
-            // value is never stamped with a generation that was advanced for
-            // a newer Store revision by another caller.
-            if (!m_lastSettingsRevision || *m_lastSettingsRevision != settingsRevision) {
-                AppSnapshot unavailable;
-                unavailable.Generation = m_generation;
-                unavailable.IsRunning = false;
-                return unavailable;
-            }
-            generation = m_generation;
-        }
-        return BuildSnapshot(std::move(devices), settings, generation, pickerGeneration, isRunning);
-    } catch (...) {
-        AppSnapshot unavailable;
-        unavailable.IsRunning = false;
-        return unavailable;
-    }
-}
-
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Result Projection /////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-AppResult AppController::DeviceQueryResult(std::vector<DeviceRecord> devices, SettingsSnapshot const& settings) const {
+AppResult AppController::DeviceQueryResult(AppSnapshot snapshot) const {
     AppResult result;
-    result.Code = AppResultCode::Success;
-    for (auto const& device : devices) {
-        if (auto snapshot = ToSnapshot(device)) result.Devices.push_back(std::move(*snapshot));
+    if (!snapshot.IsRunning) {
+        result.Code = AppResultCode::Unavailable;
+        result.Reason = AppOutcomeReason::NotReady;
+        return result;
     }
-    result.Snapshot = SnapshotFromDevices(std::move(devices), settings.Data, settings.Revision);
-    result.PrivacyModeEnabled = result.Snapshot->PrivacyModeEnabled;
+    result.Devices = snapshot.Devices;
+    result.DefaultDevice = snapshot.DefaultDevice;
+    result.PrivacyModeEnabled = snapshot.PrivacyModeEnabled;
+    result.Snapshot = std::move(snapshot);
     return result;
 }
 

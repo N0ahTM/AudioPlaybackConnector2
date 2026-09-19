@@ -759,20 +759,6 @@ Response ControlCommandAdapter::Handle(Request const& request,
                                    wantsJson);
         }
 
-        std::optional<AppSnapshot> snapshot;
-        if (!preDispatchTermination && IsQuery(request.Command)) {
-            // Queries require an inventory-backed presentation snapshot.  A
-            // failed read therefore remains fail-closed and must not dispatch
-            // a query against partial state.
-            snapshot = m_controller.Snapshot();
-            if (!snapshot->IsRunning) {
-                return MessageResponse(request,
-                                       ExitCode::Unavailable,
-                                       Resource(m_options.LocalizeResource, "Command_NotReady"),
-                                       wantsJson);
-            }
-        }
-
         std::unique_lock mutationLock(m_mutationMutex, std::defer_lock);
         if (!preDispatchTermination && IsMutating(request.Command) && !mutationLock.try_lock()) {
             return MessageResponse(
@@ -781,7 +767,7 @@ Response ControlCommandAdapter::Handle(Request const& request,
 
         auto context = MakeContext(stopToken, deadline);
         auto result = Dispatch(m_controller, request, context);
-        return FormatResponse(request, result, std::move(snapshot), m_options);
+        return FormatResponse(request, result, m_options);
     } catch (...) {
         return {ExitCode::Indeterminate, {}, request.CorrelationId};
     }
@@ -791,10 +777,8 @@ Response ControlCommandAdapter::Handle(Request const& request,
 /*//////// Response Formatting ////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-Response ControlCommandAdapter::FormatResponse(Request const& request,
-                                               AppResult const& result,
-                                               std::optional<AppSnapshot> snapshot,
-                                               Options const& options) {
+Response
+ControlCommandAdapter::FormatResponse(Request const& request, AppResult const& result, Options const& options) {
     const bool wantsJson = (request.Flags & CommandFlagJson) != 0;
     const bool wantsRaw = (request.Flags & CommandFlagRaw) != 0;
     if (IsPreDispatchTermination(result)) {
@@ -802,11 +786,11 @@ Response ControlCommandAdapter::FormatResponse(Request const& request,
             request, ExitCode::Unavailable, Resource(options.LocalizeResource, "Command_NotReady"), wantsJson);
     }
     if (IsQuery(request.Command)) {
-        if (!result.Snapshot && !snapshot) {
+        if (!result.Snapshot) {
             return MessageResponse(
                 request, ExitCode::Unavailable, Resource(options.LocalizeResource, "Command_NotReady"), wantsJson);
         }
-        auto currentSnapshot = result.Snapshot ? *result.Snapshot : std::move(*snapshot);
+        auto currentSnapshot = *result.Snapshot;
         if (!currentSnapshot.IsRunning) {
             return MessageResponse(
                 request, ExitCode::Unavailable, Resource(options.LocalizeResource, "Command_NotReady"), wantsJson);

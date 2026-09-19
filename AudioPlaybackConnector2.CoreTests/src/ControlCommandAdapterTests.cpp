@@ -287,12 +287,29 @@ void TestAdapterUsesTheProductionFormatter() {
          {std::uint32_t{0}, std::uint32_t{CommandFlagJson}, std::uint32_t{CommandFlagJson | CommandFlagRaw}}) {
         auto input = MakeRequest(CommandType::Status, TargetKind::None, {}, flags);
         auto result = harness.Controller.Status({});
-        auto expected = ControlCommandAdapter::FormatResponse(input, result, std::nullopt, {Localize});
+        auto expected = ControlCommandAdapter::FormatResponse(input, result, {Localize});
         auto actual = harness.Adapter.Handle(input, {}, apc::control::DeadlineAfter(1000));
         Check(expected.Code == actual.Code && expected.Payload == actual.Payload &&
                   actual.CorrelationId == input.CorrelationId,
               "the live adapter must use the production formatter for typed results and privacy modes");
     }
+}
+
+void TestQueryAdapterUsesOnlyItsResultSnapshot() {
+    Harness harness;
+    int captures = 0;
+    harness.Fixture.Presentation->BeforeResourceRead = [&] { ++captures; };
+    auto result = harness.Adapter.Handle(MakeRequest(CommandType::Status), {}, apc::control::DeadlineAfter(1000));
+    Check(result.Code == ExitCode::Success && captures == 1,
+          "a control query must capture once through its use case instead of reading a separate fallback snapshot");
+    bool privacy = false;
+    harness.Fixture.Presentation->BeforeResourceRead = [&] {
+        privacy = !privacy;
+        (void)harness.Fixture.Settings->SetPrivacyModeEnabled(privacy);
+    };
+    result = harness.Adapter.Handle(MakeRequest(CommandType::Status), {}, apc::control::DeadlineAfter(1000));
+    Check(result.Code == ExitCode::Unavailable,
+          "an unstable application query must not be rescued by an older transport snapshot");
 }
 
 struct FormattingFixture {
@@ -302,7 +319,11 @@ struct FormattingFixture {
     Response FormatStarted(Request const& request) const {
         auto result = Result;
         result.DispatchPhase = apc::app::AppDispatchPhase::Started;
-        return ControlCommandAdapter::FormatResponse(request, result, Snapshot, {Localize});
+        if (!result.Snapshot &&
+            (request.Command == CommandType::List || request.Command == CommandType::Status ||
+             request.Command == CommandType::DefaultShow || request.Command == CommandType::AliasList))
+            result.Snapshot = Snapshot;
+        return ControlCommandAdapter::FormatResponse(request, result, {Localize});
     }
 };
 
@@ -531,6 +552,7 @@ int RunControlCommandAdapterTests() {
     TestControllerPostDispatchTerminationRemainsIndeterminate();
     TestMutationBusyAndNonmutationConcurrency();
     TestAdapterUsesTheProductionFormatter();
+    TestQueryAdapterUsesOnlyItsResultSnapshot();
     TestResultExitMappingAndGoldenTextJsonPrivacy();
     TestLongSnapshotIdsRemainWireVisibleAndRedactable();
     return g_failures;

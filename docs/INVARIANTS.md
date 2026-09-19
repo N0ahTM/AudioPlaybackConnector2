@@ -60,8 +60,16 @@ and ignore revisions they have already applied; the host does this on its UI con
 Settings commits publish `SettingsChangedEvent` through the same ordered stream as device facts. Each carries
 the store revision and requires no second settings cache. Regression tests mutate both owners during capture,
 retain a blocked older delivery, force repeated capture invalidation, and overlap capture with shutdown.
-Query-specific result projections and presentation generations still need consolidation with this observation
-contract before the complete rewrite is accepted.
+Status, device listing, alias listing and default-device queries project their fields from the same validated
+capture as `Snapshot()`. Device listing refreshes discovery first; subsequent capture uses the device owner's
+inventory rather than a second WinRT enumeration result. Failed capture returns an unavailable query without
+partial fields. The control adapter formats that result without taking a separate fallback snapshot.
+
+Each successful snapshot records `SettingsRevision` and `DeviceGeneration`. The controller retains version
+numbers, not a second copy of the owner data. An observed newer device version or picker acknowledgement
+advances the presentation generation; stable rereads retain it. A reader overtaken by a newer capture retries
+instead of stamping stale data with the newer generation. Application and tray projections share that generation.
+Resource diagnostics remain an independently sampled presentation field, outside this generation guarantee.
 
 The controller subscribes directly to the concrete `DeviceService` fact stream. Its private event state owns
 `DeviceFactPublicationFence`; there is no separate router or device-state history map. The fence records only

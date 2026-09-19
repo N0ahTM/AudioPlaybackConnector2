@@ -1,6 +1,11 @@
 #include "TestCheck.hpp"
 #include "AppTestFixture.hpp"
 #include <core/SettingsLimits.hpp>
+#include <array>
+#include <atomic>
+#include <future>
+#include <semaphore>
+#include <utility>
 
 namespace {
 using namespace apc::app;
@@ -199,9 +204,100 @@ void TestDetachedToggleRespectsOwnedBusyState() {
           "tray toggle must use current device-owner busy state without starting a competing operation");
 }
 
+void TestQueriesReconcileAllProjectedFieldsAfterOwnerChanges() {
+    for (auto query : std::array{&AppController::Status,
+                                 &AppController::ListDevices,
+                                 &AppController::ListAliases,
+                                 &AppController::ShowDefault}) {
+        AppFixture fixture;
+        (void)fixture.Settings->RememberDevice(L"target", L"Target");
+        (void)fixture.Settings->SetDefaultDevice(L"target");
+        apc::tests::device::ConnectSuccessfully(*fixture.Devices, L"target");
+        auto const before = fixture.Controller.Snapshot();
+        bool changed = false;
+        fixture.Presentation->BeforeResourceRead = [&] {
+            if (std::exchange(changed, true)) return;
+            (void)fixture.Settings->SetDeviceAlias(L"target", L"Updated");
+            (void)fixture.Service->Disconnect(L"target");
+            apc::tests::device::CompleteCloseAndCooldown(*fixture.Devices,
+                                                         fixture.Devices->ConnectionAccess->LastConnection);
+        };
+        auto result = (fixture.Controller.*query)({});
+        Check(result.Succeeded() && result.Snapshot && result.Devices == result.Snapshot->Devices &&
+                  result.DefaultDevice == result.Snapshot->DefaultDevice && result.Devices.size() == 1 &&
+                  result.Devices.front().DisplayName == L"Updated" && !result.Devices.front().IsConnected &&
+                  !result.DefaultDevice->IsConnected && result.Snapshot->Generation > before.Generation &&
+                  result.Snapshot->SettingsRevision == fixture.Settings->Snapshot().Revision &&
+                  result.Snapshot->DeviceGeneration == fixture.Service->Snapshot().Generation,
+              "every query must derive all projected fields from the same validated owner capture");
+    }
+}
+
+void TestSnapshotGenerationTracksOwnersAndPickerWithoutCommands() {
+    AppFixture fixture;
+    auto previous = fixture.Controller.Snapshot();
+    (void)fixture.Service->Start();
+    fixture.Devices->WatcherAccess->LastWatcher->Add(L"target", L"Target");
+    auto inventory = fixture.Controller.Snapshot();
+    Check(inventory.Generation > previous.Generation && inventory.DeviceGeneration > previous.DeviceGeneration &&
+              inventory.Devices.size() == 1 && inventory.Tray.Generation == inventory.Generation,
+          "owner inventory changes must advance application and tray generations without a controller command");
+    apc::tests::device::ConnectSuccessfully(*fixture.Devices, L"target");
+    auto connected = fixture.Controller.Snapshot();
+    Check(connected.Generation > inventory.Generation && connected.Devices.front().IsConnected &&
+              fixture.Controller.Snapshot().Generation == connected.Generation,
+          "a new session state must advance generation once and stable rereads must retain it");
+    ++fixture.Presentation->OpenedGeneration;
+    auto picker = fixture.Controller.Snapshot();
+    Check(picker.Generation > connected.Generation && picker.Tray.DevicePickerOpenedGeneration == 1 &&
+              fixture.Controller.Snapshot().Generation == picker.Generation,
+          "a later picker acknowledgement must advance generation once even after the action returned");
+}
+
+void TestUnstableQueryCannotReportSuccessWithPartialState() {
+    AppFixture fixture;
+    bool privacy = false;
+    fixture.Presentation->BeforeResourceRead = [&] {
+        privacy = !privacy;
+        (void)fixture.Settings->SetPrivacyModeEnabled(privacy);
+    };
+    auto result = fixture.Controller.Status({});
+    Check(result.Code == AppResultCode::Unavailable && !result.Snapshot && result.Devices.empty(),
+          "continuous source changes must fail the query instead of returning mixed fields or a success code");
+}
+
+void TestOlderCaptureCannotReuseANewerGenerationForStaleState() {
+    AppFixture fixture;
+    (void)fixture.Settings->RememberDevice(L"target", L"Target");
+    (void)fixture.Controller.Snapshot();
+    std::binary_semaphore entered(0), release(0);
+    std::atomic_bool first = true;
+    fixture.Presentation->BeforeResourceRead = [&] {
+        if (!first.exchange(false)) return;
+        entered.release();
+        release.acquire();
+    };
+    auto older = std::async(std::launch::async, [&] { return fixture.Controller.Snapshot(); });
+    entered.acquire();
+    (void)fixture.Settings->SetDeviceAlias(L"target", L"Current");
+    apc::tests::device::ConnectSuccessfully(*fixture.Devices, L"target");
+    auto newer = fixture.Controller.Snapshot();
+    release.release();
+    auto completed = older.get();
+    Check(completed.IsRunning && completed.Generation == newer.Generation &&
+              completed.DeviceGeneration == newer.DeviceGeneration &&
+              completed.SettingsRevision == newer.SettingsRevision && completed.Devices == newer.Devices &&
+              completed.Devices.front().DisplayName == L"Current" && completed.Devices.front().IsConnected,
+          "a delayed reader must recapture current owners instead of stamping stale values with a newer generation");
+}
+
 } // namespace
 
 int RunAppControllerUseCasesTests() {
+    TestQueriesReconcileAllProjectedFieldsAfterOwnerChanges();
+    TestSnapshotGenerationTracksOwnersAndPickerWithoutCommands();
+    TestUnstableQueryCannotReportSuccessWithPartialState();
+    TestOlderCaptureCannotReuseANewerGenerationForStaleState();
     TestExplicitSettingsInputContracts();
     TestQueriesChooseTheirRequiredInputs();
     TestTargetResolutionAndDefaultModes();

@@ -104,6 +104,8 @@ void TestParseErrors() {
         {{L"connect"}, L"A device target is required.\n"},
         {{L"connect", L""}, L"A non-empty device target is required.\n"},
         {{L"connect", L"--id"}, L"Missing value for --id.\n"},
+        {{L"connect", L"--id=device"}, L"Unknown option: --id=device\n"},
+        {{L"connect", L"--id", L"-device"}, L"Missing value for --id.\n"},
         {{L"connect", L"--NAME", L"--json"}, L"Missing value for --NAME.\n"},
         {{L"connect", L"--id", L""}, L"Missing value for --id.\n"},
         {{L"connect", L"--id", L"--"}, L"Missing value for --id.\n"},

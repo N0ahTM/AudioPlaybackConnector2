@@ -34,7 +34,8 @@ and are single observations, not statistically stable benchmarks. The empty
 baseline helps show executable overhead but is not the existing implementation.
 ZIP sizes are isolated probe artifacts, **not product MSIX size deltas**.
 
-- CLI11: UTF-8 option values and rejection of mutually exclusive options.
+- CLI11: UTF-8 option values, rejection of mutually exclusive options, and seven
+  native-parser comparisons with the product's existing `connect --id` contract.
 - JSON: Unicode round trip, malformed input and explicit type inspection.
 - spdlog: file rotation, bounded queue overflow accounting and a private pool
   with a deliberately blocked sink. No global logger registry is used.
@@ -61,6 +62,16 @@ incremental builds there. The script now defaults to a dedicated LocalAppData
 directory. No compiler warnings occurred.
 
 ## Adoption gates still open
+
+The expanded CLI11 2.6.2 probe found four acceptance differences on x64:
+`--id -- -device` is rejected (exit 109), while `--id=device`, `--id -device`
+and an empty `--id` value are accepted. The product accepts the first form and
+rejects the other three. Both reject duplicate and missing values, but native
+CLI11 returns exit 114 with different diagnostic text; the product requires exit
+3 and its existing text. The product parser tests preserve those contracts.
+This measures native behavior, not the impossibility of an adapter. Adoption
+still requires explicit value/escape normalization, product error mapping and
+the full golden suite; the basic Unicode/exclusivity probe alone is insufficient.
 
 - Compare adapters against the actual existing implementations, including net
   production logic removed and complete product package size. The settings codec

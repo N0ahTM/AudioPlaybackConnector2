@@ -241,11 +241,7 @@
     <None Include="packages.config" />
     <Content Include="..\THIRD_PARTY_NOTICES.md"><Link>THIRD_PARTY_NOTICES.md</Link><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
   </ItemGroup>
-  <Target Name="GeneratePackageVersionResource" BeforeTargets="ResourceCompile">
-    <Error Condition="'$(_ApcPackageVersionFormatValid)' != 'true'"
-           Text="PackageVersion must contain four numeric components, for example 1.2.3.0." />
-    <Error Condition="$(_ApcPackageVersionMajor) &gt; 65535 or $(_ApcPackageVersionMinor) &gt; 65535 or $(_ApcPackageVersionBuild) &gt; 65535 or $(_ApcPackageVersionRevision) &gt; 65535"
-           Text="Every PackageVersion component must be between 0 and 65535." />
+  <Target Name="GeneratePackageVersionResource" DependsOnTargets="ResolveBuildVersion" BeforeTargets="ResourceCompile">
     <ItemGroup>
       <_PackageVersionResourceLine Include="#define APC_PACKAGE_VERSION $([System.Text.RegularExpressions.Regex]::Replace('$(PackageVersion)', '\.', ','))" />
       <_PackageVersionResourceLine Include="#define APC_PACKAGE_VERSION_STRING &quot;$(PackageVersion)&quot;" />

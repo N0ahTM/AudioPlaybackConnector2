@@ -294,6 +294,7 @@ jobs:
         & msbuild 'AudioPlaybackConnector2 (Package)\AudioPlaybackConnector2 (Package).wapproj' `
           /p:Configuration=Release `
           /p:Platform=x64 `
+          /p:ReleaseTag=${{ needs.version.outputs.tag }} `
           /p:PackageVersion=${{ needs.version.outputs.package_version }} `
           "/p:AppxPackageDir=$root\" `
           /p:AppxPackageSigningEnabled=false `

@@ -23,16 +23,20 @@ try {
         }
         $propsPath = Join-Path $testDirectory 'Directory.Build.props'
         [xml]$props = [IO.File]::ReadAllText($propsPath)
-        $versionNode = $props.SelectSingleNode('/Project/PropertyGroup/PackageVersion')
+        $versionNode = $props.CreateElement('PackageVersion')
         $versionNode.InnerText = '1.2.3.4'
+        [void]$props.SelectSingleNode('/Project/PropertyGroup').AppendChild($versionNode)
         $props.Save($propsPath)
         & pwsh -NoProfile -File $validator -Version $version *> $null
-        if ($LASTEXITCODE -eq 0) { throw 'Mismatched package version was accepted.' }
-        $versionNode.InnerText = "$version.0"
-        [void]$versionNode.ParentNode.AppendChild($versionNode.CloneNode($true))
+        if ($LASTEXITCODE -eq 0) { throw 'Independent package version declaration was accepted.' }
+        [void]$versionNode.ParentNode.RemoveChild($versionNode)
         $props.Save($propsPath)
+        $manifestPath = Join-Path $testDirectory 'AudioPlaybackConnector2 (Package)/Package.appxmanifest'
+        [xml]$manifest = [IO.File]::ReadAllText($manifestPath)
+        $manifest.Package.Identity.Version = "$version.0"
+        $manifest.Save($manifestPath)
         & pwsh -NoProfile -File $validator -Version $version *> $null
-        if ($LASTEXITCODE -eq 0) { throw 'Ambiguous package version declarations were accepted.' }
+        if ($LASTEXITCODE -eq 0) { throw 'Independent manifest release version was accepted.' }
     } finally {
         Pop-Location
     }

@@ -8,9 +8,12 @@ This maintainer guide documents the existing GitHub, App Installer, and Microsof
 - MSIX/file version: `X.Y.Z.0`
 - `CHANGELOG.md`: dated `## [X.Y.Z] - YYYY-MM-DD` section used for GitHub release notes
 - `store/whats-new.json`: matching `version` plus eight localized Store notes
-- `Directory.Build.props` and `Package.appxmanifest`: matching checked-in default `X.Y.Z.0` for local builds
+- Local builds: nearest reachable Git tag (`git describe --tags --abbrev=0`), or explicit `/p:ReleaseTag=vX.Y.Z`
+- `Package.appxmanifest`: `0.0.0.0` template; MSBuild writes the derived version into a generated copy
 
-Do not add another independent version constant. The workflows pass `PackageVersion` from the tag to release builds.
+Do not add another independent version constant. Release workflows pass `ReleaseTag` to MSBuild. If
+`PackageVersion` is also supplied, it must match the version derived from that tag. Fetch tags for local
+builds; source archives without Git metadata require an explicit `ReleaseTag`.
 `scripts/release/ReleaseVersion.psm1` validates the canonical `vX.Y.Z` tag and derives `X.Y.Z.0` for release,
 dry-run, metadata and promotion checks. Components must fit 0–65535; leading zeros, prerelease/build suffixes
 and whitespace are rejected. Run `pwsh ./scripts/test-release-version.ps1` to check this contract locally.
@@ -21,7 +24,7 @@ and whitespace are rejected. Run `pwsh ./scripts/test-release-version.ps1` to ch
 - [ ] Confirm the previous Microsoft Store submission is no longer being processed.
 - [ ] Move completed entries from `[Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`, then leave an empty `[Unreleased]` section for future work.
 - [ ] Update `store/whats-new.json` to `X.Y.Z` and write concise release notes for `en`, `de`, `fr`, `es`, `ja`, `ko`, `zh-Hans`, and `zh-Hant`.
-- [ ] Update `Directory.Build.props` and `Package.appxmanifest` to `X.Y.Z.0`.
+- [ ] Use `/p:ReleaseTag=vX.Y.Z` for candidate builds before the tag exists; leave the manifest template unchanged.
 - [ ] Update README, usage, CLI, installation, troubleshooting, screenshots, permissions, and privacy statements only where behavior changed.
 - [ ] Run `pwsh ./scripts/validate-localizations.ps1`.
 - [ ] Run `pwsh ./scripts/validate-markdown-links.ps1`.

@@ -160,6 +160,7 @@ jobs:
         & msbuild 'AudioPlaybackConnector2 (Package)\AudioPlaybackConnector2 (Package).wapproj' `
           /p:Configuration=Release `
           /p:Platform=x64 `
+          /p:ReleaseTag=${{ inputs.tag }} `
           /p:PackageVersion=${{ inputs.package_version }} `
           "/p:AppxPackageDir=$root\" `
           "/p:AppxPackageTestDir=$root\" `
@@ -207,6 +208,7 @@ jobs:
         & msbuild 'AudioPlaybackConnector2 (Package)\AudioPlaybackConnector2 (Package).wapproj' `
           /p:Configuration=Release `
           /p:Platform=x64 `
+          /p:ReleaseTag=${{ inputs.tag }} `
           /p:PackageVersion=${{ inputs.package_version }} `
           "/p:AppxPackageDir=$root\" `
           /p:AppxPackageSigningEnabled=false `

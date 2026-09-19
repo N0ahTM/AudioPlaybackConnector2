@@ -1,5 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project>
+  <Target Name="ResolveBuildVersion" BeforeTargets="PrepareForBuild">
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)scripts\release\resolve-build-version.ps1&quot; -RepositoryPath &quot;$(MSBuildThisFileDirectory).&quot;"
+          EnvironmentVariables="APC_BUILD_RELEASE_TAG=$(ReleaseTag);APC_BUILD_PACKAGE_VERSION=$(PackageVersion)"
+          ConsoleToMSBuild="true" StandardOutputImportance="low" LogStandardErrorAsError="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_ApcResolvedPackageVersion" />
+    </Exec>
+    <PropertyGroup>
+      <PackageVersion>$(_ApcResolvedPackageVersion)</PackageVersion>
+    </PropertyGroup>
+  </Target>
   <Target Name="ValidateCppToolchain" BeforeTargets="PrepareForBuild"
           Condition="'$(MSBuildProjectExtension)' == '.vcxproj'">
     <Error Condition="'$(PlatformToolset)' != 'v145'" Text="AudioPlaybackConnector2 requires the v145 toolset." />

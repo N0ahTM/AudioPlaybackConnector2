@@ -20,6 +20,10 @@ developer shell with PowerShell 7 and run:
 pwsh ./scripts/build-headless.ps1 -Platform x64
 ```
 
+Local build versions come from the nearest reachable release tag. Run `git fetch --tags` if your clone
+does not contain tags. For a source archive or a candidate version, pass `/p:ReleaseTag=vX.Y.Z` to MSBuild.
+The build derives both the EXE and generated manifest version; do not edit a version in the manifest template.
+
 This verifies the CoreRuntime, CoreTests and Control boundaries, restores only their packages, builds them in
 parallel and runs CoreTests. It needs the C++ workload and Windows SDK, without WinUI, XAML generation or the
 graphical app project. For an ARM64 cross-build use `-Platform ARM64`; run that test binary on ARM64 Windows.

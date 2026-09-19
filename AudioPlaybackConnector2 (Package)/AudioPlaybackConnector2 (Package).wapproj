@@ -65,11 +65,7 @@
       <SubType>Designer</SubType>
     </AppxManifest>
   </ItemGroup>
-  <Target Name="GenerateVersionedPackageManifest" BeforeTargets="_ValidatePresenceOfAppxManifestItems">
-    <Error Condition="'$(_ApcPackageVersionFormatValid)' != 'true'"
-           Text="PackageVersion must contain four numeric components, for example 1.2.3.0." />
-    <Error Condition="$(_ApcPackageVersionMajor) &gt; 65535 or $(_ApcPackageVersionMinor) &gt; 65535 or $(_ApcPackageVersionBuild) &gt; 65535 or $(_ApcPackageVersionRevision) &gt; 65535"
-           Text="Every PackageVersion component must be between 0 and 65535." />
+  <Target Name="GenerateVersionedPackageManifest" DependsOnTargets="ResolveBuildVersion" BeforeTargets="_ValidatePresenceOfAppxManifestItems">
     <PropertyGroup>
       <_VersionedPackageManifest>$(IntermediateOutputPath)Package.versioned.appxmanifest</_VersionedPackageManifest>
     </PropertyGroup>

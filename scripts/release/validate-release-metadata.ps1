@@ -16,16 +16,12 @@ if ($changelog -notmatch "(?m)^## \[$([regex]::Escape($Version))\] - \d{4}-\d{2}
 
 [xml]$props = Get-Content -LiteralPath 'Directory.Build.props' -Raw
 $versionNodes = @($props.SelectNodes('/Project/PropertyGroup/PackageVersion'))
-if ($versionNodes.Count -ne 1) { throw 'Directory.Build.props must declare exactly one default PackageVersion.' }
-$defaultPackageVersion = $versionNodes[0].InnerText
-if ($defaultPackageVersion -ne $packageVersion) {
-    throw "Directory.Build.props defaults to $defaultPackageVersion, expected $packageVersion."
-}
+if ($versionNodes.Count -ne 0) { throw 'Directory.Build.props must not declare an independent PackageVersion.' }
 
 [xml]$manifest = Get-Content -LiteralPath 'AudioPlaybackConnector2 (Package)/Package.appxmanifest' -Raw
 $manifestIdentity = $manifest.SelectSingleNode("/*[local-name()='Package']/*[local-name()='Identity']")
-if ($null -eq $manifestIdentity -or $manifestIdentity.Version -ne $packageVersion) {
-    throw "Package.appxmanifest must contain version $packageVersion."
+if ($null -eq $manifestIdentity -or $manifestIdentity.Version -ne '0.0.0.0') {
+    throw 'Package.appxmanifest must use the 0.0.0.0 template version; the build supplies the release version.'
 }
 
 $whatsNew = Get-Content -LiteralPath 'store/whats-new.json' -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable

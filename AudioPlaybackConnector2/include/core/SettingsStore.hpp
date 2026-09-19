@@ -1,6 +1,7 @@
 #pragma once
 
 #include <core/SettingsData.hpp>
+#include <core/SettingsStoreWakeup.hpp>
 
 #include <chrono>
 #include <cstdint>
@@ -98,7 +99,8 @@ public:
     /*------------------------------------------------------------------------------------------------------------*/
 
     explicit SettingsStore(std::filesystem::path persistenceDirectory = {},
-                           std::shared_ptr<SettingsStoreStorage> storage = {});
+                           std::shared_ptr<SettingsStoreStorage> storage = {},
+                           std::shared_ptr<SettingsStoreWakeup> wakeup = {});
     ~SettingsStore();
     SettingsStore(SettingsStore const&) = delete;
     SettingsStore& operator=(SettingsStore const&) = delete;
@@ -109,11 +111,6 @@ public:
 
     void Load();
     [[nodiscard]] SettingsSnapshot Snapshot() const;
-#if defined(APC_SETTINGS_STORE_TESTING)
-    // Test-only observability for the deterministic worker-parking regression.
-    [[nodiscard]] std::uint64_t WorkerLoopIterationsForTesting() const noexcept;
-    [[nodiscard]] bool WorkerWaitingForTesting() const noexcept;
-#endif
     [[nodiscard]] Subscription Subscribe(SnapshotCallback callback);
 
     [[nodiscard]] SettingsMutationResult SetGlobalConnectOnStartup(bool enabled);

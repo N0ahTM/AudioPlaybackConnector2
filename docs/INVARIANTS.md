@@ -23,6 +23,18 @@ the data reference and revision under lock, then copies the immutable data after
 | Publication queue and active publisher identity | Committing thread or the existing publication drainer | `Impl::publicationMutex` | Snapshot handlers run after unlocking | Shutdown disables future handler entry; an executing handler retains its publication until return |
 | Subscription activity and executing handler identity | Publisher, reset caller and shutdown caller | `SubscriptionState::Mutex` | None under the lock | Reset disables future entry and drains an already executing handler; self-reset never waits for its own stack |
 | Storage path, backend and worker lifetime | Immutable after construction; admitted load/flush and the persistence worker | Shared `Impl` lifetime; `writerActive` excludes overlapping I/O | Storage backend outside all locks | Final flush runs on the worker; a timed-out worker retains its own state until the admitted I/O returns |
+| Persistence clock, wake version and platform wait | One worker waits; mutations, load/write completion and shutdown signal it | The system wakeup's own mutex/condition variable, never nested with store locks | No callbacks | Notify changes the version; Wait checks that version before sleeping, retaining notifications that arrive before wait entry |
+
+The worker captures a wake version, inspects store state, and releases the store lock before entering the platform
+wait. A blocked writer, active load or clean store produces an indefinite signal wait, not a deadline that has
+already expired. Eligible dirty state waits until the debounce/retry deadline. `SettingsStoreWakeup` provides the
+clock and versioned wait contract; every call to it occurs outside store/publication locks. Production and tests
+link the same worker from `CoreRuntime`. The manual clock and wait barriers live solely in the test project.
+
+Deterministic tests advance through the debounce boundary, park behind a synchronous writer after the deadline,
+and notify between state inspection and wait entry. Shutdown always measures its budget with the real steady
+clock, even when the persistence clock is frozen. A delayed platform wait retains the worker's state after a
+shutdown timeout and releases it when the wait finally returns.
 
 Where nesting is required the order is store mutex, publication mutex, subscription mutex. No code acquires an
 earlier lock while holding a later one. Publication invokes handlers without any of these locks. Subscription

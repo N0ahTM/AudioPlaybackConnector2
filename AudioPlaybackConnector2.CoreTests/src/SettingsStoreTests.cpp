@@ -1,4 +1,5 @@
 #include "TestCheck.hpp"
+#include "ManualSettingsWakeup.hpp"
 
 #include <core/SettingsStore.hpp>
 #include <core/SettingsLimits.hpp>
@@ -576,8 +577,9 @@ void TestMutationDuringBlockedWriteAndFinalFlush() {
 
 void TestDebouncedWorkerWaitsForSynchronousWriter() {
     auto storage = std::make_shared<ControlledStorage>();
+    auto wakeup = std::make_shared<ManualSettingsWakeup>();
     storage->BlockWrites();
-    SettingsStore store({}, storage);
+    SettingsStore store({}, storage, wakeup);
     Check(store.SetLanguage(L"de").IsApplied(), "the first revision must schedule persistence");
     bool flushResult = false;
     std::jthread flushing([&] { flushResult = store.FlushNow(2); });
@@ -585,14 +587,9 @@ void TestDebouncedWorkerWaitsForSynchronousWriter() {
     Check(store.SetPrivacyModeEnabled(true).IsApplied(),
           "a newer mutation must rearm the debounce timer during a synchronous write");
 
-    const auto waitDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-    while (!store.WorkerWaitingForTesting() && std::chrono::steady_clock::now() < waitDeadline)
-        std::this_thread::yield();
-    Check(store.WorkerWaitingForTesting(), "the debounced worker must park behind the synchronous writer");
-    const auto parkedIterations = store.WorkerLoopIterationsForTesting();
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    Check(store.WorkerLoopIterationsForTesting() == parkedIterations,
-          "the debounced worker must remain parked instead of hot-spinning while a synchronous writer is active");
+    const auto version = wakeup->Advance(std::chrono::seconds{1});
+    Check(wakeup->WaitUntilParked(version, std::nullopt),
+          "after the debounce deadline a busy worker must wait for a signal without a polling deadline");
     Check(storage->MaxActiveWriters() == 1, "the debounced worker must not overlap the synchronous writer");
     storage->ReleaseWrites();
     flushing.join();
@@ -601,6 +598,67 @@ void TestDebouncedWorkerWaitsForSynchronousWriter() {
     Check(storage->Output().find("privacyModeEnabled\":true") != std::string::npos,
           "the synchronous flush must persist the newest revision after the debounce deadline");
     static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+}
+
+void TestManualDebounceAndIdleWait() {
+    auto storage = std::make_shared<ControlledStorage>();
+    auto wakeup = std::make_shared<ManualSettingsWakeup>();
+    SettingsStore store({}, storage, wakeup);
+    Check(store.SetLanguage(L"de").IsApplied(), "debounce must begin with a committed mutation");
+    auto deadline = SettingsStoreWakeup::Clock::time_point{} + std::chrono::milliseconds{300};
+    Check(wakeup->WaitUntilParked(wakeup->Version(), deadline), "worker must schedule the debounce deadline");
+    auto version = wakeup->Advance(std::chrono::milliseconds{299});
+    Check(wakeup->WaitUntilParked(version, deadline) && storage->MaxActiveWriters() == 0,
+          "a clock advance before the deadline must not start persistence");
+    version = wakeup->Advance(std::chrono::milliseconds{1});
+    storage->WaitForCompletedWrites(1);
+    Check(wakeup->WaitUntilParked(version, std::nullopt) && !store.Snapshot().IsDirty,
+          "after writing the due revision the clean worker must park indefinitely");
+    version = wakeup->Advance(std::chrono::hours{1});
+    Check(wakeup->WaitUntilParked(version, std::nullopt) && storage->Outputs().size() == 1,
+          "clock changes alone must not cause a clean store to poll or write");
+    Check(store.Shutdown(SettingsShutdownMode::Flush), "shutdown must wake an indefinitely parked worker");
+}
+
+void TestNotificationBeforeWaitEntryIsRetained() {
+    auto storage = std::make_shared<ControlledStorage>();
+    auto wakeup = std::make_shared<ManualSettingsWakeup>();
+    auto gate = std::make_shared<ManualSettingsWakeup::WaitGate>();
+    wakeup->BlockNextWait(gate);
+    SettingsStore store({}, storage, wakeup);
+    Check(gate->Entered.try_acquire_for(std::chrono::seconds{2}), "worker must reach the wait-entry barrier");
+    Check(store.SetLanguage(L"fr").IsApplied(), "mutation must notify while wait entry is delayed");
+    wakeup->Advance(std::chrono::seconds{1});
+    gate->Release.release();
+    storage->WaitForCompletedWrites(1);
+    Check(store.Shutdown(SettingsShutdownMode::Flush), "notification before wait registration must not be lost");
+    Check(storage->Output().find("\"language\":\"fr\"") != std::string::npos,
+          "the raced wakeup must persist the committed revision");
+}
+
+void TestFrozenPersistenceClockCannotExtendShutdownBudget() {
+    auto destroyed = std::make_shared<std::promise<void>>();
+    auto released = destroyed->get_future();
+    auto storage = std::make_shared<ControlledStorage>();
+    storage->Destroyed = destroyed;
+    std::weak_ptr<ControlledStorage> lifetime = storage;
+    auto wakeup = std::make_shared<ManualSettingsWakeup>();
+    auto gate = std::make_shared<ManualSettingsWakeup::WaitGate>();
+    wakeup->BlockNextWait(gate);
+    {
+        SettingsStore store({}, storage, wakeup);
+        Check(gate->Entered.try_acquire_for(std::chrono::seconds{2}), "worker must enter the delayed platform wait");
+        auto started = std::chrono::steady_clock::now();
+        Check(!store.Shutdown(SettingsShutdownMode::DiscardStartupFailure, 1, std::chrono::milliseconds{50}),
+              "an undrained platform wait must report incomplete shutdown");
+        Check(std::chrono::steady_clock::now() - started < std::chrono::seconds{1},
+              "a frozen persistence clock must not freeze the real shutdown deadline");
+    }
+    storage.reset();
+    Check(!lifetime.expired(), "the delayed worker must retain storage after facade destruction");
+    gate->Release.release();
+    Check(released.wait_for(std::chrono::seconds{2}) == std::future_status::ready,
+          "releasing the delayed wait must let the cancelled worker release its retained state");
 }
 
 void TestWorkerPersistsDistinctCommittedRevisions() {
@@ -1095,6 +1153,9 @@ int RunSettingsStoreTests() {
     TestRecordConnectedDeviceEffectiveReconnectPolicy();
     TestMutationDuringBlockedWriteAndFinalFlush();
     TestDebouncedWorkerWaitsForSynchronousWriter();
+    TestManualDebounceAndIdleWait();
+    TestNotificationBeforeWaitEntryIsRetained();
+    TestFrozenPersistenceClockCannotExtendShutdownBudget();
     TestWorkerPersistsDistinctCommittedRevisions();
     TestStorageFailureRetriesLatestRevision();
     TestLoadAdmissionFencesMutationAndFlush();

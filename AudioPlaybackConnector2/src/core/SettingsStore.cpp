@@ -7,7 +7,6 @@
 #include <util/RuntimeApartment.hpp>
 #include <util/Util.hpp>
 
-#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <limits>
@@ -188,6 +187,39 @@ public:
     void PreserveCorrupt(std::filesystem::path const& path) noexcept override { BackupUnreadableSettingsFile(path); }
 };
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// System Clock and Wakeup ///////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
+class SystemSettingsWakeup final : public SettingsStoreWakeup {
+public:
+    Clock::time_point Now() const noexcept override { return Clock::now(); }
+    std::uint64_t Version() const noexcept override {
+        std::scoped_lock lock(m_mutex);
+        return m_version;
+    }
+    void Notify() noexcept override {
+        {
+            std::scoped_lock lock(m_mutex);
+            ++m_version;
+        }
+        m_changed.notify_one();
+    }
+    void Wait(std::uint64_t version, std::optional<Clock::time_point> deadline) noexcept override {
+        std::unique_lock lock(m_mutex);
+        auto changed = [&] { return version != m_version; };
+        if (deadline)
+            m_changed.wait_until(lock, *deadline, changed);
+        else
+            m_changed.wait(lock, changed);
+    }
+
+private:
+    mutable std::mutex m_mutex;
+    std::condition_variable m_changed;
+    std::uint64_t m_version = 0;
+};
+
 } // namespace
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -198,8 +230,11 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
     using DataSnapshot = std::shared_ptr<const SettingsData>;
     static_assert(std::is_nothrow_copy_assignable_v<DataSnapshot>);
 
-    explicit Impl(std::filesystem::path directory, std::shared_ptr<SettingsStoreStorage> persistenceStorage)
-        : persistenceDirectory(std::move(directory)), storage(std::move(persistenceStorage)) {
+    explicit Impl(std::filesystem::path directory,
+                  std::shared_ptr<SettingsStoreStorage> persistenceStorage,
+                  std::shared_ptr<SettingsStoreWakeup> persistenceWakeup)
+        : persistenceDirectory(std::move(directory)), storage(std::move(persistenceStorage)),
+          wakeup(persistenceWakeup ? std::move(persistenceWakeup) : std::make_shared<SystemSettingsWakeup>()) {
         if (!storage) storage = std::make_shared<FilesystemSettingsStoreStorage>();
     }
 
@@ -269,6 +304,7 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
     std::thread::id publisherThread;
     std::filesystem::path persistenceDirectory;
     std::shared_ptr<SettingsStoreStorage> storage;
+    const std::shared_ptr<SettingsStoreWakeup> wakeup;
     bool timerArmed = false;
     std::chrono::steady_clock::time_point due{};
     bool writerActive = false;
@@ -285,18 +321,21 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
     bool loadClaimed = false;
     bool loadActive = false;
     unsigned int failures = 0;
-#if defined(APC_SETTINGS_STORE_TESTING)
-    std::atomic_uint64_t workerLoopIterations = 0;
-    std::atomic_bool workerWaiting = false;
-#endif
     std::jthread worker;
+
+    // Called only after releasing the store lock. The worker waits on its own
+    // versioned signal; synchronous callers retain the store condition variable.
+    void NotifyChanged() noexcept {
+        changed.notify_all();
+        wakeup->Notify();
+    }
 
     void CompleteLoadWithoutCommit() noexcept {
         {
             std::scoped_lock lock(mutex);
             loadActive = false;
         }
-        changed.notify_all();
+        NotifyChanged();
     }
 
     [[nodiscard]] std::filesystem::path Path() const {
@@ -393,7 +432,9 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
         return false;
     }
 
-    void CompleteWriteLocked(std::uint64_t capturedRevision, bool succeeded) noexcept {
+    void CompleteWriteLocked(std::uint64_t capturedRevision,
+                             bool succeeded,
+                             SettingsStoreWakeup::Clock::time_point now) noexcept {
         writerActive = false;
         if (shutdownRequested) return;
         if (succeeded) {
@@ -401,19 +442,22 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
             failures = 0;
             if (revision != persistedRevision && !shutdownRequested && !closing) {
                 timerArmed = true;
-                due = std::chrono::steady_clock::now() + c_debounceDelay;
+                due = now + c_debounceDelay;
             }
         } else if (!shutdownRequested && !closing) {
             failures = std::min(failures + 1, 10U);
             timerArmed = true;
-            due = std::chrono::steady_clock::now() + RetryDelay(failures);
+            due = now + RetryDelay(failures);
         }
     }
 
     void CompleteWrite(std::uint64_t capturedRevision, bool succeeded) noexcept {
-        std::scoped_lock lock(mutex);
-        CompleteWriteLocked(capturedRevision, succeeded);
-        changed.notify_all();
+        const auto now = wakeup->Now();
+        {
+            std::scoped_lock lock(mutex);
+            CompleteWriteLocked(capturedRevision, succeeded, now);
+        }
+        NotifyChanged();
     }
 
     [[nodiscard]] bool FlushSynchronously(unsigned int maximumAttempts) noexcept {
@@ -443,7 +487,6 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
     }
 
     void Worker(std::stop_token stopToken) noexcept {
-        // Publish completion after the apartment and all local locks have been released.
         const auto finish = wil::scope_exit([&] {
             {
                 std::scoped_lock lock(mutex);
@@ -452,64 +495,52 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
             changed.notify_all();
         });
         util::RuntimeApartment apartment;
-        if (!apartment.Ready()) {
+        {
             std::scoped_lock lock(mutex);
-            workerReady = false;
+            workerReady = apartment.Ready();
             workerStartKnown = true;
-            timerArmed = false;
-            changed.notify_all();
-            return;
         }
-        std::unique_lock lock(mutex);
-        workerReady = true;
-        workerStartKnown = true;
         changed.notify_all();
+        if (!apartment.Ready()) return;
+
         while (!stopToken.stop_requested()) {
-#if defined(APC_SETTINGS_STORE_TESTING)
-            ++workerLoopIterations;
-            workerWaiting.store(true, std::memory_order_release);
-#endif
-            changed.wait(lock, [&] {
-                const auto ready = stopToken.stop_requested() || shutdownRequested || closing ||
-                                   (timerArmed && !loadActive && !writerActive);
-#if defined(APC_SETTINGS_STORE_TESTING)
-                if (ready) workerWaiting.store(false, std::memory_order_release);
-#endif
-                return ready;
-            });
-#if defined(APC_SETTINGS_STORE_TESTING)
-            workerWaiting.store(false, std::memory_order_release);
-#endif
-            if (stopToken.stop_requested() || shutdownRequested) return;
-            if (closing) {
-                const auto attempts = shutdownAttempts;
-                const auto discard = discardRequested;
-                lock.unlock();
-                const auto flushed = discard || FlushSynchronously(attempts);
-                lock.lock();
-                workerFlushResult = flushed;
-                return;
-            }
-            const auto scheduled = due;
-            if (changed.wait_until(lock, scheduled, [&] {
-                    return stopToken.stop_requested() || shutdownRequested || closing || !timerArmed || writerActive ||
-                           due != scheduled || loadActive;
-                }))
-                continue;
+            // Capture the signal before inspecting state. A concurrent change
+            // then invalidates this version even if Wait has not started yet.
+            const auto version = wakeup->Version();
+            const auto now = wakeup->Now();
+            std::optional<SettingsStoreWakeup::Clock::time_point> deadline;
             DataSnapshot snapshot;
             std::uint64_t capturedRevision = 0;
-            if (writerActive || revision == persistedRevision || discardRequested) continue;
-            writerActive = true;
-            timerArmed = false;
-            snapshot = data;
-            capturedRevision = revision;
-            lock.unlock();
-            const auto succeeded = Write(*snapshot);
-            CompleteWrite(capturedRevision, succeeded);
-            lock.lock();
+            {
+                std::unique_lock lock(mutex);
+                if (shutdownRequested) return;
+                if (closing) {
+                    const auto attempts = shutdownAttempts;
+                    const auto discard = discardRequested;
+                    lock.unlock();
+                    const auto flushed = discard || FlushSynchronously(attempts);
+                    lock.lock();
+                    workerFlushResult = flushed;
+                    return;
+                }
+                if (timerArmed && !loadActive && !writerActive && !discardRequested && revision != persistedRevision) {
+                    if (now < due) {
+                        deadline = due;
+                    } else {
+                        writerActive = true;
+                        timerArmed = false;
+                        snapshot = data;
+                        capturedRevision = revision;
+                    }
+                }
+            }
+            if (snapshot) {
+                CompleteWrite(capturedRevision, Write(*snapshot));
+            } else {
+                wakeup->Wait(version, deadline);
+            }
         }
     }
-
     void EnqueuePublicationWithLockHeld(SettingsSnapshot snapshot,
                                         std::vector<SubscriptionStatePtr> subscriptionStates) {
         pendingPublications.push_back({std::move(snapshot), std::move(subscriptionStates)});
@@ -569,9 +600,13 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
         std::vector<SubscriptionStatePtr> subscriptionsToNotify;
         SettingsSnapshot snapshot;
         std::uint64_t committedRevision = 0;
-        {
+        for (;;) {
+            const auto now = wakeup->Now();
             std::unique_lock lock(mutex);
-            changed.wait(lock, [&] { return closing || shutdownRequested || !loadActive; });
+            if (loadActive && !closing && !shutdownRequested) {
+                changed.wait(lock, [&] { return closing || shutdownRequested || !loadActive; });
+                continue;
+            }
             if (closing || shutdownRequested) return {SettingsMutationStatus::Rejected, revision};
             if (revision == std::numeric_limits<std::uint64_t>::max())
                 return {SettingsMutationStatus::Rejected, revision};
@@ -604,9 +639,10 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
             data = std::move(committedData);
             revision = committedRevision;
             timerArmed = true;
-            due = std::chrono::steady_clock::now() + c_debounceDelay;
+            due = now + c_debounceDelay;
+            break;
         }
-        changed.notify_all();
+        NotifyChanged();
         DrainPublications();
         return {SettingsMutationStatus::Applied, committedRevision};
     }
@@ -643,8 +679,10 @@ void SettingsStore::Subscription::Reset() noexcept {
 /*//////// Constructors /////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-SettingsStore::SettingsStore(std::filesystem::path persistenceDirectory, std::shared_ptr<SettingsStoreStorage> storage)
-    : m_impl(std::make_shared<Impl>(std::move(persistenceDirectory), std::move(storage))) {
+SettingsStore::SettingsStore(std::filesystem::path persistenceDirectory,
+                             std::shared_ptr<SettingsStoreStorage> storage,
+                             std::shared_ptr<SettingsStoreWakeup> wakeup)
+    : m_impl(std::make_shared<Impl>(std::move(persistenceDirectory), std::move(storage), std::move(wakeup))) {
     // Without its persistence executor the store cannot offer a bounded shutdown.
     // Fail construction instead of falling back to storage I/O on a UI or callback thread.
     m_impl->worker = std::jthread([impl = m_impl](std::stop_token stopToken) { impl->Worker(stopToken); });
@@ -677,16 +715,6 @@ SettingsSnapshot SettingsStore::Snapshot() const {
     }
     return {*data, revision, dirty};
 }
-
-#if defined(APC_SETTINGS_STORE_TESTING)
-std::uint64_t SettingsStore::WorkerLoopIterationsForTesting() const noexcept {
-    return m_impl->workerLoopIterations.load(std::memory_order_relaxed);
-}
-
-bool SettingsStore::WorkerWaitingForTesting() const noexcept {
-    return m_impl->workerWaiting.load(std::memory_order_acquire);
-}
-#endif
 
 SettingsStore::Subscription SettingsStore::Subscribe(SnapshotCallback callback) {
     if (!callback) return {};
@@ -833,7 +861,7 @@ void SettingsStore::Load() {
             lifetime->persistedRevision = 1;
             lifetime->loadActive = false;
         }
-        lifetime->changed.notify_all();
+        lifetime->NotifyChanged();
     } catch (...) {
         lifetime->CompleteLoadWithoutCommit();
         throw;
@@ -1056,7 +1084,9 @@ bool SettingsStore::Shutdown(SettingsShutdownMode mode,
         impl->discardRequested = mode == SettingsShutdownMode::DiscardStartupFailure;
         impl->DeactivateSubscriptionsLocked();
         retiredSubscriptions = std::move(impl->subscriptions);
-        impl->changed.notify_all();
+        lock.unlock();
+        impl->NotifyChanged();
+        lock.lock();
 
         // Only the persistence worker performs the final write. This caller never enters storage I/O.
         const auto drained = impl->changed.wait_until(
@@ -1067,7 +1097,7 @@ bool SettingsStore::Shutdown(SettingsShutdownMode mode,
         impl->shutdownRequested = true;
         impl->timerArmed = false;
     }
-    impl->changed.notify_all();
+    impl->NotifyChanged();
     impl->worker.request_stop();
     if (workerFinished) {
         impl->worker.join();

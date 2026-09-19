@@ -739,7 +739,6 @@ Response ControlCommandAdapter::Handle(Request const& request,
                                        std::uint64_t deadline) const noexcept {
     try {
         const bool wantsJson = (request.Flags & CommandFlagJson) != 0;
-        const bool wantsRaw = (request.Flags & CommandFlagRaw) != 0;
 
         // Keep the transport's pre-dispatch cancellation and deadline
         // precedence for malformed requests.  Valid commands are allowed to
@@ -782,35 +781,48 @@ Response ControlCommandAdapter::Handle(Request const& request,
 
         auto context = MakeContext(stopToken, deadline);
         auto result = Dispatch(m_controller, request, context);
-        if (IsPreDispatchTermination(result)) {
-            return MessageResponse(
-                request, ExitCode::Unavailable, Resource(m_options.LocalizeResource, "Command_NotReady"), wantsJson);
-        }
-        if (IsQuery(request.Command)) {
-            auto currentSnapshot = result.Snapshot ? *result.Snapshot : std::move(*snapshot);
-            if (!currentSnapshot.IsRunning) {
-                return MessageResponse(request,
-                                       ExitCode::Unavailable,
-                                       Resource(m_options.LocalizeResource, "Command_NotReady"),
-                                       wantsJson);
-            }
-            if (result.Tray) currentSnapshot.Tray = *result.Tray;
-            const bool privacyMode = result.PrivacyModeEnabled.value_or(currentSnapshot.PrivacyModeEnabled);
-            const bool redact = privacyMode && !wantsRaw;
-            return FormatQuery(
-                request, result, std::move(currentSnapshot), m_options.LocalizeResource, redact, wantsJson);
-        }
-
-        // Operation results normally carry their privacy state directly.  Do
-        // not obtain a fallback inventory snapshot here: doing so would make
-        // a successful non-device command depend on device enumeration.
-        const bool privacyMode =
-            result.PrivacyModeEnabled.value_or(result.Snapshot && result.Snapshot->PrivacyModeEnabled);
-        const bool redact = privacyMode && !wantsRaw;
-        return FormatOperation(request, result, m_options.LocalizeResource, redact, wantsJson);
+        return FormatResponse(request, result, std::move(snapshot), m_options);
     } catch (...) {
         return {ExitCode::Indeterminate, {}, request.CorrelationId};
     }
+}
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Response Formatting ////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
+Response ControlCommandAdapter::FormatResponse(Request const& request,
+                                               AppResult const& result,
+                                               std::optional<AppSnapshot> snapshot,
+                                               Options const& options) {
+    const bool wantsJson = (request.Flags & CommandFlagJson) != 0;
+    const bool wantsRaw = (request.Flags & CommandFlagRaw) != 0;
+    if (IsPreDispatchTermination(result)) {
+        return MessageResponse(
+            request, ExitCode::Unavailable, Resource(options.LocalizeResource, "Command_NotReady"), wantsJson);
+    }
+    if (IsQuery(request.Command)) {
+        if (!result.Snapshot && !snapshot) {
+            return MessageResponse(
+                request, ExitCode::Unavailable, Resource(options.LocalizeResource, "Command_NotReady"), wantsJson);
+        }
+        auto currentSnapshot = result.Snapshot ? *result.Snapshot : std::move(*snapshot);
+        if (!currentSnapshot.IsRunning) {
+            return MessageResponse(
+                request, ExitCode::Unavailable, Resource(options.LocalizeResource, "Command_NotReady"), wantsJson);
+        }
+        if (result.Tray) currentSnapshot.Tray = *result.Tray;
+        const bool privacyMode = result.PrivacyModeEnabled.value_or(currentSnapshot.PrivacyModeEnabled);
+        const bool redact = privacyMode && !wantsRaw;
+        return FormatQuery(request, result, std::move(currentSnapshot), options.LocalizeResource, redact, wantsJson);
+    }
+
+    // Operation results normally carry their privacy state directly.  Do
+    // not obtain a fallback inventory snapshot here: doing so would make
+    // a successful non-device command depend on device enumeration.
+    const bool privacyMode = result.PrivacyModeEnabled.value_or(result.Snapshot && result.Snapshot->PrivacyModeEnabled);
+    const bool redact = privacyMode && !wantsRaw;
+    return FormatOperation(request, result, options.LocalizeResource, redact, wantsJson);
 }
 
 } // namespace apc::control

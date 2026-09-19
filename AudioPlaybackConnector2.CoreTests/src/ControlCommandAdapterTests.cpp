@@ -6,8 +6,10 @@
 #include <winrt/Windows.Data.Json.h>
 
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <iostream>
 #include <map>
 #include <mutex>
@@ -457,8 +459,48 @@ void TestMutationBusyAndNonmutationConcurrency() {
     first.join();
 }
 
-void TestResultExitMappingAndGoldenTextJsonPrivacy() {
+void TestAdapterUsesTheProductionFormatter() {
     Harness harness;
+    harness.Snapshot.PrivacyModeEnabled = true;
+    harness.Result.PrivacyModeEnabled = true;
+    const std::vector<std::pair<Request, AppCommandKind>> cases{
+        {MakeRequest(CommandType::List), AppCommandKind::ListDevices},
+        {MakeRequest(CommandType::Status), AppCommandKind::Status},
+        {MakeRequest(CommandType::DefaultShow), AppCommandKind::ShowDefault},
+        {MakeRequest(CommandType::AliasList), AppCommandKind::ListAliases},
+        {MakeRequest(CommandType::Connect, TargetKind::Id, L"device-a"), AppCommandKind::Connect},
+    };
+    for (auto const& [request, kind] : cases) {
+        for (auto flags : std::array<std::uint32_t, 3>{0u, CommandFlagJson, CommandFlagJson | CommandFlagRaw}) {
+            auto input = request;
+            input.Flags = flags;
+            auto result = harness.Result;
+            result.Command = kind;
+            result.DispatchPhase = apc::app::AppDispatchPhase::Started;
+            const auto expected = ControlCommandAdapter::FormatResponse(input, result, harness.Snapshot, {Localize});
+            const auto actual = harness.Adapter.Handle(input, {}, apc::control::DeadlineAfter(1000));
+            Check(actual.Code == expected.Code && actual.Payload == expected.Payload &&
+                      actual.CorrelationId == expected.CorrelationId,
+                  "adapter responses must use the same formatter, localization and privacy flags as golden fixtures");
+        }
+    }
+}
+
+// These fixtures represent results after dispatch. They exercise the production
+// formatter directly and require neither a controller nor an execution callback.
+struct FormattingFixture {
+    AppResult Result;
+    AppSnapshot Snapshot = FixtureSnapshot();
+
+    Response FormatStarted(Request const& request) const {
+        auto result = Result;
+        result.DispatchPhase = apc::app::AppDispatchPhase::Started;
+        return ControlCommandAdapter::FormatResponse(request, result, Snapshot, {Localize});
+    }
+};
+
+void TestResultExitMappingAndGoldenTextJsonPrivacy() {
+    FormattingFixture harness;
 
     struct CodeCase {
         AppResultCode AppCode;
@@ -478,40 +520,39 @@ void TestResultExitMappingAndGoldenTextJsonPrivacy() {
     for (auto const& code : codes) {
         harness.Result = {};
         harness.Result.Code = code.AppCode;
+        harness.Result.Command = AppCommandKind::Connect;
         harness.Result.Reason =
             code.AppCode == AppResultCode::OperationFailed ? AppOutcomeReason::ConnectFailed : AppOutcomeReason::None;
         if (code.AppCode == AppResultCode::InternalError) {
-            auto result = harness.Adapter.Handle(
-                MakeRequest(CommandType::Connect, TargetKind::Id, L"device-a"), {}, apc::control::DeadlineAfter(1000));
+            auto result = harness.FormatStarted(MakeRequest(CommandType::Connect, TargetKind::Id, L"device-a"));
             Check(result.Code == code.WireCode && result.Payload.empty(),
                   "internal controller errors must preserve the legacy empty indeterminate payload");
             continue;
         }
-        auto result = harness.Adapter.Handle(
-            MakeRequest(CommandType::Connect, TargetKind::Id, L"device-a"), {}, apc::control::DeadlineAfter(1000));
+        auto result = harness.FormatStarted(MakeRequest(CommandType::Connect, TargetKind::Id, L"device-a"));
         Check(result.Code == code.WireCode, "every normalized AppResultCode must map to its P01 exit code");
     }
 
     harness.Result = {};
     harness.Result.Code = AppResultCode::Success;
-    auto listText = harness.Adapter.Handle(MakeRequest(CommandType::List), {}, apc::control::DeadlineAfter(1000));
+    harness.Result.Command = AppCommandKind::ListDevices;
+    auto listText = harness.FormatStarted(MakeRequest(CommandType::List));
     Check(listText.Payload == L"Devices\n- Desk (connected)\n  ID: device-a\n- Speaker\n  ID: device-b\n",
           "list text must preserve legacy ordering, connected suffix, and ID shape");
 
-    auto listJson = harness.Adapter.Handle(
-        MakeRequest(CommandType::List, TargetKind::None, {}, CommandFlagJson), {}, apc::control::DeadlineAfter(1000));
+    auto listJson = harness.FormatStarted(MakeRequest(CommandType::List, TargetKind::None, {}, CommandFlagJson));
     Check(listJson.Payload == L"{\"devices\":[{\"id\":\"device-a\",\"name\":\"Headphones\",\"alias\":\"Desk\","
                               L"\"displayName\":\"Desk\",\"connected\":true,\"known\":true,\"privacyRedacted\":false},{"
                               L"\"id\":\"device-b\",\"name\":\"Speaker\",\"alias\":\"\",\"displayName\":\"Speaker\","
                               L"\"connected\":false,\"known\":true,\"privacyRedacted\":false}]}",
           "list JSON must preserve the established device object shape and field order");
 
-    auto statusText = harness.Adapter.Handle(MakeRequest(CommandType::Status), {}, apc::control::DeadlineAfter(1000));
+    harness.Result.Command = AppCommandKind::Status;
+    auto statusText = harness.FormatStarted(MakeRequest(CommandType::Status));
     Check(statusText.Payload == L"Running\nConnections: 1\n- Desk\n  ID: device-a\n",
           "status text must preserve the running/count/device presentation shape");
 
-    auto statusJson = harness.Adapter.Handle(
-        MakeRequest(CommandType::Status, TargetKind::None, {}, CommandFlagJson), {}, apc::control::DeadlineAfter(1000));
+    auto statusJson = harness.FormatStarted(MakeRequest(CommandType::Status, TargetKind::None, {}, CommandFlagJson));
     Check(statusJson.Payload ==
               L"{\"running\":true,\"connectedCount\":1,\"connectedDevices\":[{\"id\":\"device-a\",\"name\":"
               L"\"Headphones\",\"alias\":\"Desk\",\"displayName\":\"Desk\",\"connected\":true,\"known\":true,"
@@ -522,27 +563,24 @@ void TestResultExitMappingAndGoldenTextJsonPrivacy() {
               L"\"energySaver\":false}}",
           "status JSON must retain picker generation and complete adaptive-resource diagnostics");
 
+    harness.Result.Command = AppCommandKind::ShowDefault;
     auto defaultJson =
-        harness.Adapter.Handle(MakeRequest(CommandType::DefaultShow, TargetKind::None, {}, CommandFlagJson),
-                               {},
-                               apc::control::DeadlineAfter(1000));
+        harness.FormatStarted(MakeRequest(CommandType::DefaultShow, TargetKind::None, {}, CommandFlagJson));
     Check(defaultJson.Payload == L"{\"ok\":true,\"mode\":\"specificDevice\",\"privacyRedacted\":false,\"id\":\"device-"
                                  L"a\",\"displayName\":\"Desk\",\"resolved\":true,\"connected\":true}",
           "default JSON must retain mode, resolved, connected, and privacy fields");
-    auto defaultText =
-        harness.Adapter.Handle(MakeRequest(CommandType::DefaultShow), {}, apc::control::DeadlineAfter(1000));
+    auto defaultText = harness.FormatStarted(MakeRequest(CommandType::DefaultShow));
     Check(defaultText.Payload == L"Default: Desk\n", "default text must preserve the localized specific-device shape");
 
-    auto aliasJson = harness.Adapter.Handle(MakeRequest(CommandType::AliasList, TargetKind::None, {}, CommandFlagJson),
-                                            {},
-                                            apc::control::DeadlineAfter(1000));
+    harness.Result.Command = AppCommandKind::ListAliases;
+    auto aliasJson = harness.FormatStarted(MakeRequest(CommandType::AliasList, TargetKind::None, {}, CommandFlagJson));
     Check(aliasJson.Payload ==
               L"{\"devices\":[{\"id\":\"device-a\",\"name\":\"Headphones\",\"alias\":\"Desk\",\"displayName\":\"Desk\","
               L"\"connected\":true,\"known\":true,\"privacyRedacted\":false,\"hasAlias\":true},{\"id\":\"device-b\","
               L"\"name\":\"Speaker\",\"alias\":\"\",\"displayName\":\"Speaker\",\"connected\":false,\"known\":true,"
               L"\"privacyRedacted\":false,\"hasAlias\":false}],\"privacyRedacted\":false}",
           "alias-list JSON must retain per-device hasAlias and root privacy fields");
-    auto aliasText = harness.Adapter.Handle(MakeRequest(CommandType::AliasList), {}, apc::control::DeadlineAfter(1000));
+    auto aliasText = harness.FormatStarted(MakeRequest(CommandType::AliasList));
     Check(aliasText.Payload == L"Aliases\n- Desk: Desk\n  ID: device-a\n- Speaker: (none)\n  ID: device-b\n",
           "alias-list text must preserve alias labels, empty-alias text, and IDs");
 
@@ -550,14 +588,12 @@ void TestResultExitMappingAndGoldenTextJsonPrivacy() {
     harness.Result.Code = AppResultCode::Success;
     harness.Result.Reason = AppOutcomeReason::ConnectSucceeded;
     harness.Result.Target = apc::app::AppTargetSnapshot{L"device-a", L"Headphones", L"Desk", L"Desk", true, true, true};
-    auto connectText = harness.Adapter.Handle(
-        MakeRequest(CommandType::Connect, TargetKind::Id, L"device-a"), {}, apc::control::DeadlineAfter(1000));
+    harness.Result.Command = AppCommandKind::Connect;
+    auto connectText = harness.FormatStarted(MakeRequest(CommandType::Connect, TargetKind::Id, L"device-a"));
     Check(connectText.Payload == L"Connected: Desk",
           "connect operation text must preserve its localized action message");
     auto connectJson =
-        harness.Adapter.Handle(MakeRequest(CommandType::Connect, TargetKind::Id, L"device-a", CommandFlagJson),
-                               {},
-                               apc::control::DeadlineAfter(1000));
+        harness.FormatStarted(MakeRequest(CommandType::Connect, TargetKind::Id, L"device-a", CommandFlagJson));
     Check(connectJson.Payload ==
               L"{\"ok\":true,\"exitCode\":0,\"action\":\"connect\",\"id\":\"device-a\",\"name\":\"Desk\","
               L"\"displayName\":\"Desk\",\"privacyRedacted\":false,\"message\":\"Connected: Desk\"}",
@@ -576,10 +612,9 @@ void TestResultExitMappingAndGoldenTextJsonPrivacy() {
                                                      true,
                                                      true,
                                                      false};
-    auto aliasOperation = harness.Adapter.Handle(
-        MakeRequest(CommandType::AliasSet, TargetKind::Id, L"device-a\nNew Alias", CommandFlagJson),
-        {},
-        apc::control::DeadlineAfter(1000));
+    harness.Result.Command = AppCommandKind::SetAlias;
+    auto aliasOperation = harness.FormatStarted(
+        MakeRequest(CommandType::AliasSet, TargetKind::Id, L"device-a\nNew Alias", CommandFlagJson));
     Check(aliasOperation.Payload.find(L"\"action\":\"alias-set\"") != std::wstring::npos &&
               aliasOperation.Payload.find(L"\"name\":\"New Alias\"") != std::wstring::npos &&
               aliasOperation.Payload.find(L"\"displayName\":\"New Alias\"") != std::wstring::npos,
@@ -592,10 +627,9 @@ void TestResultExitMappingAndGoldenTextJsonPrivacy() {
     harness.Result.Reason = AppOutcomeReason::ReconnectFailed;
     harness.Result.Target =
         apc::app::AppTargetSnapshot{L"device-a", L"Headphones", L"Desk", L"Desk", true, false, true};
+    harness.Result.Command = AppCommandKind::ReconnectAll;
     auto reconnectAllFailure =
-        harness.Adapter.Handle(MakeRequest(CommandType::ReconnectAll, TargetKind::None, {}, CommandFlagJson),
-                               {},
-                               apc::control::DeadlineAfter(1000));
+        harness.FormatStarted(MakeRequest(CommandType::ReconnectAll, TargetKind::None, {}, CommandFlagJson));
     Check(reconnectAllFailure.Code == ExitCode::Indeterminate &&
               reconnectAllFailure.Payload.find(L"\"action\":\"reconnect-all\"") != std::wstring::npos &&
               reconnectAllFailure.Payload.find(L"Reconnect failed: Desk") != std::wstring::npos,
@@ -607,10 +641,9 @@ void TestResultExitMappingAndGoldenTextJsonPrivacy() {
     harness.Result.Reason = AppOutcomeReason::TargetNotFound;
     harness.Result.Target = apc::app::AppTargetSnapshot{longId, {}, {}, {}, false, false, false};
     harness.Result.RequestedTarget = longId;
+    harness.Result.Command = AppCommandKind::Connect;
     auto longIdFailure =
-        harness.Adapter.Handle(MakeRequest(CommandType::Connect, TargetKind::Id, longId, CommandFlagJson),
-                               {},
-                               apc::control::DeadlineAfter(1000));
+        harness.FormatStarted(MakeRequest(CommandType::Connect, TargetKind::Id, longId, CommandFlagJson));
     Check(longIdFailure.Code == ExitCode::NotFound &&
               longIdFailure.Payload ==
                   L"{\"ok\":false,\"exitCode\":4,\"message\":\"Target not found: " + longId + L"\"}",
@@ -622,10 +655,9 @@ void TestResultExitMappingAndGoldenTextJsonPrivacy() {
     harness.Result.Target =
         apc::app::AppTargetSnapshot{L"device-a", L"Headphones", L"Desk", L"Desk", true, false, true};
     harness.Result.PrivacyModeEnabled = true;
+    harness.Result.Command = AppCommandKind::Connect;
     auto privateFailure =
-        harness.Adapter.Handle(MakeRequest(CommandType::Connect, TargetKind::Id, L"device-a", CommandFlagJson),
-                               {},
-                               apc::control::DeadlineAfter(1000));
+        harness.FormatStarted(MakeRequest(CommandType::Connect, TargetKind::Id, L"device-a", CommandFlagJson));
     Check(privateFailure.Payload.find(L"\"id\":\"<value>\"") != std::wstring::npos &&
               privateFailure.Payload.find(L"\"name\":\"<device>\"") != std::wstring::npos &&
               privateFailure.Payload.find(L"Connect failed: <device>") != std::wstring::npos,
@@ -636,33 +668,31 @@ void TestResultExitMappingAndGoldenTextJsonPrivacy() {
     harness.Result.Reason = AppOutcomeReason::TargetNotFound;
     harness.Result.RequestedTarget = L"Headphones";
     harness.Result.PrivacyModeEnabled = true;
+    harness.Result.Command = AppCommandKind::Connect;
     auto privateQueryFailure =
-        harness.Adapter.Handle(MakeRequest(CommandType::Connect, TargetKind::Name, L"Headphones", CommandFlagJson),
-                               {},
-                               apc::control::DeadlineAfter(1000));
+        harness.FormatStarted(MakeRequest(CommandType::Connect, TargetKind::Name, L"Headphones", CommandFlagJson));
     Check(privateQueryFailure.Payload.find(L"Target not found: Headphones") != std::wstring::npos,
           "not-found messages must preserve the current raw query compatibility quirk");
 
     harness.Snapshot.PrivacyModeEnabled = true;
     harness.Result = {};
+    harness.Result.Command = AppCommandKind::ListAliases;
     auto privateAliases =
-        harness.Adapter.Handle(MakeRequest(CommandType::AliasList, TargetKind::None, {}, CommandFlagJson),
-                               {},
-                               apc::control::DeadlineAfter(1000));
+        harness.FormatStarted(MakeRequest(CommandType::AliasList, TargetKind::None, {}, CommandFlagJson));
     Check(privateAliases.Payload.find(L"\"alias\":\"Desk\"") != std::wstring::npos &&
               privateAliases.Payload.find(L"\"name\":\"\"") != std::wstring::npos &&
               privateAliases.Payload.find(L"\"displayName\":\"<device>\"") != std::wstring::npos,
           "privacy alias-list JSON must retain the characterized unredacted alias quirk while redacting identity");
     harness.Result = {};
-    auto rawList = harness.Adapter.Handle(
-        MakeRequest(CommandType::List, TargetKind::None, {}, CommandFlagRaw), {}, apc::control::DeadlineAfter(1000));
+    harness.Result.Command = AppCommandKind::ListDevices;
+    auto rawList = harness.FormatStarted(MakeRequest(CommandType::List, TargetKind::None, {}, CommandFlagRaw));
     Check(rawList.Payload.find(L"Desk") != std::wstring::npos &&
               rawList.Payload.find(L"device-a") != std::wstring::npos,
           "the raw flag must retain unredacted list text despite privacy mode");
 }
 
 void TestLongSnapshotIdsRemainWireVisibleAndRedactable() {
-    Harness harness;
+    FormattingFixture harness;
     const std::wstring longId(513, L'x');
     const auto externalId = apc::app::ExternalDeviceId::TryCreate(longId);
     Check(externalId.has_value(), "the long-ID adapter fixture must satisfy the P01 snapshot bound");
@@ -671,14 +701,15 @@ void TestLongSnapshotIdsRemainWireVisibleAndRedactable() {
     harness.Snapshot.Devices.push_back(
         {*externalId, L"Long device", {}, L"Long device", DeviceConnectionState::Connected, true, true, false});
     harness.Snapshot.Tray.ConnectedDevices.push_back(harness.Snapshot.Devices.back());
-    const auto visible = harness.Adapter.Handle(
-        MakeRequest(CommandType::List, TargetKind::None, {}, CommandFlagJson), {}, apc::control::DeadlineAfter(1000));
+    harness.Result.Command = AppCommandKind::ListDevices;
+    const auto visible = harness.FormatStarted(MakeRequest(CommandType::List, TargetKind::None, {}, CommandFlagJson));
     Check(visible.Payload.find(longId) != std::wstring::npos,
           "list JSON must preserve a connected external ID beyond the persistence bound");
 
     harness.Snapshot.PrivacyModeEnabled = true;
-    const auto privateStatus = harness.Adapter.Handle(
-        MakeRequest(CommandType::Status, TargetKind::None, {}, CommandFlagJson), {}, apc::control::DeadlineAfter(1000));
+    harness.Result.Command = AppCommandKind::Status;
+    const auto privateStatus =
+        harness.FormatStarted(MakeRequest(CommandType::Status, TargetKind::None, {}, CommandFlagJson));
     Check(privateStatus.Payload.find(L"\"id\":\"<value>\"") != std::wstring::npos &&
               privateStatus.Payload.find(longId) == std::wstring::npos,
           "status JSON must redact the same long external ID in privacy mode");
@@ -695,6 +726,7 @@ int RunControlCommandAdapterTests() {
     TestControllerPreDispatchTerminationIsUnavailableForEveryCommand();
     TestControllerPostDispatchTerminationRemainsIndeterminate();
     TestMutationBusyAndNonmutationConcurrency();
+    TestAdapterUsesTheProductionFormatter();
     TestResultExitMappingAndGoldenTextJsonPrivacy();
     TestLongSnapshotIdsRemainWireVisibleAndRedactable();
     return g_failures;

@@ -28,6 +28,7 @@ AudioPlaybackConnector2 is a per-user Windows tray application. WinUI 3 provides
 - Settings persistence owns schema validation and atomic storage. Callers use the current typed model rather than carrying legacy-format concerns through the application.
 - Command transport is per-user and validates its peer. Protocol changes require compatibility consideration, bounded payloads, and regression tests.
 - `ControlCommandAdapter` validates the wire grammar and directly selects an explicit controller method. It does not build an intermediate `AppCommand`. Response formatting uses the original request and application result. The controller's general command dispatch is private pending removal of the internal legacy bridge.
+- The adapter's stateless `FormatResponse` function owns response rendering. Golden output fixtures call that production function without constructing a controller; adapter integration tests verify delegation, localization and privacy options separately.
 - Localization keys are defined by English resources. Selected locales overlay English at runtime.
 - Long-running or asynchronous device actions have an explicit owner and cancellation/lifetime boundary.
 

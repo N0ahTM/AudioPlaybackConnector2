@@ -6,6 +6,11 @@
 #include <core/SettingsLimits.hpp>
 #include <core/StringResources.hpp>
 
+#include <algorithm>
+#include <string>
+#include <utility>
+#include <vector>
+
 namespace {
 [[nodiscard]] bool IsValidDeviceId(std::wstring_view value) noexcept {
     return !value.empty() && apc::limits::IsBoundedUtf16(value, apc::limits::c_maxDeviceIdCharacters);
@@ -40,8 +45,8 @@ void SettingsController::SetGlobalReconnectOnConnectionLoss(bool enabled) {
         for (auto const& device : snapshot.Data.Devices) {
             if (device.ReconnectOnConnectionLoss) individuallyEnabledDeviceIds.push_back(device.Id);
         }
-        service->ApplyReconnectOnConnectionLossPolicy(snapshot.Data.GlobalReconnectOnConnectionLoss,
-                                                      individuallyEnabledDeviceIds);
+        service->ConfigureReconnectPolicy(snapshot.Data.GlobalReconnectOnConnectionLoss,
+                                          std::move(individuallyEnabledDeviceIds));
     }
     NotifyPresentationChanged();
 }
@@ -50,7 +55,7 @@ void SettingsController::SetAllowIncomingConnections(bool enabled) {
     if (!m_settings || !WasApplied(m_settings->SetAllowIncomingConnections(enabled))) return;
     const auto snapshot = m_settings->Snapshot();
     if (auto service = m_deviceService.lock())
-        service->SetIncomingConnectionsEnabled(snapshot.Data.AllowIncomingConnections);
+        service->ConfigureIncomingConnections(snapshot.Data.AllowIncomingConnections);
 }
 
 void SettingsController::SetStartWithWindows(bool enabled) {

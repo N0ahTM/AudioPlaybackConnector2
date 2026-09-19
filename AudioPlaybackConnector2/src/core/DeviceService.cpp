@@ -654,18 +654,6 @@ DeviceServiceSnapshot DeviceService::Snapshot() const {
     return m_state ? m_state->Snapshot() : DeviceServiceSnapshot{};
 }
 
-void DeviceService::StartDeviceWatcher() {
-    static_cast<void>(Start());
-}
-
-void DeviceService::StopDeviceWatcher() {
-    static_cast<void>(Stop());
-}
-
-void DeviceService::ShutdownForProcessExit() noexcept {
-    Shutdown();
-}
-
 std::vector<std::wstring> DeviceService::SuspendForPowerTransition() {
     auto state = m_state;
     if (!state) return {};
@@ -721,17 +709,6 @@ void DeviceService::ResumeSuspendedSessions(std::vector<std::wstring> deviceIds)
     }));
 }
 
-void DeviceService::SetIncomingConnectionsEnabled(bool enabled) {
-    ConfigureIncomingConnections(enabled);
-}
-
-void DeviceService::ApplyReconnectOnConnectionLossPolicy(bool globallyEnabled,
-                                                         std::span<const std::wstring> individuallyEnabledDeviceIds) {
-    ConfigureReconnectPolicy(
-        globallyEnabled,
-        std::vector<std::wstring>(individuallyEnabledDeviceIds.begin(), individuallyEnabledDeviceIds.end()));
-}
-
 void DeviceService::SetReconnectOnConnectionLoss(std::wstring deviceId, bool enabled) {
     auto const state = m_state;
     if (!state || deviceId.empty()) return;
@@ -767,10 +744,6 @@ winrt::Windows::Foundation::IAsyncAction DeviceService::ConnectAsync(winrt::hstr
     co_await state->AwaitTerminal(std::wstring(deviceId), result.OperationEpoch);
 }
 
-void DeviceService::ConnectDetached(winrt::hstring deviceId) {
-    static_cast<void>(Connect(std::wstring(deviceId)));
-}
-
 winrt::Windows::Foundation::IAsyncAction DeviceService::ReconnectAsync(winrt::hstring deviceId) {
     auto const state = m_state;
     if (!state || deviceId.empty()) co_return;
@@ -790,10 +763,6 @@ winrt::Windows::Foundation::IAsyncAction DeviceService::ReconnectAsync(winrt::hs
     co_await state->AwaitTerminal(std::wstring(deviceId), result.OperationEpoch);
 }
 
-void DeviceService::ReconnectDetached(winrt::hstring deviceId) {
-    static_cast<void>(Reconnect(std::wstring(deviceId)));
-}
-
 winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
 DeviceService::RefreshDevicesAsync() {
     auto const state = m_state;
@@ -808,10 +777,6 @@ std::vector<DeviceSessionSnapshot> DeviceService::GetConnectedDevices() const {
         if (session.State == DeviceLifecycleState::Connected) result.push_back(session);
     }
     return result;
-}
-
-std::vector<DeviceSessionSnapshot> DeviceService::GetConnectionSessions() const {
-    return Snapshot().Sessions;
 }
 
 std::vector<std::wstring> DeviceService::GetPowerTransitionRecoveryDeviceIds() const {

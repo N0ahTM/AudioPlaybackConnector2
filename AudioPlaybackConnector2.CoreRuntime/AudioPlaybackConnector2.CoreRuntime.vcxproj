@@ -147,6 +147,8 @@
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\StartupTaskCoordinator.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\ToastContentBuilder.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\util\Logger.cpp" />
+    <ClCompile Include="..\AudioPlaybackConnector2\src\ui\DiagnosticsLogCollector.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\ui\SettingsDiagnosticsReportBuilder.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
   </ItemGroup>
   <ItemGroup><None Include="packages.config" /></ItemGroup>
   <Target Name="VerifyCoreRuntimeBoundary"

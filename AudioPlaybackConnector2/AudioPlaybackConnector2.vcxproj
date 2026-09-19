@@ -216,13 +216,7 @@
     <ClCompile Include="src\services\TrayController.cpp" />
     <ClCompile Include="src\ui\DevicePickerViewModel.cpp" />
     <ClCompile Include="src\ui\FlyoutPresenterStyle.cpp" />
-    <ClCompile Include="src\ui\DiagnosticsLogCollector.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
     <ClCompile Include="src\ui\SettingsDiagnosticsReport.cpp" />
-    <ClCompile Include="src\ui\SettingsDiagnosticsReportBuilder.cpp">
-      <PrecompiledHeader>NotUsing</PrecompiledHeader>
-    </ClCompile>
     <ClCompile Include="src\ui\SettingsViewModel.cpp" />
     <ClCompile Include="src\ui\TrayIcon.cpp" />
     <ClCompile Include="src\ui\TrayContextMenu.cpp" />

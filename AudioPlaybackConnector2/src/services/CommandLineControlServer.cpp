@@ -1,7 +1,3 @@
-#ifndef APC_COMMAND_PIPE_SERVER_STANDALONE
-#include <pch.h>
-#endif
-
 #include <control/CommandPipeSecurity.hpp>
 #include <services/CommandLineControlServer.hpp>
 #include <util/RuntimeApartment.hpp>

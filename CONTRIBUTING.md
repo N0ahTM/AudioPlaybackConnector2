@@ -103,6 +103,8 @@ pwsh ./scripts/validate-markdown-links.ps1
 pwsh ./scripts/update-cli-reference.ps1 -Check
 ```
 
+The test runner prints a unique temporary application-data directory and sets `LOCALAPPDATA` for its own process before running suites. The real runtime logger writes there; normal application logs remain untouched. These logs are retained for failure diagnosis.
+
 The x64 test executable runs on standard GitHub-hosted Windows runners. CI also cross-compiles the complete ARM64 solution and ARM64 test executable; run that binary on ARM64 Windows when validating architecture-specific behavior.
 
 ## How to Contribute

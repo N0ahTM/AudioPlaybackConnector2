@@ -5,8 +5,6 @@
 #include <windows.h>
 #include <winrt/Windows.ApplicationModel.h>
 
-#include <services/StartupTaskController.hpp>
-
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -346,16 +344,6 @@ void TestShutdownSuppressesLateCompletion() {
 }
 
 } // namespace
-
-void DebugTrace(std::wstring_view) noexcept {}
-
-winrt::Windows::Foundation::IAsyncOperation<bool> StartupTaskController::IsEnabledAsync() {
-    co_return false;
-}
-
-winrt::Windows::Foundation::IAsyncOperation<bool> StartupTaskController::SetEnabledAsync(bool) {
-    co_return false;
-}
 
 int RunStartupTaskCoordinatorTests() {
     TestRefreshPublishesAuthoritativeState();

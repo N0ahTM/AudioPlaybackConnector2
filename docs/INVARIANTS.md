@@ -78,6 +78,11 @@ Installer feed or submit a Store package. Release promotion is a separate operat
 
 ## Native test process
 
+Before invoking any suite the runner isolates `LOCALAPPDATA` in a unique temporary directory for that process.
+Runtime logging uses its production implementation and retains diagnostic files there. Tests do not replace
+`DebugTrace` or the startup controller's methods at link time; coordinator tests inject their backend through the
+same explicit dependency contract used by the runtime.
+
 The shared runner owns a Windows Runtime apartment for the complete suite run. Individual workers still
 initialize their own apartments. A suite must not rely on another suite's temporary apartment keeping WinRT
 factories alive. The shuffled-order regression seed `314159` exposed a stale JSON activation factory after

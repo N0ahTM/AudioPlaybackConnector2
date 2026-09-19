@@ -5,10 +5,18 @@
 #include <charconv>
 #include <cstdint>
 #include <exception>
+#include <filesystem>
+#include <format>
 #include <iostream>
 #include <random>
 #include <string_view>
 #include <system_error>
+
+#include <windows.h>
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Test Suites ///////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 int RunProtocolBoundaryTests();
 int RunAdaptiveResourceDiagnosticsTests();
@@ -44,7 +52,33 @@ struct Suite {
     std::string_view Name;
     int (*Run)();
 };
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Test Environment //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
+bool PrepareTestEnvironment() {
+    std::error_code error;
+    auto directory = std::filesystem::temp_directory_path(error);
+    if (error) {
+        std::cerr << "Unable to locate the temporary test directory: " << error.message() << '\n';
+        return false;
+    }
+    directory /= std::format(L"APC-CoreTests-{}-{}", GetCurrentProcessId(), GetTickCount64());
+    // The real runtime logger resolves LOCALAPPDATA on first use. Isolate its
+    // output before any suite runs and retain logs for post-failure diagnostics.
+    if (!SetEnvironmentVariableW(L"LOCALAPPDATA", directory.c_str())) {
+        std::cerr << "Unable to isolate test application data: " << GetLastError() << '\n';
+        return false;
+    }
+    std::cout << "Test application data: " << directory << '\n';
+    return true;
+}
 } // namespace
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Test Entry Point //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 int main(int argc, char** argv) {
     std::uint32_t seed = 0;
@@ -109,6 +143,7 @@ int main(int argc, char** argv) {
             std::cout << suite.Name << '\n';
         return 0;
     }
+    if (!PrepareTestEnvironment()) return 1;
     // Several suites activate WinRT classes. Keep the process apartment alive across suite boundaries
     // so temporary per-operation apartments cannot unload factories still cached by C++/WinRT.
     util::RuntimeApartment apartment;

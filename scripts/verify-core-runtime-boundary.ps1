@@ -18,11 +18,11 @@ $forbiddenProjectPatterns = @(
 
 $failures = [System.Collections.Generic.List[string]]::new()
 $msbuildQueue = [System.Collections.Generic.Queue[string]]::new()
-$msbuildQueue.Enqueue("$resolvedProject|$projectDirectory")
+$msbuildQueue.Enqueue("$resolvedProject|$projectDirectory|$resolvedProject")
 foreach ($sharedName in @('Directory.Build.props', 'Directory.Build.targets')) {
     $sharedPath = Join-Path $repositoryDirectory $sharedName
     if (Test-Path -LiteralPath $sharedPath -PathType Leaf) {
-        $msbuildQueue.Enqueue("$sharedPath|$projectDirectory")
+        $msbuildQueue.Enqueue("$sharedPath|$projectDirectory|$resolvedProject")
     }
 }
 $visitedMsbuildFiles = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
@@ -68,10 +68,11 @@ function Resolve-LocalMsbuildImport(
 }
 
 while ($msbuildQueue.Count -ne 0) {
-    $queueEntry = $msbuildQueue.Dequeue().Split('|', 2)
+    $queueEntry = $msbuildQueue.Dequeue().Split('|', 3)
     $currentProject = $queueEntry[0]
     $evaluationProjectDirectory = $queueEntry[1]
-    if (-not $visitedMsbuildFiles.Add("$currentProject|$evaluationProjectDirectory")) {
+    $compilingProject = $queueEntry[2]
+    if (-not $visitedMsbuildFiles.Add("$currentProject|$compilingProject")) {
         continue
     }
     $currentDirectory = Split-Path -Parent $currentProject
@@ -124,7 +125,7 @@ while ($msbuildQueue.Count -ne 0) {
                 $failures.Add("project reference does not exist: $referencedProject")
                 continue
             }
-            $msbuildQueue.Enqueue("$referencedProject|$(Split-Path -Parent $referencedProject)")
+            $msbuildQueue.Enqueue("$referencedProject|$(Split-Path -Parent $referencedProject)|$referencedProject")
         } elseif ($dependencyNode.LocalName -eq 'Import') {
             try {
                 $importedFile = Resolve-LocalMsbuildImport $currentDirectory $evaluationProjectDirectory $dependency
@@ -139,7 +140,7 @@ while ($msbuildQueue.Count -ne 0) {
                 continue
             }
             if (Test-Path -LiteralPath $importedFile -PathType Leaf) {
-                $msbuildQueue.Enqueue("$importedFile|$evaluationProjectDirectory")
+                $msbuildQueue.Enqueue("$importedFile|$evaluationProjectDirectory|$compilingProject")
             }
         }
     }
@@ -147,8 +148,7 @@ while ($msbuildQueue.Count -ne 0) {
     $nodes = $project.SelectNodes('//msb:ItemGroup/msb:ClCompile[@Include] | //msb:ItemGroup/msb:ClInclude[@Include]',
         $namespace)
     foreach ($node in $nodes) {
-        # Resolve PCH and quoted headers in the declaring project's include context. In particular,
-        # CoreTests compiles some shared sources with CoreRuntime's PCH, not the GUI project's PCH.
+        # Resolve PCH and quoted headers in the compiling project's include context.
         $includeRoots = [System.Collections.Generic.List[string]]::new()
         $directoryNodes = @($node.SelectNodes('msb:AdditionalIncludeDirectories', $namespace))
         $directoryNodes += @($project.SelectNodes(
@@ -170,6 +170,8 @@ while ($msbuildQueue.Count -ne 0) {
         }
         $declaredFiles.Add([pscustomobject]@{
             Directory = $currentDirectory
+            CompilingProject = $compilingProject
+            IsCompiled = $node.LocalName -eq 'ClCompile'
             EvaluationProjectDirectory = $evaluationProjectDirectory
             Include = $node.GetAttribute('Include')
             IncludeRoots = $includeRoots.ToArray()
@@ -187,6 +189,7 @@ $searchRoots = @(
 $pending = [System.Collections.Generic.Queue[object]]::new()
 $visited = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 
+$sourceOwners = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 foreach ($declaredFile in $declaredFiles) {
     $include = $declaredFile.Include
     if ($include.Contains('*') -or $include.Contains('?')) {
@@ -208,6 +211,14 @@ foreach ($declaredFile in $declaredFiles) {
     if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
         $failures.Add("declared boundary file does not exist: $include")
         continue
+    }
+
+    if ($declaredFile.IsCompiled) {
+        if ($sourceOwners.ContainsKey($candidate)) {
+            $failures.Add("source compiled more than once: $candidate ($($sourceOwners[$candidate]); $($declaredFile.CompilingProject))")
+        } else {
+            $sourceOwners.Add($candidate, $declaredFile.CompilingProject)
+        }
     }
 
     $pending.Enqueue([pscustomobject]@{ Path = $candidate; IncludeRoots = $declaredFile.IncludeRoots })
@@ -248,4 +259,4 @@ if ($failures.Count -ne 0) {
     exit 1
 }
 
-Write-Host "CoreRuntime boundary verified: no WinUI/XAML dependencies."
+Write-Host "CoreRuntime boundary verified: no WinUI/XAML dependencies or duplicate source compilation."

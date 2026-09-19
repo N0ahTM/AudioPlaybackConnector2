@@ -171,6 +171,46 @@ try {
     if ($negativeIncludeExitCode -eq 0 -or ($includeFailure -join ' ') -notmatch 'forbidden\s+XAML\s+dependency') {
         throw "Boundary verifier failed to report a forbidden include (exit $negativeIncludeExitCode): $($includeFailure -join ' ')"
     }
+    $sharedSource = Join-Path $testDirectory 'shared.cpp'
+    $sharedItems = Join-Path $testDirectory 'SharedSources.props'
+    $libraryProject = Join-Path $testDirectory 'Library.vcxproj'
+    $consumerProject = Join-Path $testDirectory 'Consumer.vcxproj'
+    Set-Content -LiteralPath $sharedSource -Value 'int answer() { return 42; }'
+    Set-Content -LiteralPath $sharedItems -Value @'
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup><ClCompile Include="shared.cpp" /></ItemGroup>
+</Project>
+'@
+    Set-Content -LiteralPath $libraryProject -Value @'
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="SharedSources.props" />
+</Project>
+'@
+    Set-Content -LiteralPath $consumerProject -Value @'
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup><ProjectReference Include="Library.vcxproj" /></ItemGroup>
+  <Import Project="SharedSources.props" />
+</Project>
+'@
+    $ErrorActionPreference = 'Continue'
+    $duplicateFailure = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $resolvedVerifier -ProjectPath $consumerProject 2>&1
+    $duplicateExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousErrorPreference
+    if ($duplicateExitCode -eq 0 -or ($duplicateFailure -join ' ') -notmatch 'source\s+compiled\s+more\s+than\s+once') {
+        throw "Boundary verifier missed duplicate compilation through shared imports: $($duplicateFailure -join ' ')"
+    }
+    Set-Content -LiteralPath $consumerProject -Value @'
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ProjectReference Include="Library.vcxproj" />
+    <ClInclude Include="shared.cpp" />
+  </ItemGroup>
+</Project>
+'@
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $resolvedVerifier -ProjectPath $consumerProject *> $null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Boundary verifier rejected a source referenced for browsing but compiled only by the library.'
+    }
 } finally {
     $resolvedTestDirectory = [System.IO.Path]::GetFullPath($testDirectory)
     $temporaryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\')

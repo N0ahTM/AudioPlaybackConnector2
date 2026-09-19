@@ -986,6 +986,7 @@ AppSnapshot AppController::BuildSnapshot(std::vector<DeviceRecord> devices,
     snapshot.Generation = generation;
     snapshot.IsRunning = isRunning;
     snapshot.PrivacyModeEnabled = settings.PrivacyModeEnabled;
+    snapshot.Settings = settings;
     for (auto const& device : devices) {
         if (auto value = ToSnapshot(device)) snapshot.Devices.push_back(std::move(*value));
     }
@@ -1234,6 +1235,86 @@ AppController::OperationResult AppController::PerformDeviceOperation(AppCommandK
         case apc::device::DeviceOperationStatus::Rejected: return {OperationStatus::Failed};
     }
     return {OperationStatus::Failed};
+}
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Settings Actions //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
+template <typename Mutation> SettingsMutationResult AppController::MutateSettings(Mutation&& mutation) const noexcept {
+    CallLease lease(*this);
+    if (!lease.Acquired()) return {SettingsMutationStatus::Rejected, 0};
+    try {
+        return mutation();
+    } catch (...) {
+        return {SettingsMutationStatus::Rejected, 0};
+    }
+}
+
+SettingsMutationResult AppController::SetGlobalConnectOnStartup(bool enabled) const {
+    return MutateSettings([&] { return m_settings->SetGlobalConnectOnStartup(enabled); });
+}
+
+SettingsMutationResult AppController::SetGlobalReconnectOnConnectionLoss(bool enabled) const {
+    return MutateSettings([&] { return m_settings->SetGlobalReconnectOnConnectionLoss(enabled); });
+}
+
+SettingsMutationResult AppController::SetAllowIncomingConnections(bool enabled) const {
+    return MutateSettings([&] { return m_settings->SetAllowIncomingConnections(enabled); });
+}
+
+SettingsMutationResult AppController::SetShowNotifications(bool enabled) const {
+    return MutateSettings([&] { return m_settings->SetShowNotifications(enabled); });
+}
+
+SettingsMutationResult AppController::SetSystemBackdropEffects(bool enabled) const {
+    return MutateSettings([&] { return m_settings->SetUseSystemBackdropEffects(enabled); });
+}
+
+SettingsMutationResult AppController::SetPrivacyMode(bool enabled) const {
+    return MutateSettings([&] { return m_settings->SetPrivacyModeEnabled(enabled); });
+}
+
+SettingsMutationResult AppController::SetLanguage(std::wstring language) const {
+    if (language.empty()) language = L"system";
+    return MutateSettings([&] { return m_settings->SetLanguage(language); });
+}
+
+SettingsMutationResult AppController::SetSettingsWindowBounds(PersistedWindowBounds bounds) const {
+    return MutateSettings([&] { return m_settings->SetSettingsWindowBounds(bounds); });
+}
+
+SettingsMutationResult AppController::ClearSettingsWindowBounds() const {
+    return MutateSettings([&] { return m_settings->SetSettingsWindowBounds(std::nullopt); });
+}
+
+SettingsMutationResult AppController::SetDeviceConnectOnStartup(std::wstring const& id, bool enabled) const {
+    return MutateSettings([&] {
+        if (!RememberKnownDevice(id)) return SettingsMutationResult{SettingsMutationStatus::Rejected, 0};
+        return m_settings->SetDeviceConnectOnStartup(id, enabled);
+    });
+}
+
+SettingsMutationResult AppController::SetDeviceReconnectOnConnectionLoss(std::wstring const& id, bool enabled) const {
+    return MutateSettings([&] {
+        if (!RememberKnownDevice(id)) return SettingsMutationResult{SettingsMutationStatus::Rejected, 0};
+        return m_settings->SetDeviceReconnectOnConnectionLoss(id, enabled);
+    });
+}
+
+SettingsMutationResult AppController::ForgetDevice(std::wstring const& id) const {
+    return MutateSettings([&] { return m_settings->ForgetDevice(id); });
+}
+bool AppController::RememberKnownDevice(std::wstring const& id) const {
+    if (!apc::core::DeviceId::TryCreate(id)) return false;
+    auto settings = m_settings->Snapshot();
+    if (std::ranges::find(settings.Data.Devices, id, &DeviceSettings::Id) != settings.Data.Devices.end()) return true;
+    auto devices = m_devices->Snapshot();
+    auto found = std::ranges::find(devices.Inventory.Devices, id, &apc::device_picker::DeviceIdentity::Id);
+    if (found == devices.Inventory.Devices.end()) return false;
+    auto result =
+        m_settings->RememberDevice(id, apc::limits::TruncateUtf16(found->Name, apc::limits::c_maxDeviceNameCharacters));
+    return result.Status != SettingsMutationStatus::Rejected;
 }
 
 } // namespace apc::app

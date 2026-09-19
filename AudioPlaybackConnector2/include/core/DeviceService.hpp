@@ -71,6 +71,14 @@ struct DeviceServiceDependencies {
     std::unique_ptr<DeviceTimerPlatform> TimerPlatform;
 };
 
+struct DeviceSettingsPolicy {
+    std::uint64_t Revision = 0;
+    bool AllowIncomingConnections = false;
+    bool GlobalReconnectOnConnectionLoss = false;
+    std::vector<std::wstring> ReconnectDeviceIds;
+    std::stop_token StopToken;
+};
+
 // DeviceService owns the only session map and its concrete serialized context. The fact subscriber is invoked on
 // that context after each mutation, without holding the context queue lock.
 class DeviceService {
@@ -96,6 +104,7 @@ public:
     [[nodiscard]] DeviceCommandResult DisconnectAll();
     [[nodiscard]] DeviceCommandResult ReconnectAll();
     void ConfigureIncomingConnections(bool enabled);
+    void ApplySettingsPolicy(DeviceSettingsPolicy policy);
     void ConfigureReconnectPolicy(bool globallyEnabled, std::vector<std::wstring> enabledDeviceIds);
     void ConnectStartupTargets(std::vector<std::wstring> deviceIds);
     void Suspend();

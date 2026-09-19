@@ -291,9 +291,47 @@ void TestOlderCaptureCannotReuseANewerGenerationForStaleState() {
           "a delayed reader must recapture current owners instead of stamping stale values with a newer generation");
 }
 
+void TestSettingsActionsShareTheStoreAndDevicePolicy() {
+    AppFixture fixture;
+    (void)fixture.Service->Start();
+    fixture.Devices->WatcherAccess->LastWatcher->Add(L"target", L"Target");
+    Check(fixture.Controller.SetDeviceConnectOnStartup(L"target", true).IsApplied() &&
+              fixture.Controller.SetDeviceReconnectOnConnectionLoss(L"target", true).IsApplied(),
+          "per-device actions must remember an observed device and commit its settings through the store");
+    apc::tests::device::ConnectSuccessfully(*fixture.Devices, L"target");
+    auto session = fixture.Service->Snapshot().Sessions.front();
+    Check(session.IsReconnectEnabled, "a connection must inherit its committed per-device reconnect policy");
+    Check(fixture.Controller.SetDeviceReconnectOnConnectionLoss(L"target", false).IsApplied() &&
+              !fixture.Service->Snapshot().Sessions.front().IsReconnectEnabled,
+          "disabling the persisted device policy must reach the serialized session owner");
+    Check(fixture.Controller.SetGlobalReconnectOnConnectionLoss(true).IsApplied() &&
+              fixture.Service->Snapshot().Sessions.front().IsReconnectEnabled,
+          "global reconnect must update existing sessions from the same revisioned policy");
+    Check(fixture.Controller.SetGlobalConnectOnStartup(true).IsApplied() &&
+              fixture.Controller.SetShowNotifications(false).IsApplied() &&
+              fixture.Controller.SetPrivacyMode(true).IsApplied() &&
+              fixture.Controller.SetSystemBackdropEffects(false).IsApplied() &&
+              fixture.Controller.SetLanguage(L"de").IsApplied(),
+          "general settings must expose committed mutation results through the application endpoint");
+    auto snapshot = fixture.Controller.Snapshot();
+    Check(snapshot.Settings == fixture.Settings->Snapshot().Data &&
+              snapshot.SettingsRevision == fixture.Settings->Snapshot().Revision,
+          "the application snapshot must contain the settings value from its validated capture");
+    auto const revision = fixture.Settings->Snapshot().Revision;
+    fixture.Controller.Shutdown();
+    Check(fixture.Controller.SetShowNotifications(true).Status == SettingsMutationStatus::Rejected &&
+              fixture.Controller.ForgetDevice(L"target").Status == SettingsMutationStatus::Rejected &&
+              fixture.Settings->Snapshot().Revision == revision,
+          "settings and device settings actions must reject admission after application shutdown");
+    (void)fixture.Settings->SetGlobalReconnectOnConnectionLoss(false);
+    Check(fixture.Service->Snapshot().Sessions.front().IsReconnectEnabled,
+          "a detached source notification must not reconfigure devices after controller shutdown");
+}
+
 } // namespace
 
 int RunAppControllerUseCasesTests() {
+    TestSettingsActionsShareTheStoreAndDevicePolicy();
     TestQueriesReconcileAllProjectedFieldsAfterOwnerChanges();
     TestSnapshotGenerationTracksOwnersAndPickerWithoutCommands();
     TestUnstableQueryCannotReportSuccessWithPartialState();

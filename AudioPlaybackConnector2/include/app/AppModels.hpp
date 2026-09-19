@@ -1,6 +1,7 @@
 #pragma once
 
 #include <core/DeviceId.hpp>
+#include <core/SettingsData.hpp>
 
 #include <chrono>
 #include <cstddef>
@@ -302,6 +303,7 @@ struct AppSnapshot {
         friend bool operator==(ResourceStatusSnapshot const&, ResourceStatusSnapshot const&) = default;
     } AdaptiveResources;
     // Versions of the concrete owners from the successful capture.
+    SettingsData Settings;
     std::uint64_t SettingsRevision = 0;
     std::uint64_t DeviceGeneration = 0;
 
@@ -388,6 +390,8 @@ struct DeviceInventoryChangedEvent {
 
 struct SettingsChangedEvent {
     std::uint64_t SettingsRevision = 0;
+    std::wstring Language;
+    bool UseSystemBackdropEffects = true;
     friend bool operator==(SettingsChangedEvent const&, SettingsChangedEvent const&) = default;
 };
 

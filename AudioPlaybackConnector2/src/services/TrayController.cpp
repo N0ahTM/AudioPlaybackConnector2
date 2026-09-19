@@ -94,9 +94,7 @@ void TrayController::SetSettingsStore(std::shared_ptr<SettingsStore> settingsSto
     }
 }
 
-void TrayController::SetDeviceSettings(std::shared_ptr<ISettingsController> controller,
-                                       std::weak_ptr<apc::app::AppController> appController) {
-    m_settingsController = std::move(controller);
+void TrayController::SetAppController(std::weak_ptr<apc::app::AppController> appController) {
     m_appController = std::move(appController);
 }
 
@@ -180,7 +178,6 @@ void TrayController::Teardown() noexcept try {
     m_showHelpCallback = nullptr;
     m_openSettingsAfterPickerClosed = false;
     m_appController.reset();
-    m_settingsController.reset();
     m_showDevicePickerCallback = nullptr;
     m_exitCallback = nullptr;
     m_connectCallback = nullptr;
@@ -706,7 +703,7 @@ bool TrayController::EnsureDevicePickerViewCreated() noexcept {
                 DebugTrace(L"[TrayController] User reconnected all devices");
                 if (self->m_reconnectAllCallback) self->m_reconnectAllCallback();
             });
-        impl->SetDeviceSettings(m_settingsController, m_appController, [weak] {
+        impl->SetAppController(m_appController, [weak] {
             if (auto self = weak.lock(); self && !self->m_isTearingDown.load()) {
                 self->ShowSettingsAfterPickerClosed();
             }

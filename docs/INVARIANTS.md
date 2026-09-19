@@ -85,6 +85,20 @@ reconnect entry, typed platform failure and callbacks after controller destructi
 
 ## Settings persistence
 
+Settings UI mutations enter through named `AppController` methods and return the store's typed mutation result.
+The application snapshot includes the settings value from its validated owner capture. There is no separate
+settings controller or presentation callback slot. The shared settings event carries the language/backdrop
+presentation inputs; the host applies these on its UI context. The host closes the settings window and commits
+its final placement before closing application admission, then drains commands before shutting down the store.
+
+The application subscribes once to settings changes and submits the complete incoming/reconnect policy to
+`DeviceService`. The device context applies only a newer settings revision. It stages the per-device set before
+committing the version and flags, and does not republish session changes for semantically unchanged policy.
+Submission never waits behind a foreign device observer. Controller shutdown cancels queued policy through an
+owned stop token; the device context checks that token before admission. No owner mutex is held while calling
+another component. Tests cover out-of-order revisions, duplicates, no-op policy, per-device overrides, blocked
+delivery, cancelled queued work and settings actions after shutdown.
+
 `SettingsStore` owns the current immutable `SettingsData` reference, revision and persisted revision. Changes stage
 a private mutable candidate, allocate its immutable representation, and stage subscriber publication before the
 no-throw commit. Allocation failure during staging cannot publish a partial revision. Storage never runs under an

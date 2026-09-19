@@ -45,9 +45,7 @@ struct DevicePickerView : DevicePickerViewT<DevicePickerView> {
     void ApplyLanguage();
     [[nodiscard]] bool InvalidateDeviceInventory();
     void SetPresentationActive(bool active) noexcept;
-    void SetDeviceSettings(std::shared_ptr<ISettingsController> controller,
-                           std::weak_ptr<apc::app::AppController> appController,
-                           std::function<void()> showSettings);
+    void SetAppController(std::weak_ptr<apc::app::AppController> appController, std::function<void()> showSettings);
 
 private:
     void OnCloseClicked(winrt::Windows::Foundation::IInspectable const&,

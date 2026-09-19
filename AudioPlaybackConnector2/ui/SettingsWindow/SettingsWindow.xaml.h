@@ -2,7 +2,7 @@
 
 #include <SettingsWindow.g.h>
 #include <app/StartupTaskCoordinator.hpp>
-#include <services/SettingsController.hpp>
+#include <app/AppController.hpp>
 #include <ui/SettingsDiagnosticsReport.hpp>
 #include <ui/WindowPlacement.hpp>
 
@@ -42,7 +42,7 @@ struct SettingsWindow : SettingsWindowT<SettingsWindow> {
                                          winrt::Microsoft::UI::Xaml::SizeChangedEventArgs const& e);
     void LanguageComboBox_SelectionChanged(winrt::Windows::Foundation::IInspectable const& sender,
                                            winrt::Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const& e);
-    void SetSettingsController(std::shared_ptr<ISettingsController> controller);
+    void SetAppController(std::shared_ptr<apc::app::AppController> controller);
     void SetStartupTaskCoordinator(std::shared_ptr<StartupTaskCoordinator> coordinator);
     void SetInitialSettingsSnapshot(SettingsData snapshot);
     void SetDefaultPlacement(util::SettingsWindowPlacement placement);
@@ -98,7 +98,7 @@ private:
     std::uint64_t m_lastStartupTaskPublication = 0;
     std::uint64_t m_diagnosticsCopyRequestId = 0;
     bool m_diagnosticsCopyInProgress = false;
-    std::shared_ptr<ISettingsController> m_settingsController;
+    std::shared_ptr<apc::app::AppController> m_appController;
     std::shared_ptr<StartupTaskCoordinator> m_startupTaskCoordinator;
     StartupTaskCoordinator::HandlerToken m_startupTaskHandlerToken = 0;
     std::optional<SettingsData> m_initialSettingsSnapshot;

@@ -182,6 +182,9 @@ bool ApplicationHost::PerformTeardown(SettingsShutdownMode settingsShutdownMode)
     // handler may be waiting for this UI thread to process show/settings work;
     // Stop() still drains the server after the controller has rejected new work.
     m_commandLineControlServer.RequestStop();
+    // Persist the window's final placement before closing application admission.
+    auto const settingsWindowClosed = m_settingsWindowPresenter.Close();
+    m_teardownWindowCloseSucceeded.store(settingsWindowClosed);
     if (m_appController) {
         m_appController->Shutdown();
     }
@@ -222,10 +225,6 @@ bool ApplicationHost::PerformTeardown(SettingsShutdownMode settingsShutdownMode)
         m_mainWindowLoadedToken = {};
     }
     m_powerTransitionCoordinator.Cancel();
-    // Close the settings window while its controller and Store are still alive so
-    // the final placement mutation can be committed before Store shutdown.
-    auto const settingsWindowClosed = m_settingsWindowPresenter.Close();
-    m_teardownWindowCloseSucceeded.store(settingsWindowClosed);
     if (m_startupTaskCoordinator) {
         m_startupTaskCoordinator->Shutdown();
     }
@@ -267,7 +266,6 @@ bool ApplicationHost::PerformTeardown(SettingsShutdownMode settingsShutdownMode)
         Gdiplus::GdiplusShutdown(m_gdiplusToken);
         m_gdiplusToken = 0;
     }
-    m_settingsController.reset();
     if (m_settingsStore) {
         const auto settingsShutdown = m_settingsStore->Shutdown(settingsShutdownMode, 3);
         if (!settingsShutdown) {
@@ -418,14 +416,6 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept tr
     InitializeAdaptiveResources();
     InitializeNotifications();
     SetupDeviceEvents();
-    const auto incomingSettingsSnapshot = m_settingsStore->Snapshot();
-    m_deviceService->ConfigureIncomingConnections(incomingSettingsSnapshot.Data.AllowIncomingConnections);
-    std::vector<std::wstring> individuallyEnabledReconnectIds;
-    for (auto const& device : incomingSettingsSnapshot.Data.Devices) {
-        if (device.ReconnectOnConnectionLoss) individuallyEnabledReconnectIds.push_back(device.Id);
-    }
-    m_deviceService->ConfigureReconnectPolicy(incomingSettingsSnapshot.Data.GlobalReconnectOnConnectionLoss,
-                                              individuallyEnabledReconnectIds);
     static_cast<void>(m_deviceService->Start());
     DebugTrace(L"[App] Device watcher started");
     InitializeCommandLineControl();
@@ -478,24 +468,8 @@ void ApplicationHost::InitializeTray() {
     m_trayController->SetDeviceService(m_deviceService);
     m_trayController->SetSettingsStore(m_settingsStore);
     auto weak = weak_from_this();
-    m_trayController->SetDeviceSettings(m_settingsController, m_appController);
-    if (m_settingsController) {
-        m_settingsController->SetPresentationChangedCallback([weak](ISettingsController::PresentationChangeKind kind) {
-            auto self = weak.lock();
-            if (!self || self->m_exiting.load()) return;
-            if (kind == ISettingsController::PresentationChangeKind::Language && self->m_trayController) {
-                self->m_trayController->ApplyLanguage();
-                return;
-            }
-            if (kind == ISettingsController::PresentationChangeKind::Appearance && self->m_trayController &&
-                self->m_settingsStore) {
-                const auto settingsSnapshot = self->m_settingsStore->Snapshot();
-                self->m_trayController->SetSystemBackdropEffectsEnabled(settingsSnapshot.Data.UseSystemBackdropEffects);
-                return;
-            }
-            self->ScheduleDeviceVisualRefresh(false);
-        });
-    }
+    m_trayController->SetAppController(m_appController);
+
     m_trayController->SetHelpCallback([weak] {
         if (auto self = weak.lock(); self && !self->m_exiting.load() && self->m_appController) {
             auto result = self->m_appController->ShowSettings();
@@ -586,10 +560,9 @@ void ApplicationHost::InitializeDeviceService() {
     DebugTrace(L"[App] InitializeDeviceService()");
     m_deviceService = std::make_shared<apc::device::DeviceService>();
     auto weak = weak_from_this();
-    m_settingsController = std::make_shared<SettingsController>(m_settingsStore, m_deviceService);
-    auto weakSettingsController = std::weak_ptr<ISettingsController>(m_settingsController);
-    m_startupTaskCoordinator = std::make_shared<StartupTaskCoordinator>([weakSettingsController](bool enabled) {
-        if (auto controller = weakSettingsController.lock()) controller->SetStartWithWindows(enabled);
+    auto weakSettings = std::weak_ptr<SettingsStore>(m_settingsStore);
+    m_startupTaskCoordinator = std::make_shared<StartupTaskCoordinator>([weakSettings](bool enabled) {
+        if (auto settings = weakSettings.lock()) (void)settings->SetStartWithWindows(enabled);
     });
     DebugTrace(L"[App] DeviceService initialized");
 }
@@ -1343,6 +1316,8 @@ void ApplicationHost::SetupDeviceEvents() {
         });
     if (!observation.Updates) throw winrt::hresult_error(E_UNEXPECTED, L"Application observation unavailable");
     m_lastAppEventRevision = observation.Revision;
+    m_appliedLanguage = observation.Snapshot.Settings.Language;
+    m_appliedBackdrop = observation.Snapshot.Settings.UseSystemBackdropEffects;
     m_appEventSubscription = std::move(observation.Updates);
     ScheduleDeviceVisualRefresh(false, true);
 }
@@ -1386,6 +1361,16 @@ void ApplicationHost::HandleAppEvent(apc::app::AppController::EventNotification 
             } else if constexpr (std::is_same_v<T, DeviceActivityChangedEvent>) {
                 ScheduleDeviceVisualRefresh(false);
             } else if constexpr (std::is_same_v<T, SettingsChangedEvent>) {
+                if (m_appliedLanguage != event.Language) {
+                    m_appliedLanguage = event.Language;
+                    StringResources::Instance().Initialize(GetModuleHandleW(nullptr), event.Language);
+                    if (m_trayController) m_trayController->ApplyLanguage();
+                }
+                if (m_appliedBackdrop != event.UseSystemBackdropEffects) {
+                    m_appliedBackdrop = event.UseSystemBackdropEffects;
+                    if (m_trayController)
+                        m_trayController->SetSystemBackdropEffectsEnabled(event.UseSystemBackdropEffects);
+                }
                 ScheduleDeviceVisualRefresh(false, true);
             }
         },
@@ -1395,7 +1380,7 @@ void ApplicationHost::HandleAppEvent(apc::app::AppController::EventNotification 
 bool ApplicationHost::ShowSettingsWindow() {
     if (m_exiting.load()) return false;
     DebugTrace(L"[App] ShowSettingsWindow()");
-    return m_settingsWindowPresenter.Show(m_settingsController, m_startupTaskCoordinator, m_trayController);
+    return m_settingsWindowPresenter.Show(m_appController, m_startupTaskCoordinator, m_trayController);
 }
 
 void ApplicationHost::ExitApplication() noexcept {

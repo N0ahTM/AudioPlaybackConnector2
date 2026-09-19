@@ -50,8 +50,7 @@ public:
     void Initialize(HWND hwnd, winrt::Microsoft::UI::Xaml::Window mainWindow);
     void SetDeviceService(std::shared_ptr<apc::device::DeviceService> deviceService);
     void SetSettingsStore(std::shared_ptr<SettingsStore> settingsStore);
-    void SetDeviceSettings(std::shared_ptr<ISettingsController> controller,
-                           std::weak_ptr<apc::app::AppController> appController);
+    void SetAppController(std::weak_ptr<apc::app::AppController> appController);
     void PreloadDevicePicker() noexcept;
     void ReleaseDevicePicker() noexcept;
     void Teardown() noexcept;
@@ -122,7 +121,7 @@ private:
     winrt::Microsoft::UI::Xaml::Window m_mainWindow{nullptr};
     std::shared_ptr<apc::device::DeviceService> m_deviceService;
     std::shared_ptr<SettingsStore> m_settingsStore;
-    std::shared_ptr<ISettingsController> m_settingsController;
+
     std::weak_ptr<apc::app::AppController> m_appController;
 
     std::unique_ptr<TrayIcon> m_trayIcon;

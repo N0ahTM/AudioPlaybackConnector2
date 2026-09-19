@@ -412,7 +412,7 @@ void SettingsWindow::StopPlacementSaveTimer() noexcept {
 bool SettingsWindow::StoreCurrentPlacement() {
     if (!m_capturePlacementChanges) return false;
 
-    auto controller = m_settingsController;
+    auto controller = m_appController;
     if (!controller) return false;
 
     auto hwnd = util::GetWindowHandle(*this);
@@ -429,11 +429,13 @@ bool SettingsWindow::StoreCurrentPlacement() {
     auto dpi = GetDpiForWindow(hwnd);
     if (dpi == 0) dpi = USER_DEFAULT_SCREEN_DPI;
 
-    return controller->SetSettingsWindowBounds(PersistedWindowBounds{static_cast<int32_t>(rect.left),
-                                                                     static_cast<int32_t>(rect.top),
-                                                                     static_cast<int32_t>(width),
-                                                                     static_cast<int32_t>(height),
-                                                                     dpi});
+    return controller
+        ->SetSettingsWindowBounds(PersistedWindowBounds{static_cast<int32_t>(rect.left),
+                                                        static_cast<int32_t>(rect.top),
+                                                        static_cast<int32_t>(width),
+                                                        static_cast<int32_t>(height),
+                                                        dpi})
+        .IsApplied();
 }
 
 void SettingsWindow::StartWithWindowsToggle_Toggled(IInspectable const& sender, RoutedEventArgs const&) {
@@ -469,9 +471,10 @@ void SettingsWindow::OpenLogFolderButton_Click(IInspectable const&, RoutedEventA
 void SettingsWindow::CopyDiagnosticsButton_Click(IInspectable const&, RoutedEventArgs const&) {
     if (m_diagnosticsCopyInProgress) return;
     try {
-        auto controller = m_settingsController;
-        auto snapshot = controller ? controller->Snapshot() : SettingsData{};
-        auto connectedCount = controller ? controller->ConnectedDeviceCount() : 0;
+        auto controller = m_appController;
+        auto application = controller ? controller->Snapshot() : apc::app::AppSnapshot{};
+        auto snapshot = std::move(application.Settings);
+        auto connectedCount = application.Tray.ConnectedDevices.size();
         auto context = apc::ui::CaptureSettingsDiagnosticsReportContext(BuildVersionText());
         auto logPath = util::GetCachedLogPath();
         auto requestId = ++m_diagnosticsCopyRequestId;
@@ -527,7 +530,7 @@ void SettingsWindow::LanguageComboBox_SelectionChanged(IInspectable const&, Sele
     if (!selected) return;
 
     auto language = winrt::unbox_value_or<winrt::hstring>(selected.Tag(), L"system");
-    if (auto controller = m_settingsController) {
+    if (auto controller = m_appController) {
         controller->SetLanguage(std::wstring(language));
     }
     LocalizeSettingsText();
@@ -539,7 +542,7 @@ void SettingsWindow::ResetWindowPlacement() {
     StopPlacementSaveTimer();
     m_capturePlacementChanges = false;
 
-    if (auto controller = m_settingsController) {
+    if (auto controller = m_appController) {
         static_cast<void>(controller->ClearSettingsWindowBounds());
     }
 
@@ -628,10 +631,10 @@ void SettingsWindow::InitializeSettingsContent() {
     if (m_contentInitialized) return;
     m_contentInitialized = true;
 
-    auto controller = m_settingsController;
+    auto controller = m_appController;
     if (!controller) return;
 
-    auto settings = m_initialSettingsSnapshot ? std::move(*m_initialSettingsSnapshot) : controller->Snapshot();
+    auto settings = m_initialSettingsSnapshot ? std::move(*m_initialSettingsSnapshot) : controller->Snapshot().Settings;
     m_initialSettingsSnapshot.reset();
     ConnectOnStartupToggle().IsOn(settings.GlobalConnectOnStartup);
     ReconnectOnConnectionLossToggle().IsOn(settings.GlobalReconnectOnConnectionLoss);
@@ -649,32 +652,32 @@ void SettingsWindow::InitializeSettingsContent() {
     auto weak = get_weak();
     ConnectOnStartupToggle().Toggled([weak](auto const& s, auto) {
         if (auto self = weak.get()) {
-            if (auto settingsController = self->m_settingsController) {
-                settingsController->SetGlobalConnectOnStartup(s.template as<ToggleSwitch>().IsOn());
+            if (auto appController = self->m_appController) {
+                appController->SetGlobalConnectOnStartup(s.template as<ToggleSwitch>().IsOn());
             }
         }
     });
 
     ReconnectOnConnectionLossToggle().Toggled([weak](auto const& s, auto) {
         if (auto self = weak.get()) {
-            if (auto settingsController = self->m_settingsController) {
-                settingsController->SetGlobalReconnectOnConnectionLoss(s.template as<ToggleSwitch>().IsOn());
+            if (auto appController = self->m_appController) {
+                appController->SetGlobalReconnectOnConnectionLoss(s.template as<ToggleSwitch>().IsOn());
             }
         }
     });
 
     AllowIncomingConnectionsToggle().Toggled([weak](auto const& s, auto) {
         if (auto self = weak.get()) {
-            if (auto settingsController = self->m_settingsController) {
-                settingsController->SetAllowIncomingConnections(s.template as<ToggleSwitch>().IsOn());
+            if (auto appController = self->m_appController) {
+                appController->SetAllowIncomingConnections(s.template as<ToggleSwitch>().IsOn());
             }
         }
     });
 
     PrivacyModeToggle().Toggled([weak](auto const& s, auto) {
         if (auto self = weak.get()) {
-            if (auto settingsController = self->m_settingsController) {
-                settingsController->SetPrivacyMode(s.template as<ToggleSwitch>().IsOn());
+            if (auto appController = self->m_appController) {
+                appController->SetPrivacyMode(s.template as<ToggleSwitch>().IsOn());
             }
         }
     });
@@ -720,8 +723,8 @@ void SettingsWindow::InitializeSettingsContent() {
 
     ShowNotificationsToggle().Toggled([weak](auto const& s, auto) {
         if (auto self = weak.get()) {
-            if (auto settingsController = self->m_settingsController) {
-                settingsController->SetShowNotifications(s.template as<ToggleSwitch>().IsOn());
+            if (auto appController = self->m_appController) {
+                appController->SetShowNotifications(s.template as<ToggleSwitch>().IsOn());
             }
         }
     });
@@ -730,8 +733,8 @@ void SettingsWindow::InitializeSettingsContent() {
         if (auto self = weak.get()) {
             auto enabled = s.template as<ToggleSwitch>().IsOn();
             self->ApplySystemBackdropEffects(enabled);
-            if (auto settingsController = self->m_settingsController) {
-                settingsController->SetSystemBackdropEffects(enabled);
+            if (auto appController = self->m_appController) {
+                appController->SetSystemBackdropEffects(enabled);
             }
         }
     });
@@ -957,8 +960,8 @@ winrt::fire_and_forget SettingsWindow::CopyDiagnosticsAsync(winrt::weak_ref<Sett
 /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-void SettingsWindow::SetSettingsController(std::shared_ptr<ISettingsController> controller) {
-    m_settingsController = std::move(controller);
+void SettingsWindow::SetAppController(std::shared_ptr<apc::app::AppController> controller) {
+    m_appController = std::move(controller);
 }
 
 void SettingsWindow::SetStartupTaskCoordinator(std::shared_ptr<StartupTaskCoordinator> coordinator) {

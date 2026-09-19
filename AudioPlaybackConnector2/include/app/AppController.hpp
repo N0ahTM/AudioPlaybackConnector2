@@ -74,6 +74,23 @@ public:
     AppController(AppController&&) = delete;
     AppController& operator=(AppController&&) = delete;
 
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Settings Actions //////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
+
+    SettingsMutationResult SetGlobalConnectOnStartup(bool enabled) const;
+    SettingsMutationResult SetGlobalReconnectOnConnectionLoss(bool enabled) const;
+    SettingsMutationResult SetAllowIncomingConnections(bool enabled) const;
+    SettingsMutationResult SetShowNotifications(bool enabled) const;
+    SettingsMutationResult SetSystemBackdropEffects(bool enabled) const;
+    SettingsMutationResult SetPrivacyMode(bool enabled) const;
+    SettingsMutationResult SetLanguage(std::wstring language) const;
+    SettingsMutationResult SetSettingsWindowBounds(PersistedWindowBounds bounds) const;
+    SettingsMutationResult ClearSettingsWindowBounds() const;
+    SettingsMutationResult SetDeviceConnectOnStartup(std::wstring const& id, bool enabled) const;
+    SettingsMutationResult SetDeviceReconnectOnConnectionLoss(std::wstring const& id, bool enabled) const;
+    SettingsMutationResult ForgetDevice(std::wstring const& id) const;
+
     [[nodiscard]] AppSnapshot Snapshot() const noexcept;
     // Snapshot capture and registration share an event-revision fence. A callback
     // can run before return; consumers serialize applying the initial value and
@@ -139,6 +156,10 @@ private:
                                        DeviceSelector const& target,
                                        std::wstring_view alias,
                                        AppCommandContext context) const;
+
+    template <typename Mutation> SettingsMutationResult MutateSettings(Mutation&& mutation) const noexcept;
+    bool RememberKnownDevice(std::wstring const& id) const;
+
     static constexpr auto c_refreshTimeout = std::chrono::milliseconds{2500};
     using OperationStatus = AppActionStatus;
     struct OperationResult {

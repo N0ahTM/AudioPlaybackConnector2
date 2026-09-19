@@ -87,6 +87,7 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
     bool IsShutdown = false;
     bool IsIncomingEnabled = false;
     bool IsGlobalReconnectEnabled = true;
+    std::optional<std::uint64_t> SettingsPolicyRevision;
 
     void Initialize() {
         if (!ConnectionPlatform) ConnectionPlatform = CreateWindowsDeviceConnectionPlatform();
@@ -628,6 +629,38 @@ void DeviceService::ConfigureIncomingConnections(bool enabled) {
             }
         }
     }));
+}
+
+void DeviceService::ApplySettingsPolicy(DeviceSettingsPolicy policy) {
+    auto state = m_state;
+    if (!state) return;
+    static_cast<void>(state->Post(
+        [state, policy = std::move(policy)] {
+            if (state->IsShutdown || policy.StopToken.stop_requested() ||
+                (state->SettingsPolicyRevision && policy.Revision <= *state->SettingsPolicyRevision))
+                return;
+            std::unordered_set<std::wstring> reconnectIds(policy.ReconnectDeviceIds.begin(),
+                                                          policy.ReconnectDeviceIds.end());
+            const bool reconnectChanged = state->IsGlobalReconnectEnabled != policy.GlobalReconnectOnConnectionLoss ||
+                                          state->IndividuallyReconnectEnabled != reconnectIds;
+            const bool incomingChanged = state->IsIncomingEnabled != policy.AllowIncomingConnections;
+            state->SettingsPolicyRevision = policy.Revision;
+            state->IsGlobalReconnectEnabled = policy.GlobalReconnectOnConnectionLoss;
+            state->IndividuallyReconnectEnabled.swap(reconnectIds);
+            state->IsIncomingEnabled = policy.AllowIncomingConnections;
+            for (auto const& [id, session] : state->Sessions) {
+                if (reconnectChanged)
+                    session->SetReconnectEnabled(state->IsGlobalReconnectEnabled ||
+                                                 state->IndividuallyReconnectEnabled.contains(id));
+                if (incomingChanged) session->SetIncomingEnabled(state->IsIncomingEnabled);
+            }
+            if (incomingChanged && state->IsIncomingEnabled && state->Watcher) {
+                auto const inventory = state->Watcher->Snapshot();
+                for (auto const& device : inventory.Devices)
+                    (void)state->GetOrCreateSession(device.Id);
+            }
+        },
+        false));
 }
 
 void DeviceService::ConfigureReconnectPolicy(bool globallyEnabled, std::vector<std::wstring> enabledDeviceIds) {

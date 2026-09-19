@@ -135,8 +135,9 @@ void TestCancellationDoesNotWaitBehindBlockedPublisher() {
 void TestControllerOwnsDeviceFactNormalization() {
     auto fixture = std::make_shared<Fixture>();
     std::vector<apc::app::AppController::EventNotification> events;
-    apc::app::AppController controller(apc::tests::MakeTestSettings(),
-                                       std::shared_ptr<DeviceService>(fixture, &fixture->Service));
+    auto settings = apc::tests::MakeTestSettings();
+    (void)settings->SetGlobalReconnectOnConnectionLoss(true);
+    apc::app::AppController controller(settings, std::shared_ptr<DeviceService>(fixture, &fixture->Service));
     auto subscription = controller.Subscribe([&](auto const& event) { events.push_back(event); });
     const auto longId = std::wstring(513, L'd');
     ConnectSuccessfully(*fixture, longId);
@@ -1651,9 +1652,61 @@ void TestOperationFailuresRemainOperationFailuresWithoutDisconnectReason() {
           "connection setup failures must retain the operation-error fact category");
 }
 
+void TestSettingsPolicyRejectsOldDuplicateAndCancelledRevisions() {
+    Fixture fixture;
+    ConnectSuccessfully(fixture, L"policy");
+    fixture.Service.ApplySettingsPolicy({10, false, false, {}, {}});
+    Check(!fixture.Service.Snapshot().Sessions.front().IsReconnectEnabled,
+          "the first settings policy must replace the session's initial reconnect policy");
+    auto const generation = fixture.Service.Snapshot().Generation;
+    fixture.Service.ApplySettingsPolicy({9, true, true, {}, {}});
+    fixture.Service.ApplySettingsPolicy({10, true, true, {}, {}});
+    fixture.Service.ApplySettingsPolicy({11, false, false, {}, {}});
+    Check(fixture.Service.Snapshot().Generation == generation &&
+              !fixture.Service.Snapshot().Sessions.front().IsIncomingEnabled,
+          "old, duplicate and semantically unchanged policies must not mutate sessions or publish extra facts");
+    fixture.Service.ApplySettingsPolicy({12, false, false, {L"policy"}, {}});
+    Check(fixture.Service.Snapshot().Sessions.front().IsReconnectEnabled,
+          "a newer per-device setting must apply independently of global reconnect");
+    std::stop_source stopped;
+    stopped.request_stop();
+    fixture.Service.ApplySettingsPolicy({13, false, false, {}, stopped.get_token()});
+    Check(fixture.Service.Snapshot().Sessions.front().IsReconnectEnabled,
+          "cancelled application ownership must prevent a pending policy from changing sessions");
+}
+
+void TestSettingsPolicyDoesNotWaitForForeignDeliveryAndCancelsQueuedWork() {
+    Fixture fixture;
+    ConnectSuccessfully(fixture, L"queued-policy");
+    std::binary_semaphore entered(0), release(0);
+    bool first = true;
+    auto subscription = fixture.Service.Subscribe([&](auto const&) {
+        if (!std::exchange(first, false)) return;
+        entered.release();
+        release.acquire();
+    });
+    std::jthread publisher([&] { fixture.Service.ConfigureReconnectPolicy(false, {}); });
+    entered.acquire();
+    std::stop_source stopped;
+    auto applying = std::async(std::launch::async,
+                               [&] { fixture.Service.ApplySettingsPolicy({10, true, true, {}, stopped.get_token()}); });
+    auto const returned = applying.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    stopped.request_stop();
+    release.release();
+    publisher.join();
+    applying.get();
+    fixture.Service.Unsubscribe(subscription);
+    auto snapshot = fixture.Service.Snapshot();
+    Check(returned && !snapshot.Sessions.front().IsIncomingEnabled && !snapshot.Sessions.front().IsReconnectEnabled,
+          "settings publication must queue without waiting on a foreign observer and cancelled queued policy must be "
+          "inert");
+}
+
 } // namespace
 
 int RunDeviceServiceTests() {
+    TestSettingsPolicyRejectsOldDuplicateAndCancelledRevisions();
+    TestSettingsPolicyDoesNotWaitForForeignDeliveryAndCancelsQueuedWork();
     TestControllerOwnsDeviceFactNormalization();
     TestControllerStatusTokensFollowTheDeviceOwner();
     TestControllerDeviceFailureAndLifetime();

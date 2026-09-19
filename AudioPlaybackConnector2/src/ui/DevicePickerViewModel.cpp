@@ -5,7 +5,7 @@
 #include <core/DeviceService.hpp>
 #include <core/SettingsStore.hpp>
 #include <core/StringResources.hpp>
-#include <services/SettingsController.hpp>
+#include <app/AppController.hpp>
 #include <ui/SettingsViewModel.hpp>
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -20,16 +20,14 @@ void DevicePickerViewModel::SetSettingsStore(std::weak_ptr<SettingsStore> settin
     m_settingsStore = std::move(settingsStore);
 }
 
-void DevicePickerViewModel::SetDeviceSettings(std::weak_ptr<ISettingsController> controller,
-                                              std::weak_ptr<apc::app::AppController> appController) {
-    m_settingsController = std::move(controller);
+void DevicePickerViewModel::SetAppController(std::weak_ptr<apc::app::AppController> appController) {
     m_appController = std::move(appController);
 }
 
 std::optional<DeviceOptionsViewModel> DevicePickerViewModel::DeviceOptions(std::wstring_view id) const {
-    auto controller = m_settingsController.lock();
+    auto controller = m_appController.lock();
     if (!controller || id.empty()) return std::nullopt;
-    const auto settings = controller->Snapshot();
+    const auto settings = controller->Snapshot().Settings;
     auto devices = SettingsViewModel::BuildDeviceItems(settings);
     auto const saved = std::ranges::find(devices, id, &SettingsDeviceViewModel::Id);
     auto const& items = m_cache.CachedSnapshot().Items;
@@ -72,7 +70,7 @@ bool DevicePickerViewModel::SetDefault(std::wstring_view id, bool enabled) const
 }
 
 bool DevicePickerViewModel::SetConnectOnStartup(std::wstring const& id, bool enabled) const {
-    auto controller = m_settingsController.lock();
+    auto controller = m_appController.lock();
     if (!controller) return false;
     controller->SetDeviceConnectOnStartup(id, enabled);
     const auto options = DeviceOptions(id);
@@ -80,7 +78,7 @@ bool DevicePickerViewModel::SetConnectOnStartup(std::wstring const& id, bool ena
 }
 
 bool DevicePickerViewModel::SetReconnectOnConnectionLoss(std::wstring const& id, bool enabled) const {
-    auto controller = m_settingsController.lock();
+    auto controller = m_appController.lock();
     if (!controller) return false;
     controller->SetDeviceReconnectOnConnectionLoss(id, enabled);
     const auto options = DeviceOptions(id);
@@ -88,11 +86,11 @@ bool DevicePickerViewModel::SetReconnectOnConnectionLoss(std::wstring const& id,
 }
 
 bool DevicePickerViewModel::ForgetDevice(std::wstring const& id) const {
-    auto controller = m_settingsController.lock();
+    auto controller = m_appController.lock();
     const auto options = DeviceOptions(id);
     if (!controller || !options || !options->CanForget) return false;
     controller->ForgetDevice(id);
-    const auto settings = controller->Snapshot();
+    const auto settings = controller->Snapshot().Settings;
     return std::ranges::find(settings.Devices, id, &DeviceSettings::Id) == settings.Devices.end();
 }
 

@@ -13,6 +13,17 @@
 
 namespace apc::app {
 
+namespace {
+apc::device::DeviceSettingsPolicy DevicePolicy(SettingsSnapshot const& snapshot) {
+    apc::device::DeviceSettingsPolicy policy{
+        snapshot.Revision, snapshot.Data.AllowIncomingConnections, snapshot.Data.GlobalReconnectOnConnectionLoss, {}};
+    for (auto const& device : snapshot.Data.Devices) {
+        if (device.ReconnectOnConnectionLoss) policy.ReconnectDeviceIds.push_back(device.Id);
+    }
+    return policy;
+}
+} // namespace
+
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Ordered Event Delivery ////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
@@ -47,6 +58,7 @@ struct AppController::EventState {
     }
 
     void Close() noexcept {
+        SettingsCancellation.request_stop();
         std::vector<std::shared_ptr<Entry>> removed;
         std::deque<Delivery> discarded;
         {
@@ -168,6 +180,7 @@ struct AppController::EventState {
     /*------------------------------------------------------------------------------------------------------------*/
 
     DeviceFactPublicationFence DeviceFence;
+    std::stop_source SettingsCancellation;
     std::mutex Mutex;
     std::condition_variable Changed;
     std::vector<std::shared_ptr<Entry>> Handlers;
@@ -189,9 +202,19 @@ AppController::AppController(std::shared_ptr<SettingsStore> settings,
     m_deviceSubscription = m_devices->Subscribe([weak](apc::device::DeviceFact const& fact) {
         if (auto state = weak.lock()) state->ObserveDevice(fact);
     });
-    m_settingsSubscription = m_settings->Subscribe([weak](SettingsSnapshot const& snapshot) {
-        if (auto state = weak.lock()) state->Publish(SettingsChangedEvent{snapshot.Revision});
+    std::weak_ptr<apc::device::DeviceService> weakDevices = m_devices;
+    m_settingsSubscription = m_settings->Subscribe([weak, weakDevices](SettingsSnapshot const& snapshot) {
+        auto state = weak.lock();
+        if (!state || state->SettingsCancellation.stop_requested()) return;
+        auto policy = DevicePolicy(snapshot);
+        policy.StopToken = state->SettingsCancellation.get_token();
+        if (auto devices = weakDevices.lock()) devices->ApplySettingsPolicy(std::move(policy));
+        state->Publish(
+            SettingsChangedEvent{snapshot.Revision, snapshot.Data.Language, snapshot.Data.UseSystemBackdropEffects});
     });
+    auto policy = DevicePolicy(m_settings->Snapshot());
+    policy.StopToken = m_eventState->SettingsCancellation.get_token();
+    m_devices->ApplySettingsPolicy(std::move(policy));
 }
 
 AppController::~AppController() {

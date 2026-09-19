@@ -161,7 +161,6 @@
     <ClInclude Include="include\core\DeviceWatcher.hpp" />
     <ClInclude Include="include\core\ReconnectPolicy.hpp" />
     <ClInclude Include="include\services\NotificationService.hpp" />
-    <ClInclude Include="include\services\SettingsController.hpp" />
     <ClInclude Include="include\control\ControlTargetMatcher.hpp" />
     <ClInclude Include="include\control\ControlCommandAdapter.hpp" />
     <ClInclude Include="include\services\StartupTaskController.hpp" />

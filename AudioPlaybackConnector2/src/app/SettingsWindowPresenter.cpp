@@ -51,7 +51,7 @@ bool SettingsWindowPresenter::ShowHelp() {
     }
 }
 
-bool SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settingsController,
+bool SettingsWindowPresenter::Show(std::shared_ptr<apc::app::AppController> appController,
                                    std::shared_ptr<StartupTaskCoordinator> startupTaskCoordinator,
                                    std::shared_ptr<TrayController> trayController) {
     DebugTrace(L"[SettingsWindowPresenter] Show()");
@@ -102,8 +102,8 @@ bool SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settings
         auto placement = defaultPlacement;
         std::optional<SettingsData> initialSettings;
 
-        if (settingsController) {
-            initialSettings = settingsController->Snapshot();
+        if (appController) {
+            initialSettings = appController->Snapshot().Settings;
             if (initialSettings->SettingsWindowBounds) {
                 placement = util::CalculateSettingsWindowPlacementFromBounds(
                     POINT{initialSettings->SettingsWindowBounds->X, initialSettings->SettingsWindowBounds->Y},
@@ -113,7 +113,7 @@ bool SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settings
         }
 
         auto impl = candidate->Window.as<winrt::AudioPlaybackConnector2::implementation::SettingsWindow>();
-        impl->SetSettingsController(std::move(settingsController));
+        impl->SetAppController(std::move(appController));
         impl->SetStartupTaskCoordinator(std::move(startupTaskCoordinator));
         if (initialSettings) impl->SetInitialSettingsSnapshot(std::move(*initialSettings));
         impl->SetDefaultPlacement(defaultPlacement);

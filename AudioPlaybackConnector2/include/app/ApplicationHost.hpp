@@ -16,7 +16,6 @@
 
 #include <services/CommandLineControlServer.hpp>
 #include <services/NotificationService.hpp>
-#include <services/SettingsController.hpp>
 #include <services/TrayController.hpp>
 
 #include <control/ControlCommandAdapter.hpp>
@@ -138,7 +137,6 @@ private:
 
     std::shared_ptr<SettingsStore> m_settingsStore;
     std::shared_ptr<apc::device::DeviceService> m_deviceService;
-    std::shared_ptr<ISettingsController> m_settingsController;
     std::shared_ptr<StartupTaskCoordinator> m_startupTaskCoordinator;
     winrt::Microsoft::UI::Dispatching::DispatcherQueue m_dispatcherQueue{nullptr};
     winrt::Microsoft::UI::Dispatching::DispatcherQueueTimer m_mainWindowLoadedWatchdog{nullptr};
@@ -153,6 +151,8 @@ private:
     bool m_uiFallbackMessagePending = false;
     apc::app::AppController::Subscription m_appEventSubscription;
     std::uint64_t m_lastAppEventRevision = 0;
+    std::wstring m_appliedLanguage;
+    std::optional<bool> m_appliedBackdrop;
     SingleInstanceGuard m_singleInstanceGuard;
     static inline UINT s_wmTaskbarCreated = 0;
     static constexpr UINT_PTR c_timerAnimation = 0x41504332;

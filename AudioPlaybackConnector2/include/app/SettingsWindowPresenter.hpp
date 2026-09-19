@@ -2,7 +2,9 @@
 
 #include <memory>
 
-class ISettingsController;
+namespace apc::app {
+class AppController;
+}
 class StartupTaskCoordinator;
 class TrayController;
 
@@ -19,7 +21,7 @@ public:
     SettingsWindowPresenter();
     ~SettingsWindowPresenter();
 
-    [[nodiscard]] bool Show(std::shared_ptr<ISettingsController> settingsController,
+    [[nodiscard]] bool Show(std::shared_ptr<apc::app::AppController> appController,
                             std::shared_ptr<StartupTaskCoordinator> startupTaskCoordinator,
                             std::shared_ptr<TrayController> trayController);
     [[nodiscard]] bool Close() noexcept;

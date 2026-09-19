@@ -216,10 +216,9 @@ void DevicePickerView::Initialize(std::shared_ptr<apc::device::DeviceService> se
     ApplyLanguage();
 }
 
-void DevicePickerView::SetDeviceSettings(std::shared_ptr<ISettingsController> controller,
-                                         std::weak_ptr<apc::app::AppController> appController,
-                                         std::function<void()> showSettings) {
-    m_viewModel.SetDeviceSettings(std::move(controller), std::move(appController));
+void DevicePickerView::SetAppController(std::weak_ptr<apc::app::AppController> appController,
+                                        std::function<void()> showSettings) {
+    m_viewModel.SetAppController(std::move(appController));
     m_onShowSettings = std::move(showSettings);
 }
 

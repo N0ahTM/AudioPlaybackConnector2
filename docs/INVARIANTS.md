@@ -351,6 +351,9 @@ the deterministic race scenarios, not exhaustive interleaving coverage.
 ## UI resource evaluation and snapshot reentrancy
 
 The host's resource-authorization mutex protects the constrained-pressure sequence and published diagnostics.
+The published value is the ResourceStatusSnapshot consumed by AppController. The host converts policy and
+pressure enums once when publishing; readers copy that same value under the mutex. There is no intermediate
+diagnostic model. The pure policy does not include the host's retry or scheduling helpers.
 Evaluation captures the current authorization in a short critical section, then releases it before logging,
 querying tray state, preloading/releasing the picker or scheduling UI work. The capture admits that evaluation;
 a pressure observation arriving afterward queues another UI evaluation. Published diagnostics recheck the fence

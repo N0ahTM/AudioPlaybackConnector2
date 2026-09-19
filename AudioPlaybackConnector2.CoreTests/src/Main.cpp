@@ -19,7 +19,6 @@
 /*------------------------------------------------------------------------------------------------------------*/
 
 int RunProtocolBoundaryTests();
-int RunAdaptiveResourceDiagnosticsTests();
 int RunAdaptiveResourcePolicyTests();
 int RunAppControllerTests();
 int RunAppModelsTests();
@@ -112,7 +111,6 @@ int main(int argc, char** argv) {
     }
     std::array suites{
         Suite{"ProtocolBoundary", RunProtocolBoundaryTests},
-        Suite{"AdaptiveResourceDiagnostics", RunAdaptiveResourceDiagnosticsTests},
         Suite{"AdaptiveResourcePolicy", RunAdaptiveResourcePolicyTests},
         Suite{"AppController", RunAppControllerTests},
         Suite{"AppModels", RunAppModelsTests},

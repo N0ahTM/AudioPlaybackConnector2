@@ -1,8 +1,5 @@
 #pragma once
 
-#include <app/AdaptiveActionRetryBackoff.hpp>
-#include <app/AdaptiveScheduleState.hpp>
-
 #include <chrono>
 #include <cstdint>
 #include <optional>

@@ -587,27 +587,8 @@ apc::app::AppUiActionResult ApplicationHost::PresentSettings(apc::app::AppComman
 }
 
 apc::app::AppSnapshot::ResourceStatusSnapshot ApplicationHost::ResourceStatus() const {
-    auto weak = weak_from_this();
-    apc::app::AppSnapshot::ResourceStatusSnapshot result;
-    if (auto self = weak.lock()) {
-        AdaptiveResourceDiagnostics diagnostics;
-        {
-            std::scoped_lock lock(self->m_resourceAuthorizationMutex);
-            diagnostics = self->m_adaptiveResourceDiagnostics;
-        }
-        result.Evaluated = diagnostics.Evaluated;
-        result.ForegroundResidency = ToAppResidency(diagnostics.Residency);
-        result.BackgroundResidency = ToAppResidency(diagnostics.BackgroundResidency);
-        result.SnapshotFresh = diagnostics.SnapshotFresh;
-        result.PositiveAuthorizationCurrent = diagnostics.PositiveAuthorizationCurrent;
-        result.PreloadAllowed = diagnostics.PreloadAllowed;
-        result.UiResourcesLoaded = diagnostics.UiResourcesLoaded;
-        result.UiResourcesInitialized = diagnostics.UiResourcesInitialized;
-        result.Memory = ToAppMemoryPressure(diagnostics.Pressure.Memory);
-        result.Activity = ToAppUserActivity(diagnostics.Pressure.UserActivity);
-        result.EnergySaver = diagnostics.Pressure.EnergySaver;
-    }
-    return result;
+    std::scoped_lock lock(m_resourceAuthorizationMutex);
+    return m_resourceStatus;
 }
 
 std::uint64_t ApplicationHost::PickerOpenedGeneration() const {
@@ -760,23 +741,25 @@ void ApplicationHost::EvaluateAdaptiveResources(bool userInteraction, std::wstri
         } else {
             m_adaptiveActionRetryBackoff.Reset();
         }
-        AdaptiveResourceDiagnostics diagnostics = {
+        apc::app::AppSnapshot::ResourceStatusSnapshot status = {
             .Evaluated = true,
-            .Residency = decision.Residency,
-            .BackgroundResidency = decision.BackgroundResidency,
-            .Pressure = pressureValues,
+            .ForegroundResidency = ToAppResidency(decision.Residency),
+            .BackgroundResidency = ToAppResidency(decision.BackgroundResidency),
             .SnapshotFresh = snapshotFresh,
             .PositiveAuthorizationCurrent = positiveAuthorizationCurrent,
             .PreloadAllowed = input.PreloadAllowed,
             .UiResourcesLoaded = m_trayController->IsDevicePickerLoaded(),
             .UiResourcesInitialized = m_trayController->IsDevicePickerPreloadInitialized(),
+            .Memory = ToAppMemoryPressure(pressureValues.Memory),
+            .Activity = ToAppUserActivity(pressureValues.UserActivity),
+            .EnergySaver = pressureValues.EnergySaver,
         };
         {
             std::scoped_lock authorizationLock(m_resourceAuthorizationMutex);
-            diagnostics.PositiveAuthorizationCurrent = IsPositiveResourceAuthorizationCurrent(
+            status.PositiveAuthorizationCurrent = IsPositiveResourceAuthorizationCurrent(
                 m_lastResourcePressureSequence, m_latestConstrainedResourcePressureSequence);
-            diagnostics.PreloadAllowed = input.PreloadAllowed && diagnostics.PositiveAuthorizationCurrent;
-            m_adaptiveResourceDiagnostics = diagnostics;
+            status.PreloadAllowed = input.PreloadAllowed && status.PositiveAuthorizationCurrent;
+            m_resourceStatus = status;
         }
         ScheduleAdaptiveResourceEvaluation(reevaluateAt);
     } catch (...) {

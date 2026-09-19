@@ -3,7 +3,8 @@
 #include <core/StringResources.hpp>
 
 #include <app/AdaptiveResourcePolicy.hpp>
-#include <app/AdaptiveResourceDiagnostics.hpp>
+#include <app/AdaptiveActionRetryBackoff.hpp>
+#include <app/AdaptiveScheduleState.hpp>
 #include <app/AppController.hpp>
 #include <app/ControlUiActionGate.hpp>
 #include <app/PowerTransitionCoordinator.hpp>
@@ -184,7 +185,7 @@ private:
     AdaptiveActionRetryBackoff m_adaptiveActionRetryBackoff;
     AdaptiveScheduleState m_adaptiveScheduleState;
     mutable std::mutex m_resourceAuthorizationMutex;
-    AdaptiveResourceDiagnostics m_adaptiveResourceDiagnostics;
+    apc::app::AppSnapshot::ResourceStatusSnapshot m_resourceStatus;
     std::optional<AdaptiveResourcePolicy::TimePoint> m_lastResourcePressureObservedAt;
     std::uint64_t m_lastResourcePressureSequence = 0;
     std::uint64_t m_latestConstrainedResourcePressureSequence = 0;

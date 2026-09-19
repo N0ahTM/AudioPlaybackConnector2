@@ -1,6 +1,8 @@
 #include "TestCheck.hpp"
 
 #include <app/AdaptiveResourcePolicy.hpp>
+#include <app/AdaptiveActionRetryBackoff.hpp>
+#include <app/AdaptiveScheduleState.hpp>
 
 #include <chrono>
 #include <iostream>

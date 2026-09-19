@@ -82,7 +82,6 @@
     <ClCompile Include="src\LoggerTests.cpp" />
     <ClCompile Include="src\StringResourcesTests.cpp" />
     <ClCompile Include="src\CrashHandlerTests.cpp" />
-    <ClCompile Include="src\AdaptiveResourceDiagnosticsTests.cpp" />
     <ClCompile Include="src\AdaptiveResourcePolicyTests.cpp" />
     <ClCompile Include="src\AppControllerTests.cpp" />
     <ClCompile Include="src\ControlCommandAdapterTests.cpp" />
@@ -119,7 +118,6 @@
     <ClInclude Include="src\AppTestFixture.hpp" />
     <ClInclude Include="src\DeviceTestFixture.hpp" />
     <ClInclude Include="src\ManualSettingsWakeup.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveResourceDiagnostics.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppController.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\DeviceFactPublicationFence.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppPresentation.hpp" />

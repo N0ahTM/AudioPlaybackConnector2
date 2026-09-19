@@ -1,5 +1,8 @@
 #pragma once
 
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.ApplicationModel.h>
+
 class StartupTaskController final {
 public:
     [[nodiscard]] static winrt::Windows::Foundation::IAsyncOperation<bool> IsEnabledAsync();

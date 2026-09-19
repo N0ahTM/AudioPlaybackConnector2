@@ -14,6 +14,8 @@
 #include <string_view>
 #include <utility>
 
+class StartupTaskCoordinator;
+
 namespace apc::device {
 class DeviceService;
 struct DeviceServiceSnapshot;
@@ -65,7 +67,8 @@ public:
 
     AppController(std::shared_ptr<SettingsStore> settings,
                   std::shared_ptr<apc::device::DeviceService> devices,
-                  std::weak_ptr<AppPresentation> presentation = {});
+                  std::weak_ptr<AppPresentation> presentation = {},
+                  std::shared_ptr<StartupTaskCoordinator> startupTask = {});
     void Shutdown() noexcept;
     ~AppController();
 
@@ -77,6 +80,10 @@ public:
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Settings Actions //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
+
+    enum class StartupTaskRequestResult { Accepted, Unavailable };
+    StartupTaskRequestResult RefreshStartupTask() const noexcept;
+    StartupTaskRequestResult SetStartWithWindows(bool enabled) const noexcept;
 
     SettingsMutationResult SetGlobalConnectOnStartup(bool enabled) const;
     SettingsMutationResult SetGlobalReconnectOnConnectionLoss(bool enabled) const;
@@ -282,6 +289,7 @@ private:
     mutable std::condition_variable m_noActiveCalls;
     mutable std::optional<std::uint64_t> m_lastSettingsRevision;
     mutable std::optional<std::uint64_t> m_lastDeviceGeneration;
+    mutable std::optional<std::uint64_t> m_lastStartupPublication;
     mutable std::uint64_t m_generation = 0;
     mutable std::uint64_t m_pickerGeneration = 0;
     mutable std::size_t m_activeCalls = 0;
@@ -290,6 +298,8 @@ private:
     std::shared_ptr<apc::device::DeviceService> m_devices;
     std::uint64_t m_deviceSubscription = 0;
     SettingsStore::Subscription m_settingsSubscription;
+    std::shared_ptr<StartupTaskCoordinator> m_startupTask;
+    std::uint64_t m_startupSubscription = 0;
 };
 
 } // namespace apc::app

@@ -1,4 +1,5 @@
 #include <app/AppController.hpp>
+#include <app/StartupTaskCoordinator.hpp>
 #include <core/DeviceService.hpp>
 
 #include <algorithm>
@@ -76,6 +77,10 @@ struct AppController::EventState {
         {
             std::lock_guard lock(Mutex);
             if (Closed || NextRevision == 0) return;
+            if (auto startup = std::get_if<StartupTaskChangedEvent>(&event)) {
+                if (LastStartupPublication && startup->Snapshot.Publication <= *LastStartupPublication) return;
+                LastStartupPublication = startup->Snapshot.Publication;
+            }
             Pending.push_back({{NextRevision, event, std::move(token)}, Handlers});
             ++NextRevision;
             if (Draining) return;
@@ -185,6 +190,7 @@ struct AppController::EventState {
     std::condition_variable Changed;
     std::vector<std::shared_ptr<Entry>> Handlers;
     std::deque<Delivery> Pending;
+    std::optional<std::uint64_t> LastStartupPublication;
     SubscriptionId NextId = 1;
     std::uint64_t NextRevision = 1;
     std::thread::id DrainThread;
@@ -194,9 +200,11 @@ struct AppController::EventState {
 
 AppController::AppController(std::shared_ptr<SettingsStore> settings,
                              std::shared_ptr<apc::device::DeviceService> devices,
-                             std::weak_ptr<AppPresentation> presentation)
+                             std::weak_ptr<AppPresentation> presentation,
+                             std::shared_ptr<StartupTaskCoordinator> startupTask)
     : m_settings(std::move(settings)), m_presentation(std::move(presentation)),
-      m_eventState(std::make_shared<EventState>()), m_devices(std::move(devices)) {
+      m_eventState(std::make_shared<EventState>()), m_devices(std::move(devices)),
+      m_startupTask(std::move(startupTask)) {
     if (!m_settings || !m_devices) throw std::invalid_argument("application owners are required");
     std::weak_ptr<EventState> weak = m_eventState;
     m_deviceSubscription = m_devices->Subscribe([weak](apc::device::DeviceFact const& fact) {
@@ -215,11 +223,17 @@ AppController::AppController(std::shared_ptr<SettingsStore> settings,
     auto policy = DevicePolicy(m_settings->Snapshot());
     policy.StopToken = m_eventState->SettingsCancellation.get_token();
     m_devices->ApplySettingsPolicy(std::move(policy));
+    if (m_startupTask) {
+        m_startupSubscription = m_startupTask->Subscribe([weak](StartupTaskSnapshot const& snapshot) {
+            if (auto state = weak.lock()) state->Publish(StartupTaskChangedEvent{snapshot});
+        });
+    }
 }
 
 AppController::~AppController() {
     Shutdown();
     m_settingsSubscription.Reset();
+    if (m_startupTask) m_startupTask->Unsubscribe(m_startupSubscription);
     if (m_devices && m_deviceSubscription) m_devices->Unsubscribe(m_deviceSubscription);
 }
 

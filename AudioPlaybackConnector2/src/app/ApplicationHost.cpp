@@ -668,7 +668,8 @@ std::uint64_t ApplicationHost::PickerOpenedGeneration() const {
 }
 
 void ApplicationHost::InitializeAppController() {
-    m_appController = std::make_shared<apc::app::AppController>(m_settingsStore, m_deviceService, weak_from_this());
+    m_appController = std::make_shared<apc::app::AppController>(
+        m_settingsStore, m_deviceService, weak_from_this(), m_startupTaskCoordinator);
     m_controlCommandAdapter = std::make_unique<apc::control::ControlCommandAdapter>(
         *m_appController, apc::control::ControlCommandAdapter::Options{[](std::string_view key) { return _(key); }});
     DebugTrace(L"[App] AppController and control adapter initialized");
@@ -1380,7 +1381,7 @@ void ApplicationHost::HandleAppEvent(apc::app::AppController::EventNotification 
 bool ApplicationHost::ShowSettingsWindow() {
     if (m_exiting.load()) return false;
     DebugTrace(L"[App] ShowSettingsWindow()");
-    return m_settingsWindowPresenter.Show(m_appController, m_startupTaskCoordinator, m_trayController);
+    return m_settingsWindowPresenter.Show(m_appController, m_trayController);
 }
 
 void ApplicationHost::ExitApplication() noexcept {

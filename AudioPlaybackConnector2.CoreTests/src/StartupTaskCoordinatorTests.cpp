@@ -1,4 +1,5 @@
 #include "TestCheck.hpp"
+#include "AppTestFixture.hpp"
 
 #include <app/StartupTaskCoordinator.hpp>
 
@@ -13,6 +14,8 @@
 #include <stdexcept>
 #include <string_view>
 #include <vector>
+#include <future>
+#include <semaphore>
 
 namespace {
 using namespace std::chrono_literals;
@@ -160,6 +163,107 @@ struct CoordinatorFixture {
     std::condition_variable CommitChanged;
     std::vector<bool> Commits;
 };
+
+void TestCommitCanReenterAndStopTheOwner() {
+    auto backend = std::make_shared<FakeStartupTaskBackend>();
+    std::shared_ptr<StartupTaskCoordinator> owner;
+    std::promise<void> committed;
+    owner = std::make_shared<StartupTaskCoordinator>(
+        [backend] { return backend->QueryAsync(); },
+        [backend](bool desired) { return backend->SetAsync(desired); },
+        [&](bool) {
+            Check(owner->RequestDesired(false), "a commit callback must be able to enqueue a new intent");
+            owner->Shutdown();
+            committed.set_value();
+        });
+    owner->Refresh();
+    Check(backend->WaitForCalls(1), "reentrant commit test must start its query");
+    backend->Release(0, true);
+    Check(committed.get_future().wait_for(2s) == std::future_status::ready,
+          "commit callbacks must run outside owner locks and allow reentrant shutdown");
+    Check(!owner->RequestDesired(true) && !owner->Refresh() && !owner->Snapshot().Busy,
+          "shutdown from a commit must discard its queued replacement request and close admission");
+    Check(!backend->WaitForCalls(2, 100ms), "a queued intent must not start after reentrant shutdown");
+}
+
+void TestShutdownDrainsForeignCommitWithoutHoldingOwnerLock() {
+    auto backend = std::make_shared<FakeStartupTaskBackend>();
+    std::binary_semaphore entered{0}, release{0};
+    auto owner =
+        std::make_shared<StartupTaskCoordinator>([backend] { return backend->QueryAsync(); },
+                                                 [backend](bool desired) { return backend->SetAsync(desired); },
+                                                 [&](bool) {
+                                                     entered.release();
+                                                     release.acquire();
+                                                 });
+    owner->Refresh();
+    Check(backend->WaitForCalls(1), "drain test must start its query");
+    backend->Release(0, true);
+    Check(entered.try_acquire_for(2s), "the foreign completion must enter persistence");
+    auto stopped = std::async(std::launch::async, [&] { owner->Shutdown(); });
+    Check(stopped.wait_for(50ms) == std::future_status::timeout,
+          "shutdown must drain an admitted foreign commit before returning");
+    auto snapshot = std::async(std::launch::async, [&] { return owner->Snapshot(); });
+    Check(snapshot.wait_for(2s) == std::future_status::ready,
+          "an admitted commit and shutdown must not retain the owner's snapshot mutex");
+    release.release();
+    Check(stopped.wait_for(2s) == std::future_status::ready, "shutdown must finish when the admitted commit leaves");
+}
+
+void TestFacadeDestructionInvalidatesPendingSetContinuation() {
+    auto backend = std::make_shared<FakeStartupTaskBackend>();
+    auto owner =
+        std::make_shared<StartupTaskCoordinator>([backend] { return backend->QueryAsync(); },
+                                                 [backend](bool desired) { return backend->SetAsync(desired); },
+                                                 [](bool) {});
+    std::weak_ptr<StartupTaskCoordinator> weak = owner;
+    owner->RequestDesired(true);
+    Check(backend->WaitForCalls(1), "destruction test must suspend in its set operation");
+    owner.reset();
+    Check(weak.expired(), "an OS operation must not retain the coordinator facade");
+    backend->Release(0, true);
+    Check(!backend->WaitForCalls(2, 100ms), "a late set completion must not launch a query after shutdown");
+}
+
+void TestAppControllerOwnsStartupActionsAndObservation() {
+    apc::tests::AppFixture app;
+    CoordinatorFixture fixture;
+    using Controller = apc::app::AppController;
+    Controller controller(app.Settings, app.Service, app.Presentation, fixture.Coordinator);
+    SnapshotRecorder recorder;
+    auto observation = controller.SnapshotAndSubscribe([&](auto const& notification) {
+        if (auto startup = std::get_if<apc::app::StartupTaskChangedEvent>(&notification.Event))
+            recorder.Record(startup->Snapshot);
+    });
+    Check(observation.Updates && observation.Snapshot.StartupTask && !observation.Snapshot.StartupTask->Known,
+          "the application observation must expose the coordinator without requiring a second UI subscription");
+    Check(controller.RefreshStartupTask() == Controller::StartupTaskRequestResult::Accepted,
+          "refresh must be admitted through the application endpoint");
+    Check(fixture.Backend->WaitForCalls(1), "the application refresh must reach the backend");
+    fixture.Backend->Release(0, false);
+    Check(recorder.WaitFor([](auto const& state) { return state.Known && !state.Busy; }),
+          "authoritative startup changes must flow through the ordered application stream");
+    auto confirmed = controller.Snapshot();
+    Check(confirmed.StartupTask == fixture.Coordinator->Snapshot() &&
+              confirmed.Generation > observation.Snapshot.Generation,
+          "the application snapshot must expose the current owner's publication and advance presentation generation");
+    Check(controller.SetStartWithWindows(true) == Controller::StartupTaskRequestResult::Accepted,
+          "the startup toggle must use the same application endpoint");
+    Check(fixture.Backend->WaitForCalls(2), "the toggle must start one set operation");
+    controller.Shutdown();
+    auto const delivered = recorder.Count();
+    Check(controller.SetStartWithWindows(false) == Controller::StartupTaskRequestResult::Unavailable &&
+              controller.RefreshStartupTask() == Controller::StartupTaskRequestResult::Unavailable,
+          "controller shutdown must close both startup actions");
+    fixture.Backend->Release(1, true);
+    Check(fixture.Backend->WaitForCalls(3), "the owner may settle its already admitted operation");
+    fixture.Backend->Release(2, true);
+    Check(fixture.WaitForCommits(2) && recorder.Count() == delivered,
+          "an owner completion after application shutdown must not reach application observers");
+    Check(app.Controller.RefreshStartupTask() == Controller::StartupTaskRequestResult::Unavailable &&
+              !app.Controller.Snapshot().StartupTask,
+          "a headless composition without startup integration must explicitly report it unavailable");
+}
 
 void TestRefreshPublishesAuthoritativeState() {
     CoordinatorFixture fixture;
@@ -346,6 +450,10 @@ void TestShutdownSuppressesLateCompletion() {
 } // namespace
 
 int RunStartupTaskCoordinatorTests() {
+    TestCommitCanReenterAndStopTheOwner();
+    TestShutdownDrainsForeignCommitWithoutHoldingOwnerLock();
+    TestFacadeDestructionInvalidatesPendingSetContinuation();
+    TestAppControllerOwnsStartupActionsAndObservation();
     TestRefreshPublishesAuthoritativeState();
     TestLatestDesiredIntentRunsSeriallyAndAlonePublishes();
     TestSameDesiredIntentCoalescesWhileRunning();

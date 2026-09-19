@@ -14,9 +14,9 @@ Command admission may independently consult the current busy state; that read do
 After an awaited inventory refresh, session state is read again before merging discovery and saved labels.
 The session read therefore cannot predate a disconnect that completed during enumeration. `Snapshot()` reads
 settings and the complete device-owner snapshot, projects inventory, sessions and saved labels, then checks
-both owner versions again. A successful capture has an overlapping stable interval for these two owners.
+the owner versions again, including the startup-task publication when present. A successful capture has an overlapping stable interval for these owners.
 Bounded retries return an unavailable snapshot under continuous mutation, rather than a mixed usable value.
-Presentation diagnostics are read at their own boundary; they are not part of this two-owner atomicity claim.
+Presentation diagnostics are read at their own boundary; they are not part of this owner-version atomicity claim.
 
 ## Controller event delivery
 
@@ -228,6 +228,27 @@ behind another publisher; the mutation rechecks terminal completion before actin
 caller drains the queue as for other device commands, so this does not promise a bound on native platform calls.
 Shutdown resolves all pending completions as cancelled. Deterministic tests cover retained success, shutdown,
 coalesced cancellation, deadline cancellation, reentrant waits and cancellation behind a blocked subscriber.
+
+## Startup task ownership
+
+The UI reads `AppSnapshot::StartupTask` and sends `RefreshStartupTask` / `SetStartWithWindows` to the application
+controller. An absent optional value means the composition has no startup integration. Accepted means queued or
+started, not OS success; authoritative state, busy state and failure are observed in the snapshot and event stream.
+The controller fences captures against the coordinator publication and includes changes in presentation generation.
+The settings window queues each update once to its dispatcher and revokes its subscription on native window close.
+
+| State | Owner and synchronization | Lifetime boundary |
+| --- | --- | --- |
+| Latest request, active operation and confirmed OS state | `StartupTaskCoordinator::State` serial drainer; request-state mutex is never nested under the owner mutex | Only queued owner work may start a set/query or accept a completion |
+| Published snapshot, queue admission, registrations and active delivery | `State::Mutex`; short capture/update only | Shutdown closes admission and discards queued work; foreign draining is awaited without holding the mutex |
+| WinRT operations | Shared internal State across coroutine suspension; no facade capture | Continuations post to the owner; after shutdown they cannot launch the next query, persist or notify |
+| Persistence and observer callbacks | Serial drainer, outside all owner locks | Reentrant requests enqueue; reentrant shutdown invalidates remaining work without waiting on itself; foreign unsubscribe drains its active callback |
+
+Only the latest completed request may persist a known OS state. Superseded results start the latest queued intent
+without publishing their obsolete result. The commit callback can reenter or stop the owner. Foreign shutdown waits
+for an already admitted commit, so none continues after it returns. Shutdown cannot undo a Windows call that already
+started; its late completion only releases internal lifetime. Tests cover supersession, coalescing, failed queries,
+reentrant commit/shutdown, foreign commit drain, facade destruction during a set and application-event integration.
 
 ## Distribution
 

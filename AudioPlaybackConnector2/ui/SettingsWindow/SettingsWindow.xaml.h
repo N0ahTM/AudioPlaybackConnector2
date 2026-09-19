@@ -1,7 +1,6 @@
 #pragma once
 
 #include <SettingsWindow.g.h>
-#include <app/StartupTaskCoordinator.hpp>
 #include <app/AppController.hpp>
 #include <ui/SettingsDiagnosticsReport.hpp>
 #include <ui/WindowPlacement.hpp>
@@ -43,7 +42,6 @@ struct SettingsWindow : SettingsWindowT<SettingsWindow> {
     void LanguageComboBox_SelectionChanged(winrt::Windows::Foundation::IInspectable const& sender,
                                            winrt::Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const& e);
     void SetAppController(std::shared_ptr<apc::app::AppController> controller);
-    void SetStartupTaskCoordinator(std::shared_ptr<StartupTaskCoordinator> coordinator);
     void SetInitialSettingsSnapshot(SettingsData snapshot);
     void SetDefaultPlacement(util::SettingsWindowPlacement placement);
     void ShowHelpPage();
@@ -99,8 +97,9 @@ private:
     std::uint64_t m_diagnosticsCopyRequestId = 0;
     bool m_diagnosticsCopyInProgress = false;
     std::shared_ptr<apc::app::AppController> m_appController;
-    std::shared_ptr<StartupTaskCoordinator> m_startupTaskCoordinator;
-    StartupTaskCoordinator::HandlerToken m_startupTaskHandlerToken = 0;
+    apc::app::AppController::Subscription m_appSubscription;
+    std::uint64_t m_lastAppRevision = 0;
+    bool m_closed = false;
     std::optional<SettingsData> m_initialSettingsSnapshot;
     winrt::event_token m_actualThemeChangedToken{};
     SettingsPage m_currentPage = SettingsPage::App;

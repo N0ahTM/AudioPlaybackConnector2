@@ -1,4 +1,5 @@
 #include <app/AppController.hpp>
+#include <app/StartupTaskCoordinator.hpp>
 #include <core/DeviceService.hpp>
 #include <winrt/Windows.Foundation.h>
 
@@ -131,6 +132,7 @@ AppSnapshot AppController::CaptureSnapshot() const {
         auto const settings = ReadSettings();
         if (!settings) break;
         auto const deviceState = m_devices->Snapshot();
+        auto const startup = m_startupTask ? std::optional{m_startupTask->Snapshot()} : std::nullopt;
         std::uint64_t generation;
         std::uint64_t pickerGeneration;
         {
@@ -147,20 +149,27 @@ AppSnapshot AppController::CaptureSnapshot() const {
         auto records = MergeDevices(std::move(inventory), SessionRecords(deviceState), settings->Data);
         auto snapshot = BuildSnapshot(std::move(records), settings->Data, generation, pickerGeneration, true);
         // Reading each version again establishes an overlapping stable interval
-        // for the two owner snapshots. Neither owner is called under our mutex.
+        // for the owner snapshots. Neither owner is called under our mutex.
         if (m_settings->Snapshot().Revision != settings->Revision ||
-            m_devices->Snapshot().Generation != deviceState.Generation)
+            m_devices->Snapshot().Generation != deviceState.Generation ||
+            (startup && m_startupTask->Snapshot().Publication != startup->Publication))
             continue;
         {
             std::scoped_lock lock(m_stateMutex);
             if (!m_running) break;
             if (m_generation != generation || !m_lastSettingsRevision ||
                 *m_lastSettingsRevision != settings->Revision ||
-                (m_lastDeviceGeneration && *m_lastDeviceGeneration > deviceState.Generation))
+                (m_lastDeviceGeneration && *m_lastDeviceGeneration > deviceState.Generation) ||
+                (startup && m_lastStartupPublication && *m_lastStartupPublication > startup->Publication))
                 continue;
             if (m_lastDeviceGeneration && *m_lastDeviceGeneration != deviceState.Generation)
                 AdvanceGeneration(m_generation);
             m_lastDeviceGeneration = deviceState.Generation;
+            if (startup) {
+                if (m_lastStartupPublication && *m_lastStartupPublication != startup->Publication)
+                    AdvanceGeneration(m_generation);
+                m_lastStartupPublication = startup->Publication;
+            }
             if (pickerGeneration > m_pickerGeneration) {
                 m_pickerGeneration = pickerGeneration;
                 AdvanceGeneration(m_generation);
@@ -168,6 +177,7 @@ AppSnapshot AppController::CaptureSnapshot() const {
             snapshot.Generation = m_generation;
             snapshot.Tray.Generation = m_generation;
         }
+        snapshot.StartupTask = startup;
         snapshot.SettingsRevision = settings->Revision;
         snapshot.DeviceGeneration = deviceState.Generation;
         return snapshot;
@@ -1249,6 +1259,19 @@ template <typename Mutation> SettingsMutationResult AppController::MutateSetting
     } catch (...) {
         return {SettingsMutationStatus::Rejected, 0};
     }
+}
+
+AppController::StartupTaskRequestResult AppController::RefreshStartupTask() const noexcept {
+    CallLease lease(*this);
+    if (!lease.Acquired() || !m_startupTask) return StartupTaskRequestResult::Unavailable;
+    return m_startupTask->Refresh() ? StartupTaskRequestResult::Accepted : StartupTaskRequestResult::Unavailable;
+}
+
+AppController::StartupTaskRequestResult AppController::SetStartWithWindows(bool enabled) const noexcept {
+    CallLease lease(*this);
+    if (!lease.Acquired() || !m_startupTask) return StartupTaskRequestResult::Unavailable;
+    return m_startupTask->RequestDesired(enabled) ? StartupTaskRequestResult::Accepted
+                                                  : StartupTaskRequestResult::Unavailable;
 }
 
 SettingsMutationResult AppController::SetGlobalConnectOnStartup(bool enabled) const {

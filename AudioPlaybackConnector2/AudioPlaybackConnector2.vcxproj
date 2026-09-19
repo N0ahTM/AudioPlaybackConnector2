@@ -136,6 +136,7 @@
     <ClInclude Include="include\app\SingleInstanceGuard.hpp" />
     <ClInclude Include="include\app\LatestStartupTaskRequestState.hpp" />
     <ClInclude Include="include\app\StartupTaskCoordinator.hpp" />
+    <ClInclude Include="include\app\StartupTaskSnapshot.hpp" />
     <ClInclude Include="include\app\UiRefreshCoalescer.hpp" />
     <ClInclude Include="include\util\RuntimeApartment.hpp" />
     <ClInclude Include="include\control\CommandProtocol.hpp" />

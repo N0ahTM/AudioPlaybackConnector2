@@ -181,6 +181,9 @@
     <ClInclude Include="include\app\StartupTaskCoordinator.hpp">
       <Filter>include\app</Filter>
     </ClInclude>
+    <ClInclude Include="include\app\StartupTaskSnapshot.hpp">
+      <Filter>include\app</Filter>
+    </ClInclude>
     <ClInclude Include="include\control\CommandProtocol.hpp">
       <Filter>include\control</Filter>
     </ClInclude>

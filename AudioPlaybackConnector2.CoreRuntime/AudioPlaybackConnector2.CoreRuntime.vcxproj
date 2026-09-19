@@ -108,6 +108,7 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\CommandLineControlServer.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\StartupTaskController.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\StartupTaskCoordinator.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\StartupTaskSnapshot.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\ToastContentBuilder.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\ToastXmlSanitizer.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\util\Event.hpp" />

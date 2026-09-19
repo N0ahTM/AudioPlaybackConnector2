@@ -5,7 +5,6 @@
 namespace apc::app {
 class AppController;
 }
-class StartupTaskCoordinator;
 class TrayController;
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -22,7 +21,6 @@ public:
     ~SettingsWindowPresenter();
 
     [[nodiscard]] bool Show(std::shared_ptr<apc::app::AppController> appController,
-                            std::shared_ptr<StartupTaskCoordinator> startupTaskCoordinator,
                             std::shared_ptr<TrayController> trayController);
     [[nodiscard]] bool Close() noexcept;
     [[nodiscard]] bool ShowHelp();

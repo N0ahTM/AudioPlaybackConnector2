@@ -1,265 +1,290 @@
 #include <pch.h>
 
 #include <app/StartupTaskCoordinator.hpp>
-
+#include <app/LatestStartupTaskRequestState.hpp>
 #include <services/StartupTaskController.hpp>
 #include <util/Util.hpp>
+#include <winrt/Windows.ApplicationModel.h>
+
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#include <optional>
+#include <stdexcept>
+#include <thread>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Serial Startup Task Owner /////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
+struct StartupTaskCoordinator::State : std::enable_shared_from_this<State> {
+    using OperationToken = LatestStartupTaskRequestState::OperationToken;
+    struct Entry {
+        ChangedHandler Handler;
+        bool Active = true;
+        std::optional<std::uint64_t> LastPublication;
+    };
+
+    State(QueryOperation query, SetOperation set, CommitActual commit)
+        : Query(std::move(query)), Set(std::move(set)), Commit(std::move(commit)) {
+        if (!Query || !Set) throw std::invalid_argument("startup task operations are required");
+    }
+
+    // The mutex protects queue admission, the published snapshot, and subscription lifetime only.
+    // Request policy and confirmations belong to the single drainer. No foreign call runs under Mutex.
+    bool Post(std::function<void()> work) {
+        {
+            std::lock_guard lock(Mutex);
+            if (Stopped) return false;
+            Pending.push_back(std::move(work));
+            if (Draining) return true;
+            Draining = true;
+            DrainThread = std::this_thread::get_id();
+        }
+        for (;;) {
+            std::function<void()> next;
+            {
+                std::lock_guard lock(Mutex);
+                if (Pending.empty()) {
+                    Draining = false;
+                    DrainThread = {};
+                    Changed.notify_all();
+                    return true;
+                }
+                next = std::move(Pending.front());
+                Pending.pop_front();
+            }
+            try {
+                if (!IsStopped()) next();
+            } catch (...) {
+                util::DebugTraceUnknownException(L"[StartupTaskCoordinator] owner operation failed");
+            }
+        }
+    }
+
+    bool IsStopped() const {
+        std::lock_guard lock(Mutex);
+        return Stopped;
+    }
+
+    StartupTaskSnapshot Snapshot() const {
+        std::lock_guard lock(Mutex);
+        return Published;
+    }
+
+    void Deliver(std::shared_ptr<Entry> const& entry, StartupTaskSnapshot const& snapshot) {
+        {
+            std::lock_guard lock(Mutex);
+            if (Stopped || !entry->Active ||
+                (entry->LastPublication && snapshot.Publication <= *entry->LastPublication))
+                return;
+            entry->LastPublication = snapshot.Publication;
+            Delivering = entry;
+        }
+        try {
+            entry->Handler(snapshot);
+        } catch (...) {
+            util::DebugTraceUnknownException(L"[StartupTaskCoordinator] observer failed");
+        }
+        {
+            std::lock_guard lock(Mutex);
+            Delivering.reset();
+        }
+        Changed.notify_all();
+    }
+
+    void Publish(StartupTaskSnapshot snapshot) {
+        std::vector<std::shared_ptr<Entry>> recipients;
+        {
+            std::lock_guard lock(Mutex);
+            if (Stopped) return;
+            snapshot.Publication = Published.Publication + 1;
+            Published = snapshot;
+            for (auto const& [id, entry] : Handlers)
+                recipients.push_back(entry);
+        }
+        for (auto const& entry : recipients)
+            Deliver(entry, snapshot);
+    }
+
+    HandlerToken Subscribe(ChangedHandler handler) {
+        if (!handler) return 0;
+        auto entry = std::make_shared<Entry>(std::move(handler));
+        HandlerToken token;
+        {
+            std::lock_guard lock(Mutex);
+            if (Stopped || NextToken == 0) return 0;
+            token = NextToken++;
+            Handlers.emplace(token, entry);
+        }
+        auto self = shared_from_this();
+        Post([self, entry] { self->Deliver(entry, self->Snapshot()); });
+        return token;
+    }
+
+    void Unsubscribe(HandlerToken token) {
+        std::shared_ptr<Entry> removed;
+        std::unique_lock lock(Mutex);
+        auto found = Handlers.find(token);
+        if (found == Handlers.end()) return;
+        removed = std::move(found->second);
+        Handlers.erase(found);
+        removed->Active = false;
+        if (DrainThread != std::this_thread::get_id()) Changed.wait(lock, [&] { return Delivering != removed; });
+        lock.unlock();
+    }
+
+    void Stop() {
+        std::deque<std::function<void()>> abandoned;
+        std::unordered_map<HandlerToken, std::shared_ptr<Entry>> removed;
+        {
+            std::unique_lock lock(Mutex);
+            Stopped = true;
+            if (Published.Busy) {
+                Published.Busy = false;
+                ++Published.Publication;
+            }
+            abandoned.swap(Pending);
+            removed.swap(Handlers);
+            if (DrainThread != std::this_thread::get_id()) Changed.wait(lock, [&] { return !Draining; });
+        }
+        // Captures may release owners or subscriptions; destruction must also be outside the mutex.
+    }
+
+    void Request(std::optional<bool> desired) {
+        auto request = desired ? Requests.RequestDesired(*desired) : Requests.RequestRefresh();
+        if (!request.Accepted || request.Coalesced) return;
+        auto snapshot = Snapshot();
+        snapshot.Revision = request.Revision;
+        snapshot.Busy = true;
+        snapshot.Failed = false;
+        if (desired) {
+            snapshot.Enabled = *desired;
+            snapshot.Known = false;
+        }
+        Publish(snapshot);
+        if (request.OperationToStart && !IsStopped()) Run(shared_from_this(), *request.OperationToStart);
+    }
+
+    static winrt::fire_and_forget QueryActual(std::shared_ptr<State> self, OperationToken operation) {
+        bool known = false;
+        bool actual = false;
+        try {
+            actual = co_await self->Query();
+            known = true;
+        } catch (...) {
+            util::DebugTraceUnknownException(L"[StartupTaskCoordinator] query operation failed");
+        }
+        auto failed = !known || (operation.Kind == LatestStartupTaskRequestState::RequestKind::Desired &&
+                                 actual != operation.Desired);
+        self->Post([self, operation, known, actual, failed] { self->Complete(operation, known, actual, failed); });
+    }
+
+    static winrt::fire_and_forget SetDesired(std::shared_ptr<State> self, OperationToken operation) {
+        try {
+            static_cast<void>(co_await self->Set(operation.Desired));
+        } catch (...) {
+            // Even a failed set is followed by a query of the authoritative OS state.
+            util::DebugTraceUnknownException(L"[StartupTaskCoordinator] set operation failed");
+        }
+        self->Post([self, operation] { QueryActual(self, operation); });
+    }
+
+    static void Run(std::shared_ptr<State> self, OperationToken operation) {
+        if (operation.Kind == LatestStartupTaskRequestState::RequestKind::Desired)
+            SetDesired(std::move(self), operation);
+        else
+            QueryActual(std::move(self), operation);
+    }
+
+    void Complete(OperationToken operation, bool known, bool actual, bool failed) {
+        auto desiredReached = operation.Kind != LatestStartupTaskRequestState::RequestKind::Desired ||
+                              (known && actual == operation.Desired);
+        auto completion = Requests.Complete(operation, desiredReached);
+        if (completion.Disposition == LatestStartupTaskRequestState::CompletionDisposition::Publish) {
+            if (known) {
+                ConfirmedKnown = true;
+                ConfirmedEnabled = actual;
+                if (Commit && !IsStopped()) {
+                    try {
+                        Commit(actual);
+                    } catch (...) {
+                        util::DebugTraceUnknownException(L"[StartupTaskCoordinator] settings commit failed");
+                    }
+                }
+            }
+            auto snapshot = Snapshot();
+            snapshot.Revision = operation.Revision;
+            snapshot.Known = ConfirmedKnown;
+            snapshot.Enabled = ConfirmedEnabled;
+            snapshot.Busy = false;
+            snapshot.Failed = failed || !known;
+            Publish(snapshot);
+        }
+        if (completion.OperationToStart && !IsStopped()) Run(shared_from_this(), *completion.OperationToStart);
+    }
+
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
+
+    QueryOperation Query;
+    SetOperation Set;
+    CommitActual Commit;
+    LatestStartupTaskRequestState Requests;
+    bool ConfirmedEnabled = false;
+    bool ConfirmedKnown = false;
+    mutable std::mutex Mutex;
+    std::condition_variable Changed;
+    StartupTaskSnapshot Published;
+    std::deque<std::function<void()>> Pending;
+    std::unordered_map<HandlerToken, std::shared_ptr<Entry>> Handlers;
+    std::shared_ptr<Entry> Delivering;
+    HandlerToken NextToken = 1;
+    std::thread::id DrainThread;
+    bool Draining = false;
+    bool Stopped = false;
+};
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 StartupTaskCoordinator::StartupTaskCoordinator(CommitActual commitActual)
     : StartupTaskCoordinator([] { return StartupTaskController::IsEnabledAsync(); },
                              [](bool enabled) { return StartupTaskController::SetEnabledAsync(enabled); },
                              std::move(commitActual)) {}
 
-StartupTaskCoordinator::StartupTaskCoordinator(QueryOperation queryOperation,
-                                               SetOperation setOperation,
-                                               CommitActual commitActual)
-    : m_queryOperation(std::move(queryOperation)), m_setOperation(std::move(setOperation)),
-      m_commitActual(commitActual ? std::make_shared<CommitActual>(std::move(commitActual)) : nullptr) {
-    if (!m_queryOperation || !m_setOperation) throw std::invalid_argument("startup task operations are required");
-}
+StartupTaskCoordinator::StartupTaskCoordinator(QueryOperation query, SetOperation set, CommitActual commit)
+    : m_state(std::make_shared<State>(std::move(query), std::move(set), std::move(commit))) {}
 
 StartupTaskCoordinator::~StartupTaskCoordinator() {
     Shutdown();
 }
 
-void StartupTaskCoordinator::Refresh() noexcept {
-    try {
-        std::optional<LatestStartupTaskRequestState::OperationToken> operation;
-        StartupTaskSnapshot snapshot;
-        std::vector<ChangedHandler> handlers;
-        {
-            std::scoped_lock requestLock(m_requestMutex);
-            auto request = m_requests.RequestRefresh();
-            if (!request.Accepted || request.Coalesced) return;
-            snapshot = Snapshot();
-            snapshot.Revision = request.Revision;
-            snapshot.Busy = true;
-            snapshot.Failed = false;
-            handlers = StoreSnapshot(snapshot);
-            operation = request.OperationToStart;
-        }
-        NotifyHandlers(handlers, snapshot);
-        if (operation) StartOperation(*operation);
-    } catch (...) {
-        util::DebugTraceUnknownException(L"[StartupTaskCoordinator] refresh request ignored exception");
-    }
+bool StartupTaskCoordinator::Refresh() noexcept {
+    auto state = m_state;
+    return state->Post([state] { state->Request(std::nullopt); });
 }
 
-void StartupTaskCoordinator::RequestDesired(bool enabled) noexcept {
-    try {
-        std::optional<LatestStartupTaskRequestState::OperationToken> operation;
-        StartupTaskSnapshot snapshot;
-        std::vector<ChangedHandler> handlers;
-        {
-            std::scoped_lock requestLock(m_requestMutex);
-            auto request = m_requests.RequestDesired(enabled);
-            if (!request.Accepted || request.Coalesced) return;
-            snapshot = Snapshot();
-            snapshot.Revision = request.Revision;
-            snapshot.Enabled = enabled;
-            snapshot.Known = false;
-            snapshot.Busy = true;
-            snapshot.Failed = false;
-            handlers = StoreSnapshot(snapshot);
-            operation = request.OperationToStart;
-        }
-        NotifyHandlers(handlers, snapshot);
-        if (operation) StartOperation(*operation);
-    } catch (...) {
-        util::DebugTraceUnknownException(L"[StartupTaskCoordinator] desired request ignored exception");
-    }
+bool StartupTaskCoordinator::RequestDesired(bool enabled) noexcept {
+    auto state = m_state;
+    return state->Post([state, enabled] { state->Request(enabled); });
 }
 
 StartupTaskSnapshot StartupTaskCoordinator::Snapshot() const noexcept {
-    try {
-        std::scoped_lock lock(m_mutex);
-        return m_snapshot;
-    } catch (...) {
-        return {};
-    }
+    return m_state->Snapshot();
 }
-
 StartupTaskCoordinator::HandlerToken StartupTaskCoordinator::Subscribe(ChangedHandler handler) {
-    if (!handler) return 0;
-    HandlerToken token = 0;
-    StartupTaskSnapshot snapshot;
-    {
-        std::scoped_lock lock(m_mutex);
-        if (m_stopping || m_nextHandlerToken == 0) return 0;
-        token = m_nextHandlerToken++;
-        m_handlers.emplace(token, handler);
-        snapshot = m_snapshot;
-    }
-    try {
-        handler(snapshot);
-    } catch (...) {
-        Unsubscribe(token);
-        throw;
-    }
-    return token;
+    auto state = m_state;
+    return state->Subscribe(std::move(handler));
 }
-
 void StartupTaskCoordinator::Unsubscribe(HandlerToken token) noexcept {
-    if (token == 0) return;
-    try {
-        std::scoped_lock lock(m_mutex);
-        m_handlers.erase(token);
-    } catch (...) {
-    }
+    m_state->Unsubscribe(token);
 }
-
 void StartupTaskCoordinator::Shutdown() noexcept {
-    try {
-        std::scoped_lock launchLock(m_launchMutex);
-        std::scoped_lock requestLock(m_requestMutex);
-        m_requests.Stop();
-        std::scoped_lock lock(m_mutex);
-        if (m_stopping) return;
-        m_stopping = true;
-        m_snapshot.Busy = false;
-        m_handlers.clear();
-        m_commitActual = nullptr;
-    } catch (...) {
-        util::DebugTraceUnknownException(L"[StartupTaskCoordinator] shutdown ignored exception");
-    }
-}
-
-void StartupTaskCoordinator::StartOperation(LatestStartupTaskRequestState::OperationToken operation) noexcept {
-    try {
-        std::scoped_lock launchLock(m_launchMutex);
-        {
-            std::scoped_lock lock(m_mutex);
-            if (m_stopping) return;
-        }
-        RunOperationAsync(operation);
-    } catch (...) {
-        CompleteOperation(operation, false, false, true);
-    }
-}
-
-winrt::fire_and_forget
-StartupTaskCoordinator::RunOperationAsync(LatestStartupTaskRequestState::OperationToken operation) {
-    auto lifetime = shared_from_this();
-    bool known = false;
-    bool actual = false;
-    bool failed = false;
-
-    if (operation.Kind == LatestStartupTaskRequestState::RequestKind::Desired) {
-        try {
-            static_cast<void>(co_await m_setOperation(operation.Desired));
-        } catch (winrt::hresult_error const& ex) {
-            util::DebugTraceException(L"[StartupTaskCoordinator] set operation failed", ex);
-            failed = true;
-        } catch (std::exception const& ex) {
-            util::DebugTraceException(L"[StartupTaskCoordinator] set operation failed", ex);
-            failed = true;
-        } catch (...) {
-            util::DebugTraceUnknownException(L"[StartupTaskCoordinator] set operation failed");
-            failed = true;
-        }
-    }
-
-    try {
-        actual = co_await m_queryOperation();
-        known = true;
-    } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[StartupTaskCoordinator] state query failed", ex);
-        failed = true;
-    } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[StartupTaskCoordinator] state query failed", ex);
-        failed = true;
-    } catch (...) {
-        util::DebugTraceUnknownException(L"[StartupTaskCoordinator] state query failed");
-        failed = true;
-    }
-
-    if (known) {
-        failed = operation.Kind == LatestStartupTaskRequestState::RequestKind::Desired && actual != operation.Desired;
-    }
-    CompleteOperation(operation, known, actual, failed);
-}
-
-void StartupTaskCoordinator::CompleteOperation(LatestStartupTaskRequestState::OperationToken operation,
-                                               bool known,
-                                               bool actual,
-                                               bool failed) noexcept {
-    try {
-        std::optional<LatestStartupTaskRequestState::OperationToken> nextOperation;
-        StartupTaskSnapshot snapshot;
-        std::vector<ChangedHandler> handlers;
-        bool publish = false;
-        {
-            std::scoped_lock requestLock(m_requestMutex);
-            auto const desiredReached = operation.Kind != LatestStartupTaskRequestState::RequestKind::Desired ||
-                                        (known && actual == operation.Desired);
-            auto completion = m_requests.Complete(operation, desiredReached);
-            if (completion.Disposition == LatestStartupTaskRequestState::CompletionDisposition::Stale) return;
-
-            if (completion.Disposition == LatestStartupTaskRequestState::CompletionDisposition::Publish) {
-                snapshot = Snapshot();
-                snapshot.Revision = operation.Revision;
-                snapshot.Busy = false;
-                snapshot.Failed = failed || !known;
-
-                std::shared_ptr<CommitActual> commit;
-                {
-                    std::scoped_lock lock(m_mutex);
-                    if (m_stopping) return;
-                    if (known) {
-                        m_confirmedKnown = true;
-                        m_confirmedEnabled = actual;
-                    }
-                    snapshot.Known = m_confirmedKnown;
-                    snapshot.Enabled = m_confirmedEnabled;
-                    commit = m_commitActual;
-                }
-
-                if (known && commit) {
-                    try {
-                        (*commit)(actual);
-                    } catch (...) {
-                        util::DebugTraceUnknownException(L"[StartupTaskCoordinator] settings commit ignored exception");
-                    }
-                }
-                handlers = StoreSnapshot(snapshot);
-                publish = true;
-            }
-            nextOperation = completion.OperationToStart;
-        }
-        if (publish) NotifyHandlers(handlers, snapshot);
-        if (nextOperation) StartOperation(*nextOperation);
-    } catch (...) {
-        util::DebugTraceUnknownException(L"[StartupTaskCoordinator] completion ignored exception");
-    }
-}
-
-std::vector<StartupTaskCoordinator::ChangedHandler>
-StartupTaskCoordinator::StoreSnapshot(StartupTaskSnapshot& snapshot) noexcept {
-    std::vector<ChangedHandler> handlers;
-    try {
-        std::scoped_lock lock(m_mutex);
-        if (m_stopping) return handlers;
-        if (m_nextPublication == 0) return handlers;
-        snapshot.Publication = m_nextPublication++;
-        m_snapshot = snapshot;
-        handlers.reserve(m_handlers.size());
-        for (auto const& [token, handler] : m_handlers) {
-            static_cast<void>(token);
-            handlers.push_back(handler);
-        }
-    } catch (...) {
-        util::DebugTraceUnknownException(L"[StartupTaskCoordinator] handler snapshot allocation ignored exception");
-    }
-    return handlers;
-}
-
-void StartupTaskCoordinator::NotifyHandlers(std::vector<ChangedHandler> const& handlers,
-                                            StartupTaskSnapshot const& snapshot) noexcept {
-    for (auto const& handler : handlers) {
-        try {
-            handler(snapshot);
-        } catch (...) {
-            util::DebugTraceUnknownException(L"[StartupTaskCoordinator] handler ignored exception");
-        }
-    }
+    m_state->Stop();
 }

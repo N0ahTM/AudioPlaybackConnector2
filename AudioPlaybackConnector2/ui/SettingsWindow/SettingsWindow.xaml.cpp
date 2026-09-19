@@ -125,9 +125,7 @@ SettingsWindow::SettingsWindow() {
 
 SettingsWindow::~SettingsWindow() {
     StopPageTransition();
-    if (m_startupTaskCoordinator && m_startupTaskHandlerToken != 0) {
-        m_startupTaskCoordinator->Unsubscribe(std::exchange(m_startupTaskHandlerToken, 0));
-    }
+    m_appSubscription.Reset();
     StopPlacementSaveTimer();
     if (m_actualThemeChangedToken.value != 0) {
         try {
@@ -167,6 +165,8 @@ LRESULT CALLBACK SettingsWindow::SettingsWindowSubclassProc(
                 self->RootGrid().ActualThemeChanged(self->m_actualThemeChangedToken);
                 self->m_actualThemeChangedToken = {};
             }
+            self->m_closed = true;
+            self->m_appSubscription.Reset();
             self->m_capturePlacementChanges = false;
             self->m_subclassInstalled = false;
         }
@@ -441,7 +441,7 @@ bool SettingsWindow::StoreCurrentPlacement() {
 void SettingsWindow::StartWithWindowsToggle_Toggled(IInspectable const& sender, RoutedEventArgs const&) {
     if (m_suppressStartupToggle) return;
     auto toggle = sender.as<ToggleSwitch>();
-    if (m_startupTaskCoordinator) m_startupTaskCoordinator->RequestDesired(toggle.IsOn());
+    if (m_appController) m_appController->SetStartWithWindows(toggle.IsOn());
 }
 
 void SettingsWindow::ResetWindowPlacementButton_Click(IInspectable const&, RoutedEventArgs const&) {
@@ -693,24 +693,26 @@ void SettingsWindow::InitializeSettingsContent() {
     ShowNotificationsToggle().OnContent(box_value(L""));
     SystemBackdropEffectsToggle().OffContent(box_value(L""));
     SystemBackdropEffectsToggle().OnContent(box_value(L""));
-    if (m_startupTaskCoordinator) {
-        auto weakWindow = get_weak();
-        auto dispatcher = DispatcherQueue();
-        m_startupTaskHandlerToken =
-            m_startupTaskCoordinator->Subscribe([weakWindow, dispatcher](StartupTaskSnapshot const& snapshot) noexcept {
-                try {
-                    auto apply = [weakWindow, snapshot]() noexcept {
-                        if (auto self = weakWindow.get()) self->ApplyStartupTaskSnapshot(snapshot);
-                    };
-                    if (dispatcher.HasThreadAccess()) {
-                        apply();
-                    } else {
-                        static_cast<void>(dispatcher.TryEnqueue(std::move(apply)));
+    auto weakWindow = get_weak();
+    auto dispatcher = DispatcherQueue();
+    auto observation = controller->SnapshotAndSubscribe(
+        [weakWindow, dispatcher](apc::app::AppController::EventNotification const& notification) {
+            auto startup = std::get_if<apc::app::StartupTaskChangedEvent>(&notification.Event);
+            if (!startup) return;
+            // Always queue: the initial observation is applied before queued updates.
+            static_cast<void>(
+                dispatcher.TryEnqueue([weakWindow, revision = notification.Revision, snapshot = startup->Snapshot]() {
+                    if (auto self = weakWindow.get(); self && !self->m_closed && revision > self->m_lastAppRevision) {
+                        self->m_lastAppRevision = revision;
+                        self->ApplyStartupTaskSnapshot(snapshot);
                     }
-                } catch (...) {
-                }
-            });
-        m_startupTaskCoordinator->Refresh();
+                }));
+        });
+    m_lastAppRevision = observation.Revision;
+    m_appSubscription = std::move(observation.Updates);
+    if (observation.Snapshot.StartupTask) {
+        ApplyStartupTaskSnapshot(*observation.Snapshot.StartupTask);
+        controller->RefreshStartupTask();
     } else {
         StartWithWindowsToggle().IsEnabled(false);
     }
@@ -962,10 +964,6 @@ winrt::fire_and_forget SettingsWindow::CopyDiagnosticsAsync(winrt::weak_ref<Sett
 
 void SettingsWindow::SetAppController(std::shared_ptr<apc::app::AppController> controller) {
     m_appController = std::move(controller);
-}
-
-void SettingsWindow::SetStartupTaskCoordinator(std::shared_ptr<StartupTaskCoordinator> coordinator) {
-    m_startupTaskCoordinator = std::move(coordinator);
 }
 
 void SettingsWindow::SetInitialSettingsSnapshot(SettingsData snapshot) {

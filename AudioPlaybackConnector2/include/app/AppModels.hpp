@@ -1,6 +1,7 @@
 #pragma once
 
 #include <core/DeviceId.hpp>
+#include <app/StartupTaskSnapshot.hpp>
 #include <core/SettingsData.hpp>
 
 #include <chrono>
@@ -304,6 +305,7 @@ struct AppSnapshot {
     } AdaptiveResources;
     // Versions of the concrete owners from the successful capture.
     SettingsData Settings;
+    std::optional<StartupTaskSnapshot> StartupTask;
     std::uint64_t SettingsRevision = 0;
     std::uint64_t DeviceGeneration = 0;
 
@@ -388,6 +390,11 @@ struct DeviceInventoryChangedEvent {
     friend bool operator==(DeviceInventoryChangedEvent const&, DeviceInventoryChangedEvent const&) = default;
 };
 
+struct StartupTaskChangedEvent {
+    StartupTaskSnapshot Snapshot;
+    friend bool operator==(StartupTaskChangedEvent const&, StartupTaskChangedEvent const&) = default;
+};
+
 struct SettingsChangedEvent {
     std::uint64_t SettingsRevision = 0;
     std::wstring Language;
@@ -412,6 +419,7 @@ using AppEvent = std::variant<DeviceConnectedEvent,
                               DeviceActivityChangedEvent,
                               DeviceInventoryChangedEvent,
                               SettingsChangedEvent,
+                              StartupTaskChangedEvent,
                               AutoReconnectTriggeredEvent,
                               AutoReconnectFailedEvent>;
 

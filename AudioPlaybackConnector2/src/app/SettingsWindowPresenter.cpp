@@ -52,7 +52,6 @@ bool SettingsWindowPresenter::ShowHelp() {
 }
 
 bool SettingsWindowPresenter::Show(std::shared_ptr<apc::app::AppController> appController,
-                                   std::shared_ptr<StartupTaskCoordinator> startupTaskCoordinator,
                                    std::shared_ptr<TrayController> trayController) {
     DebugTrace(L"[SettingsWindowPresenter] Show()");
     auto owner = m_state;
@@ -114,7 +113,6 @@ bool SettingsWindowPresenter::Show(std::shared_ptr<apc::app::AppController> appC
 
         auto impl = candidate->Window.as<winrt::AudioPlaybackConnector2::implementation::SettingsWindow>();
         impl->SetAppController(std::move(appController));
-        impl->SetStartupTaskCoordinator(std::move(startupTaskCoordinator));
         if (initialSettings) impl->SetInitialSettingsSnapshot(std::move(*initialSettings));
         impl->SetDefaultPlacement(defaultPlacement);
         impl->SetTargetPlacement(placement);

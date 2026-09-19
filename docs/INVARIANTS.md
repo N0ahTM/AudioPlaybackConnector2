@@ -12,10 +12,11 @@ or keep a terminal session busy. Tray busy state is derived from the same sessio
 Command admission may independently consult the current busy state; that read does not alter the snapshot.
 
 After an awaited inventory refresh, session state is read again before merging discovery and saved labels.
-The session read therefore cannot predate a disconnect that completed during enumeration. This does not claim
-that the complete cross-owner application snapshot is atomic; the controller publication contract still needs
-its own consolidation. Regression coverage includes delayed facts, session removal without presentation delivery,
-and session changes during inventory refresh.
+The session read therefore cannot predate a disconnect that completed during enumeration. `Snapshot()` reads
+settings and the complete device-owner snapshot, projects inventory, sessions and saved labels, then checks
+both owner versions again. A successful capture has an overlapping stable interval for these two owners.
+Bounded retries return an unavailable snapshot under continuous mutation, rather than a mixed usable value.
+Presentation diagnostics are read at their own boundary; they are not part of this two-owner atomicity claim.
 
 ## Controller event delivery
 
@@ -48,8 +49,18 @@ retains the closed event state until it returns. Observer exceptions do not inte
 The tests exercise simultaneous and reentrant publication, admission timing, reset with queued work, both
 destruction paths and reentrant capture destruction.
 
-Publication revisions currently order events only. They do not yet certify an atomic application snapshot or
-close the separate snapshot/registration gap; the concrete controller-owner integration must establish that
+`SnapshotAndSubscribe` captures the publication revision, obtains a snapshot without holding the event mutex,
+then atomically checks the revision and registers. An intervening publication retries the capture; a later
+publication includes the new recipient. Exhausted retries, shutdown and invalid handlers return no subscription
+and an unavailable snapshot. An already queued event cannot acquire the new recipient retroactively. The
+returned `Observation::Revision` is an event watermark, distinct from the snapshot's presentation generation.
+Callbacks may run before the method returns. Consumers apply the initial value and notifications on one context
+and ignore revisions they have already applied; the host does this on its UI context.
+
+Settings commits publish `SettingsChangedEvent` through the same ordered stream as device facts. Each carries
+the store revision and requires no second settings cache. Regression tests mutate both owners during capture,
+retain a blocked older delivery, force repeated capture invalidation, and overlap capture with shutdown.
+Query-specific result projections and presentation generations still need consolidation with this observation
 contract before the complete rewrite is accepted.
 
 The controller subscribes directly to the concrete `DeviceService` fact stream. Its private event state owns

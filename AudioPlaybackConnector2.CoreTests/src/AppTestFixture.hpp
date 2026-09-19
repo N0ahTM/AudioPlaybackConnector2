@@ -31,7 +31,10 @@ public:
         Contexts.push_back(context);
         return {apc::app::AppActionStatus::Succeeded, std::nullopt};
     }
-    apc::app::AppSnapshot::ResourceStatusSnapshot ResourceStatus() const override { return Resources; }
+    apc::app::AppSnapshot::ResourceStatusSnapshot ResourceStatus() const override {
+        if (BeforeResourceRead) BeforeResourceRead();
+        return Resources;
+    }
     std::uint64_t PickerOpenedGeneration() const override { return OpenedGeneration; }
 
     std::vector<apc::app::DevicePickerOpenMode> Modes;
@@ -40,6 +43,7 @@ public:
     std::uint64_t OpenedGeneration = 0;
     apc::app::AppSnapshot::ResourceStatusSnapshot Resources;
     std::function<apc::app::AppUiActionResult(apc::app::AppCommandContext const&)> SettingsAction;
+    std::function<void()> BeforeResourceRead;
 };
 
 struct AppFixture {

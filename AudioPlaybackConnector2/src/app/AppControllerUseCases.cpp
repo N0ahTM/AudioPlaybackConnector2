@@ -122,21 +122,49 @@ AppSnapshot AppController::Snapshot() const noexcept {
             unavailable.IsRunning = false;
             return unavailable;
         }
-        for (std::size_t attempt = 0; attempt != 3; ++attempt) {
-            const auto settings = ReadCoherentSettings();
-            if (!settings) break;
-            auto devices = BuildDevicesWithoutRefresh(settings->Data);
-            auto snapshot = SnapshotFromDevices(std::move(devices), settings->Data, settings->Revision);
-            if (snapshot.IsRunning || IsCurrentSettingsRevision(settings->Revision)) return snapshot;
-        }
-        AppSnapshot unavailable;
-        unavailable.IsRunning = false;
-        return unavailable;
+        return CaptureSnapshot();
     } catch (...) {
         AppSnapshot unavailable;
         unavailable.IsRunning = false;
         return unavailable;
     }
+}
+
+AppSnapshot AppController::CaptureSnapshot() const {
+    for (std::size_t attempt = 0; attempt != 3; ++attempt) {
+        auto const settings = ReadSettings();
+        if (!settings) break;
+        auto const deviceState = m_devices->Snapshot();
+        std::uint64_t generation;
+        std::uint64_t pickerGeneration;
+        {
+            std::scoped_lock lock(m_stateMutex);
+            if (!m_running) break;
+            generation = m_generation;
+            pickerGeneration = m_pickerGeneration;
+        }
+        if (auto presentation = m_presentation.lock())
+            pickerGeneration = std::max(pickerGeneration, presentation->PickerOpenedGeneration());
+        std::vector<DeviceRecord> inventory;
+        for (auto const& device : deviceState.Inventory.Devices)
+            inventory.push_back({device.Id, device.Name, {}, DeviceConnectionState::Idle, false, true, false});
+        auto records = MergeDevices(std::move(inventory), SessionRecords(deviceState), settings->Data);
+        auto snapshot = BuildSnapshot(std::move(records), settings->Data, generation, pickerGeneration, true);
+        // Reading each version again establishes an overlapping stable interval
+        // for the two owner snapshots. Neither owner is called under our mutex.
+        if (m_settings->Snapshot().Revision != settings->Revision ||
+            m_devices->Snapshot().Generation != deviceState.Generation)
+            continue;
+        {
+            std::scoped_lock lock(m_stateMutex);
+            if (!m_running) break;
+            if (m_generation != generation) continue;
+        }
+        return snapshot;
+    }
+    AppSnapshot unavailable;
+    unavailable.IsRunning = false;
+    return unavailable;
 }
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -899,8 +927,12 @@ bool AppController::IsCurrentSettingsRevision(std::uint64_t revision) const noex
 }
 
 std::vector<AppController::DeviceRecord> AppController::ReadConnectedDevices() const {
+    return SessionRecords(m_devices->Snapshot());
+}
+
+std::vector<AppController::DeviceRecord>
+AppController::SessionRecords(apc::device::DeviceServiceSnapshot const& snapshot) {
     std::vector<DeviceRecord> records;
-    auto const snapshot = m_devices->Snapshot();
     for (auto const& session : snapshot.Sessions) {
         DeviceConnectionState state = DeviceConnectionState::Idle;
         switch (session.State) {

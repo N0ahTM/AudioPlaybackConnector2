@@ -1333,14 +1333,18 @@ void ApplicationHost::DrainDeviceVisualRefresh() noexcept {
 
 void ApplicationHost::SetupDeviceEvents() {
     auto weak = weak_from_this();
-    m_appEventSubscription =
-        m_appController->Subscribe([weak](apc::app::AppController::EventNotification const& event) {
+    auto observation =
+        m_appController->SnapshotAndSubscribe([weak](apc::app::AppController::EventNotification const& event) {
             if (auto self = weak.lock()) {
                 (void)self->RunOnUIThread([weak, event] {
                     if (auto current = weak.lock()) current->HandleAppEvent(event);
                 });
             }
         });
+    if (!observation.Updates) throw winrt::hresult_error(E_UNEXPECTED, L"Application observation unavailable");
+    m_lastAppEventRevision = observation.Revision;
+    m_appEventSubscription = std::move(observation.Updates);
+    ScheduleDeviceVisualRefresh(false, true);
 }
 
 void ApplicationHost::TeardownDeviceEvents() {
@@ -1348,7 +1352,9 @@ void ApplicationHost::TeardownDeviceEvents() {
 }
 
 void ApplicationHost::HandleAppEvent(apc::app::AppController::EventNotification const& notification) {
-    if (m_exiting.load() || !m_appController || !m_appController->IsCurrent(notification)) return;
+    if (m_exiting.load() || !m_appController || notification.Revision <= m_lastAppEventRevision) return;
+    m_lastAppEventRevision = notification.Revision;
+    if (!m_appController->IsCurrent(notification)) return;
     std::visit(
         [this](auto const& event) {
             using T = std::decay_t<decltype(event)>;
@@ -1379,6 +1385,8 @@ void ApplicationHost::HandleAppEvent(apc::app::AppController::EventNotification 
                 ScheduleDeviceVisualRefresh(false, true, false);
             } else if constexpr (std::is_same_v<T, DeviceActivityChangedEvent>) {
                 ScheduleDeviceVisualRefresh(false);
+            } else if constexpr (std::is_same_v<T, SettingsChangedEvent>) {
+                ScheduleDeviceVisualRefresh(false, true);
             }
         },
         notification.Event);

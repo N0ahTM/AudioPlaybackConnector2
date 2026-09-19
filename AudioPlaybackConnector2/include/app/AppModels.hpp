@@ -374,14 +374,18 @@ struct DeviceStatusChangedEvent {
     friend bool operator==(DeviceStatusChangedEvent const&, DeviceStatusChangedEvent const&) = default;
 };
 
-// These facts intentionally carry no payload: the legacy producer publishes
-// them without an ID or generation, so the bridge must not invent one.
+// These invalidations tell consumers to obtain current presentation data.
 struct DeviceActivityChangedEvent {
     friend bool operator==(DeviceActivityChangedEvent const&, DeviceActivityChangedEvent const&) = default;
 };
 
 struct DeviceInventoryChangedEvent {
     friend bool operator==(DeviceInventoryChangedEvent const&, DeviceInventoryChangedEvent const&) = default;
+};
+
+struct SettingsChangedEvent {
+    std::uint64_t SettingsRevision = 0;
+    friend bool operator==(SettingsChangedEvent const&, SettingsChangedEvent const&) = default;
 };
 
 struct AutoReconnectTriggeredEvent {
@@ -400,6 +404,7 @@ using AppEvent = std::variant<DeviceConnectedEvent,
                               DeviceStatusChangedEvent,
                               DeviceActivityChangedEvent,
                               DeviceInventoryChangedEvent,
+                              SettingsChangedEvent,
                               AutoReconnectTriggeredEvent,
                               AutoReconnectFailedEvent>;
 

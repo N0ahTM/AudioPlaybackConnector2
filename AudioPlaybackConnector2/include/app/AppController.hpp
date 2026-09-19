@@ -16,7 +16,8 @@
 
 namespace apc::device {
 class DeviceService;
-}
+struct DeviceServiceSnapshot;
+} // namespace apc::device
 
 namespace apc::app {
 
@@ -56,6 +57,12 @@ public:
         SubscriptionId m_id = 0;
     };
 
+    struct Observation {
+        AppSnapshot Snapshot;
+        std::uint64_t Revision = 0;
+        Subscription Updates;
+    };
+
     AppController(std::shared_ptr<SettingsStore> settings,
                   std::shared_ptr<apc::device::DeviceService> devices,
                   std::weak_ptr<AppPresentation> presentation = {});
@@ -68,6 +75,10 @@ public:
     AppController& operator=(AppController&&) = delete;
 
     [[nodiscard]] AppSnapshot Snapshot() const noexcept;
+    // Snapshot capture and registration share an event-revision fence. A callback
+    // can run before return; consumers serialize applying the initial value and
+    // updates, retaining the largest Revision they have already applied.
+    [[nodiscard]] Observation SnapshotAndSubscribe(EventHandler handler);
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// UI Actions ////////////////////////////////////////////////////////////////////////////////////////*/
@@ -188,6 +199,8 @@ private:
     [[nodiscard]] std::optional<SettingsSnapshot> ReadCoherentSettings() const noexcept;
     [[nodiscard]] bool IsCurrentSettingsRevision(std::uint64_t revision) const noexcept;
     [[nodiscard]] std::vector<DeviceRecord> ReadConnectedDevices() const;
+    [[nodiscard]] static std::vector<DeviceRecord> SessionRecords(apc::device::DeviceServiceSnapshot const& snapshot);
+    [[nodiscard]] AppSnapshot CaptureSnapshot() const;
     [[nodiscard]] AppSnapshot SnapshotFromDevices(std::vector<DeviceRecord> devices,
                                                   SettingsData const& settings,
                                                   std::uint64_t settingsRevision) const noexcept;
@@ -257,6 +270,7 @@ private:
     std::shared_ptr<EventState> m_eventState;
     std::shared_ptr<apc::device::DeviceService> m_devices;
     std::uint64_t m_deviceSubscription = 0;
+    SettingsStore::Subscription m_settingsSubscription;
 };
 
 } // namespace apc::app

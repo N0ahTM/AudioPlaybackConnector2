@@ -152,6 +152,7 @@ private:
     std::deque<std::function<void()>> m_uiFallbackWork;
     bool m_uiFallbackMessagePending = false;
     apc::app::AppController::Subscription m_appEventSubscription;
+    std::uint64_t m_lastAppEventRevision = 0;
     SingleInstanceGuard m_singleInstanceGuard;
     static inline UINT s_wmTaskbarCreated = 0;
     static constexpr UINT_PTR c_timerAnimation = 0x41504332;

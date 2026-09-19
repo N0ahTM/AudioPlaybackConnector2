@@ -295,9 +295,116 @@ void TestResetDestroysHandlerCapturesOutsideTheOwnerLock() {
     Check(released, "handler capture destruction must be able to reenter registration and reset without an owner lock");
 }
 
+void TestSnapshotRegistrationReconcilesChangesDuringCapture() {
+    apc::tests::AppFixture fixture;
+    (void)fixture.Settings->RememberDevice(L"device-a", L"Headphones");
+    bool changeDuringCapture = true;
+    fixture.Presentation->BeforeResourceRead = [&] {
+        if (!std::exchange(changeDuringCapture, false)) return;
+        (void)fixture.Settings->SetDeviceAlias(L"device-a", L"New alias");
+        apc::tests::device::ConnectSuccessfully(*fixture.Devices, L"device-a");
+    };
+    std::vector<AppController::EventNotification> updates;
+    auto observation = fixture.Controller.SnapshotAndSubscribe([&](auto const& event) { updates.push_back(event); });
+    Check(observation.Updates && observation.Snapshot.IsRunning && observation.Snapshot.Devices.size() == 1 &&
+              observation.Snapshot.Devices.front().DisplayName == L"New alias" &&
+              observation.Snapshot.Devices.front().IsConnected && observation.Revision != 0 && updates.empty(),
+          "settings and device changes during capture must be reconciled into the initial value before registration");
+    (void)fixture.Settings->SetDeviceAlias(L"device-a", L"Later alias");
+    Check(updates.size() == 1 && updates.front().Revision > observation.Revision &&
+              std::get<apc::app::SettingsChangedEvent>(updates.front().Event).SettingsRevision ==
+                  fixture.Settings->Snapshot().Revision,
+          "a later settings commit must cross the same ordered subscription with its owner revision");
+    (void)fixture.Service->Disconnect(L"device-a");
+    Check(updates.size() > 1 && updates.back().Revision > updates.front().Revision,
+          "device changes after registration must follow the initial event watermark");
+}
+
+void TestSnapshotRegistrationDoesNotReceiveOlderQueuedDelivery() {
+    apc::tests::AppFixture fixture;
+    std::binary_semaphore entered(0), release(0);
+    auto blocker = fixture.Controller.Subscribe([&](auto const& event) {
+        if (event.Revision != 1) return;
+        entered.release();
+        release.acquire();
+    });
+    std::jthread publisher([&] { fixture.Controller.Publish(apc::app::DeviceActivityChangedEvent{}); });
+    entered.acquire();
+    std::vector<std::uint64_t> revisions;
+    auto observation =
+        fixture.Controller.SnapshotAndSubscribe([&](auto const& event) { revisions.push_back(event.Revision); });
+    Check(observation.Updates && observation.Revision == 1 && revisions.empty(),
+          "registration must not wait for an older observer or join an already admitted delivery");
+    fixture.Controller.Publish(apc::app::DeviceActivityChangedEvent{});
+    release.release();
+    publisher.join();
+    Check(revisions == std::vector<std::uint64_t>{2},
+          "only publications following the captured watermark may target the new observer");
+}
+
+void TestUnstableOrStoppedObservationCannotInstallAnObserver() {
+    apc::tests::AppFixture fixture;
+    int delivered = 0;
+    fixture.Presentation->BeforeResourceRead = [&] {
+        fixture.Controller.Publish(apc::app::DeviceActivityChangedEvent{});
+    };
+    auto unstable = fixture.Controller.SnapshotAndSubscribe([&](auto const&) { ++delivered; });
+    Check(!unstable.Updates && !unstable.Snapshot.IsRunning && delivered == 0,
+          "an exhausted capture retry must return no partial subscription or apparently usable snapshot");
+    fixture.Presentation->BeforeResourceRead = {};
+    auto stable = fixture.Controller.SnapshotAndSubscribe([&](auto const&) { ++delivered; });
+    Check(stable.Updates && stable.Snapshot.IsRunning, "a later stable capture must be able to register normally");
+    fixture.Controller.Shutdown();
+    auto stopped = fixture.Controller.SnapshotAndSubscribe([&](auto const&) { ++delivered; });
+    (void)fixture.Settings->RememberDevice(L"late", L"Late");
+    Check(!stopped.Updates && !stopped.Snapshot.IsRunning && delivered == 0,
+          "shutdown must reject observation and invalidate subsequent settings delivery");
+}
+
+void TestInitialSnapshotContainsDiscoveredUnconnectedDevices() {
+    apc::tests::AppFixture fixture;
+    (void)fixture.Service->Start();
+    fixture.Devices->WatcherAccess->LastWatcher->Add(L"discovered", L"Discovered");
+    auto observation = fixture.Controller.SnapshotAndSubscribe([](auto const&) {});
+    Check(observation.Updates && observation.Snapshot.Devices.size() == 1 &&
+              observation.Snapshot.Devices.front().Id.View() == L"discovered" &&
+              !observation.Snapshot.Devices.front().IsConnected,
+          "the initial device projection must include inventory even without settings or a live session");
+}
+
+void TestShutdownDrainsAnObservationBeingCaptured() {
+    apc::tests::AppFixture fixture;
+    std::binary_semaphore entered(0), release(0);
+    fixture.Presentation->BeforeResourceRead = [&] {
+        entered.release();
+        release.acquire();
+    };
+    auto capture =
+        std::async(std::launch::async, [&] { return fixture.Controller.SnapshotAndSubscribe([](auto const&) {}); });
+    entered.acquire();
+    auto shutdown = std::async(std::launch::async, [&] { fixture.Controller.Shutdown(); });
+    std::stop_source stop;
+    stop.request_stop();
+    AppCommandContext cancelled{stop.get_token(), AppCommandContext::TimePoint::max()};
+    while (fixture.Controller.ShowSettings(cancelled).Code != AppResultCode::Unavailable)
+        std::this_thread::yield();
+    Check(shutdown.wait_for(std::chrono::milliseconds(0)) == std::future_status::timeout,
+          "shutdown must wait for an admitted observation that is still reading presentation");
+    release.release();
+    shutdown.get();
+    auto observation = capture.get();
+    Check(!observation.Updates && !observation.Snapshot.IsRunning,
+          "a snapshot capture overtaken by shutdown must not install a late observer");
+}
+
 } // namespace
 
 int RunAppControllerTests() {
+    TestSnapshotRegistrationReconcilesChangesDuringCapture();
+    TestSnapshotRegistrationDoesNotReceiveOlderQueuedDelivery();
+    TestUnstableOrStoppedObservationCannotInstallAnObserver();
+    TestInitialSnapshotContainsDiscoveredUnconnectedDevices();
+    TestShutdownDrainsAnObservationBeingCaptured();
     TestConcreteOwnersAndExplicitUseCases();
     TestPreflightAndShutdownCloseAdmission();
     TestPresentationBoundaryRetainsPickerIntent();

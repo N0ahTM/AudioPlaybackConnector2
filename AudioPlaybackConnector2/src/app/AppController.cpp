@@ -189,10 +189,14 @@ AppController::AppController(std::shared_ptr<SettingsStore> settings,
     m_deviceSubscription = m_devices->Subscribe([weak](apc::device::DeviceFact const& fact) {
         if (auto state = weak.lock()) state->ObserveDevice(fact);
     });
+    m_settingsSubscription = m_settings->Subscribe([weak](SettingsSnapshot const& snapshot) {
+        if (auto state = weak.lock()) state->Publish(SettingsChangedEvent{snapshot.Revision});
+    });
 }
 
 AppController::~AppController() {
     Shutdown();
+    m_settingsSubscription.Reset();
     if (m_devices && m_deviceSubscription) m_devices->Unsubscribe(m_deviceSubscription);
 }
 
@@ -223,6 +227,40 @@ AppController::Subscription AppController::Subscribe(EventHandler handler) {
     entry->Id = id;
     state->Handlers.push_back(entry);
     return Subscription(state, id);
+}
+
+AppController::Observation AppController::SnapshotAndSubscribe(EventHandler handler) {
+    Observation unavailable;
+    unavailable.Snapshot.IsRunning = false;
+    if (!handler) return unavailable;
+    CallLease lease(*this);
+    if (!lease.Acquired()) return unavailable;
+
+    auto const state = m_eventState;
+    auto entry = std::make_shared<EventState::Entry>(0, std::move(handler));
+    for (std::size_t attempt = 0; attempt != 3; ++attempt) {
+        std::uint64_t revision;
+        {
+            std::scoped_lock lock(state->Mutex);
+            if (state->Closed || state->NextId == 0 || state->NextRevision == 0) return unavailable;
+            revision = state->NextRevision - 1;
+        }
+        auto snapshot = Snapshot();
+        if (!snapshot.IsRunning) return unavailable;
+        {
+            std::scoped_lock lock(state->Mutex);
+            if (state->Closed || state->NextId == 0) return unavailable;
+            // No owner or presentation calls under the publication mutex.
+            // Updates preceding this point either force a fresh capture or
+            // appear in the initial snapshot. Later updates target this entry.
+            if (state->NextRevision - 1 != revision) continue;
+            auto const id = state->NextId++;
+            entry->Id = id;
+            state->Handlers.push_back(entry);
+            return {std::move(snapshot), revision, Subscription(state, id)};
+        }
+    }
+    return unavailable;
 }
 
 void AppController::Publish(AppEvent const& event) const noexcept {

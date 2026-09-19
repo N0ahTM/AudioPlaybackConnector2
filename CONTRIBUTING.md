@@ -105,6 +105,11 @@ pwsh ./scripts/update-cli-reference.ps1 -Check
 
 The test runner prints a unique temporary application-data directory and sets `LOCALAPPDATA` for its own process before running suites. The real runtime logger writes there; normal application logs remain untouched. These logs are retained for failure diagnosis.
 
+Named-pipe protocol fixtures admit only clients in the test process through the server's trust-policy boundary.
+The Release security checks use the unchanged production policy, including a real-pipe test that rejects an
+unpackaged peer before dispatching its command. Debug builds additionally permit an exact executable-file match
+for development; Release builds do not inherit that permission from the tests.
+
 The x64 test executable runs on standard GitHub-hosted Windows runners. CI also cross-compiles the complete ARM64 solution and ARM64 test executable; run that binary on ARM64 Windows when validating architecture-specific behavior.
 
 ## How to Contribute

@@ -48,7 +48,7 @@
   <ItemDefinitionGroup>
     <ClCompile>
       <AdditionalIncludeDirectories>..\AudioPlaybackConnector2.CoreRuntime\include;..\AudioPlaybackConnector2\include;..\packages\Microsoft.Windows.ImplementationLibrary.1.0.260126.7\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>APC_ALLOW_UNPACKAGED_CONTROL;APC_COMMAND_PIPE_SERVER_TESTING;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>APC_COMMAND_PIPE_SERVER_TESTING;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
     <Link>

@@ -349,7 +349,7 @@ inline bool IsTrustedPeerProcess(HANDLE process,
         auto peerIdentity = details::QueryProcessIdentity(process, processId);
         if (!peerIdentity || !details::IsSameTrustedIdentity(*self, *peerIdentity)) return false;
         if (self->Package.State != details::PackageIdentityState::Unpackaged) return true;
-#if !defined(_DEBUG) && !defined(APC_ALLOW_UNPACKAGED_CONTROL)
+#if !defined(_DEBUG)
         // Unpackaged equal-user processes have no OS-enforced code-identity boundary.
         (void)expectedUnpackagedIdentity;
         return false;

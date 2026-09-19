@@ -79,6 +79,16 @@ std::wstring UniquePipeName(std::wstring_view testName) {
            std::to_wstring(++g_pipeSequence) + L"." + std::wstring(testName);
 }
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Bounded Test Host /////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
+bool IsCurrentTestProcessClient(HANDLE pipe) noexcept {
+    ULONG clientId = 0;
+    return GetNamedPipeClientProcessId(pipe, &clientId) && clientId == GetCurrentProcessId() &&
+           apc::control::IsTrustedPeerProcess(GetCurrentProcess(), clientId);
+}
+
 CommandLineControlServer::Options TestOptions(std::wstring_view testName, std::size_t instances = 2) {
     CommandLineControlServer::Options serverOptions;
     serverOptions.PipeName = UniquePipeName(testName);
@@ -90,7 +100,7 @@ CommandLineControlServer::Options TestOptions(std::wstring_view testName, std::s
     serverOptions.RetryDelayMs = 10;
     serverOptions.RequestRecordLifetime = 2s;
     serverOptions.RetryStartupFailures = false;
-    serverOptions.IsTrustedClient = [](HANDLE) noexcept { return true; };
+    serverOptions.IsTrustedClient = IsCurrentTestProcessClient;
     return serverOptions;
 }
 
@@ -166,16 +176,6 @@ bool WaitUntil(std::function<bool()> predicate, DWORD timeoutMs) {
 
 void TestProductionRoundTripFragmentationAndRearm() {
     auto options = TestOptions(L"roundtrip", 1);
-    options.IsTrustedClient = {};
-    auto currentImage = apc::control::details::ProcessImagePath(GetCurrentProcess());
-    Check(static_cast<bool>(currentImage), "production trust test must resolve its client executable");
-    if (!currentImage) return;
-    auto currentIdentity = apc::control::ExecutableIdentityFromPath(*currentImage);
-    Check(static_cast<bool>(currentIdentity), "production trust test must resolve its client file identity");
-    if (!currentIdentity) return;
-    options.IsTrustedClient = [currentIdentity](HANDLE pipe) noexcept {
-        return apc::control::IsTrustedNamedPipeClient(pipe, currentIdentity);
-    };
     const auto pipeName = options.PipeName;
     CommandLineControlServer server(std::move(options));
     std::atomic_int calls = 0;
@@ -846,9 +846,14 @@ void TestStartupSquattingAndSecurityDescriptor() {
           "an already-open current-process handle must trust itself without reopening the process");
     auto currentImage = apc::control::details::ProcessImagePath(GetCurrentProcess());
     auto currentIdentity = currentImage ? apc::control::ExecutableIdentityFromPath(*currentImage) : std::nullopt;
-    Check(currentIdentity &&
-              apc::control::IsTrustedPeerProcess(GetCurrentProcess(), GetCurrentProcessId(), currentIdentity),
-          "strict unpackaged trust must accept the exact current executable image");
+    Check(currentIdentity.has_value(), "the executable file identity must be available for the trust checks");
+#if defined(_DEBUG)
+    Check(apc::control::IsTrustedPeerProcess(GetCurrentProcess(), GetCurrentProcessId(), currentIdentity),
+          "debug development trust must accept the exact current executable image");
+#else
+    Check(!apc::control::IsTrustedPeerProcess(GetCurrentProcess(), GetCurrentProcessId(), currentIdentity),
+          "release trust must reject an unpackaged peer even with a matching executable identity");
+#endif
     if (currentIdentity) {
         auto differentIdentity = *currentIdentity;
         differentIdentity.FileId.Identifier[0] ^= 1;
@@ -974,6 +979,38 @@ void TestStrictCommandSemantics() {
     defaultSet.Target = apc::control::TargetKind::Last;
     Check(!apc::control::IsRequestValid(defaultSet), "default-set must require an explicit resolvable target");
 }
+
+void TestProductionTrustRejectsUnpackagedClientBeforeHandler() {
+    Check(apc::control::details::ProcessPackageIdentity(GetCurrentProcess()).State ==
+              apc::control::details::PackageIdentityState::Unpackaged,
+          "the bounded test host must run without package identity");
+    auto expectedIdentity = apc::control::ProcessExecutableIdentity(GetCurrentProcess());
+    Check(expectedIdentity.has_value(), "the negative trust test must resolve its own executable identity");
+#if defined(_DEBUG)
+    // Debug builds intentionally support exact-file development peers. Missing
+    // identity remains forbidden in that configuration; Release rejects both.
+    expectedIdentity.reset();
+#endif
+    auto options = TestOptions(L"production-trust-rejection", 1);
+    Event trustChecked;
+    options.IsTrustedClient = [expectedIdentity, &trustChecked](HANDLE pipe) noexcept {
+        auto const trusted = apc::control::IsTrustedNamedPipeClient(pipe, expectedIdentity);
+        trustChecked.Signal();
+        return trusted;
+    };
+    auto pipeName = options.PipeName;
+    CommandLineControlServer server(std::move(options));
+    std::atomic_uint32_t handlerCalls = 0;
+    server.Start([&](auto const&, std::stop_token, std::uint64_t) {
+        ++handlerCalls;
+        return apc::control::Response{apc::control::ExitCode::Success, L"must not run"};
+    });
+    Check(server.IsRunning(), "production trust fixture must start");
+    auto response = Exchange(pipeName, MakeRequest(401));
+    Check(trustChecked.Wait(2000), "the connected client must pass through the production trust check");
+    Check(!response && handlerCalls == 0, "an untrusted peer must receive no handler result or execute a command");
+    server.Stop();
+}
 } // namespace
 
 int RunCommandLineControlServerTests() {
@@ -988,5 +1025,6 @@ int RunCommandLineControlServerTests() {
     TestStartStopHandleStability();
     TestMaximumRequestAndIdleCachePruning();
     TestStrictCommandSemantics();
+    TestProductionTrustRejectsUnpackagedClientBeforeHandler();
     return g_failures;
 }

@@ -44,7 +44,7 @@ void TestFreshWorkerCanActivateWindowsRuntimeClass() {
 
     Check(ready.load(), "a fresh worker thread must initialize a usable Windows Runtime apartment");
     Check(SUCCEEDED(activationResult.load()),
-          "a RuntimeApartment worker must activate the same Windows.Data.Json class used by SettingsStore");
+          "a RuntimeApartment worker must activate the Windows.Data.Json class used by the control renderer");
 }
 
 } // namespace

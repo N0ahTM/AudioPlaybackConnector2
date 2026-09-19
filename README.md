@@ -107,6 +107,8 @@ Use [GitHub Discussions](https://github.com/N0ahTM/AudioPlaybackConnector2/discu
 ## Privacy and Crash Reports
 
 - Settings are stored locally in the current user profile.
+- Settings support only the current file format. After an incompatible format change, preferences reset to defaults
+  and must be configured again; the original file is retained as a backup. Old preferences are not migrated.
 - No telemetry is sent by the app.
 - The app does not query GitHub release metadata or perform update checks.
 - Privacy mode can redact real Bluetooth device names and IDs from the UI, command-line output, and copied diagnostics.

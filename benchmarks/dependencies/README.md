@@ -1,7 +1,8 @@
 # Dependency evaluation probes
 
 These isolated programs are the first stage of the rewrite's dependency evaluation.
-They do not approve or introduce these libraries into the product. Product builds
+The JSON library is now used by the product settings codec and string loader; CLI11
+and spdlog remain probe-only. Product builds
 continue to use the existing MSBuild solution; CMake is used only for these probes.
 
 Run locally with PowerShell 7, CMake 4.2 or newer and Visual Studio 2026 with v145,
@@ -62,11 +63,14 @@ directory. No compiler warnings occurred.
 ## Adoption gates still open
 
 - Compare adapters against the actual existing implementations, including net
-  production lines removed (currently zero) and complete product package size.
+  production logic removed and complete product package size. The settings codec
+  replaces the old Store parser/writer and adds stricter current-format validation;
+  its total source size must not be confused with parser boilerplate alone.
 - CLI11: all golden stdout, stderr and exit-code cases, Windows UTF-16 argument
   handling, quoting, aliases and help formatting.
-- JSON: the explicit settings codec, schema 0/1 to 2 conversion, validation,
-  rejection behavior and the existing persistence fixtures.
+- JSON: product codec supports only schema 2, with complete validation and whole-input
+  rejection. The user explicitly removed all historical-format migration. Product
+  package size and supply-chain acceptance remain part of the final verification.
 - spdlog: the product owner, bounded shutdown during stalled I/O, crash-path
   independence, error handling and drop reporting. The raw pool destructor
   waits for its worker and is insufficient for the required shutdown contract.

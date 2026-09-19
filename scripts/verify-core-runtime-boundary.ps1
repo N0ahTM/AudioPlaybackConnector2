@@ -53,6 +53,9 @@ function Resolve-LocalMsbuildImport(
     $expanded = $expanded.Replace('$(ProjectDir)', ($EvaluationProjectDirectory.TrimEnd('\') + '\'))
     $expanded = $expanded.Replace('$(MSBuildThisFileDirectory)', ($CurrentDirectory.TrimEnd('\') + '\'))
     if ($expanded.Contains('$(')) {
+        if ($expanded -eq '$(VSInstallDir)VC\vcpkg\scripts\buildsystems\msbuild\vcpkg.targets') {
+            return $null # The Visual Studio package-manager integration, not a product UI import.
+        }
         if ($expanded -match '^\$\((VCTargetsPath|UserRootDir|MSBuildExtensionsPath|MSBuildToolsPath)\)[\\/]') {
             return $null
         }

@@ -7,6 +7,7 @@ Thank you for your interest in contributing to AudioPlaybackConnector2.
 - Visual Studio 2026 18.6 or later with MSVC Build Tools 14.51 (v145), with:
   - **Desktop development with C++**
   - **Windows application development** (for WinUI 3 / Windows App SDK)
+- Visual Studio vcpkg component (the MSBuild integration under `VC/vcpkg`)
 - Windows SDK 10.0.26100.0 or later
 - Windows 10 version 2004 or newer; Windows 11 is recommended for development
 
@@ -23,6 +24,10 @@ This verifies the CoreRuntime, CoreTests and Control boundaries, restores only t
 parallel and runs CoreTests. It needs the C++ workload and Windows SDK, without WinUI, XAML generation or the
 graphical app project. For an ARM64 cross-build use `-Platform ARM64`; run that test binary on ARM64 Windows.
 Add `-DisablePrecompiledHeaders` to check the build without compiler PCH reuse. CI runs these same commands.
+The CoreRuntime build restores its pinned JSON dependency automatically from the root vcpkg manifest.
+No user-wide `vcpkg integrate install` or Classic Mode installation is needed. The explicit triplets are
+`x64-windows-static-md` and `arm64-windows-static-md`; each has its own installation root under
+`vcpkg_installed/` so one architecture's manifest restore cannot remove another's dependencies.
 Shared C++ rules live in `Directory.Build.props`; `Directory.Build.targets` rejects MSVC older than 14.51 and
 any translation unit outside the C++26 draft mode.
 

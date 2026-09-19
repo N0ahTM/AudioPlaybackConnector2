@@ -1,5 +1,6 @@
 #include <pch.h>
 #include <core/StringResources.hpp>
+#include <nlohmann/json.hpp>
 #include <util/Util.hpp>
 #include <resource.h>
 
@@ -63,12 +64,12 @@ void StringResources::Initialize(HINSTANCE hInst, std::wstring_view language) {
 
         try {
             const std::string_view jsonView(reinterpret_cast<const char*>(data->data()), data->size());
-            const auto json = winrt::Windows::Data::Json::JsonObject::Parse(winrt::to_hstring(jsonView));
-            for (const auto pair : json) {
-                if (pair.Value().ValueType() != winrt::Windows::Data::Json::JsonValueType::String) continue;
-
-                auto key = winrt::to_string(pair.Key());
-                auto value = std::wstring(pair.Value().GetString());
+            const auto json = nlohmann::json::parse(jsonView);
+            if (!json.is_object()) return false;
+            for (auto const& [resourceKey, text] : json.items()) {
+                if (!text.is_string()) continue;
+                auto key = resourceKey;
+                auto value = std::wstring(winrt::to_hstring(text.get_ref<std::string const&>()));
                 if (replace)
                     m_map.insert_or_assign(std::move(key), std::move(value));
                 else

@@ -1,6 +1,7 @@
 #include <pch.h>
 
 #include <core/SettingsStore.hpp>
+#include <core/SettingsCodec.hpp>
 
 #include <core/SettingsLimits.hpp>
 #include <util/Logger.hpp>
@@ -14,7 +15,6 @@
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
-#include <unordered_set>
 
 namespace {
 
@@ -24,93 +24,6 @@ namespace {
 
 constexpr auto c_debounceDelay = std::chrono::milliseconds(300);
 constexpr auto c_maxRetryDelay = std::chrono::minutes(5);
-
-[[nodiscard]] std::wstring BoundedString(winrt::hstring const& value, std::size_t limit) {
-    return apc::limits::TruncateUtf16(std::wstring_view(value), limit);
-}
-
-[[nodiscard]] bool IsPersistable(SettingsData const& data) {
-    if (data.Devices.size() > apc::limits::c_maxPersistedDeviceCount ||
-        data.LastConnectedIds.size() > apc::limits::c_maxPersistedDeviceCount ||
-        !apc::limits::IsSupportedLanguage(data.Language) ||
-        !apc::limits::IsBoundedUtf16(data.DefaultDeviceId, apc::limits::c_maxDeviceIdCharacters) ||
-        ((data.DefaultDevice == DefaultDeviceMode::SpecificDevice) != !data.DefaultDeviceId.empty())) {
-        return false;
-    }
-    if (data.SettingsWindowBounds && (data.SettingsWindowBounds->Width <= 0 || data.SettingsWindowBounds->Height <= 0 ||
-                                      data.SettingsWindowBounds->Dpi < apc::limits::c_minWindowDpi ||
-                                      data.SettingsWindowBounds->Dpi > apc::limits::c_maxWindowDpi)) {
-        return false;
-    }
-    std::unordered_set<std::wstring_view> deviceIds;
-    std::unordered_set<std::wstring_view> connectedIds;
-    for (auto const& device : data.Devices) {
-        if (device.Id.empty() || !apc::limits::IsBoundedUtf16(device.Id, apc::limits::c_maxDeviceIdCharacters) ||
-            !apc::limits::IsBoundedUtf16(device.Name, apc::limits::c_maxDeviceNameCharacters) ||
-            !apc::limits::IsBoundedUtf16(device.Alias, apc::limits::c_maxDeviceAliasCharacters) ||
-            !deviceIds.insert(device.Id).second) {
-            return false;
-        }
-    }
-    for (auto const& id : data.LastConnectedIds) {
-        if (id.empty() || !apc::limits::IsBoundedUtf16(id, apc::limits::c_maxDeviceIdCharacters) ||
-            !connectedIds.insert(id).second) {
-            return false;
-        }
-    }
-    return true;
-}
-
-[[nodiscard]] bool
-GetOptionalBoolean(winrt::Windows::Data::Json::JsonObject const& json, winrt::hstring const& key, bool fallback) {
-    if (!json.HasKey(key)) return fallback;
-    const auto value = json.Lookup(key);
-    return value.ValueType() == winrt::Windows::Data::Json::JsonValueType::Boolean ? value.GetBoolean() : fallback;
-}
-
-[[nodiscard]] winrt::hstring GetOptionalString(winrt::Windows::Data::Json::JsonObject const& json,
-                                               winrt::hstring const& key,
-                                               winrt::hstring const& fallback) {
-    if (!json.HasKey(key)) return fallback;
-    const auto value = json.Lookup(key);
-    return value.ValueType() == winrt::Windows::Data::Json::JsonValueType::String ? value.GetString() : fallback;
-}
-
-[[nodiscard]] std::int32_t
-GetOptionalInt32(winrt::Windows::Data::Json::JsonObject const& json, winrt::hstring const& key, std::int32_t fallback) {
-    if (!json.HasKey(key)) return fallback;
-    const auto value = json.Lookup(key);
-    if (value.ValueType() != winrt::Windows::Data::Json::JsonValueType::Number) return fallback;
-    const auto number = value.GetNumber();
-    if (!std::isfinite(number) || std::trunc(number) != number ||
-        number < static_cast<double>(std::numeric_limits<std::int32_t>::min()) ||
-        number > static_cast<double>(std::numeric_limits<std::int32_t>::max())) {
-        return fallback;
-    }
-    return static_cast<std::int32_t>(number);
-}
-
-[[nodiscard]] winrt::Windows::Data::Json::JsonObject
-GetOptionalObject(winrt::Windows::Data::Json::JsonObject const& json, winrt::hstring const& key) {
-    if (!json.HasKey(key)) return nullptr;
-    const auto value = json.Lookup(key);
-    return value.ValueType() == winrt::Windows::Data::Json::JsonValueType::Object ? value.GetObject() : nullptr;
-}
-
-[[nodiscard]] winrt::Windows::Data::Json::JsonArray GetOptionalArray(winrt::Windows::Data::Json::JsonObject const& json,
-                                                                     winrt::hstring const& key) {
-    if (!json.HasKey(key)) return nullptr;
-    const auto value = json.Lookup(key);
-    return value.ValueType() == winrt::Windows::Data::Json::JsonValueType::Array ? value.GetArray() : nullptr;
-}
-
-[[nodiscard]] DefaultDeviceMode ParseDefaultDeviceMode(std::wstring_view value) noexcept {
-    return value == L"specificDevice" ? DefaultDeviceMode::SpecificDevice : DefaultDeviceMode::LastConnected;
-}
-
-[[nodiscard]] std::wstring_view SerializeDefaultDeviceMode(DefaultDeviceMode mode) noexcept {
-    return mode == DefaultDeviceMode::SpecificDevice ? L"specificDevice" : L"lastConnected";
-}
 
 [[nodiscard]] std::chrono::milliseconds RetryDelay(unsigned int failures) noexcept {
     const auto exponent = std::min(failures == 0 ? 0U : failures - 1, 10U);
@@ -371,69 +284,7 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
 
     [[nodiscard]] bool Write(SettingsData const& snapshot) noexcept {
         try {
-            if (!IsPersistable(snapshot)) {
-                DebugTrace(L"[SettingsStore] ERROR: refusing invalid or oversized settings");
-                return false;
-            }
-            winrt::Windows::Data::Json::JsonObject json;
-            json.Insert(L"globalConnectOnStartup",
-                        winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.GlobalConnectOnStartup));
-            json.Insert(
-                L"globalReconnectOnConnectionLoss",
-                winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.GlobalReconnectOnConnectionLoss));
-            json.Insert(L"allowIncomingConnections",
-                        winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.AllowIncomingConnections));
-            json.Insert(L"startWithWindows",
-                        winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.StartWithWindows));
-            json.Insert(L"showNotifications",
-                        winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.ShowNotifications));
-            json.Insert(L"useSystemBackdropEffects",
-                        winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.UseSystemBackdropEffects));
-            json.Insert(L"privacyModeEnabled",
-                        winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.PrivacyModeEnabled));
-            json.Insert(L"language", winrt::Windows::Data::Json::JsonValue::CreateStringValue(snapshot.Language));
-            json.Insert(L"defaultDeviceMode",
-                        winrt::Windows::Data::Json::JsonValue::CreateStringValue(
-                            winrt::hstring(SerializeDefaultDeviceMode(snapshot.DefaultDevice))));
-            json.Insert(L"defaultDeviceId",
-                        winrt::Windows::Data::Json::JsonValue::CreateStringValue(snapshot.DefaultDeviceId));
-            if (snapshot.SettingsWindowBounds) {
-                winrt::Windows::Data::Json::JsonObject bounds;
-                bounds.Insert(
-                    L"x", winrt::Windows::Data::Json::JsonValue::CreateNumberValue(snapshot.SettingsWindowBounds->X));
-                bounds.Insert(
-                    L"y", winrt::Windows::Data::Json::JsonValue::CreateNumberValue(snapshot.SettingsWindowBounds->Y));
-                bounds.Insert(
-                    L"width",
-                    winrt::Windows::Data::Json::JsonValue::CreateNumberValue(snapshot.SettingsWindowBounds->Width));
-                bounds.Insert(
-                    L"height",
-                    winrt::Windows::Data::Json::JsonValue::CreateNumberValue(snapshot.SettingsWindowBounds->Height));
-                bounds.Insert(
-                    L"dpi",
-                    winrt::Windows::Data::Json::JsonValue::CreateNumberValue(snapshot.SettingsWindowBounds->Dpi));
-                json.Insert(L"settingsWindowBounds", bounds);
-            }
-            winrt::Windows::Data::Json::JsonArray devices;
-            for (auto const& device : snapshot.Devices) {
-                winrt::Windows::Data::Json::JsonObject entry;
-                entry.Insert(L"id", winrt::Windows::Data::Json::JsonValue::CreateStringValue(device.Id));
-                entry.Insert(L"name", winrt::Windows::Data::Json::JsonValue::CreateStringValue(device.Name));
-                entry.Insert(L"alias", winrt::Windows::Data::Json::JsonValue::CreateStringValue(device.Alias));
-                entry.Insert(L"connectOnStartup",
-                             winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(device.ConnectOnStartup));
-                entry.Insert(
-                    L"reconnectOnConnectionLoss",
-                    winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(device.ReconnectOnConnectionLoss));
-                devices.Append(entry);
-            }
-            json.Insert(L"devices", devices);
-            winrt::Windows::Data::Json::JsonArray lastConnected;
-            for (auto const& id : snapshot.LastConnectedIds)
-                lastConnected.Append(winrt::Windows::Data::Json::JsonValue::CreateStringValue(id));
-            json.Insert(L"lastConnectedIds", lastConnected);
-            const auto utf8 = util::Utf16ToUtf8(json.Stringify());
-            if (utf8.size() > apc::limits::c_maxSettingsFileBytes) return false;
+            const auto utf8 = apc::settings::Encode(snapshot);
             return storage->WriteAtomically(Path(), utf8);
         } catch (std::exception const& exception) {
             DebugTrace(L"[SettingsStore] write failed: {0}", util::Utf8ToUtf16(exception.what()));
@@ -765,73 +616,7 @@ void SettingsStore::Load() {
             lifetime->CompleteLoadWithoutCommit();
             return;
         }
-        const auto json = winrt::Windows::Data::Json::JsonObject::Parse(winrt::to_hstring(*bytes));
-        const auto legacyGlobal = GetOptionalBoolean(json, L"globalAutoReconnect", false);
-        loaded.GlobalConnectOnStartup = GetOptionalBoolean(json, L"globalConnectOnStartup", legacyGlobal);
-        loaded.GlobalReconnectOnConnectionLoss =
-            GetOptionalBoolean(json, L"globalReconnectOnConnectionLoss", legacyGlobal);
-        loaded.AllowIncomingConnections = GetOptionalBoolean(json, L"allowIncomingConnections", false);
-        loaded.StartWithWindows = GetOptionalBoolean(json, L"startWithWindows", false);
-        loaded.ShowNotifications = GetOptionalBoolean(json, L"showNotifications", true);
-        loaded.UseSystemBackdropEffects = GetOptionalBoolean(json, L"useSystemBackdropEffects", true);
-        loaded.PrivacyModeEnabled = GetOptionalBoolean(json, L"privacyModeEnabled", false);
-        const auto language = GetOptionalString(json, L"language", L"system");
-        loaded.Language = apc::limits::IsSupportedLanguage(language) ? std::wstring(language) : L"system";
-        loaded.DefaultDevice = ParseDefaultDeviceMode(GetOptionalString(json, L"defaultDeviceMode", L""));
-        loaded.DefaultDeviceId = GetOptionalString(json, L"defaultDeviceId", L"");
-        if (loaded.DefaultDevice != DefaultDeviceMode::SpecificDevice || loaded.DefaultDeviceId.empty() ||
-            !apc::limits::IsBoundedUtf16(loaded.DefaultDeviceId, apc::limits::c_maxDeviceIdCharacters)) {
-            loaded.DefaultDevice = DefaultDeviceMode::LastConnected;
-            loaded.DefaultDeviceId.clear();
-        }
-        if (auto boundsJson = GetOptionalObject(json, L"settingsWindowBounds")) {
-            const auto persistedDpi = GetOptionalInt32(boundsJson, L"dpi", USER_DEFAULT_SCREEN_DPI);
-            PersistedWindowBounds bounds{
-                GetOptionalInt32(boundsJson, L"x", 0),
-                GetOptionalInt32(boundsJson, L"y", 0),
-                GetOptionalInt32(boundsJson, L"width", 0),
-                GetOptionalInt32(boundsJson, L"height", 0),
-                static_cast<std::uint32_t>(persistedDpi > 0 ? persistedDpi : USER_DEFAULT_SCREEN_DPI)};
-            if (bounds.Width > 0 && bounds.Height > 0 && bounds.Dpi >= apc::limits::c_minWindowDpi &&
-                bounds.Dpi <= apc::limits::c_maxWindowDpi)
-                loaded.SettingsWindowBounds = bounds;
-        }
-        std::unordered_set<std::wstring> deviceIds;
-        if (auto devices = GetOptionalArray(json, L"devices"))
-            for (auto value : devices) {
-                if (loaded.Devices.size() == apc::limits::c_maxPersistedDeviceCount) break;
-                if (value.ValueType() != winrt::Windows::Data::Json::JsonValueType::Object) continue;
-                try {
-                    const auto entry = value.GetObject();
-                    DeviceSettings device;
-                    device.Id = GetOptionalString(entry, L"id", L"");
-                    if (device.Id.empty() ||
-                        !apc::limits::IsBoundedUtf16(device.Id, apc::limits::c_maxDeviceIdCharacters) ||
-                        !deviceIds.insert(device.Id).second)
-                        continue;
-                    device.Name =
-                        BoundedString(GetOptionalString(entry, L"name", L""), apc::limits::c_maxDeviceNameCharacters);
-                    device.Alias =
-                        BoundedString(GetOptionalString(entry, L"alias", L""), apc::limits::c_maxDeviceAliasCharacters);
-                    const auto legacy = GetOptionalBoolean(entry, L"autoReconnect", false);
-                    device.ConnectOnStartup = GetOptionalBoolean(entry, L"connectOnStartup", legacy);
-                    device.ReconnectOnConnectionLoss = GetOptionalBoolean(entry, L"reconnectOnConnectionLoss", legacy);
-                    loaded.Devices.push_back(std::move(device));
-                } catch (...) {
-                    DebugTrace(L"[SettingsStore] skipping invalid device entry");
-                }
-            }
-        std::unordered_set<std::wstring> recentIds;
-        if (auto ids = GetOptionalArray(json, L"lastConnectedIds"))
-            for (auto value : ids) {
-                if (loaded.LastConnectedIds.size() == apc::limits::c_maxPersistedDeviceCount) break;
-                if (value.ValueType() != winrt::Windows::Data::Json::JsonValueType::String) continue;
-                auto identifier = std::wstring(value.GetString());
-                if (!identifier.empty() &&
-                    apc::limits::IsBoundedUtf16(identifier, apc::limits::c_maxDeviceIdCharacters) &&
-                    recentIds.insert(identifier).second)
-                    loaded.LastConnectedIds.push_back(std::move(identifier));
-            }
+        loaded = apc::settings::Decode(*bytes);
     } catch (std::exception const& exception) {
         DebugTrace(L"[SettingsStore] load failed: {0}", util::Utf8ToUtf16(exception.what()));
         lifetime->CompleteLoadWithoutCommit(lifetime->storage->PreserveCorrupt(path));

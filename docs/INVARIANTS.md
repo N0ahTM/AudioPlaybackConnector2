@@ -125,6 +125,12 @@ the data reference and revision under lock, then copies the immutable data after
 | Storage path, backend and worker lifetime | Immutable after construction; admitted load/flush and the persistence worker | Shared `Impl` lifetime; `writerActive` excludes overlapping I/O | Storage backend outside all locks | Final flush runs on the worker; a timed-out worker retains its own state until the admitted I/O returns |
 | Persistence clock, wake version and platform wait | One worker waits; mutations, load/write completion and shutdown signal it | The system wakeup's own mutex/condition variable, never nested with store locks | No callbacks | Notify changes the version; Wait checks that version before sleeping, retaining notifications that arrive before wait entry |
 
+Settings use exactly one format: `schemaVersion: 2`. Unversioned or differently versioned files are
+not migrated, including individually recognizable preferences. The stateless codec validates the complete
+candidate before the store commits it. Unknown keys, duplicate keys/identities, wrong types and invalid limits
+reject the whole input. Missing optional fields use current defaults. The writer always emits version 2.
+The JSON dependency stays in implementation files; no library DOM crosses the store boundary.
+
 Only file/path-not-found means absent settings. An empty file or a failed open is a load failure, not permission
 to overwrite the path with defaults. The storage boundary reports whether preservation succeeded. A failed
 preservation sets `preservationFailed` under `Impl::mutex` before releasing load admission; all subsequent

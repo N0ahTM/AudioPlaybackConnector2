@@ -100,6 +100,7 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceWatcher.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\ReconnectPolicy.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsStore.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsCodec.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsData.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsLimits.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\StringResources.hpp" />
@@ -116,6 +117,7 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\util\Util.hpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\SettingsCodec.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="src\pch.cpp"><PrecompiledHeader>Create</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveResourcePolicy.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\AppController.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
@@ -170,6 +172,7 @@
     <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\scripts\test-core-runtime-boundary.ps1&quot; -VerifierPath &quot;$(MSBuildProjectDirectory)\..\scripts\verify-core-runtime-boundary.ps1&quot;" />
   </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Import Project="$(VSInstallDir)VC\vcpkg\scripts\buildsystems\msbuild\vcpkg.targets" Condition="'$(_ZVcpkgInstalledDir)' == ''" />
   <ImportGroup Label="ExtensionTargets">
     <Import Project="..\packages\Microsoft.Windows.CppWinRT.2.0.250303.1\build\native\Microsoft.Windows.CppWinRT.targets" Condition="Exists('..\packages\Microsoft.Windows.CppWinRT.2.0.250303.1\build\native\Microsoft.Windows.CppWinRT.targets')" />
     <Import Project="..\packages\Microsoft.Windows.SDK.BuildTools.10.0.28000.1839\build\Microsoft.Windows.SDK.BuildTools.targets" Condition="Exists('..\packages\Microsoft.Windows.SDK.BuildTools.10.0.28000.1839\build\Microsoft.Windows.SDK.BuildTools.targets')" />

@@ -243,6 +243,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
+    <Content Include="..\THIRD_PARTY_NOTICES.md"><Link>THIRD_PARTY_NOTICES.md</Link><CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory></Content>
   </ItemGroup>
   <Target Name="GeneratePackageVersionResource" BeforeTargets="ResourceCompile">
     <Error Condition="'$(_ApcPackageVersionFormatValid)' != 'true'"

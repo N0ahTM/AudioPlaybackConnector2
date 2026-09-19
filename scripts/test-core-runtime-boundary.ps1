@@ -29,7 +29,9 @@ try {
     New-Item -ItemType Directory -Path $sourceProjectDirectory | Out-Null
     New-Item -ItemType Directory -Path $wildcardDirectory | Out-Null
     Set-Content -LiteralPath $cleanProject -Encoding UTF8 -Value @'
-<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" />
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(VSInstallDir)VC\vcpkg\scripts\buildsystems\msbuild\vcpkg.targets" />
+</Project>
 '@
     Set-Content -LiteralPath $uiProject -Encoding UTF8 -Value @'
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">

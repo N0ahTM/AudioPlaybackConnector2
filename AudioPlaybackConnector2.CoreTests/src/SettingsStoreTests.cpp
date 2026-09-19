@@ -2,6 +2,8 @@
 #include "ManualSettingsWakeup.hpp"
 
 #include <core/SettingsStore.hpp>
+#include <core/SettingsCodec.hpp>
+#include <stdexcept>
 #include <core/SettingsLimits.hpp>
 #include <util/RuntimeApartment.hpp>
 
@@ -252,24 +254,47 @@ void WriteBytes(std::filesystem::path const& path, std::string_view bytes) {
     return {std::istreambuf_iterator<char>(stream), {}};
 }
 
-void TestCurrentLegacyPartialAndMalformed() {
-    auto storage = std::make_shared<ControlledStorage>();
-    storage->SetInput(
-        R"({"globalAutoReconnect":true,"devices":[7,{"id":"a","autoReconnect":true}],"lastConnectedIds":[7,"a","a"]})");
-    SettingsStore store({}, storage);
-    store.Load();
-    const auto snapshot = store.Snapshot();
-    Check(snapshot.Data.GlobalConnectOnStartup && snapshot.Data.GlobalReconnectOnConnectionLoss,
-          "legacy global reconnect fields must populate both current fields");
-    Check(snapshot.Data.Devices.size() == 1 && snapshot.Data.Devices.front().ConnectOnStartup,
-          "wrong typed and duplicate device entries must be skipped independently");
-    Check(snapshot.Data.LastConnectedIds == std::vector<std::wstring>{L"a"},
-          "wrong typed and duplicate recent ids must be skipped independently");
-
-    storage->SetInput("{");
-    SettingsStore corrupt({}, storage);
-    corrupt.Load();
-    Check(storage->m_corruptPreservations == 1, "malformed JSON must be preserved through storage boundary");
+void TestOnlyCurrentFormatIsAccepted() {
+    const std::vector<std::string> invalid{
+        "{",
+        "",
+        "[]",
+        R"({"language":"de","privacyModeEnabled":true})",
+        R"({"schemaVersion":1,"language":"de"})",
+        R"({"schemaVersion":3,"language":"de"})",
+        R"({"schemaVersion":2,"language":"de","unknown":true})",
+        R"({"schemaVersion":2,"showNotifications":1})",
+        R"({"schemaVersion":2,"language":false})",
+        R"({"schemaVersion":2,"language":"unknown"})",
+        R"({"schemaVersion":2,"language":"en","language":"de"})",
+        R"({"schemaVersion":2,"devices":[{"id":"a"},{"id":"a"}]})",
+        R"({"schemaVersion":2,"devices":[7]})",
+        R"({"schemaVersion":2,"lastConnectedIds":["a","a"]})",
+        R"({"schemaVersion":2,"defaultDeviceMode":"specificDevice"})",
+        R"({"schemaVersion":2,"settingsWindowBounds":{"width":320,"height":240,"dpi":0}})",
+        R"({"schemaVersion":2,"settingsWindowBounds":{"width":320,"height":240,"x":2147483648}})",
+        R"({"schemaVersion":2,"settingsWindowBounds":{"width":320,"height":240,"dpi":144.5}})"};
+    for (auto const& bytes : invalid) {
+        auto storage = std::make_shared<ControlledStorage>();
+        storage->SetInput(bytes);
+        SettingsStore store({}, storage);
+        store.Load();
+        Check(store.Snapshot().Data == SettingsData{} && store.Snapshot().Revision == 0 &&
+                  storage->m_corruptPreservations == 1,
+              "unsupported or invalid input must be preserved with no partial settings adoption");
+        Check(store.SetLanguage(L"ja").IsApplied() && store.FlushNow(1),
+              "after successful preservation, new preferences must save using current defaults");
+        Check(storage->Output().find("\"schemaVersion\":2") != std::string::npos &&
+                  apc::settings::Decode(storage->Output()) == store.Snapshot().Data,
+              "every replacement must use the current format and round-trip its complete state");
+        static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+    }
+    Check(apc::settings::Decode(R"({"schemaVersion":2})") == SettingsData{},
+          "missing optional current-format fields must use current defaults");
+    SettingsData unicode;
+    unicode.Devices.push_back({L"device", L"Kopfh\u00f6rer \u97f3", L"Desk", true, false});
+    Check(apc::settings::Decode(apc::settings::Encode(unicode)) == unicode,
+          "UTF-8 persistence must round-trip Unicode device names");
 }
 
 void TestMissingEmptyAndCurrentRoundTrip() {
@@ -284,7 +309,7 @@ void TestMissingEmptyAndCurrentRoundTrip() {
 
     auto input = std::make_shared<ControlledStorage>();
     input->SetInput(
-        R"({"globalConnectOnStartup":true,"globalReconnectOnConnectionLoss":true,"allowIncomingConnections":true,"startWithWindows":true,"showNotifications":false,"useSystemBackdropEffects":false,"language":"de","lastUpdateCheckUnixSeconds":5,"lastNotifiedUpdateVersion":"2.0","privacyModeEnabled":true,"defaultDeviceMode":"specificDevice","defaultDeviceId":"a","settingsWindowBounds":{"x":1,"y":2,"width":3,"height":4,"dpi":144},"devices":[{"id":"a","name":"A","alias":"Desk","connectOnStartup":true,"reconnectOnConnectionLoss":true}],"lastConnectedIds":["a"]})");
+        R"({"schemaVersion":2,"globalConnectOnStartup":true,"globalReconnectOnConnectionLoss":true,"allowIncomingConnections":true,"startWithWindows":true,"showNotifications":false,"useSystemBackdropEffects":false,"language":"de","privacyModeEnabled":true,"defaultDeviceMode":"specificDevice","defaultDeviceId":"a","settingsWindowBounds":{"x":1,"y":2,"width":3,"height":4,"dpi":144},"devices":[{"id":"a","name":"A","alias":"Desk","connectOnStartup":true,"reconnectOnConnectionLoss":true}],"lastConnectedIds":["a"]})");
     SettingsStore current({}, input);
     current.Load();
     const auto data = current.Snapshot().Data;
@@ -297,7 +322,7 @@ void TestMissingEmptyAndCurrentRoundTrip() {
               data.LastConnectedIds == std::vector<std::wstring>{L"a"},
           "current-schema input must retain every persisted field");
     static_cast<void>(current.SetLanguage(L"ja"));
-    input->SetInput(R"({"language":"fr"})");
+    input->SetInput(R"({"schemaVersion":2,"language":"fr"})");
     current.Load();
     Check(current.Snapshot().Data.Language == L"ja", "a second Load must not overwrite a committed runtime mutation");
     static_cast<void>(current.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
@@ -326,41 +351,6 @@ void TestValidationAndLoadNormalizationMatrix() {
     static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
 }
 
-void TestLegacyWindowDpiLoadCompatibility() {
-    struct DpiCase {
-        std::string Json;
-        std::optional<std::uint32_t> ExpectedDpi;
-    };
-
-    const std::vector<DpiCase> cases{
-        {R"({"settingsWindowBounds":{"width":320,"height":240,"dpi":-1}})", USER_DEFAULT_SCREEN_DPI},
-        {R"({"settingsWindowBounds":{"width":320,"height":240,"dpi":0}})", USER_DEFAULT_SCREEN_DPI},
-        {R"({"settingsWindowBounds":{"width":320,"height":240}})", USER_DEFAULT_SCREEN_DPI},
-        {std::format(R"({{"settingsWindowBounds":{{"width":320,"height":240,"dpi":{}}}}})", USER_DEFAULT_SCREEN_DPI),
-         USER_DEFAULT_SCREEN_DPI},
-        {R"({"settingsWindowBounds":{"width":320,"height":240,"dpi":144}})", 144},
-        {std::format(R"({{"settingsWindowBounds":{{"width":320,"height":240,"dpi":{}}}}})",
-                     apc::limits::c_minWindowDpi - 1),
-         std::nullopt},
-        {std::format(R"({{"settingsWindowBounds":{{"width":320,"height":240,"dpi":{}}}}})",
-                     apc::limits::c_maxWindowDpi + 1),
-         std::nullopt},
-    };
-
-    for (auto const& test : cases) {
-        auto storage = std::make_shared<ControlledStorage>();
-        storage->SetInput(test.Json);
-        SettingsStore store({}, storage);
-        store.Load();
-        const auto bounds = store.Snapshot().Data.SettingsWindowBounds;
-        Check(bounds.has_value() == test.ExpectedDpi.has_value(), "legacy DPI compatibility must retain valid bounds");
-        if (bounds && test.ExpectedDpi)
-            Check(bounds->Dpi == *test.ExpectedDpi,
-                  "legacy nonpositive DPI must normalize before persisted-bound validation");
-        static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
-    }
-}
-
 void TestFailedPreservationBlocksMutationAndFlush() {
     auto storage = std::make_shared<ControlledStorage>();
     storage->SetInput("{");
@@ -376,7 +366,7 @@ void TestFailedPreservationBlocksMutationAndFlush() {
 
 void TestUnreadableFileIsNotTreatedAsMissing() {
     ScopedTestDirectory directory;
-    constexpr std::string_view original = R"({"language":"fr"})";
+    constexpr std::string_view original = R"({"schemaVersion":2,"language":"fr"})";
     WriteBytes(directory.SettingsPath(), original);
     wil::unique_hfile blocker(CreateFileW(
         directory.SettingsPath().c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
@@ -432,7 +422,7 @@ void TestProductionCorruptPreservationAndAtomicWrite() {
 
 void TestReplacementFailurePreservesOldBytesAndCleansTemporaryFile() {
     ScopedTestDirectory directory;
-    constexpr std::string_view original = R"({"language":"fr"})";
+    constexpr std::string_view original = R"({"schemaVersion":2,"language":"fr"})";
     WriteBytes(directory.SettingsPath(), original);
     SettingsStore store(directory.Path());
     static_cast<void>(store.SetLanguage(L"de"));
@@ -745,7 +735,7 @@ void TestStorageFailureRetriesLatestRevision() {
 
 void TestLoadAdmissionFencesMutationAndFlush() {
     auto storage = std::make_shared<ControlledStorage>();
-    storage->SetInput(R"({"language":"fr","privacyModeEnabled":false})");
+    storage->SetInput(R"({"schemaVersion":2,"language":"fr","privacyModeEnabled":false})");
     storage->BlockReads();
     SettingsStore store({}, storage);
     std::jthread loading([&] { store.Load(); });
@@ -772,7 +762,7 @@ void TestLoadAdmissionFencesMutationAndFlush() {
 
 void TestShutdownWaitsForAdmittedLoad() {
     auto storage = std::make_shared<ControlledStorage>();
-    storage->SetInput(R"({"language":"ko"})");
+    storage->SetInput(R"({"schemaVersion":2,"language":"ko"})");
     storage->BlockReads();
     SettingsStore store({}, storage);
     std::jthread loading([&] { store.Load(); });
@@ -792,7 +782,7 @@ void TestShutdownWaitsForAdmittedLoad() {
 
 void TestShutdownClosesAdmissionBeforeAdmittedLoadCompletes() {
     auto storage = std::make_shared<ControlledStorage>();
-    storage->SetInput(R"({"language":"fr"})");
+    storage->SetInput(R"({"schemaVersion":2,"language":"fr"})");
     storage->BlockReads();
     SettingsStore store({}, storage);
     std::jthread loading([&] { store.Load(); });
@@ -850,7 +840,7 @@ void TestShutdownClosesAdmissionBeforeAdmittedLoadCompletes() {
 
 void TestMutationBeforeLoadSkipsStorageRead() {
     auto storage = std::make_shared<ControlledStorage>();
-    storage->SetInput(R"({"language":"fr"})");
+    storage->SetInput(R"({"schemaVersion":2,"language":"fr"})");
     SettingsStore store({}, storage);
     Check(store.SetLanguage(L"de").IsApplied(), "runtime mutation must commit before a first load attempt");
     store.Load();
@@ -899,9 +889,8 @@ void TestPersistedMutationRoundTrip() {
     Check(writer.ClearDefaultDevice().IsApplied(), "clear-default mutation must persist");
     Check(writer.SetDefaultDevice(L"primary").IsApplied(), "default-device reset must persist");
     Check(writer.FlushNow(2), "all persisted mutation fields must serialize in one snapshot");
-    Check(storage->Output().find("lastUpdateCheckUnixSeconds") == std::string::npos &&
-              storage->Output().find("lastNotifiedUpdateVersion") == std::string::npos,
-          "obsolete update metadata must not be written");
+    Check(storage->Output().find("\"schemaVersion\":2") != std::string::npos,
+          "persisted preferences must declare the sole supported format");
     storage->SetInput(storage->Output());
     static_cast<void>(writer.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
 
@@ -1067,7 +1056,7 @@ void TestNormalShutdownFlushAndNoLateCallback() {
 
 void TestShutdownBudgetFencesBlockedLoad() {
     auto storage = std::make_shared<ControlledStorage>();
-    storage->SetInput(R"({"language":"ko"})");
+    storage->SetInput(R"({"schemaVersion":2,"language":"ko"})");
     storage->BlockReads();
     SettingsStore store({}, storage);
     std::jthread loading([&] { store.Load(); });
@@ -1184,13 +1173,12 @@ void TestConcurrentShutdownCallerHasItsOwnBudget() {
 } // namespace
 
 int RunSettingsStoreTests() {
+    TestOnlyCurrentFormatIsAccepted();
     util::RuntimeApartment apartment;
     Check(apartment.Ready(), "SettingsStore tests require a usable Windows Runtime apartment");
     if (!apartment.Ready()) return g_failures;
-    TestCurrentLegacyPartialAndMalformed();
     TestMissingEmptyAndCurrentRoundTrip();
     TestValidationAndLoadNormalizationMatrix();
-    TestLegacyWindowDpiLoadCompatibility();
     TestProductionCorruptPreservationAndAtomicWrite();
     TestFailedPreservationBlocksMutationAndFlush();
     TestUnreadableFileIsNotTreatedAsMissing();

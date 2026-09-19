@@ -13,6 +13,13 @@
       <LanguageStandard>stdcpplatest</LanguageStandard>
     </ClCompile>
   </ItemDefinitionGroup>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'AudioPlaybackConnector2.CoreRuntime'">
+    <VcpkgEnableManifest>true</VcpkgEnableManifest>
+    <VcpkgManifestRoot>$(MSBuildThisFileDirectory)</VcpkgManifestRoot>
+    <VcpkgTriplet>$(Platform.ToLower())-windows-static-md</VcpkgTriplet>
+    <!-- Manifest restore removes packages outside its requested triplet. Isolate architecture restores. -->
+    <VcpkgInstalledDir>$(MSBuildThisFileDirectory)vcpkg_installed\$(VcpkgTriplet)\</VcpkgInstalledDir>
+  </PropertyGroup>
   <PropertyGroup>
     <PackageVersion Condition="'$(PackageVersion)' == ''">0.9.1.0</PackageVersion>
     <_ApcPackageVersionFormatValid>$([System.Text.RegularExpressions.Regex]::IsMatch('$(PackageVersion)', '^\d{1,5}\.\d{1,5}\.\d{1,5}\.\d{1,5}$'))</_ApcPackageVersionFormatValid>

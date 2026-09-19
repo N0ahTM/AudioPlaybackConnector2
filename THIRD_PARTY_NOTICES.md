@@ -3,6 +3,34 @@
 AudioPlaybackConnector2 includes or depends on the following third-party components.
 Their licenses are reproduced below or linked to their canonical sources.
 
+## nlohmann/json - product dependency
+
+Version 3.12.0, vcpkg port revision 2. Pinned in the repository's manifest.
+Used by the settings codec and embedded string-resource loader. Upstream:
+https://github.com/nlohmann/json
+
+MIT License
+
+Copyright (c) 2013-2025 Niels Lohmann
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 ## Dependency evaluation tools
 
 The isolated programs in `benchmarks/dependencies` evaluate the following
@@ -14,7 +42,6 @@ and records the license SHA-256 in `measurements.json`.
 | Component | Version | License | Upstream |
 |-----------|---------|---------|----------|
 | CLI11 | 2.6.2 | BSD-3-Clause | https://github.com/CLIUtils/CLI11 |
-| nlohmann/json | 3.12.0 (vcpkg port revision 2) | MIT | https://github.com/nlohmann/json |
 | spdlog | 1.17.0 | MIT, with bundled notices in the package copyright file | https://github.com/gabime/spdlog |
 
 See [the evaluation scope and remaining gates](benchmarks/dependencies/README.md).

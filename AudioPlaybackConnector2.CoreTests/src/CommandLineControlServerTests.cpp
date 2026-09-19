@@ -165,6 +165,19 @@ std::optional<apc::control::Response> Exchange(std::wstring const& pipeName,
     return ReadResponse(pipe.Get(), request.CorrelationId, acknowledge, timeoutMs);
 }
 
+bool WaitForServerDisconnect(HANDLE pipe, DWORD timeoutMs = 1000) {
+    std::byte unexpectedByte{};
+    return apc::control::ReadExact(pipe, &unexpectedByte, 1, nullptr, apc::control::DeadlineAfter(timeoutMs)) ==
+           apc::control::IoStatus::Closed;
+}
+
+bool CompleteRoundTrip(std::wstring const& pipeName, apc::control::Request const& request) {
+    auto pipe = OpenClient(pipeName);
+    if (!pipe || !WriteRequest(pipe.Get(), request)) return false;
+    auto response = ReadResponse(pipe.Get(), request.CorrelationId);
+    return response && response->Code == apc::control::ExitCode::Success && WaitForServerDisconnect(pipe.Get());
+}
+
 bool WaitUntil(std::function<bool()> predicate, DWORD timeoutMs) {
     const auto deadline = GetTickCount64() + timeoutMs;
     while (GetTickCount64() < deadline) {
@@ -642,12 +655,10 @@ void TestStopLifecycleAndRearmRetry() {
         const auto pipeName = options.PipeName;
         options.RetryDelayMs = 1;
         std::atomic_int attempts = 0;
-        Event recreated;
         options.BeforeArmConnection = [&](std::size_t) noexcept {
             ++attempts;
             return false;
         };
-        options.AfterPipeRecreated = [&](std::size_t) noexcept { recreated.Signal(); };
         CommandLineControlServer server(std::move(options));
         server.Start([](apc::control::Request const&, std::stop_token, std::uint64_t) {
             return apc::control::Response{apc::control::ExitCode::Success, L"recovered"};
@@ -655,12 +666,8 @@ void TestStopLifecycleAndRearmRetry() {
         Check(server.IsRunning(), "server lifecycle must stay healthy while an individual slot retries");
         auto stale = OpenClient(pipeName);
         Check(static_cast<bool>(stale), "unarmed fixture client must attach to the old pipe instance");
-        Check(recreated.Wait(2000), "persistent arm failures must recreate the affected slot");
         if (stale) {
-            std::byte byte{};
-            const auto closed =
-                apc::control::ReadExact(stale.Get(), &byte, 1, nullptr, apc::control::DeadlineAfter(500));
-            Check(closed != apc::control::IoStatus::Success,
+            Check(WaitForServerDisconnect(stale.Get(), 3000),
                   "slot recreation must close clients attached to the invalid old instance");
         }
         stale.Reset();
@@ -739,10 +746,6 @@ void TestStartupSquattingAndSecurityDescriptor() {
                                                   0,
                                                   nullptr));
         Check(static_cast<bool>(blockedSlot), "one-slot squatting fixture must be created");
-        Event recoveredSlot;
-        partialOptions.AfterPipeRecreated = [&](std::size_t index) noexcept {
-            if (index == 1) recoveredSlot.Signal();
-        };
         CommandLineControlServer partialServer(std::move(partialOptions));
         partialServer.Start([](apc::control::Request const&, std::stop_token, std::uint64_t) {
             return apc::control::Response{apc::control::ExitCode::Success, L"available-slot"};
@@ -752,9 +755,8 @@ void TestStartupSquattingAndSecurityDescriptor() {
         Check(partialResponse && partialResponse->Payload == L"available-slot",
               "a healthy slot must serve commands while another slot is blocked");
         blockedSlot.Reset();
-        Check(recoveredSlot.Wait(3000), "a blocked startup slot must recover after its namespace becomes available");
         UniqueHandle recoveredClient;
-        const auto recoveredDeadline = GetTickCount64() + 1000;
+        const auto recoveredDeadline = GetTickCount64() + 3000;
         do {
             recoveredClient.Reset(CreateFileW(blockedSlotName.c_str(),
                                               GENERIC_READ | FILE_WRITE_DATA,
@@ -871,10 +873,8 @@ void TestStartupSquattingAndSecurityDescriptor() {
 void TestStartStopHandleStability() {
     auto options = TestOptions(L"leaks", 1);
     const auto pipeName = options.PipeName;
-    std::atomic_size_t acknowledgements = 0;
-    options.AfterDeliveryCompleted = [&](apc::control::CorrelationId, bool acknowledged) noexcept {
-        if (acknowledged) ++acknowledgements;
-    };
+    // The close must follow the ACK, not an expired acknowledgement deadline.
+    options.AcknowledgementTimeoutMs = 5000;
     CommandLineControlServer server(std::move(options));
     const auto handler = [](apc::control::Request const&, std::stop_token, std::uint64_t) {
         return apc::control::Response{apc::control::ExitCode::Success, L"ok"};
@@ -882,9 +882,8 @@ void TestStartStopHandleStability() {
 
     for (std::uint64_t cycle = 0; cycle < 5; ++cycle) {
         server.Start(handler);
-        (void)Exchange(pipeName, MakeRequest(100 + cycle));
-        Check(WaitUntil([&] { return acknowledgements.load() >= cycle + 1; }, 1000),
-              "warmup ACK must be observed before stopping the endpoint");
+        Check(CompleteRoundTrip(pipeName, MakeRequest(100 + cycle)),
+              "warmup exchange must reach server disconnect before stopping the endpoint");
         server.Stop();
     }
     DWORD before = 0;
@@ -892,11 +891,8 @@ void TestStartStopHandleStability() {
 
     for (std::uint64_t cycle = 0; cycle < 100; ++cycle) {
         server.Start(handler);
-        auto response = Exchange(pipeName, MakeRequest(1000 + cycle));
-        Check(response && response->Code == apc::control::ExitCode::Success,
-              "stress cycle must complete a production roundtrip");
-        Check(WaitUntil([&] { return acknowledgements.load() >= cycle + 6; }, 1000),
-              "stress ACK must be observed before stopping the endpoint");
+        Check(CompleteRoundTrip(pipeName, MakeRequest(1000 + cycle)),
+              "stress exchange must reach server disconnect before stopping the endpoint");
         server.Stop();
     }
     DWORD after = 0;

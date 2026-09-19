@@ -14,6 +14,10 @@
 #include <type_traits>
 #include <utility>
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Platform Helpers //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 namespace {
 enum class PipePhase {
     Disconnected,
@@ -104,6 +108,10 @@ FILETIME AbsoluteDeadline(std::uint64_t deadline) noexcept {
 
 } // namespace
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Request Records ///////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 struct CommandLineControlServer::RequestRecord {
     apc::control::Request Request;
     apc::control::Response Response;
@@ -115,6 +123,10 @@ struct CommandLineControlServer::RequestRecord {
     bool IsComplete = false;
     bool Acknowledged = false;
 };
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Pipe Instance State ///////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 struct CommandLineControlServer::PipeInstance {
     PipeInstance(CommandLineControlServer* owner, std::size_t index, std::wstring name)
@@ -164,6 +176,10 @@ struct CommandLineControlServer::PipeInstance {
 };
 
 static_assert(std::is_nothrow_move_assignable_v<apc::control::Response>);
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Server Lifecycle //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 CommandLineControlServer::CommandLineControlServer() {
     const auto expectedIdentity = [] {
@@ -469,6 +485,10 @@ void CommandLineControlServer::Stop() noexcept {
     }
 }
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Connection and Recovery ///////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 bool CommandLineControlServer::ArmConnection(PipeInstance& instance) noexcept {
     try {
 #ifdef APC_COMMAND_PIPE_SERVER_TESTING
@@ -609,16 +629,14 @@ void CommandLineControlServer::RecreatePipeInstance(PipeInstance& instance) noex
             instance.RearmFailures = 0;
             if (!ArmConnectionLocked(instance)) Trace(L"recreated pipe instance arm deferred");
         }
-#ifdef APC_COMMAND_PIPE_SERVER_TESTING
-        try {
-            if (m_options.AfterPipeRecreated) m_options.AfterPipeRecreated(instance.Index);
-        } catch (...) {
-        }
-#endif
     } catch (...) {
         failAndRetry();
     }
 }
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Overlapped Transfers //////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 bool CommandLineControlServer::StartTransferLocked(
     PipeInstance& instance, void* buffer, std::uint32_t byteCount, bool write, std::uint64_t deadline) noexcept {
@@ -655,6 +673,10 @@ bool CommandLineControlServer::StartCurrentTransferLocked(PipeInstance& instance
     SetLastError(error);
     return false;
 }
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Threadpool Callbacks //////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 void CALLBACK CommandLineControlServer::OnIoCompleted(
     PTP_CALLBACK_INSTANCE, void* context, void* overlapped, ULONG ioResult, ULONG_PTR bytes, PTP_IO) noexcept {
@@ -839,6 +861,10 @@ void CALLBACK CommandLineControlServer::OnDeferredStop(PTP_CALLBACK_INSTANCE, vo
     auto* owner = static_cast<CommandLineControlServer*>(context);
     if (owner) owner->Stop();
 }
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Protocol State Machine ////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 void CommandLineControlServer::HandleIoCompletion(PipeInstance& instance,
                                                   void* overlapped,
@@ -1050,6 +1076,10 @@ void CommandLineControlServer::FinishClientLocked(PipeInstance& instance) noexce
     if (m_running.load() && !ArmConnectionLocked(instance)) Trace(L"pipe rearm deferred");
 }
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Request Deduplication /////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 std::shared_ptr<CommandLineControlServer::RequestRecord>
 CommandLineControlServer::ExecuteOnce(apc::control::Request const& request,
                                       std::stop_token stopToken,
@@ -1165,11 +1195,6 @@ void CommandLineControlServer::CompleteDelivery(apc::control::CorrelationId corr
             PruneRequestRecords(record->LastDeliveryCompletedAt);
             ScheduleRequestPruneLocked(record->LastDeliveryCompletedAt);
         }
-#ifdef APC_COMMAND_PIPE_SERVER_TESTING
-        if (m_options.AfterDeliveryCompleted) {
-            m_options.AfterDeliveryCompleted(correlationId, acknowledged);
-        }
-#endif
     } catch (...) {
         Trace(L"request acknowledgement cleanup failed");
     }

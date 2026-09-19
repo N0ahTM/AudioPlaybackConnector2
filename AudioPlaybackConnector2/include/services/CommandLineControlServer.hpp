@@ -39,9 +39,7 @@ public:
         TrustClient IsTrustedClient;
 #ifdef APC_COMMAND_PIPE_SERVER_TESTING
         std::function<bool(std::size_t)> BeforeArmConnection;
-        std::function<void(std::size_t)> AfterPipeRecreated;
         std::function<void(std::size_t)> BeforeDeliveryPromoted;
-        std::function<void(apc::control::CorrelationId, bool)> AfterDeliveryCompleted;
         std::function<void(std::size_t, std::size_t)> AfterRequestCachePruned;
 #endif
     };

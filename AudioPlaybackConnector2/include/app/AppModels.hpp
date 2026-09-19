@@ -412,6 +412,7 @@ struct DeviceConnectedEvent {
 
 struct DeviceDisconnectedEvent {
     ExternalDeviceId Id;
+    bool NotifyUser = false;
     friend bool operator==(DeviceDisconnectedEvent const&, DeviceDisconnectedEvent const&) = default;
 };
 
@@ -420,6 +421,8 @@ struct DeviceConnectionErrorEvent {
     // The legacy free-form message is deliberately normalized away here.
     // Presentation chooses localized text from this actionable category.
     AppResultCode Code = AppResultCode::OperationFailed;
+    enum class Reason { Unknown, TimedOut, Denied, ReconnectExhausted };
+    Reason FailureReason = Reason::Unknown;
     friend bool operator==(DeviceConnectionErrorEvent const&, DeviceConnectionErrorEvent const&) = default;
 };
 

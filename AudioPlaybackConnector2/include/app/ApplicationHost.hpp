@@ -4,7 +4,6 @@
 #include <app/AdaptiveResourceDiagnostics.hpp>
 #include <app/AppController.hpp>
 #include <app/ControlUiActionGate.hpp>
-#include <app/DeviceEventRouter.hpp>
 #include <app/LegacyAppUseCaseBridge.hpp>
 #include <app/PowerTransitionCoordinator.hpp>
 #include <app/ResourcePressureMonitor.hpp>
@@ -102,14 +101,14 @@ private:
     void DrainUiFallbackWork() noexcept;
     ControlUiActionResult RunControlUiAction(std::function<bool()> work, apc::app::AppCommandContext const& context);
 
-    void PublishDeviceFact(apc::app::LegacyAppUseCaseBridge::DeviceFact fact) noexcept;
+    void HandleAppEvent(apc::app::AppController::EventNotification const& event);
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Device Event Handlers /////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
     void OnDeviceConnected(winrt::hstring const& id);
-    void OnDeviceDisconnected(winrt::hstring const& id, apc::device::DeviceDisconnectReason reason);
+    void OnDeviceDisconnected(winrt::hstring const& id, bool notifyUser);
     void OnConnectionError(winrt::hstring const& id, winrt::hstring msg);
     void OnAutoReconnectTriggered(winrt::hstring const& id);
     void OnAutoReconnectFailed(winrt::hstring const& id);
@@ -148,7 +147,7 @@ private:
     std::mutex m_uiFallbackWorkMutex;
     std::deque<std::function<void()>> m_uiFallbackWork;
     bool m_uiFallbackMessagePending = false;
-    DeviceEventRouter m_deviceEventRouter;
+    apc::app::AppController::Subscription m_appEventSubscription;
     SingleInstanceGuard m_singleInstanceGuard;
     static inline UINT s_wmTaskbarCreated = 0;
     static constexpr UINT_PTR c_timerAnimation = 0x41504332;

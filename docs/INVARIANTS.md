@@ -40,6 +40,18 @@ Publication revisions currently order events only. They do not yet certify an at
 close the separate snapshot/registration gap; the concrete controller-owner integration must establish that
 contract before the complete rewrite is accepted.
 
+The controller subscribes directly to the concrete `DeviceService` fact stream. Its private event state owns
+`DeviceFactPublicationFence`; there is no separate router or device-state history map. The fence records only
+connection/status publication history and identifies superseded presentation work. Session snapshots remain
+the authority for application device state. Normalization runs on the device context without localization or
+UI dispatch. Events carry typed failure reasons and disconnect notification intent.
+
+The host subscribes to the controller and marshals each notification once to its UI context. Before presenting
+device work it validates the notification's fence token; a queued connected event cannot revive a disconnected
+device's presentation. The controller unsubscribes from the source at destruction, and the source callback
+captures only weak event state. Integration tests exercise opaque external IDs, loss versus manual disconnect,
+reconnect entry, typed platform failure and callbacks after controller destruction.
+
 ## Settings persistence
 
 `SettingsStore` owns the current immutable `SettingsData` reference, revision and persisted revision. Changes stage

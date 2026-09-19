@@ -1,12 +1,18 @@
 #pragma once
 
 #include <app/AppModels.hpp>
+#include <app/DeviceFactPublicationFence.hpp>
 
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string_view>
 #include <utility>
+
+namespace apc::device {
+class DeviceService;
+}
 
 namespace apc::app {
 
@@ -20,6 +26,7 @@ public:
     struct EventNotification {
         std::uint64_t Revision = 0;
         AppEvent Event;
+        std::optional<DeviceFactPublicationFence::Token> DeviceToken;
     };
     using EventHandler = std::function<void(EventNotification const&)>;
     using SubscriptionId = std::uint64_t;
@@ -47,7 +54,9 @@ public:
         SubscriptionId m_id = 0;
     };
 
-    AppController(Executor executor, SnapshotProvider snapshotProvider);
+    AppController(Executor executor,
+                  SnapshotProvider snapshotProvider,
+                  std::shared_ptr<apc::device::DeviceService> devices = {});
     ~AppController();
 
     AppController(AppController const&) = delete;
@@ -101,6 +110,7 @@ public:
     // delivery; callbacks never overlap. Reset drains an admitted callback, except when called by that callback.
     [[nodiscard]] Subscription Subscribe(EventHandler handler);
     void Publish(AppEvent const& event) const noexcept;
+    [[nodiscard]] bool IsCurrent(EventNotification const& notification) const;
 
 private:
     [[nodiscard]] AppResult Execute(AppCommand command, AppCommandContext context = {}) const noexcept;
@@ -108,6 +118,8 @@ private:
     Executor m_executor;
     SnapshotProvider m_snapshotProvider;
     std::shared_ptr<EventState> m_eventState;
+    std::shared_ptr<apc::device::DeviceService> m_devices;
+    std::uint64_t m_deviceSubscription = 0;
 };
 
 } // namespace apc::app

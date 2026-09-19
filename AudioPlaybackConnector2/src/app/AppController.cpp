@@ -1,4 +1,5 @@
 #include <app/AppController.hpp>
+#include <core/DeviceService.hpp>
 
 #include <algorithm>
 #include <condition_variable>
@@ -59,11 +60,11 @@ struct AppController::EventState {
         }
     }
 
-    void Publish(AppEvent const& event) {
+    void Publish(AppEvent const& event, std::optional<DeviceFactPublicationFence::Token> token = {}) {
         {
             std::lock_guard lock(Mutex);
             if (Closed || NextRevision == 0) return;
-            Pending.push_back({{NextRevision, event}, Handlers});
+            Pending.push_back({{NextRevision, event, std::move(token)}, Handlers});
             ++NextRevision;
             if (Draining) return;
             Draining = true;
@@ -102,10 +103,71 @@ struct AppController::EventState {
         }
     }
 
+    void ObserveDevice(apc::device::DeviceFact const& fact) {
+        using namespace apc::device;
+        using Status = DeviceFactPublicationFence::Status;
+        {
+            std::lock_guard lock(Mutex);
+            if (Closed) return;
+        }
+        if (fact.Kind == DeviceFactKind::Shutdown) return;
+        if (fact.Kind == DeviceFactKind::InventoryChanged) {
+            Publish(DeviceInventoryChangedEvent{});
+            return;
+        }
+        auto const session = std::ranges::find(fact.Snapshot.Sessions, fact.DeviceId, &DeviceSessionSnapshot::DeviceId);
+        auto const id = ExternalDeviceId::TryCreate(fact.DeviceId);
+        if (session == fact.Snapshot.Sessions.end() || !id) {
+            Publish(DeviceActivityChangedEvent{});
+            return;
+        }
+        auto const [status, appState] = [&] {
+            switch (session->State) {
+                case DeviceLifecycleState::Idle: return std::pair{Status::Ready, DeviceConnectionState::Idle};
+                case DeviceLifecycleState::Connecting:
+                    return std::pair{Status::Connecting, DeviceConnectionState::Connecting};
+                case DeviceLifecycleState::Disconnecting:
+                    return std::pair{Status::Connecting, DeviceConnectionState::Disconnecting};
+                case DeviceLifecycleState::Connected:
+                    return std::pair{Status::Connected, DeviceConnectionState::Connected};
+                case DeviceLifecycleState::WaitingForReconnect:
+                    return std::pair{Status::WaitingForReconnect, DeviceConnectionState::WaitingForReconnect};
+                case DeviceLifecycleState::Failed: return std::pair{Status::Error, DeviceConnectionState::Failed};
+            }
+            return std::pair{Status::None, DeviceConnectionState::Idle};
+        }();
+        auto const observed = DeviceFence.Observe(fact.DeviceId, status);
+        if (!observed.WasConnected && status == Status::Connected) {
+            Publish(DeviceConnectedEvent{*id}, observed.Connection);
+        } else if (observed.WasConnected && status != Status::Connected &&
+                   fact.DisconnectReason != DeviceDisconnectReason::None) {
+            const bool notify = fact.DisconnectReason == DeviceDisconnectReason::UnexpectedLoss ||
+                                fact.DisconnectReason == DeviceDisconnectReason::DeviceRemoved;
+            Publish(DeviceDisconnectedEvent{*id, notify}, observed.Connection);
+        }
+        Publish(DeviceStatusChangedEvent{*id, appState}, observed.State);
+        if (status == Status::WaitingForReconnect && !observed.WasWaitingForReconnect)
+            Publish(AutoReconnectTriggeredEvent{*id}, observed.State);
+        if (fact.Kind == DeviceFactKind::OperationFailed) {
+            const bool automaticFailure =
+                fact.IsTerminalFailure && fact.Operation == DeviceOperationKind::AutomaticReconnect;
+            if (session->State == DeviceLifecycleState::Failed) {
+                using Reason = DeviceConnectionErrorEvent::Reason;
+                auto reason = automaticFailure ? Reason::ReconnectExhausted : Reason::Unknown;
+                if (fact.ConnectionResult == DeviceConnectionResult::TimedOut) reason = Reason::TimedOut;
+                if (fact.ConnectionResult == DeviceConnectionResult::Denied) reason = Reason::Denied;
+                Publish(DeviceConnectionErrorEvent{*id, AppResultCode::OperationFailed, reason}, observed.State);
+            }
+            if (automaticFailure) Publish(AutoReconnectFailedEvent{*id}, observed.State);
+        }
+        Publish(DeviceActivityChangedEvent{});
+    }
+
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
+    DeviceFactPublicationFence DeviceFence;
     std::mutex Mutex;
     std::condition_variable Changed;
     std::vector<std::shared_ptr<Entry>> Handlers;
@@ -117,15 +179,24 @@ struct AppController::EventState {
     bool Closed = false;
 };
 
-AppController::AppController(Executor executor, SnapshotProvider snapshotProvider)
+AppController::AppController(Executor executor,
+                             SnapshotProvider snapshotProvider,
+                             std::shared_ptr<apc::device::DeviceService> devices)
     : m_executor(std::move(executor)), m_snapshotProvider(std::move(snapshotProvider)),
-      m_eventState(std::make_shared<EventState>()) {
+      m_eventState(std::make_shared<EventState>()), m_devices(std::move(devices)) {
     if (!m_executor) throw std::invalid_argument("app controller executor is required");
     if (!m_snapshotProvider) throw std::invalid_argument("app controller snapshot provider is required");
+    if (m_devices) {
+        std::weak_ptr<EventState> weak = m_eventState;
+        m_deviceSubscription = m_devices->Subscribe([weak](apc::device::DeviceFact const& fact) {
+            if (auto state = weak.lock()) state->ObserveDevice(fact);
+        });
+    }
 }
 
 AppController::~AppController() {
     m_eventState->Close();
+    if (m_devices && m_deviceSubscription) m_devices->Unsubscribe(m_deviceSubscription);
 }
 
 AppResult AppController::Execute(AppCommand command, AppCommandContext context) const noexcept {
@@ -296,6 +367,10 @@ void AppController::Publish(AppEvent const& event) const noexcept {
     } catch (...) {
         // Allocation failure cannot escape a device fact callback.
     }
+}
+
+bool AppController::IsCurrent(EventNotification const& notification) const {
+    return !notification.DeviceToken || m_eventState->DeviceFence.IsCurrent(*notification.DeviceToken);
 }
 
 AppController::Subscription::~Subscription() {

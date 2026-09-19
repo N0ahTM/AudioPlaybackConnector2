@@ -1,6 +1,6 @@
 #include "TestCheck.hpp"
 
-#include <app/DeviceEventRouter.hpp>
+#include <app/AppController.hpp>
 #include <core/DeviceService.hpp>
 
 #include <winerror.h>
@@ -374,6 +374,84 @@ void TestCancellationDoesNotWaitBehindBlockedPublisher() {
           "cancellation must enqueue the owned mutation without waiting behind a blocked subscriber");
     Check(connection->CloseCalls == 1, "queued cancellation must close its epoch after the subscriber returns");
     fixture.Service.Unsubscribe(subscription);
+}
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Controller Device Events //////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
+void TestControllerOwnsDeviceFactNormalization() {
+    auto fixture = std::make_shared<Fixture>();
+    std::vector<apc::app::AppController::EventNotification> events;
+    apc::app::AppController controller(
+        [](apc::app::AppCommand const&, apc::app::AppCommandContext const&) { return apc::app::AppResult{}; },
+        [] { return apc::app::AppSnapshot{}; },
+        std::shared_ptr<DeviceService>(fixture, &fixture->Service));
+    auto subscription = controller.Subscribe([&](auto const& event) { events.push_back(event); });
+    const auto longId = std::wstring(513, L'd');
+    ConnectSuccessfully(*fixture, longId);
+    auto const connected = std::ranges::find_if(
+        events, [](auto const& event) { return std::holds_alternative<apc::app::DeviceConnectedEvent>(event.Event); });
+    Check(connected != events.end(), "the controller must normalize the concrete owner's connected fact");
+    if (connected == events.end()) return;
+    auto const retainedConnected = *connected;
+    Check(std::get<apc::app::DeviceConnectedEvent>(retainedConnected.Event).Id.View() == longId &&
+              controller.IsCurrent(retainedConnected),
+          "controller events must preserve opaque external identities and current delivery tokens");
+    (void)fixture->Service.Disconnect(longId);
+    Check(!controller.IsCurrent(retainedConnected),
+          "a queued connected UI event must become stale when the session disconnects");
+    auto const manual = std::ranges::find_if(events, [](auto const& event) {
+        return std::holds_alternative<apc::app::DeviceDisconnectedEvent>(event.Event);
+    });
+    Check(manual != events.end() && !std::get<apc::app::DeviceDisconnectedEvent>(manual->Event).NotifyUser,
+          "manual disconnect events must not request a loss notification");
+    CompleteCloseAndCooldown(*fixture, fixture->ConnectionAccess->LastConnection);
+    ConnectSuccessfully(*fixture, longId);
+    fixture->ConnectionAccess->LastConnection->Signal(DeviceConnectionState::Closed);
+    Check(std::ranges::any_of(events,
+                              [](auto const& event) {
+                                  auto const* disconnected =
+                                      std::get_if<apc::app::DeviceDisconnectedEvent>(&event.Event);
+                                  return disconnected && disconnected->NotifyUser;
+                              }),
+          "unexpected loss must carry the notification policy in the typed application event");
+    Check(std::ranges::any_of(events,
+                              [](auto const& event) {
+                                  return std::holds_alternative<apc::app::AutoReconnectTriggeredEvent>(event.Event);
+                              }),
+          "entering reconnect wait must produce the typed reconnect event");
+    for (std::size_t i = 1; i < events.size(); ++i)
+        Check(events[i - 1].Revision < events[i].Revision,
+              "device publications must share the controller's total revision order");
+}
+
+void TestControllerDeviceFailureAndLifetime() {
+    auto fixture = std::make_shared<Fixture>();
+    std::vector<apc::app::AppController::EventNotification> events;
+    auto controller = std::make_unique<apc::app::AppController>(
+        [](apc::app::AppCommand const&, apc::app::AppCommandContext const&) { return apc::app::AppResult{}; },
+        [] { return apc::app::AppSnapshot{}; },
+        std::shared_ptr<DeviceService>(fixture, &fixture->Service));
+    auto subscription = controller->Subscribe([&](auto const& event) { events.push_back(event); });
+    (void)fixture->Service.Connect(L"denied");
+    fixture->ConnectionAccess->LastConnection->CompleteStart(DeviceConnectionResult::Denied);
+    CompleteCloseAndCooldown(*fixture, fixture->ConnectionAccess->LastConnection);
+    Check(std::ranges::any_of(events,
+                              [](auto const& event) {
+                                  auto const* error = std::get_if<apc::app::DeviceConnectionErrorEvent>(&event.Event);
+                                  return error &&
+                                         error->FailureReason == apc::app::DeviceConnectionErrorEvent::Reason::Denied;
+                              }),
+          "the application must carry a typed failure reason without loading localized UI resources");
+    controller.reset();
+    auto const count = events.size();
+    (void)fixture->Service.Connect(L"after-controller");
+    fixture->ConnectionAccess->LastConnection->CompleteStart(DeviceConnectionResult::Success);
+    fixture->ConnectionAccess->LastConnection->CompleteOpen(DeviceConnectionResult::Success);
+    Check(events.size() == count,
+          "controller destruction must detach the source and make retained callbacks ineffective");
+    subscription.Reset();
 }
 
 void TestOperationEpochRejectsStaleCompletion() {
@@ -1726,7 +1804,8 @@ void TestDisconnectReasonsSelectTheLockedNotificationPolicy() {
         });
         Check(normal != fixture.Facts.end() && normal->Kind == DeviceFactKind::SessionChanged,
               "an explicit disconnect must remain a typed session fact");
-        Check(normal != fixture.Facts.end() && !DeviceEventRouter::ShouldNotifyDisconnect(normal->DisconnectReason),
+        Check(normal != fixture.Facts.end() && normal->DisconnectReason != DeviceDisconnectReason::UnexpectedLoss &&
+                  normal->DisconnectReason != DeviceDisconnectReason::DeviceRemoved,
               "normal disconnect policy must suppress toast and fallback notification");
     }
 
@@ -1745,7 +1824,7 @@ void TestDisconnectReasonsSelectTheLockedNotificationPolicy() {
                   unexpected->IsTerminalFailure,
               "a terminal unexpected loss must remain a typed disconnect fact");
         Check(unexpected != fixture.Facts.end() &&
-                  DeviceEventRouter::ShouldNotifyDisconnect(unexpected->DisconnectReason),
+                  unexpected->DisconnectReason == DeviceDisconnectReason::UnexpectedLoss,
               "an unexpected loss must retain the notifying disconnect policy");
         Check(!std::ranges::any_of(fixture.Facts,
                                    [](DeviceFact const& fact) {
@@ -1773,6 +1852,8 @@ void TestOperationFailuresRemainOperationFailuresWithoutDisconnectReason() {
 } // namespace
 
 int RunDeviceServiceTests() {
+    TestControllerOwnsDeviceFactNormalization();
+    TestControllerDeviceFailureAndLifetime();
     TestCompletionRetainsFirstTerminalResult();
     TestCompletionCancellationOwnershipAndDeadline();
     TestCompletionWakesWaitersAndRejectsReentrantWait();

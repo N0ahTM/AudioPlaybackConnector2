@@ -1,6 +1,7 @@
 #include <pch.h>
 
 #include <app/ApplicationHost.hpp>
+#include <type_traits>
 
 #include <MainWindow/MainWindow.xaml.h>
 #include <app/AutoReconnectPlanner.hpp>
@@ -44,18 +45,6 @@ OperationStatus ToUiActionStatus(ControlUiActionGate::Result result) noexcept {
         case ControlUiActionGate::Result::Indeterminate: return OperationStatus::Indeterminate;
     }
     return OperationStatus::Failed;
-}
-
-apc::app::DeviceConnectionState ToAppDeviceState(DeviceStatusKind status) noexcept {
-    switch (status) {
-        case DeviceStatusKind::Ready:
-        case DeviceStatusKind::None: return apc::app::DeviceConnectionState::Idle;
-        case DeviceStatusKind::Connecting: return apc::app::DeviceConnectionState::Connecting;
-        case DeviceStatusKind::Connected: return apc::app::DeviceConnectionState::Connected;
-        case DeviceStatusKind::Reconnecting: return apc::app::DeviceConnectionState::WaitingForReconnect;
-        case DeviceStatusKind::Error: return apc::app::DeviceConnectionState::Failed;
-    }
-    return apc::app::DeviceConnectionState::Idle;
 }
 
 apc::app::AppSnapshot::ResourceStatusSnapshot::Residency ToAppResidency(ResidencyPolicy value) noexcept {
@@ -936,7 +925,8 @@ void ApplicationHost::InitializeAppController() {
             apc::app::AppSnapshot snapshot;
             snapshot.IsRunning = false;
             return snapshot;
-        });
+        },
+        m_deviceService);
     m_controlCommandAdapter = std::make_unique<apc::control::ControlCommandAdapter>(
         *m_appController, apc::control::ControlCommandAdapter::Options{[](std::string_view key) { return _(key); }});
     DebugTrace(L"[App] AppController and control adapter initialized");
@@ -1573,95 +1563,56 @@ void ApplicationHost::DrainDeviceVisualRefresh() noexcept {
 }
 
 void ApplicationHost::SetupDeviceEvents() {
-    DebugTrace(L"[App] SetupDeviceEvents()");
     auto weak = weak_from_this();
-    DeviceEventRouter::Callbacks callbacks;
-    callbacks.DeviceConnected = [weak](auto const& id) {
-        if (auto self = weak.lock()) {
-            // The router rejects superseded queued events. Recheck the authoritative session at
-            // publication time too, because DeviceConnected carries a state overlay into the
-            // controller snapshot and must never revive a closed session.
-            if (!self->m_deviceService || !self->m_deviceService->IsDeviceConnected(std::wstring_view(id))) return;
-            self->OnDeviceConnected(id);
-            self->PublishDeviceFact({.Kind = Bridge::FactKind::DeviceConnected, .Id = std::wstring(id)});
-        }
-    };
-    callbacks.DeviceDisconnected = [weak](auto const& id, auto const reason) {
-        if (auto self = weak.lock()) {
-            self->OnDeviceDisconnected(id, reason);
-            self->PublishDeviceFact({.Kind = Bridge::FactKind::DeviceDisconnected, .Id = std::wstring(id)});
-        }
-    };
-    callbacks.ConnectionError = [weak](auto const& id, auto const& msg) {
-        if (auto self = weak.lock()) {
-            self->OnConnectionError(id, msg);
-            self->PublishDeviceFact({.Kind = Bridge::FactKind::ConnectionError,
-                                     .Id = std::wstring(id),
-                                     .ErrorCode = apc::app::AppResultCode::OperationFailed});
-        }
-    };
-    callbacks.AutoReconnectTriggered = [weak](auto const& id) {
-        if (auto self = weak.lock()) {
-            self->OnAutoReconnectTriggered(id);
-            self->PublishDeviceFact({.Kind = Bridge::FactKind::AutoReconnectTriggered, .Id = std::wstring(id)});
-        }
-    };
-    callbacks.AutoReconnectFailed = [weak](auto const& id) {
-        if (auto self = weak.lock()) {
-            self->OnAutoReconnectFailed(id);
-            self->PublishDeviceFact({.Kind = Bridge::FactKind::AutoReconnectFailed, .Id = std::wstring(id)});
-        }
-    };
-    callbacks.DeviceStatusChanged = [weak](auto const& id, auto const&, DeviceStatusKind statusKind) {
-        auto self = weak.lock();
-        if (!self) return;
-        if (!self->m_exiting.load() && self->m_trayController && self->m_deviceService && self->m_hwnd &&
-            IsWindow(self->m_hwnd)) {
-            self->ScheduleDeviceVisualRefresh(statusKind == DeviceStatusKind::Error);
-        }
-        self->PublishDeviceFact({.Kind = Bridge::FactKind::DeviceStatusChanged,
-                                 .Id = std::wstring(id),
-                                 .State = ToAppDeviceState(statusKind)});
-    };
-    callbacks.DeviceActivityChanged = [weak]() {
-        auto self = weak.lock();
-        if (!self) return;
-        if (!self->m_exiting.load() && self->m_trayController && self->m_deviceService && self->m_hwnd &&
-            IsWindow(self->m_hwnd)) {
-            self->ScheduleDeviceVisualRefresh(false);
-        }
-        self->PublishDeviceFact({.Kind = Bridge::FactKind::DeviceActivityChanged});
-    };
-    callbacks.DeviceInventoryChanged = [weak]() {
-        auto self = weak.lock();
-        if (!self) return;
-        if (!self->m_exiting.load() && self->m_trayController && self->m_deviceService && self->m_hwnd &&
-            IsWindow(self->m_hwnd)) {
-            self->ScheduleDeviceVisualRefresh(false, true, false);
-        }
-        self->PublishDeviceFact({.Kind = Bridge::FactKind::DeviceInventoryChanged});
-    };
-
-    m_deviceEventRouter.Attach(
-        m_deviceService,
-        [weak](std::function<void()> work) {
+    m_appEventSubscription =
+        m_appController->Subscribe([weak](apc::app::AppController::EventNotification const& event) {
             if (auto self = weak.lock()) {
-                return self->RunOnUIThread(std::move(work));
+                (void)self->RunOnUIThread([weak, event] {
+                    if (auto current = weak.lock()) current->HandleAppEvent(event);
+                });
             }
-            return false;
-        },
-        std::move(callbacks));
+        });
 }
 
 void ApplicationHost::TeardownDeviceEvents() {
-    m_deviceEventRouter.Detach();
+    m_appEventSubscription.Reset();
 }
 
-void ApplicationHost::PublishDeviceFact(Bridge::DeviceFact fact) noexcept {
-    if (!m_appBridge || !m_appController) return;
-    if (auto event = m_appBridge->Observe(std::move(fact))) {
-        m_appController->Publish(*event);
-    }
+void ApplicationHost::HandleAppEvent(apc::app::AppController::EventNotification const& notification) {
+    if (m_exiting.load() || !m_appController || !m_appController->IsCurrent(notification)) return;
+    std::visit(
+        [this](auto const& event) {
+            using T = std::decay_t<decltype(event)>;
+            using namespace apc::app;
+            if constexpr (std::is_same_v<T, DeviceConnectedEvent>) {
+                OnDeviceConnected(winrt::hstring(event.Id.View()));
+            } else if constexpr (std::is_same_v<T, DeviceDisconnectedEvent>) {
+                OnDeviceDisconnected(winrt::hstring(event.Id.View()), event.NotifyUser);
+            } else if constexpr (std::is_same_v<T, DeviceConnectionErrorEvent>) {
+                using Reason = DeviceConnectionErrorEvent::Reason;
+                auto const key = [&] {
+                    switch (event.FailureReason) {
+                        case Reason::TimedOut: return "RequestTimedOut";
+                        case Reason::Denied: return "DeniedBySystem";
+                        case Reason::ReconnectExhausted: return "AutoReconnectFailed";
+                        case Reason::Unknown: return "UnknownError";
+                    }
+                    return "UnknownError";
+                }();
+                OnConnectionError(winrt::hstring(event.Id.View()), winrt::hstring(_(key)));
+            } else if constexpr (std::is_same_v<T, AutoReconnectTriggeredEvent>) {
+                OnAutoReconnectTriggered(winrt::hstring(event.Id.View()));
+            } else if constexpr (std::is_same_v<T, AutoReconnectFailedEvent>) {
+                OnAutoReconnectFailed(winrt::hstring(event.Id.View()));
+            } else if constexpr (std::is_same_v<T, DeviceStatusChangedEvent>) {
+                ScheduleDeviceVisualRefresh(event.State == DeviceConnectionState::Failed);
+            } else if constexpr (std::is_same_v<T, DeviceInventoryChangedEvent>) {
+                ScheduleDeviceVisualRefresh(false, true, false);
+            } else if constexpr (std::is_same_v<T, DeviceActivityChangedEvent>) {
+                ScheduleDeviceVisualRefresh(false);
+            }
+        },
+        notification.Event);
 }
 
 bool ApplicationHost::ShowSettingsWindow() {
@@ -1768,12 +1719,12 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
     ScheduleDeviceVisualRefresh(false);
 }
 
-void ApplicationHost::OnDeviceDisconnected(winrt::hstring const& id, apc::device::DeviceDisconnectReason reason) {
+void ApplicationHost::OnDeviceDisconnected(winrt::hstring const& id, bool notifyUser) {
     if (m_exiting.load()) return;
     DebugTrace(L"[App] OnDeviceDisconnected: {0}", std::wstring(id));
 
     ScheduleDeviceVisualRefresh(false);
-    if (!DeviceEventRouter::ShouldNotifyDisconnect(reason) || !m_notificationService) return;
+    if (!notifyUser || !m_notificationService) return;
 
     try {
         m_notificationService->ShowDeviceDisconnected(id, ResolveKnownDeviceName(id));

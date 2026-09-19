@@ -128,9 +128,7 @@ public:
         AutoReconnectFailed
     };
 
-    // This is the narrow input shape emitted by the existing DeviceEventRouter.
-    // Free-form status text is intentionally absent; the host maps its legacy
-    // status kind to DeviceConnectionState before calling Observe().
+    // Fact values carry normalized state rather than presentation text.
     struct DeviceFact {
         FactKind Kind = FactKind::DeviceActivityChanged;
         std::wstring Id;

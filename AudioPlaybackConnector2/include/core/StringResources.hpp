@@ -1,5 +1,7 @@
 #pragma once
 
+#include <util/Logger.hpp>
+
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// String Resources //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
@@ -11,8 +13,7 @@ public:
     /*------------------------------------------------------------------------------------------------------------*/
 
     static StringResources& Instance();
-    void Initialize(HINSTANCE hInst);
-    void Initialize(HINSTANCE hInst, std::wstring_view language);
+    void Initialize(HINSTANCE hInst, std::wstring_view language, util::LogSink const& log);
     std::wstring Get(std::string_view key) const;
 
     StringResources(const StringResources&) = delete;
@@ -39,7 +40,6 @@ private:
     /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    HINSTANCE m_hInst = nullptr;
     mutable wil::srwlock m_lock;
     std::unordered_map<std::string, std::wstring, StringViewHash, std::equal_to<>> m_map;
 };

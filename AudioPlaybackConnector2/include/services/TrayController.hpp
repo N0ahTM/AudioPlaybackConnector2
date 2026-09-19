@@ -30,7 +30,7 @@ public:
     /*//////// Lifecycle /////////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    TrayController();
+    explicit TrayController(util::LogSink log);
     ~TrayController();
 
     TrayController(const TrayController&) = delete;
@@ -97,6 +97,7 @@ private:
     /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
+    util::LogSink m_log;
     HWND m_hwnd = nullptr;
     winrt::Microsoft::UI::Xaml::Window m_mainWindow{nullptr};
 

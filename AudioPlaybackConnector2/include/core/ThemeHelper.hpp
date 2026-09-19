@@ -1,5 +1,7 @@
 #pragma once
 
+#include <util/Logger.hpp>
+
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Theme Helper //////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
@@ -20,7 +22,7 @@ public:
     /*------------------------------------------------------------------------------------------------------------*/
 
     static Theme GetSystemTheme();
-    static void OnSettingChange(HWND hwnd, LPARAM lParam);
+    static void OnSettingChange(LPARAM lParam, util::LogSink const& log);
     static ThemeChangedToken AddThemeChangedHandler(ThemeChangedHandler handler);
     static void RemoveThemeChangedHandler(ThemeChangedToken token);
 

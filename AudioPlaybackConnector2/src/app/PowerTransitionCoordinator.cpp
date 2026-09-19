@@ -22,6 +22,7 @@ constexpr unsigned int c_maxResumeReconnectAttempts = 6;
 // before disassociating, so cancellation may drain safely even from the callback.
 // The timer is closed only after the last admitted callback releases the context.
 struct NativeSchedule : std::enable_shared_from_this<NativeSchedule> {
+    util::LogSink Log;
     PowerTransitionCoordinator::Tick Deliver;
     wil::unique_threadpool_timer Timer;
 
@@ -30,16 +31,18 @@ struct NativeSchedule : std::enable_shared_from_this<NativeSchedule> {
         DisassociateCurrentThreadFromCallback(instance);
         util::RuntimeApartment apartment;
         if (!apartment.Ready()) {
-            DebugTrace(L"[PowerTransitionCoordinator] Resume callback apartment unavailable; retrying next tick");
+            lifetime->Log.Trace(
+                L"[PowerTransitionCoordinator] Resume callback apartment unavailable; retrying next tick");
             return;
         }
         if (!lifetime->Deliver()) SetThreadpoolTimer(lifetime->Timer.get(), nullptr, 0, 0);
     }
 };
 
-PowerTransitionCoordinator::CancelTimer ScheduleNative(std::chrono::milliseconds period,
-                                                       PowerTransitionCoordinator::Tick tick) {
+PowerTransitionCoordinator::CancelTimer
+ScheduleNative(std::chrono::milliseconds period, PowerTransitionCoordinator::Tick tick, util::LogSink log) {
     auto context = std::make_shared<NativeSchedule>();
+    context->Log = std::move(log);
     context->Deliver = std::move(tick);
     context->Timer.reset(CreateThreadpoolTimer(NativeSchedule::OnTimer, context.get(), nullptr));
     if (!context->Timer) return {};
@@ -60,6 +63,7 @@ PowerTransitionCoordinator::CancelTimer ScheduleNative(std::chrono::milliseconds
 /*------------------------------------------------------------------------------------------------------------*/
 
 struct PowerTransitionCoordinator::ResumeState {
+    util::LogSink Log;
     // No nested locks. Callbacks, capture destruction and logging occur unlocked.
     std::mutex Mutex;
     ResumeReconnectAttemptState Attempts;
@@ -74,9 +78,15 @@ struct PowerTransitionCoordinator::ResumeState {
 /*//////// Constructors /////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-PowerTransitionCoordinator::PowerTransitionCoordinator(std::atomic<bool>& exiting, Scheduler scheduler)
+PowerTransitionCoordinator::PowerTransitionCoordinator(std::atomic<bool>& exiting,
+                                                       Scheduler scheduler,
+                                                       util::LogSink log)
     : m_exiting(exiting), m_resumeState(std::make_shared<ResumeState>()),
-      m_schedule(scheduler ? std::move(scheduler) : Scheduler{ScheduleNative}) {}
+      m_schedule(scheduler ? std::move(scheduler) : Scheduler{[log](std::chrono::milliseconds period, Tick tick) {
+          return ScheduleNative(period, std::move(tick), log);
+      }}) {
+    m_resumeState->Log = std::move(log);
+}
 
 PowerTransitionCoordinator::~PowerTransitionCoordinator() {
     Cancel();
@@ -123,7 +133,8 @@ void PowerTransitionCoordinator::HandleSuspend(std::function<void()> flushSettin
             m_resumeState->Cancelled = false;
         }
     } catch (...) {
-        DebugTrace(L"[PowerTransitionCoordinator] Suspend failed; recovery generation remains invalidated");
+        m_resumeState->Log.Trace(
+            L"[PowerTransitionCoordinator] Suspend failed; recovery generation remains invalidated");
     }
 }
 
@@ -159,11 +170,12 @@ void PowerTransitionCoordinator::HandleResume(std::function<void()> resumeDevice
             // A platform scheduler may report resource exhaustion by throwing.
         }
         if (!m_cancelTimer) {
-            DebugTrace(L"[PowerTransitionCoordinator] Resume timer unavailable; delivering once immediately");
+            m_resumeState->Log.Trace(
+                L"[PowerTransitionCoordinator] Resume timer unavailable; delivering once immediately");
             static_cast<void>(DeliverResumeReconnect(state, generation));
         }
     } catch (...) {
-        DebugTrace(L"[PowerTransitionCoordinator] Resume scheduling failed");
+        m_resumeState->Log.Trace(L"[PowerTransitionCoordinator] Resume scheduling failed");
     }
 }
 
@@ -207,7 +219,7 @@ bool PowerTransitionCoordinator::DeliverResumeReconnect(std::shared_ptr<ResumeSt
         state->DeliveryInFlight = !selection.Eligible.empty() && reconnect && *reconnect;
     }
     for (auto const& id : selection.Exhausted) {
-        DebugTrace(L"[PowerTransitionCoordinator] Resume reconnect retry limit reached for {0}", id);
+        state->Log.Trace(L"[PowerTransitionCoordinator] Resume reconnect retry limit reached for {0}", id);
     }
     if (selection.Eligible.empty()) return false;
     if (!reconnect || !*reconnect) return true;
@@ -224,7 +236,7 @@ bool PowerTransitionCoordinator::DeliverResumeReconnect(std::shared_ptr<ResumeSt
         (*reconnect)(std::move(selection.Eligible), generation, completed);
     } catch (...) {
         completed({});
-        DebugTrace(L"[PowerTransitionCoordinator] Delayed resume reconnect callback failed");
+        state->Log.Trace(L"[PowerTransitionCoordinator] Delayed resume reconnect callback failed");
     }
     return true;
 }

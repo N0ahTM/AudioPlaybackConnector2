@@ -1,53 +1,41 @@
-#include <pch.h>
 #include <util/Logger.hpp>
 
+#define SPDLOG_WCHAR_FILENAMES
+#define SPDLOG_DISABLE_DEFAULT_LOGGER
+#define SPDLOG_USE_STD_FORMAT
+#include <spdlog/async_logger.h>
+#include <spdlog/details/thread_pool.h>
+#include <spdlog/sinks/rotating_file_sink.h>
+
+#include <algorithm>
+#include <appmodel.h>
+#include <array>
+#include <atomic>
+#include <condition_variable>
 #include <cwctype>
+#include <cstring>
+#include <cwchar>
+#include <mutex>
+#include <utility>
+#include <wil/resource.h>
 
 namespace util {
 
 namespace details {
-constexpr std::size_t c_maxQueuedLogMessages = 10000;
-constexpr std::size_t c_inMemoryLogTailLineCount = 100;
-
-struct InMemoryLogTail {
-    void Add(std::string line) noexcept {
-        try {
-            std::lock_guard lock(Mutex);
-            Lines[NextIndex] = std::move(line);
-            NextIndex = (NextIndex + 1) % Lines.size();
-            if (Count < Lines.size()) ++Count;
-        } catch (...) {
+inline std::wstring CaptureCurrentStackTrace(std::size_t skip = 2, std::size_t maxFrames = 12) noexcept {
+    try {
+        void* stack[32]{};
+        auto frames = CaptureStackBackTrace(static_cast<DWORD>(skip), static_cast<DWORD>(maxFrames), stack, nullptr);
+        if (frames == 0) return L"<empty>";
+        std::wstring result;
+        for (std::size_t i = 0; i < frames; ++i) {
+            if (!result.empty()) result += L" <- ";
+            result += std::format(L"0x{:X}", reinterpret_cast<std::uintptr_t>(stack[i]));
         }
+        return result;
+    } catch (...) {
+        return L"<stacktrace failed>";
     }
-
-    bool TrySnapshot(std::vector<std::string>& snapshot) noexcept {
-        try {
-            if (!Mutex.try_lock()) return false;
-            std::unique_lock lock(Mutex, std::adopt_lock);
-            snapshot.clear();
-            snapshot.reserve(Count);
-
-            auto start = Count == Lines.size() ? NextIndex : 0;
-            for (std::size_t i = 0; i < Count; ++i) {
-                auto index = (start + i) % Lines.size();
-                snapshot.push_back(Lines[index]);
-            }
-            return true;
-        } catch (...) {
-            snapshot.clear();
-            return false;
-        }
-    }
-
-    std::mutex Mutex;
-    std::array<std::string, c_inMemoryLogTailLineCount> Lines;
-    std::size_t NextIndex = 0;
-    std::size_t Count = 0;
-};
-
-InMemoryLogTail& LogTail() noexcept {
-    static InMemoryLogTail s_tail;
-    return s_tail;
 }
 
 std::string FormatLogLine(std::wstring_view message) {
@@ -64,38 +52,6 @@ std::string FormatLogLine(std::wstring_view message) {
                             GetCurrentThreadId(),
                             message);
     return Utf16ToUtf8(line);
-}
-
-void AppendLogBytesDirect(std::string_view bytes) noexcept {
-    try {
-        if (bytes.empty()) return;
-        auto const& path = GetCachedLogPath();
-        if (path.empty()) return;
-
-        wil::unique_hfile file(CreateFileW(path.c_str(),
-                                           FILE_APPEND_DATA,
-                                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                           nullptr,
-                                           OPEN_ALWAYS,
-                                           FILE_ATTRIBUTE_NORMAL,
-                                           nullptr));
-        if (!file) return;
-
-        std::size_t offset = 0;
-        while (offset < bytes.size()) {
-            auto remaining = bytes.size() - offset;
-            auto chunk = std::min<std::size_t>(remaining, static_cast<std::size_t>(std::numeric_limits<DWORD>::max()));
-            DWORD written = 0;
-            if (!WriteFile(file.get(), bytes.data() + offset, static_cast<DWORD>(chunk), &written, nullptr) ||
-                written == 0) {
-                return;
-            }
-            offset += written;
-        }
-        // Best-effort flush so crash tails survive immediate termination.
-        (void)FlushFileBuffers(file.get());
-    } catch (...) {
-    }
 }
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -189,287 +145,316 @@ std::filesystem::path ResolveLogPath() noexcept {
 } // namespace details
 
 /*------------------------------------------------------------------------------------------------------------*/
-/*//////// Log Path //////////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------*/
-
-std::filesystem::path const& GetCachedLogPath() {
-    static std::filesystem::path const s_path = details::ResolveLogPath();
-    return s_path;
-}
-
-/*------------------------------------------------------------------------------------------------------------*/
 /*//////// Logger Implementation //////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-struct Logger::Impl {
-    Impl() noexcept {
-        try {
-            Path = GetCachedLogPath();
-            if (!Path.empty()) {
-                Thread = std::thread([this] { Run(); });
-            }
-        } catch (...) {
+namespace details {
+
+// Storage is allocated during ordinary startup. Dump uses only this fixed
+// scratch space, a nonblocking tail snapshot and native file operations.
+struct EmergencyState {
+    struct Line {
+        std::array<char, 1024> Bytes{};
+        std::uint16_t Length = 0;
+    };
+
+    explicit EmergencyState(std::filesystem::path path) : Path(std::move(path)) {}
+
+    void Add(std::string_view text) noexcept {
+        while (!text.empty() && (text.back() == '\r' || text.back() == '\n'))
+            text.remove_suffix(1);
+        const bool truncated = text.size() > 1022;
+        auto count = std::min<std::size_t>(text.size(), truncated ? 1019 : 1022);
+        if (count < text.size()) {
+            while (count && (static_cast<unsigned char>(text[count]) & 0xC0) == 0x80)
+                --count;
         }
+        AcquireSRWLockExclusive(&TailLock);
+        auto& line = Lines[Next];
+        std::memcpy(line.Bytes.data(), text.data(), count);
+        if (truncated) {
+            std::memcpy(line.Bytes.data() + count, "...", 3);
+            count += 3;
+        }
+        line.Bytes[count++] = '\r';
+        line.Bytes[count++] = '\n';
+        line.Length = static_cast<std::uint16_t>(count);
+        Next = (Next + 1) % Lines.size();
+        Count = std::min(Count + 1, Lines.size());
+        ReleaseSRWLockExclusive(&TailLock);
     }
 
-    ~Impl() noexcept { Shutdown(); }
-
-    void Enqueue(std::string message) noexcept {
-        try {
-            {
-                std::lock_guard lock(QueueMutex);
-                if (ShutdownRequested || !Thread.joinable()) return;
-
-                if (Queue.size() >= details::c_maxQueuedLogMessages) {
-                    auto const overflowCount = Queue.size() - details::c_maxQueuedLogMessages + 1;
-                    for (std::size_t i = 0; i < overflowCount; ++i) {
-                        Queue.pop();
-                    }
-                    DroppedMessages += overflowCount;
-                }
-
-                Queue.push(std::move(message));
-            }
-            Cv.notify_one();
-        } catch (...) {
-        }
+    bool Snapshot(std::size_t& count) noexcept {
+        if (!TryAcquireSRWLockExclusive(&TailLock)) return false;
+        count = Count;
+        const auto first = Count == Lines.size() ? Next : 0;
+        for (std::size_t index = 0; index < count; ++index)
+            Scratch[index] = Lines[(first + index) % Lines.size()];
+        ReleaseSRWLockExclusive(&TailLock);
+        return true;
     }
 
-    void Shutdown() noexcept {
-        {
-            std::lock_guard lock(QueueMutex);
-            ShutdownRequested = true;
-        }
-        Cv.notify_one();
-        try {
-            if (Thread.joinable()) Thread.join();
-        } catch (...) {
-        }
-    }
-
-    void Disable() noexcept {
-        try {
-            std::lock_guard lock(QueueMutex);
-            ShutdownRequested = true;
-            std::queue<std::string> empty;
-            Queue.swap(empty);
-        } catch (...) {
-        }
-        Cv.notify_one();
-    }
-
-    void Run() noexcept {
-        try {
-            RunWorker();
-        } catch (...) {
-            Disable();
-        }
-    }
-
-    void RunWorker() {
-        wil::unique_hfile file;
-        ULONGLONG bytesWritten = 0;
-        constexpr ULONGLONG c_maxLogBytes = 2ull * 1024ull * 1024ull;
-
-        auto tryOpen = [&]() {
-            file.reset(CreateFileW(Path.c_str(),
-                                   FILE_APPEND_DATA,
-                                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                                   nullptr,
-                                   OPEN_ALWAYS,
-                                   FILE_ATTRIBUTE_NORMAL,
-                                   nullptr));
-            if (!file) return;
-            LARGE_INTEGER sz{};
-            if (GetFileSizeEx(file.get(), &sz)) bytesWritten = static_cast<ULONGLONG>(sz.QuadPart);
-        };
-
-        auto rotate = [&]() {
-            file.reset();
-            auto backup = Path;
-            backup += L".1";
-            DeleteFileW(backup.c_str());
-            MoveFileExW(Path.c_str(), backup.c_str(), MOVEFILE_REPLACE_EXISTING);
-            bytesWritten = 0;
-            tryOpen();
-        };
-
-        auto writeBatch = [&](std::queue<std::string>& batch) {
-            while (!batch.empty()) {
-                if (!file) tryOpen();
-                if (bytesWritten >= c_maxLogBytes) rotate();
-                if (!file) break;
-
-                auto& msg = batch.front();
-                if (msg.size() > static_cast<std::size_t>(std::numeric_limits<DWORD>::max())) {
-                    batch.pop();
-                    continue;
-                }
-
-                std::size_t offset = 0;
-                while (offset < msg.size()) {
-                    DWORD written = 0;
-                    if (!WriteFile(file.get(),
-                                   msg.data() + offset,
-                                   static_cast<DWORD>(msg.size() - offset),
-                                   &written,
-                                   nullptr) ||
-                        written == 0) {
-                        break;
-                    }
-                    offset += written;
-                    bytesWritten += written;
-                }
-                if (offset != msg.size()) {
-                    if (offset > 0) msg.erase(0, offset);
-                    file.reset();
-                    break;
-                }
-                batch.pop();
-            }
-        };
-
-        auto makeDroppedNotice = [](std::size_t droppedCount) -> std::string {
-            if (droppedCount == 0) return {};
-            try {
-                SYSTEMTIME st{};
-                GetLocalTime(&st);
-                auto line = std::format(L"{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03} [T:{}] [Logger] Dropped {} queued "
-                                        L"log message(s) due to backpressure\r\n",
-                                        st.wYear,
-                                        st.wMonth,
-                                        st.wDay,
-                                        st.wHour,
-                                        st.wMinute,
-                                        st.wSecond,
-                                        st.wMilliseconds,
-                                        GetCurrentThreadId(),
-                                        droppedCount);
-                return Utf16ToUtf8(line);
-            } catch (...) {
-                return {};
-            }
-        };
-
-        tryOpen();
-        auto retryDelay = std::chrono::milliseconds(100);
-        constexpr auto c_maxRetryDelay = std::chrono::milliseconds(5000);
-
-        while (true) {
-            std::queue<std::string> batch;
-            bool shouldExit = false;
-            std::size_t droppedSinceLastFlush = 0;
-            {
-                std::unique_lock lock(QueueMutex);
-                Cv.wait(lock, [this] { return !Queue.empty() || ShutdownRequested; });
-                batch.swap(Queue);
-                droppedSinceLastFlush = std::exchange(DroppedMessages, 0);
-                shouldExit = ShutdownRequested;
-            }
-            if (droppedSinceLastFlush > 0) {
-                auto notice = makeDroppedNotice(droppedSinceLastFlush);
-                if (!notice.empty()) {
-                    batch.push(std::move(notice));
-                }
-            }
-            writeBatch(batch);
-            if (!batch.empty() && !shouldExit) {
-                // File temporarily unavailable; prepend leftovers back to the queue.
-                std::unique_lock lock(QueueMutex);
-                std::queue<std::string> newQueue;
-                while (!batch.empty()) {
-                    newQueue.push(std::move(batch.front()));
-                    batch.pop();
-                }
-                while (!Queue.empty()) {
-                    newQueue.push(std::move(Queue.front()));
-                    Queue.pop();
-                }
-                Queue.swap(newQueue);
-
-                Cv.wait_for(lock, retryDelay, [this] { return ShutdownRequested; });
-                retryDelay = std::min(retryDelay * 2, c_maxRetryDelay);
-            } else {
-                retryDelay = std::chrono::milliseconds(100);
-            }
-            if (shouldExit) break;
-        }
-    }
-
-    std::filesystem::path Path;
-    std::thread Thread;
-    std::mutex QueueMutex;
-    std::condition_variable Cv;
-    std::queue<std::string> Queue;
-    std::size_t DroppedMessages = 0;
-    bool ShutdownRequested = false;
+    const std::filesystem::path Path;
+    SRWLOCK TailLock = SRWLOCK_INIT;
+    std::array<Line, 100> Lines{};
+    std::array<Line, 100> Scratch{};
+    std::size_t Next = 0;
+    std::size_t Count = 0;
+    std::atomic_flag Dumping = ATOMIC_FLAG_INIT;
 };
 
-Logger& Logger::Instance() noexcept {
-    static Logger s_instance;
-    return s_instance;
+bool WriteEmergencyBytes(HANDLE file, std::string_view bytes) noexcept {
+    while (!bytes.empty()) {
+        const auto size = static_cast<DWORD>(std::min<std::size_t>(bytes.size(), MAXDWORD));
+        DWORD written = 0;
+        if (!WriteFile(file, bytes.data(), size, &written, nullptr) || written == 0) return false;
+        bytes.remove_prefix(written);
+    }
+    return true;
+}
+
+wil::unique_hfile OpenEmergencyFile(std::filesystem::path const& path) noexcept {
+    return wil::unique_hfile(CreateFileW(path.c_str(),
+                                         FILE_APPEND_DATA,
+                                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                         nullptr,
+                                         OPEN_ALWAYS,
+                                         FILE_ATTRIBUTE_NORMAL,
+                                         nullptr));
+}
+
+struct LogState {
+    explicit LogState(std::filesystem::path path)
+        : Path(path), Emergency(std::make_shared<EmergencyState>(std::move(path))) {}
+    const std::filesystem::path Path;
+    std::shared_ptr<EmergencyState> Emergency;
+    std::mutex Mutex;
+    std::condition_variable Changed;
+    std::size_t ActiveCalls = 0;
+    bool Closing = false;
+    bool Finished = false;
+    std::atomic_size_t Dropped = 0;
+    std::atomic_size_t Errors = 0;
+    std::shared_ptr<spdlog::details::thread_pool> Pool;
+    std::shared_ptr<spdlog::async_logger> Async;
+    std::shared_ptr<spdlog::sinks::sink> File;
+
+    void ObserveDrops(std::size_t count) noexcept {
+        auto previous = Dropped.load(std::memory_order_relaxed);
+        while (previous < count && !Dropped.compare_exchange_weak(previous, count, std::memory_order_relaxed)) {
+        }
+    }
+};
+
+// The callback owns everything needed by a still-running worker. It never
+// references the Logger owner, its caller's stack or another product service.
+struct LogRelease {
+    std::shared_ptr<LogState> State;
+    PTP_WORK Work = nullptr;
+
+    ~LogRelease() {
+        if (Work) CloseThreadpoolWork(Work);
+    }
+
+    static void CALLBACK Run(PTP_CALLBACK_INSTANCE instance, void* context, PTP_WORK) noexcept {
+        (void)CallbackMayRunLong(instance);
+        std::unique_ptr<LogRelease> release(static_cast<LogRelease*>(context));
+        auto state = release->State;
+        {
+            std::unique_lock lock(state->Mutex);
+            state->Changed.wait(lock, [&] { return state->ActiveCalls == 0; });
+        }
+        state->ObserveDrops(state->Pool->overrun_counter());
+        state->Pool.reset(); // Drains the queue and joins only on this callback.
+        state->Async.reset();
+        try {
+            spdlog::logger finalWriter("shutdown", state->File);
+            finalWriter.set_error_handler(
+                [state](std::string const&) { state->Errors.fetch_add(1, std::memory_order_relaxed); });
+            if (auto dropped = state->Dropped.load(); dropped != 0)
+                finalWriter.warn("[Logger] Dropped {} queued log item(s) due to backpressure", dropped);
+            finalWriter.flush();
+        } catch (...) {
+            // Logging is best effort; failure must still complete shutdown.
+            state->Errors.fetch_add(1, std::memory_order_relaxed);
+        }
+        state->File.reset();
+        release.reset();
+        {
+            std::lock_guard lock(state->Mutex);
+            state->Finished = true;
+        }
+        state->Changed.notify_all();
+    }
+};
+
+void SubmitLog(std::weak_ptr<LogState> const& weak,
+               std::wstring_view message,
+               bool flush,
+               bool persist = true) noexcept {
+    auto state = weak.lock();
+    if (!state) return;
+    {
+        std::lock_guard lock(state->Mutex);
+        if (state->Closing) return;
+        ++state->ActiveCalls;
+    }
+    auto complete = wil::scope_exit([&] {
+        state->ObserveDrops(state->Pool->overrun_counter());
+        {
+            std::lock_guard lock(state->Mutex);
+            --state->ActiveCalls;
+        }
+        state->Changed.notify_all();
+    });
+    try {
+        if (flush)
+            state->Async->flush();
+        else {
+            state->Emergency->Add(FormatLogLine(message));
+            if (persist) state->Async->info("{}", Utf16ToUtf8(message));
+#ifdef _DEBUG
+            auto output = std::wstring(message) + L"\n";
+            OutputDebugStringW(output.c_str());
+#endif
+        }
+    } catch (...) {
+        // Encoding/allocation failure cannot escape a diagnostic call.
+        state->Errors.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+} // namespace details
+
+struct Logger::Impl {
+    explicit Impl(std::filesystem::path const& path, std::size_t capacity, std::size_t rotationBytes)
+        : State(std::make_shared<details::LogState>(path)), Release(std::make_unique<details::LogRelease>()) {
+        if (capacity == 0 || rotationBytes == 0) throw std::invalid_argument("Invalid logger limits");
+        Release->State = State;
+        Release->Work = CreateThreadpoolWork(details::LogRelease::Run, Release.get(), nullptr);
+        THROW_LAST_ERROR_IF(!Release->Work);
+        // Allocate cleanup before opening a file or starting any worker.
+        State->File = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(path.native(), rotationBytes, 1);
+        State->Pool = std::make_shared<spdlog::details::thread_pool>(capacity, 1);
+        State->Async = std::make_shared<spdlog::async_logger>(
+            "application", State->File, State->Pool, spdlog::async_overflow_policy::overrun_oldest);
+        State->Async->set_pattern("%Y-%m-%d %H:%M:%S.%e [T:%t] %v");
+        State->Async->set_error_handler([weak = std::weak_ptr(State)](std::string const&) {
+            if (auto state = weak.lock()) state->Errors.fetch_add(1, std::memory_order_relaxed);
+        });
+    }
+
+    std::shared_ptr<details::LogState> State;
+    std::unique_ptr<details::LogRelease> Release;
+};
+
+Logger::Logger(std::filesystem::path path, std::size_t queueCapacity, std::size_t rotationBytes)
+    : m_impl(std::make_unique<Impl>(path, queueCapacity, rotationBytes)) {}
+
+Logger::~Logger() noexcept {
+    (void)Shutdown();
+}
+
+LogSink Logger::Sink() const noexcept {
+    return m_impl ? LogSink(m_impl->State) : LogSink{};
+}
+
+EmergencyLog Logger::Emergency() const noexcept {
+    return m_impl ? EmergencyLog(m_impl->State->Emergency) : EmergencyLog{};
+}
+
+std::filesystem::path EmergencyLog::Path() const {
+    return m_state ? m_state->Path : std::filesystem::path{};
+}
+
+bool EmergencyLog::Write(std::string_view bytes) const noexcept {
+    if (!m_state || m_state->Path.empty()) return false;
+    auto file = details::OpenEmergencyFile(m_state->Path);
+    return file && details::WriteEmergencyBytes(file.get(), bytes);
+}
+
+bool EmergencyLog::Dump(std::wstring_view reason, std::uint32_t exceptionCode) const noexcept {
+    if (!m_state || m_state->Path.empty() || m_state->Dumping.test_and_set(std::memory_order_acquire)) return false;
+    auto finish = wil::scope_exit([&] { m_state->Dumping.clear(std::memory_order_release); });
+    std::size_t count = 0;
+    const bool available = m_state->Snapshot(count);
+    auto file = details::OpenEmergencyFile(m_state->Path);
+    if (!file) return false;
+    wchar_t header[512]{};
+    const int length = swprintf_s(header,
+                                  L"\r\n[Logger] BEGIN diagnostic tail reason=%.*ls exception=0x%08X\r\n",
+                                  static_cast<int>(std::min<std::size_t>(reason.size(), 160)),
+                                  reason.empty() ? L"" : reason.data(),
+                                  exceptionCode);
+    if (length <= 0) return false;
+    char utf8[2048]{};
+    const int bytes = WideCharToMultiByte(CP_UTF8, 0, header, length, utf8, sizeof(utf8), nullptr, nullptr);
+    if (bytes <= 0 || !details::WriteEmergencyBytes(file.get(), {utf8, static_cast<std::size_t>(bytes)})) return false;
+    if (!available) {
+        if (!details::WriteEmergencyBytes(file.get(), "[Logger] Tail busy; snapshot skipped\r\n")) return false;
+    } else {
+        for (std::size_t index = 0; index < count; ++index) {
+            auto const& line = m_state->Scratch[index];
+            if (!details::WriteEmergencyBytes(file.get(), {line.Bytes.data(), line.Length})) return false;
+        }
+    }
+    return details::WriteEmergencyBytes(file.get(), "[Logger] END diagnostic tail\r\n");
+}
+
+LogStatistics Logger::Statistics() const noexcept {
+    if (!m_impl) return {};
+    return {m_impl->State->Dropped.load(), m_impl->State->Errors.load()};
+}
+
+bool Logger::Shutdown(std::chrono::milliseconds timeout) noexcept {
+    if (!m_impl) return true;
+    auto const& state = m_impl->State;
+    details::LogRelease* release = nullptr;
+    {
+        std::lock_guard lock(state->Mutex);
+        if (!state->Closing) {
+            state->Closing = true;
+            release = m_impl->Release.release();
+        }
+    }
+    if (release) SubmitThreadpoolWork(release->Work);
+    std::unique_lock lock(state->Mutex);
+    return state->Changed.wait_for(lock, timeout, [&] { return state->Finished; });
+}
+
+std::filesystem::path LogSink::Path() const {
+    auto state = m_state.lock();
+    return state ? state->Path : std::filesystem::path{};
+}
+
+void LogSink::Write(std::wstring_view message) const noexcept {
+    details::SubmitLog(m_state, message, false);
+}
+void LogSink::Exception(std::wstring_view context, winrt::hresult_error const& error) const noexcept {
+    Trace(L"{0}: 0x{1:08X} {2}", context, static_cast<std::uint32_t>(error.code()), error.message());
+    Trace(L"{0} stack: {1}", context, details::CaptureCurrentStackTrace());
+}
+void LogSink::Exception(std::wstring_view context, std::exception const& error) const noexcept {
+    try {
+        Trace(L"{0}: {1}", context, Utf8ToUtf16(error.what()));
+    } catch (...) {
+        Trace(L"{0}: standard exception", context);
+    }
+    Trace(L"{0} stack: {1}", context, details::CaptureCurrentStackTrace());
+}
+void LogSink::UnknownException(std::wstring_view context) const noexcept {
+    Trace(L"{0}: unknown exception", context);
+    Trace(L"{0} stack: {1}", context, details::CaptureCurrentStackTrace());
+}
+void LogSink::RequestFlush() const noexcept {
+    details::SubmitLog(m_state, {}, true);
 }
 
 Logger::Logger() noexcept {
     try {
-        m_impl = std::make_unique<Impl>();
+        auto path = details::ResolveLogPath();
+        if (!path.empty()) m_impl = std::make_unique<Impl>(path, 10000, 2 * 1024 * 1024);
     } catch (...) {
-    }
-}
-
-Logger::~Logger() noexcept = default;
-
-void Logger::Enqueue(std::string message) noexcept {
-    if (m_impl) {
-        m_impl->Enqueue(std::move(message));
-    }
-}
-
-/*------------------------------------------------------------------------------------------------------------*/
-/*//////// Write Log Line ////////////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------*/
-
-void WriteLogLine(std::wstring_view message) noexcept {
-    try {
-        auto line = details::FormatLogLine(message);
-        details::LogTail().Add(line);
-        Logger::Instance().Enqueue(std::move(line));
-    } catch (...) {
-    }
-}
-
-void FlushInMemoryLogTailToFile(std::wstring_view reason, std::uint32_t exceptionCode) noexcept {
-    try {
-        std::vector<std::string> lines;
-        auto const snapshotAvailable = details::LogTail().TrySnapshot(lines);
-
-        SYSTEMTIME st{};
-        GetLocalTime(&st);
-        auto header = std::format(L"\r\n{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03} [T:{}] [Logger] BEGIN "
-                                  L"in-memory diagnostic tail reason={} exception=0x{:08X} lines={}\r\n",
-                                  st.wYear,
-                                  st.wMonth,
-                                  st.wDay,
-                                  st.wHour,
-                                  st.wMinute,
-                                  st.wSecond,
-                                  st.wMilliseconds,
-                                  GetCurrentThreadId(),
-                                  reason,
-                                  exceptionCode,
-                                  snapshotAvailable ? lines.size() : 0);
-
-        std::string output = Utf16ToUtf8(header);
-        if (!snapshotAvailable) {
-            output += "[Logger] In-memory diagnostic tail unavailable because the buffer lock was busy\r\n";
-        } else {
-            for (auto const& line : lines) {
-                output += line;
-            }
-        }
-        output += "[Logger] END in-memory diagnostic tail\r\n\r\n";
-        details::AppendLogBytesDirect(output);
-    } catch (...) {
+        // Failure to initialize diagnostics must not prevent application startup.
     }
 }
 
@@ -499,23 +484,10 @@ bool ShouldPersistReleaseTrace(std::wstring_view message) noexcept {
 } // namespace
 #endif
 
-void DebugTrace(std::wstring_view message) noexcept {
+void util::LogSink::Trace(std::wstring_view message) const noexcept {
 #ifdef _DEBUG
-    util::WriteLogLine(message);
-    try {
-        std::wstring output(message);
-        output.push_back(L'\n');
-        OutputDebugStringW(output.c_str());
-    } catch (...) {
-    }
+    details::SubmitLog(m_state, message, false);
 #else
-    try {
-        auto line = util::details::FormatLogLine(message);
-        util::details::LogTail().Add(line);
-        if (ShouldPersistReleaseTrace(message)) {
-            util::Logger::Instance().Enqueue(std::move(line));
-        }
-    } catch (...) {
-    }
+    details::SubmitLog(m_state, message, false, ShouldPersistReleaseTrace(message));
 #endif
 }

@@ -74,12 +74,13 @@ void TrayContextMenu::Initialize(winrt::Microsoft::UI::Xaml::FrameworkElement an
     menu.Items().Append(btItem);
     menu.Items().Append(sep);
     menu.Items().Append(exitItem);
-    menu.Opened(
-        [settingsItem = winrt::make_weak(settingsItem), backdropEffects = m_useSystemBackdropEffects](auto&, auto&) {
-            if (auto item = settingsItem.get()) {
-                apc::ui::ApplyFlyoutPresenterStyle(item, backdropEffects->load(std::memory_order_relaxed));
-            }
-        });
+    menu.Opened([settingsItem = winrt::make_weak(settingsItem),
+                 backdropEffects = m_useSystemBackdropEffects,
+                 log = m_log](auto&, auto&) {
+        if (auto item = settingsItem.get()) {
+            apc::ui::ApplyFlyoutPresenterStyle(item, backdropEffects->load(std::memory_order_relaxed), log);
+        }
+    });
 
     m_menu = menu;
     m_settingsItem = settingsItem;
@@ -101,15 +102,15 @@ void TrayContextMenu::SetSystemBackdropEffectsEnabled(bool enabled) noexcept {
 
 bool TrayContextMenu::ShowAt(winrt::Windows::Foundation::Point point) {
     if (!m_menu) {
-        DebugTrace(L"[TrayContextMenu] ERROR: m_menu is null");
+        m_log.Trace(L"[TrayContextMenu] ERROR: m_menu is null");
         return false;
     }
     if (!m_anchor) {
-        DebugTrace(L"[TrayContextMenu] ERROR: m_anchor is null");
+        m_log.Trace(L"[TrayContextMenu] ERROR: m_anchor is null");
         return false;
     }
     if (!m_anchor.XamlRoot()) {
-        DebugTrace(L"[TrayContextMenu] ERROR: m_anchor.XamlRoot() is null");
+        m_log.Trace(L"[TrayContextMenu] ERROR: m_anchor.XamlRoot() is null");
         return false;
     }
     m_menu.XamlRoot(m_anchor.XamlRoot());

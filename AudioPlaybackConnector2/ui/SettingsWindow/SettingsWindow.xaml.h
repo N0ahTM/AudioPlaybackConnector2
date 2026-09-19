@@ -1,5 +1,7 @@
 #pragma once
 
+#include <util/Logger.hpp>
+
 #include <SettingsWindow.g.h>
 #include <app/AppController.hpp>
 #include <ui/SettingsDiagnosticsReport.hpp>
@@ -41,7 +43,7 @@ struct SettingsWindow : SettingsWindowT<SettingsWindow> {
                                          winrt::Microsoft::UI::Xaml::SizeChangedEventArgs const& e);
     void LanguageComboBox_SelectionChanged(winrt::Windows::Foundation::IInspectable const& sender,
                                            winrt::Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const& e);
-    void SetAppController(std::shared_ptr<apc::app::AppController> controller);
+    void SetAppController(std::shared_ptr<apc::app::AppController> controller, util::LogSink log);
     void SetInitialSettingsSnapshot(SettingsData snapshot);
     void SetDefaultPlacement(util::SettingsWindowPlacement placement);
     void ShowHelpPage();
@@ -87,7 +89,8 @@ private:
                                                        std::size_t connectedDeviceCount,
                                                        std::filesystem::path logPath,
                                                        apc::ui::SettingsDiagnosticsReportContext context,
-                                                       std::uint64_t requestId);
+                                                       std::uint64_t requestId,
+                                                       util::LogSink log);
     void StartWithWindowsToggle_Toggled(winrt::Windows::Foundation::IInspectable const& sender,
                                         winrt::Microsoft::UI::Xaml::RoutedEventArgs const& e);
     util::SettingsWindowPlacement m_defaultPlacement = util::CalculateSettingsWindowPlacement();
@@ -96,6 +99,7 @@ private:
     std::uint64_t m_lastStartupTaskPublication = 0;
     std::uint64_t m_diagnosticsCopyRequestId = 0;
     bool m_diagnosticsCopyInProgress = false;
+    util::LogSink m_log;
     std::shared_ptr<apc::app::AppController> m_appController;
     apc::app::AppController::Subscription m_appSubscription;
     std::uint64_t m_lastAppRevision = 0;

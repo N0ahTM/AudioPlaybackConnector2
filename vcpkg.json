@@ -7,6 +7,11 @@
     {
       "name": "cli11",
       "version>=": "2.6.2"
+    },
+    {
+      "name": "spdlog",
+      "version>=": "1.17.0",
+      "default-features": false
     }
   ],
   "overrides": [
@@ -18,6 +23,10 @@
     {
       "name": "cli11",
       "version": "2.6.2"
+    },
+    {
+      "name": "spdlog",
+      "version": "1.17.0"
     }
   ]
 }

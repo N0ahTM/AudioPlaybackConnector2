@@ -169,7 +169,9 @@ DevicePickerView::~DevicePickerView() {
 
 void DevicePickerView::Initialize(std::weak_ptr<apc::app::AppController> controller,
                                   std::function<void()> onClose,
-                                  std::function<void()> showSettings) {
+                                  std::function<void()> showSettings,
+                                  util::LogSink log) {
+    m_log = std::move(log);
     m_appController = std::move(controller);
     m_onClose = std::move(onClose);
     m_onShowSettings = std::move(showSettings);
@@ -185,7 +187,7 @@ bool DevicePickerView::LoadDevices() {
     m_refreshCancellation = std::stop_source{};
     m_isLoadingDevices = true;
     SetRefreshIndicators(true, m_viewState.Items.empty());
-    RefreshDevicesAsync(get_weak(), DispatcherQueue(), std::move(controller), m_refreshCancellation.get_token());
+    RefreshDevicesAsync(get_weak(), DispatcherQueue(), std::move(controller), m_refreshCancellation.get_token(), m_log);
     return true;
 }
 
@@ -193,18 +195,19 @@ winrt::fire_and_forget
 DevicePickerView::RefreshDevicesAsync(winrt::weak_ref<DevicePickerView> weak,
                                       winrt::Microsoft::UI::Dispatching::DispatcherQueue dispatcher,
                                       std::shared_ptr<apc::app::AppController> controller,
-                                      std::stop_token stop) {
+                                      std::stop_token stop,
+                                      util::LogSink log) {
     try {
         co_await winrt::resume_background();
         util::RuntimeApartment apartment;
         if (apartment.Ready() && !stop.stop_requested())
             static_cast<void>(controller->ListDevices({.StopToken = stop}));
     } catch (...) {
-        util::DebugTraceUnknownException(L"[DevicePickerView] background refresh failed");
+        log.UnknownException(L"[DevicePickerView] background refresh failed");
     }
     try {
         // Only this dispatcher callback touches the view. A cancelled older request cannot finish a newer one.
-        static_cast<void>(dispatcher.TryEnqueue([weak, stop]() noexcept {
+        static_cast<void>(dispatcher.TryEnqueue([weak, stop, log]() noexcept {
             if (stop.stop_requested()) return;
             try {
                 if (auto self = weak.get(); self && !self->m_preparedForRelease) {
@@ -213,11 +216,11 @@ DevicePickerView::RefreshDevicesAsync(winrt::weak_ref<DevicePickerView> weak,
                     self->RenderDeviceList();
                 }
             } catch (...) {
-                util::DebugTraceUnknownException(L"[DevicePickerView] refresh presentation failed");
+                log.UnknownException(L"[DevicePickerView] refresh presentation failed");
             }
         }));
     } catch (...) {
-        util::DebugTraceUnknownException(L"[DevicePickerView] refresh dispatch failed");
+        log.UnknownException(L"[DevicePickerView] refresh dispatch failed");
     }
 }
 
@@ -237,7 +240,7 @@ void DevicePickerView::PrepareForRelease() noexcept {
     try {
         auto dispatcher = DispatcherQueue();
         if (!dispatcher || !dispatcher.HasThreadAccess()) {
-            DebugTrace(L"[DevicePickerView] ERROR: PrepareForRelease must run on the UI thread");
+            m_log.Trace(L"[DevicePickerView] ERROR: PrepareForRelease must run on the UI thread");
             return;
         }
 
@@ -247,11 +250,11 @@ void DevicePickerView::PrepareForRelease() noexcept {
         StopPendingActionTimer();
         CancelLoadDevices();
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[DevicePickerView] ERROR: PrepareForRelease failed", ex);
+        m_log.Exception(L"[DevicePickerView] ERROR: PrepareForRelease failed", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[DevicePickerView] ERROR: PrepareForRelease failed", ex);
+        m_log.Exception(L"[DevicePickerView] ERROR: PrepareForRelease failed", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[DevicePickerView] ERROR: PrepareForRelease failed");
+        m_log.UnknownException(L"[DevicePickerView] ERROR: PrepareForRelease failed");
     }
 
     m_onClose = nullptr;
@@ -389,7 +392,7 @@ void DevicePickerView::AnimateNavigation(double previousHeight) noexcept {
         m_navigationAnimation = storyboard;
         storyboard.Begin();
     } catch (...) {
-        util::DebugTraceUnknownException(L"[DevicePickerView] Navigation animation failed");
+        m_log.UnknownException(L"[DevicePickerView] Navigation animation failed");
         StopNavigationAnimation();
     }
 }
@@ -508,13 +511,13 @@ void DevicePickerView::RenderDeviceList(bool reconcilePendingActions, bool force
     const auto connectedItemCount =
         std::count_if(items.begin(), items.end(), [](auto const& item) { return item.IsConnected; });
     const auto busyItemCount = std::count_if(items.begin(), items.end(), [](auto const& item) { return item.IsBusy; });
-    DebugTrace(L"[DevicePickerView] RenderDeviceList connectedCount={0} itemCount={1} "
-               L"connectedItemCount={2} busyItemCount={3} pendingGlobalAction={4}",
-               connectedCount,
-               items.size(),
-               connectedItemCount,
-               busyItemCount,
-               m_pendingGlobalAction);
+    m_log.Trace(L"[DevicePickerView] RenderDeviceList connectedCount={0} itemCount={1} "
+                L"connectedItemCount={2} busyItemCount={3} pendingGlobalAction={4}",
+                connectedCount,
+                items.size(),
+                connectedItemCount,
+                busyItemCount,
+                m_pendingGlobalAction);
     ApplyGlobalActionState(connectedCount > 1, !anyBusy && !m_pendingGlobalAction);
     std::vector<apc::device_picker::DeviceSnapshotItem> visibleItems;
     for (auto const& device : items) {
@@ -600,7 +603,7 @@ ListViewItem DevicePickerView::BuildDeviceListItem(apc::device_picker::DeviceSna
                                                                         : L"TextFillColorSecondaryBrush"));
         primaryContent.Children().Append(statusIcon);
         if (device.IsConnected) {
-            auto update = [](Button const& owner) {
+            auto update = [log = m_log](Button const& owner) {
                 auto content = owner.Content().try_as<Grid>();
                 if (!content || content.Children().Size() == 0) return;
                 auto current = content.Children().GetAt(0).try_as<FontIcon>();
@@ -611,7 +614,7 @@ ListViewItem DevicePickerView::BuildDeviceListItem(apc::device_picker::DeviceSna
                 current.Glyph(glyph);
                 current.Foreground(
                     apc::ui::TryThemeBrush(action ? L"SystemFillColorCriticalBrush" : L"SystemFillColorSuccessBrush"));
-                DebugTrace(L"[DevicePickerView] Device action icon updated: disconnect={0}", action);
+                log.Trace(L"[DevicePickerView] Device action icon updated: disconnect={0}", action);
             };
             // Resolve the live visual from the event sender, rather than retaining weak projected peers.
             primary.RegisterPropertyChangedCallback(
@@ -742,17 +745,17 @@ void DevicePickerView::SchedulePendingActionExpiry() noexcept {
             m_pendingActionTimer = dispatcher.CreateTimer();
             m_pendingActionTimer.IsRepeating(false);
             auto weak = get_weak();
-            m_pendingActionTimer.Tick([weak](auto const&, auto const&) noexcept {
+            m_pendingActionTimer.Tick([weak, log = m_log](auto const&, auto const&) noexcept {
                 try {
                     if (auto self = weak.get(); self && self->m_presentationActive) {
                         self->RenderDeviceList(true, true);
                     }
                 } catch (winrt::hresult_error const& ex) {
-                    util::DebugTraceException(L"[DevicePickerView] Pending-action timer failed", ex);
+                    log.Exception(L"[DevicePickerView] Pending-action timer failed", ex);
                 } catch (std::exception const& ex) {
-                    util::DebugTraceException(L"[DevicePickerView] Pending-action timer failed", ex);
+                    log.Exception(L"[DevicePickerView] Pending-action timer failed", ex);
                 } catch (...) {
-                    util::DebugTraceUnknownException(L"[DevicePickerView] Pending-action timer failed");
+                    log.UnknownException(L"[DevicePickerView] Pending-action timer failed");
                 }
             });
         } else {
@@ -761,11 +764,11 @@ void DevicePickerView::SchedulePendingActionExpiry() noexcept {
         m_pendingActionTimer.Interval(delay);
         m_pendingActionTimer.Start();
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[DevicePickerView] Failed to schedule pending-action expiry", ex);
+        m_log.Exception(L"[DevicePickerView] Failed to schedule pending-action expiry", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[DevicePickerView] Failed to schedule pending-action expiry", ex);
+        m_log.Exception(L"[DevicePickerView] Failed to schedule pending-action expiry", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[DevicePickerView] Failed to schedule pending-action expiry");
+        m_log.UnknownException(L"[DevicePickerView] Failed to schedule pending-action expiry");
     }
 }
 

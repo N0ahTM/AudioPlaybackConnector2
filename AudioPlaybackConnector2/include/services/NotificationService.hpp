@@ -1,5 +1,7 @@
 #pragma once
 
+#include <util/Logger.hpp>
+
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -19,7 +21,7 @@ public:
     /*//////// Lifecycle /////////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    NotificationService() = default;
+    explicit NotificationService(util::LogSink log) : m_log(std::move(log)) {}
     ~NotificationService();
 
     NotificationService(const NotificationService&) = delete;
@@ -65,16 +67,18 @@ private:
     [[nodiscard]] StatusNotificationTagReservation ReserveStatusNotificationTag();
     void RollbackStatusNotificationTag(StatusNotificationTagReservation&& reservation);
     [[nodiscard]] bool ShouldShowNotifications() const;
-    winrt::fire_and_forget RemoveStaleStatusToastsAsync(
+    static winrt::fire_and_forget RemoveStaleStatusToastsAsync(
         winrt::Microsoft::Windows::AppNotifications::AppNotificationManager notificationManager,
         winrt::hstring group,
-        std::vector<winrt::hstring> tagsToRemove);
+        std::vector<winrt::hstring> tagsToRemove,
+        util::LogSink log);
     bool ShowStatusToast(std::wstring const& xml, winrt::Windows::Foundation::DateTime const& expiration);
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
+    util::LogSink m_log;
     winrt::Microsoft::Windows::AppNotifications::AppNotificationManager m_notificationManager{nullptr};
     winrt::event_token m_notificationInvokedToken{};
     ReconnectRequestedCallback m_reconnectCallback;

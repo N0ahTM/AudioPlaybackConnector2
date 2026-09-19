@@ -28,8 +28,8 @@ struct StartupTaskCoordinator::State : std::enable_shared_from_this<State> {
         std::optional<std::uint64_t> LastPublication;
     };
 
-    State(QueryOperation query, SetOperation set, CommitActual commit)
-        : Query(std::move(query)), Set(std::move(set)), Commit(std::move(commit)) {
+    State(QueryOperation query, SetOperation set, CommitActual commit, util::LogSink log)
+        : Log(std::move(log)), Query(std::move(query)), Set(std::move(set)), Commit(std::move(commit)) {
         if (!Query || !Set) throw std::invalid_argument("startup task operations are required");
     }
 
@@ -60,7 +60,7 @@ struct StartupTaskCoordinator::State : std::enable_shared_from_this<State> {
             try {
                 if (!IsStopped()) next();
             } catch (...) {
-                util::DebugTraceUnknownException(L"[StartupTaskCoordinator] owner operation failed");
+                Log.UnknownException(L"[StartupTaskCoordinator] owner operation failed");
             }
         }
     }
@@ -87,7 +87,7 @@ struct StartupTaskCoordinator::State : std::enable_shared_from_this<State> {
         try {
             entry->Handler(snapshot);
         } catch (...) {
-            util::DebugTraceUnknownException(L"[StartupTaskCoordinator] observer failed");
+            Log.UnknownException(L"[StartupTaskCoordinator] observer failed");
         }
         {
             std::lock_guard lock(Mutex);
@@ -176,7 +176,7 @@ struct StartupTaskCoordinator::State : std::enable_shared_from_this<State> {
             actual = co_await self->Query();
             known = true;
         } catch (...) {
-            util::DebugTraceUnknownException(L"[StartupTaskCoordinator] query operation failed");
+            self->Log.UnknownException(L"[StartupTaskCoordinator] query operation failed");
         }
         auto failed = !known || (operation.Kind == LatestStartupTaskRequestState::RequestKind::Desired &&
                                  actual != operation.Desired);
@@ -188,7 +188,7 @@ struct StartupTaskCoordinator::State : std::enable_shared_from_this<State> {
             static_cast<void>(co_await self->Set(operation.Desired));
         } catch (...) {
             // Even a failed set is followed by a query of the authoritative OS state.
-            util::DebugTraceUnknownException(L"[StartupTaskCoordinator] set operation failed");
+            self->Log.UnknownException(L"[StartupTaskCoordinator] set operation failed");
         }
         self->Post([self, operation] { QueryActual(self, operation); });
     }
@@ -212,7 +212,7 @@ struct StartupTaskCoordinator::State : std::enable_shared_from_this<State> {
                     try {
                         Commit(actual);
                     } catch (...) {
-                        util::DebugTraceUnknownException(L"[StartupTaskCoordinator] settings commit failed");
+                        Log.UnknownException(L"[StartupTaskCoordinator] settings commit failed");
                     }
                 }
             }
@@ -231,6 +231,7 @@ struct StartupTaskCoordinator::State : std::enable_shared_from_this<State> {
     /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
+    util::LogSink Log;
     QueryOperation Query;
     SetOperation Set;
     CommitActual Commit;
@@ -253,13 +254,17 @@ struct StartupTaskCoordinator::State : std::enable_shared_from_this<State> {
 /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-StartupTaskCoordinator::StartupTaskCoordinator(CommitActual commitActual)
+StartupTaskCoordinator::StartupTaskCoordinator(CommitActual commitActual, util::LogSink log)
     : StartupTaskCoordinator([] { return StartupTaskController::IsEnabledAsync(); },
                              [](bool enabled) { return StartupTaskController::SetEnabledAsync(enabled); },
-                             std::move(commitActual)) {}
+                             std::move(commitActual),
+                             std::move(log)) {}
 
-StartupTaskCoordinator::StartupTaskCoordinator(QueryOperation query, SetOperation set, CommitActual commit)
-    : m_state(std::make_shared<State>(std::move(query), std::move(set), std::move(commit))) {}
+StartupTaskCoordinator::StartupTaskCoordinator(QueryOperation query,
+                                               SetOperation set,
+                                               CommitActual commit,
+                                               util::LogSink log)
+    : m_state(std::make_shared<State>(std::move(query), std::move(set), std::move(commit), std::move(log))) {}
 
 StartupTaskCoordinator::~StartupTaskCoordinator() {
     Shutdown();

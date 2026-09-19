@@ -1,6 +1,7 @@
 #pragma once
 
 #include <core/DevicePickerTypes.hpp>
+#include <util/Logger.hpp>
 
 #include <winrt/Windows.Devices.Enumeration.h>
 #include <winrt/Windows.Foundation.h>
@@ -65,7 +66,8 @@ public:
 
     explicit DeviceWatcher(SerializedExecutor serializedExecutor,
                            FactSink factSink = {},
-                           std::unique_ptr<DeviceWatcherPlatform> platform = {});
+                           std::unique_ptr<DeviceWatcherPlatform> platform = {},
+                           util::LogSink log = {});
     ~DeviceWatcher();
 
     DeviceWatcher(DeviceWatcher const&) = delete;

@@ -29,7 +29,8 @@ device_picker::DeviceInventorySnapshot BuildSnapshot(std::uint64_t inventoryGene
 
 class WindowsDeviceInformationWatcher final : public DeviceWatcherRegistration {
 public:
-    explicit WindowsDeviceInformationWatcher(DeviceWatcherCallbacks callbacks) {
+    explicit WindowsDeviceInformationWatcher(DeviceWatcherCallbacks callbacks, util::LogSink log)
+        : m_log(std::move(log)) {
         auto const selector = winrt::Windows::Media::Audio::AudioPlaybackConnection::GetDeviceSelector();
         m_watcher = winrt::Windows::Devices::Enumeration::DeviceInformation::CreateWatcher(selector);
 
@@ -58,11 +59,11 @@ public:
         try {
             m_watcher.Stop();
         } catch (winrt::hresult_error const& error) {
-            util::DebugTraceException(L"[DeviceWatcher] failed to stop DeviceInformation watcher", error);
+            m_log.Exception(L"[DeviceWatcher] failed to stop DeviceInformation watcher", error);
         } catch (std::exception const& error) {
-            util::DebugTraceException(L"[DeviceWatcher] failed to stop DeviceInformation watcher", error);
+            m_log.Exception(L"[DeviceWatcher] failed to stop DeviceInformation watcher", error);
         } catch (...) {
-            util::DebugTraceUnknownException(L"[DeviceWatcher] failed to stop DeviceInformation watcher");
+            m_log.UnknownException(L"[DeviceWatcher] failed to stop DeviceInformation watcher");
         }
     }
 
@@ -81,14 +82,15 @@ private:
         try {
             std::forward<Revoker>(revoke)(tokenToRevoke);
         } catch (winrt::hresult_error const& error) {
-            util::DebugTraceException(L"[DeviceWatcher] failed to revoke DeviceInformation watcher callback", error);
+            m_log.Exception(L"[DeviceWatcher] failed to revoke DeviceInformation watcher callback", error);
         } catch (std::exception const& error) {
-            util::DebugTraceException(L"[DeviceWatcher] failed to revoke DeviceInformation watcher callback", error);
+            m_log.Exception(L"[DeviceWatcher] failed to revoke DeviceInformation watcher callback", error);
         } catch (...) {
-            util::DebugTraceUnknownException(L"[DeviceWatcher] failed to revoke DeviceInformation watcher callback");
+            m_log.UnknownException(L"[DeviceWatcher] failed to revoke DeviceInformation watcher callback");
         }
     }
 
+    util::LogSink m_log;
     winrt::Windows::Devices::Enumeration::DeviceWatcher m_watcher{nullptr};
     winrt::event_token m_addedToken{};
     winrt::event_token m_removedToken{};
@@ -96,10 +98,13 @@ private:
 };
 
 class WindowsDeviceWatcherPlatform final : public DeviceWatcherPlatform {
+    util::LogSink m_log;
+
 public:
+    explicit WindowsDeviceWatcherPlatform(util::LogSink log) : m_log(std::move(log)) {}
     [[nodiscard]] std::unique_ptr<DeviceWatcherRegistration>
     CreateDeviceInformationWatcher(DeviceWatcherCallbacks callbacks) override {
-        return std::make_unique<WindowsDeviceInformationWatcher>(std::move(callbacks));
+        return std::make_unique<WindowsDeviceInformationWatcher>(std::move(callbacks), m_log);
     }
 
     winrt::Windows::Foundation::IAsyncAction RefreshAsync(RefreshCompletion completion) override {
@@ -119,6 +124,7 @@ public:
 } // namespace
 
 struct DeviceWatcher::State : std::enable_shared_from_this<DeviceWatcher::State> {
+    util::LogSink Log;
     SerializedExecutor Executor;
     FactSink PublishFact;
     std::unique_ptr<DeviceWatcherPlatform> Platform;
@@ -213,12 +219,14 @@ struct DeviceWatcher::State : std::enable_shared_from_this<DeviceWatcher::State>
 
 DeviceWatcher::DeviceWatcher(SerializedExecutor serializedExecutor,
                              FactSink factSink,
-                             std::unique_ptr<DeviceWatcherPlatform> platform)
+                             std::unique_ptr<DeviceWatcherPlatform> platform,
+                             util::LogSink log)
     : m_state(std::make_shared<State>()) {
     if (!serializedExecutor) throw std::invalid_argument("DeviceWatcher requires a serialized executor");
+    m_state->Log = log;
     m_state->Executor = std::move(serializedExecutor);
     m_state->PublishFact = std::move(factSink);
-    m_state->Platform = platform ? std::move(platform) : std::make_unique<WindowsDeviceWatcherPlatform>();
+    m_state->Platform = platform ? std::move(platform) : std::make_unique<WindowsDeviceWatcherPlatform>(std::move(log));
 }
 
 DeviceWatcher::~DeviceWatcher() {
@@ -265,11 +273,11 @@ bool DeviceWatcher::Start() {
         state->Publish(DeviceWatcherFactKind::InventoryChanged);
         return true;
     } catch (winrt::hresult_error const& error) {
-        util::DebugTraceException(L"[DeviceWatcher] failed to create or start DeviceInformation watcher", error);
+        state->Log.Exception(L"[DeviceWatcher] failed to create or start DeviceInformation watcher", error);
     } catch (std::exception const& error) {
-        util::DebugTraceException(L"[DeviceWatcher] failed to create or start DeviceInformation watcher", error);
+        state->Log.Exception(L"[DeviceWatcher] failed to create or start DeviceInformation watcher", error);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[DeviceWatcher] failed to create or start DeviceInformation watcher");
+        state->Log.UnknownException(L"[DeviceWatcher] failed to create or start DeviceInformation watcher");
     }
 
     if (state->WatcherGeneration.load(std::memory_order_acquire) == watcherGeneration) {

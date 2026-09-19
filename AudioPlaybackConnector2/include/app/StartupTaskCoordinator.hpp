@@ -1,6 +1,7 @@
 #pragma once
 
 #include <app/StartupTaskSnapshot.hpp>
+#include <util/Logger.hpp>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -18,8 +19,11 @@ public:
     using ChangedHandler = std::function<void(StartupTaskSnapshot const&)>;
     using HandlerToken = std::uint64_t;
 
-    explicit StartupTaskCoordinator(CommitActual commitActual);
-    StartupTaskCoordinator(QueryOperation queryOperation, SetOperation setOperation, CommitActual commitActual);
+    explicit StartupTaskCoordinator(CommitActual commitActual, util::LogSink log = {});
+    StartupTaskCoordinator(QueryOperation queryOperation,
+                           SetOperation setOperation,
+                           CommitActual commitActual,
+                           util::LogSink log = {});
     ~StartupTaskCoordinator();
 
     StartupTaskCoordinator(StartupTaskCoordinator const&) = delete;

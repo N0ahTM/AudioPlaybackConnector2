@@ -1,5 +1,7 @@
 #pragma once
 
+#include <util/Logger.hpp>
+
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -31,7 +33,7 @@ public:
     /*//////// Constructors /////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    explicit PowerTransitionCoordinator(std::atomic<bool>& exiting, Scheduler scheduler = {});
+    explicit PowerTransitionCoordinator(std::atomic<bool>& exiting, Scheduler scheduler = {}, util::LogSink log = {});
     ~PowerTransitionCoordinator();
 
     /*------------------------------------------------------------------------------------------------------------*/

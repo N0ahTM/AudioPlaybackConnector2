@@ -89,7 +89,7 @@ void SetItemContent(NavigationViewItem const& item, std::wstring_view text) {
     item.Content(winrt::box_value(winrt::hstring(text)));
 }
 
-std::wstring BuildVersionText() {
+std::wstring BuildVersionText(util::LogSink const& log) {
     std::wstring label(_("About_Version"));
     try {
         auto version = winrt::Windows::ApplicationModel::Package::Current().Id().Version();
@@ -99,14 +99,14 @@ std::wstring BuildVersionText() {
                 : std::format(L"{}.{}.{}.{}", version.Major, version.Minor, version.Build, version.Revision);
         return std::format(L"{} {}", label, versionText);
     } catch (winrt::hresult_error const& ex) {
-        DebugTrace(
+        log.Trace(
             L"[SettingsWindow] BuildVersionText failed: 0x{0:08X} {1}", static_cast<uint32_t>(ex.code()), ex.message());
         return label;
     } catch (std::exception const& ex) {
-        DebugTrace(L"[SettingsWindow] BuildVersionText failed: {0}", util::Utf8ToUtf16(ex.what()));
+        log.Trace(L"[SettingsWindow] BuildVersionText failed: {0}", util::Utf8ToUtf16(ex.what()));
         return label;
     } catch (...) {
-        DebugTrace(L"[SettingsWindow] BuildVersionText failed: unknown exception");
+        log.Trace(L"[SettingsWindow] BuildVersionText failed: unknown exception");
         return label;
     }
 }
@@ -235,15 +235,15 @@ void SettingsWindow::RootGrid_Loaded(IInspectable const&, RoutedEventArgs const&
         m_initializationState = InitializationState::Succeeded;
     } catch (winrt::hresult_error const& ex) {
         m_initializationState = InitializationState::Failed;
-        util::DebugTraceException(L"[SettingsWindow] initialization failed", ex);
+        m_log.Exception(L"[SettingsWindow] initialization failed", ex);
         CloseAfterInitializationFailure();
     } catch (std::exception const& ex) {
         m_initializationState = InitializationState::Failed;
-        util::DebugTraceException(L"[SettingsWindow] initialization failed", ex);
+        m_log.Exception(L"[SettingsWindow] initialization failed", ex);
         CloseAfterInitializationFailure();
     } catch (...) {
         m_initializationState = InitializationState::Failed;
-        util::DebugTraceUnknownException(L"[SettingsWindow] initialization failed");
+        m_log.UnknownException(L"[SettingsWindow] initialization failed");
         CloseAfterInitializationFailure();
     }
 }
@@ -256,11 +256,11 @@ void SettingsWindow::CloseAfterInitializationFailure() noexcept {
     try {
         Close();
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] failed to close after initialization error", ex);
+        m_log.Exception(L"[SettingsWindow] failed to close after initialization error", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] failed to close after initialization error", ex);
+        m_log.Exception(L"[SettingsWindow] failed to close after initialization error", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[SettingsWindow] failed to close after initialization error");
+        m_log.UnknownException(L"[SettingsWindow] failed to close after initialization error");
     }
 }
 
@@ -322,7 +322,7 @@ void SettingsWindow::LocalizeSettingsText() {
     apc::ui::SetButtonLabel(
         OpenLogFolderButton(), OpenLogFolderButtonText(), winrt::hstring(_("Settings_OpenLogFolder")));
 
-    VersionText().Text(winrt::hstring(BuildVersionText()));
+    VersionText().Text(winrt::hstring(BuildVersionText(m_log)));
     CopyrightText().Text(winrt::hstring(_("About_Copyright")));
     apc::ui::SetButtonLabel(RepositoryButton(), RepositoryButtonText(), winrt::hstring(_("Settings_Repository")));
 
@@ -362,11 +362,11 @@ void SettingsWindow::QueuePlacementSave() {
         m_placementSaveTimer.Stop();
         m_placementSaveTimer.Start();
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] QueuePlacementSave failed", ex);
+        m_log.Exception(L"[SettingsWindow] QueuePlacementSave failed", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] QueuePlacementSave failed", ex);
+        m_log.Exception(L"[SettingsWindow] QueuePlacementSave failed", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[SettingsWindow] QueuePlacementSave failed");
+        m_log.UnknownException(L"[SettingsWindow] QueuePlacementSave failed");
     }
 }
 
@@ -387,18 +387,18 @@ void SettingsWindow::ApplySystemBackdropEffects(bool enabled) noexcept try {
             ? winrt::Microsoft::UI::Xaml::Media::SolidColorBrush(winrt::Windows::UI::Colors::Transparent())
             : apc::ui::ThemeBrushOrFallback(L"SolidBackgroundFillColorBaseBrush", winrt::Windows::UI::Colors::White()));
 } catch (...) {
-    util::DebugTraceUnknownException(L"[SettingsWindow] failed to apply backdrop setting");
+    m_log.UnknownException(L"[SettingsWindow] failed to apply backdrop setting");
 }
 
 void SettingsWindow::CommitPlacementNow() noexcept {
     try {
         if (!StoreCurrentPlacement()) return;
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] CommitPlacementNow failed", ex);
+        m_log.Exception(L"[SettingsWindow] CommitPlacementNow failed", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] CommitPlacementNow failed", ex);
+        m_log.Exception(L"[SettingsWindow] CommitPlacementNow failed", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[SettingsWindow] CommitPlacementNow failed");
+        m_log.UnknownException(L"[SettingsWindow] CommitPlacementNow failed");
     }
 }
 
@@ -475,8 +475,8 @@ void SettingsWindow::CopyDiagnosticsButton_Click(IInspectable const&, RoutedEven
         auto application = controller ? controller->Snapshot() : apc::app::AppSnapshot{};
         auto snapshot = std::move(application.Settings);
         auto connectedCount = application.Tray.ConnectedDevices.size();
-        auto context = apc::ui::CaptureSettingsDiagnosticsReportContext(BuildVersionText());
-        auto logPath = util::GetCachedLogPath();
+        auto context = apc::ui::CaptureSettingsDiagnosticsReportContext(BuildVersionText(m_log));
+        auto logPath = m_log.Path();
         auto requestId = ++m_diagnosticsCopyRequestId;
         m_diagnosticsCopyInProgress = true;
         CopyDiagnosticsButton().IsEnabled(false);
@@ -486,14 +486,15 @@ void SettingsWindow::CopyDiagnosticsButton_Click(IInspectable const&, RoutedEven
                              connectedCount,
                              std::move(logPath),
                              std::move(context),
-                             requestId);
+                             requestId,
+                             m_log);
         return;
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] BuildDiagnosticsText failed", ex);
+        m_log.Exception(L"[SettingsWindow] BuildDiagnosticsText failed", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] BuildDiagnosticsText failed", ex);
+        m_log.Exception(L"[SettingsWindow] BuildDiagnosticsText failed", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[SettingsWindow] BuildDiagnosticsText failed");
+        m_log.UnknownException(L"[SettingsWindow] BuildDiagnosticsText failed");
     }
 
     m_diagnosticsCopyInProgress = false;
@@ -751,17 +752,18 @@ void SettingsWindow::ShowDiagnosticsInfo(InfoBarSeverity severity, std::wstring_
 
 winrt::fire_and_forget SettingsWindow::LaunchUri(std::wstring_view uri) {
     auto weak = get_weak();
+    auto log = m_log;
     auto uriCopy = std::wstring(uri);
     winrt::apartment_context uiThread;
     bool launched = false;
     try {
         launched = co_await winrt::Windows::System::Launcher::LaunchUriAsync(winrt::Windows::Foundation::Uri(uriCopy));
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] LaunchUri failed", ex);
+        log.Exception(L"[SettingsWindow] LaunchUri failed", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] LaunchUri failed", ex);
+        log.Exception(L"[SettingsWindow] LaunchUri failed", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[SettingsWindow] LaunchUri failed");
+        log.UnknownException(L"[SettingsWindow] LaunchUri failed");
     }
 
     try {
@@ -777,7 +779,7 @@ winrt::fire_and_forget SettingsWindow::LaunchUri(std::wstring_view uri) {
 
 void SettingsWindow::OpenLogFolder() {
     try {
-        auto folder = util::GetCachedLogPath().parent_path();
+        auto folder = m_log.Path().parent_path();
         if (folder.empty()) {
             ShowDiagnosticsInfo(
                 InfoBarSeverity::Error, _("Settings_ActionFailed_Title"), _("Settings_ActionFailed_Message"));
@@ -792,15 +794,15 @@ void SettingsWindow::OpenLogFolder() {
                 InfoBarSeverity::Error, _("Settings_ActionFailed_Title"), _("Settings_ActionFailed_Message"));
         }
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] OpenLogFolder failed", ex);
+        m_log.Exception(L"[SettingsWindow] OpenLogFolder failed", ex);
         ShowDiagnosticsInfo(
             InfoBarSeverity::Error, _("Settings_ActionFailed_Title"), _("Settings_ActionFailed_Message"));
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] OpenLogFolder failed", ex);
+        m_log.Exception(L"[SettingsWindow] OpenLogFolder failed", ex);
         ShowDiagnosticsInfo(
             InfoBarSeverity::Error, _("Settings_ActionFailed_Title"), _("Settings_ActionFailed_Message"));
     } catch (...) {
-        util::DebugTraceUnknownException(L"[SettingsWindow] OpenLogFolder failed");
+        m_log.UnknownException(L"[SettingsWindow] OpenLogFolder failed");
         ShowDiagnosticsInfo(
             InfoBarSeverity::Error, _("Settings_ActionFailed_Title"), _("Settings_ActionFailed_Message"));
     }
@@ -814,11 +816,11 @@ bool SettingsWindow::CopyTextToClipboard(std::wstring_view text) {
         winrt::Windows::ApplicationModel::DataTransfer::Clipboard::Flush();
         return true;
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] CopyTextToClipboard failed", ex);
+        m_log.Exception(L"[SettingsWindow] CopyTextToClipboard failed", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] CopyTextToClipboard failed", ex);
+        m_log.Exception(L"[SettingsWindow] CopyTextToClipboard failed", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[SettingsWindow] CopyTextToClipboard failed");
+        m_log.UnknownException(L"[SettingsWindow] CopyTextToClipboard failed");
     }
 
     return false;
@@ -886,7 +888,7 @@ void SettingsWindow::ApplyStartupTaskSnapshot(StartupTaskSnapshot const& snapsho
     StartWithWindowsToggle().IsOn(snapshot.Enabled);
 } catch (...) {
     m_suppressStartupToggle = false;
-    util::DebugTraceUnknownException(L"[SettingsWindow] startup task snapshot ignored exception");
+    m_log.UnknownException(L"[SettingsWindow] startup task snapshot ignored exception");
 }
 
 winrt::fire_and_forget SettingsWindow::CopyDiagnosticsAsync(winrt::weak_ref<SettingsWindow> weak,
@@ -895,7 +897,8 @@ winrt::fire_and_forget SettingsWindow::CopyDiagnosticsAsync(winrt::weak_ref<Sett
                                                             std::size_t connectedDeviceCount,
                                                             std::filesystem::path logPath,
                                                             apc::ui::SettingsDiagnosticsReportContext context,
-                                                            std::uint64_t requestId) {
+                                                            std::uint64_t requestId,
+                                                            util::LogSink log) {
     apc::ui::DiagnosticsLogResult logResult;
     std::wstring diagnostics;
     bool returnedToUi = false;
@@ -905,13 +908,13 @@ winrt::fire_and_forget SettingsWindow::CopyDiagnosticsAsync(winrt::weak_ref<Sett
             apc::ui::CollectRecentDiagnosticLogLines(logPath, settings, context.RedactedDevice, context.RedactedValue);
         diagnostics = apc::ui::BuildSettingsDiagnosticsReport(settings, connectedDeviceCount, context, logResult);
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] CollectRecentDiagnosticLogLines failed", ex);
+        log.Exception(L"[SettingsWindow] CollectRecentDiagnosticLogLines failed", ex);
         logResult.Status = apc::ui::DiagnosticsLogStatus::Unavailable;
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] CollectRecentDiagnosticLogLines failed", ex);
+        log.Exception(L"[SettingsWindow] CollectRecentDiagnosticLogLines failed", ex);
         logResult.Status = apc::ui::DiagnosticsLogStatus::Unavailable;
     } catch (...) {
-        util::DebugTraceUnknownException(L"[SettingsWindow] CollectRecentDiagnosticLogLines failed");
+        log.UnknownException(L"[SettingsWindow] CollectRecentDiagnosticLogLines failed");
         logResult.Status = apc::ui::DiagnosticsLogStatus::Unavailable;
     }
 
@@ -933,11 +936,11 @@ winrt::fire_and_forget SettingsWindow::CopyDiagnosticsAsync(winrt::weak_ref<Sett
         self->CopyDiagnosticsButton().IsEnabled(true);
         co_return;
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] CopyDiagnosticsAsync failed", ex);
+        log.Exception(L"[SettingsWindow] CopyDiagnosticsAsync failed", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] CopyDiagnosticsAsync failed", ex);
+        log.Exception(L"[SettingsWindow] CopyDiagnosticsAsync failed", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[SettingsWindow] CopyDiagnosticsAsync failed");
+        log.UnknownException(L"[SettingsWindow] CopyDiagnosticsAsync failed");
     }
 
     if (returnedToUi) {
@@ -962,7 +965,8 @@ winrt::fire_and_forget SettingsWindow::CopyDiagnosticsAsync(winrt::weak_ref<Sett
 /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-void SettingsWindow::SetAppController(std::shared_ptr<apc::app::AppController> controller) {
+void SettingsWindow::SetAppController(std::shared_ptr<apc::app::AppController> controller, util::LogSink log) {
+    m_log = std::move(log);
     m_appController = std::move(controller);
 }
 
@@ -1010,7 +1014,7 @@ void SettingsWindow::ShowSettingsPage(SettingsPage page) {
             m_pageTransition.Children().Append(fade);
             m_pageTransition.Begin();
         } catch (...) {
-            util::DebugTraceUnknownException(L"[SettingsWindow] Page transition failed");
+            m_log.UnknownException(L"[SettingsWindow] Page transition failed");
             StopPageTransition();
         }
     }
@@ -1020,7 +1024,7 @@ void SettingsWindow::StopPageTransition() noexcept {
         auto animation = std::exchange(m_pageTransition, nullptr);
         if (animation) animation.Stop();
     } catch (...) {
-        util::DebugTraceUnknownException(L"[SettingsWindow] Failed to stop page transition");
+        m_log.UnknownException(L"[SettingsWindow] Failed to stop page transition");
     }
 }
 void SettingsWindow::ShowHelpPage() {

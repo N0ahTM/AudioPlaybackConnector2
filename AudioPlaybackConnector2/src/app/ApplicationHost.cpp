@@ -80,29 +80,29 @@ apc::app::AppSnapshot::ResourceStatusSnapshot::UserActivity ToAppUserActivity(Us
     return UserActivity::Unknown;
 }
 
-void LogMainWindowAnchor(HWND hwnd, std::wstring_view reason) noexcept {
+void LogMainWindowAnchor(util::LogSink const& log, HWND hwnd, std::wstring_view reason) noexcept {
     if (!hwnd) return;
 
     RECT rect{};
     GetWindowRect(hwnd, &rect);
     auto const style = GetWindowLongPtr(hwnd, GWL_STYLE);
     auto const exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
-    DebugTrace(L"[App] MainWindow anchor reason={0} hwnd=0x{1:X} visible={2} rect=({3},{4})-({5},{6}) "
-               L"size={7}x{8} style=0x{9:08X} exStyle=0x{10:08X}",
-               reason,
-               reinterpret_cast<uintptr_t>(hwnd),
-               IsWindowVisible(hwnd) != FALSE,
-               rect.left,
-               rect.top,
-               rect.right,
-               rect.bottom,
-               rect.right - rect.left,
-               rect.bottom - rect.top,
-               static_cast<uint32_t>(style),
-               static_cast<uint32_t>(exStyle));
+    log.Trace(L"[App] MainWindow anchor reason={0} hwnd=0x{1:X} visible={2} rect=({3},{4})-({5},{6}) "
+              L"size={7}x{8} style=0x{9:08X} exStyle=0x{10:08X}",
+              reason,
+              reinterpret_cast<uintptr_t>(hwnd),
+              IsWindowVisible(hwnd) != FALSE,
+              rect.left,
+              rect.top,
+              rect.right,
+              rect.bottom,
+              rect.right - rect.left,
+              rect.bottom - rect.top,
+              static_cast<uint32_t>(style),
+              static_cast<uint32_t>(exStyle));
 }
 
-void ConfigureHiddenMainWindowAnchor(HWND hwnd) noexcept {
+void ConfigureHiddenMainWindowAnchor(util::LogSink const& log, HWND hwnd) noexcept {
     if (!hwnd) return;
 
     auto const oldStyle = GetWindowLongPtr(hwnd, GWL_STYLE);
@@ -123,12 +123,12 @@ void ConfigureHiddenMainWindowAnchor(HWND hwnd) noexcept {
                  1,
                  SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-    LogMainWindowAnchor(hwnd, L"configured-hidden-anchor");
+    LogMainWindowAnchor(log, hwnd, L"configured-hidden-anchor");
 }
 
-[[noreturn]] void TerminateAfterWindowCloseFailure(std::wstring_view reason) noexcept {
-    DebugTrace(L"[App] FATAL: window teardown failed reason={0}; terminating process", reason);
-    util::FlushInMemoryLogTailToFile(reason, ERROR_PROCESS_ABORTED);
+[[noreturn]] void TerminateAfterWindowCloseFailure(util::EmergencyLog const& emergency,
+                                                   std::wstring_view reason) noexcept {
+    (void)emergency.Dump(reason, ERROR_PROCESS_ABORTED);
     ExitProcess(ERROR_PROCESS_ABORTED);
 }
 
@@ -138,9 +138,8 @@ void ConfigureHiddenMainWindowAnchor(HWND hwnd) noexcept {
 /*//////// Constructors / Destructor /////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-ApplicationHost::ApplicationHost() {
-    util::crash::InstallCrashHandlers();
-}
+ApplicationHost::ApplicationHost(util::LogSink log, util::EmergencyLog emergency)
+    : m_log(std::move(log)), m_emergencyLog(std::move(emergency)) {}
 
 ApplicationHost::~ApplicationHost() {
     Shutdown();
@@ -153,24 +152,24 @@ ApplicationHost::~ApplicationHost() {
 void ApplicationHost::Start() {
     bool expected = false;
     if (!m_started.compare_exchange_strong(expected, true)) {
-        DebugTrace(L"[App] Start ignored because initialization already began");
+        m_log.Trace(L"[App] Start ignored because initialization already began");
         return;
     }
     if (!m_singleInstanceGuard.TryAcquire(L"AudioPlaybackConnector2_SingleInstance_v2")) {
         ExitProcess(0);
         return;
     }
-    DebugTrace(L"[App] OnLaunched started");
+    m_log.Trace(L"[App] OnLaunched started");
     try {
         SetupMainWindow();
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[App] Main window setup failed", ex);
+        m_log.Exception(L"[App] Main window setup failed", ex);
         FailStartup(L"main-window-setup-hresult");
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[App] Main window setup failed", ex);
+        m_log.Exception(L"[App] Main window setup failed", ex);
         FailStartup(L"main-window-setup-standard");
     } catch (...) {
-        util::DebugTraceUnknownException(L"[App] Main window setup failed");
+        m_log.UnknownException(L"[App] Main window setup failed");
         FailStartup(L"main-window-setup-unknown");
     }
 }
@@ -191,7 +190,7 @@ bool ApplicationHost::PerformTeardown(SettingsShutdownMode settingsShutdownMode)
     StopMainWindowLoadedWatchdog();
     if (auto notification = std::exchange(m_powerSavingStatusNotification, nullptr)) {
         if (!UnregisterPowerSettingNotification(notification)) {
-            DebugTrace(L"[App] Failed to unregister battery-saver notification: {0}", GetLastError());
+            m_log.Trace(L"[App] Failed to unregister battery-saver notification: {0}", GetLastError());
         }
     }
     if (m_resourcePressureMonitor) {
@@ -242,7 +241,7 @@ bool ApplicationHost::PerformTeardown(SettingsShutdownMode settingsShutdownMode)
                 if (RemoveWindowSubclass(m_hwnd, SubclassProc, 1)) {
                     m_windowSubclassInstalled = false;
                 } else {
-                    DebugTrace(L"[App] ERROR: failed to remove MainWindow subclass: {0}", GetLastError());
+                    m_log.Trace(L"[App] ERROR: failed to remove MainWindow subclass: {0}", GetLastError());
                 }
             }
         } catch (...) {
@@ -268,8 +267,8 @@ bool ApplicationHost::PerformTeardown(SettingsShutdownMode settingsShutdownMode)
     if (m_settingsStore) {
         const auto settingsShutdown = m_settingsStore->Shutdown(settingsShutdownMode, 3);
         if (!settingsShutdown) {
-            DebugTrace(L"[App] SettingsStore shutdown failed mode={0}",
-                       settingsShutdownMode == SettingsShutdownMode::Flush ? L"flush" : L"discard-startup-failure");
+            m_log.Trace(L"[App] SettingsStore shutdown failed mode={0}",
+                        settingsShutdownMode == SettingsShutdownMode::Flush ? L"flush" : L"discard-startup-failure");
         }
         m_settingsStore.reset();
     }
@@ -297,14 +296,14 @@ void ApplicationHost::SetupMainWindow() {
 
     auto content = m_mainWindow.Content();
     if (!content) {
-        DebugTrace(L"[App] ERROR: MainWindow.Content() is null!");
+        m_log.Trace(L"[App] ERROR: MainWindow.Content() is null!");
         FailStartup(L"main-window-content-null");
         return;
     }
 
     auto root = content.try_as<Controls::Grid>();
     if (!root) {
-        DebugTrace(L"[App] ERROR: MainWindow.Content() is not a Grid!");
+        m_log.Trace(L"[App] ERROR: MainWindow.Content() is not a Grid!");
         FailStartup(L"main-window-content-type");
         return;
     }
@@ -333,7 +332,7 @@ void ApplicationHost::SetupMainWindow() {
 
     StartMainWindowLoadedWatchdog();
     m_mainWindow.Activate();
-    DebugTrace(L"[App] MainWindow.Activate() called");
+    m_log.Trace(L"[App] MainWindow.Activate() called");
 }
 
 void ApplicationHost::StartMainWindowLoadedWatchdog() {
@@ -367,47 +366,47 @@ void ApplicationHost::StopMainWindowLoadedWatchdog() noexcept {
 
 void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept try {
     if (m_hwnd) {
-        DebugTrace(L"[App] Grid.Loaded fired again, ignoring (already initialized)");
+        m_log.Trace(L"[App] Grid.Loaded fired again, ignoring (already initialized)");
         return;
     }
     StopMainWindowLoadedWatchdog();
-    DebugTrace(L"[App] Grid.Loaded - beginning initialization");
+    m_log.Trace(L"[App] Grid.Loaded - beginning initialization");
 
     m_hwnd = util::GetWindowHandle(m_mainWindow);
     if (!m_hwnd) {
-        DebugTrace(L"[App] ERROR: GetWindowHandle returned null!");
+        m_log.Trace(L"[App] ERROR: GetWindowHandle returned null!");
         FailStartup(L"main-window-hwnd-null");
         return;
     }
-    DebugTrace(L"[App] MainWindow HWND = 0x{0:X}", reinterpret_cast<uintptr_t>(m_hwnd));
+    m_log.Trace(L"[App] MainWindow HWND = 0x{0:X}", reinterpret_cast<uintptr_t>(m_hwnd));
 
-    ConfigureHiddenMainWindowAnchor(m_hwnd);
+    ConfigureHiddenMainWindowAnchor(m_log, m_hwnd);
     root.Opacity(1);
-    DebugTrace(L"[App] MainWindow hidden anchor configured");
+    m_log.Trace(L"[App] MainWindow hidden anchor configured");
 
     if (!SetWindowSubclass(m_hwnd, SubclassProc, 1, reinterpret_cast<DWORD_PTR>(this))) {
-        DebugTrace(L"[App] ERROR: SetWindowSubclass failed: {0}", GetLastError());
+        m_log.Trace(L"[App] ERROR: SetWindowSubclass failed: {0}", GetLastError());
         FailStartup(L"main-window-subclass");
         return;
     }
     m_windowSubclassInstalled = true;
-    DebugTrace(L"[App] Window subclass installed");
+    m_log.Trace(L"[App] Window subclass installed");
 
-    m_settingsStore = std::make_shared<SettingsStore>();
+    m_settingsStore = std::make_shared<SettingsStore>(std::filesystem::path{}, nullptr, nullptr, m_log);
     m_settingsStore->Load();
-    DebugTrace(L"[App] Settings loaded");
+    m_log.Trace(L"[App] Settings loaded");
 
     const auto settingsSnapshot = m_settingsStore->Snapshot();
-    StringResources::Instance().Initialize(GetModuleHandleW(nullptr), settingsSnapshot.Data.Language);
-    DebugTrace(L"[App] StringResources initialized");
+    StringResources::Instance().Initialize(GetModuleHandleW(nullptr), settingsSnapshot.Data.Language, m_log);
+    m_log.Trace(L"[App] StringResources initialized");
 
     Gdiplus::GdiplusStartupInput gdiplusStartupInput;
     if (Gdiplus::GdiplusStartup(&m_gdiplusToken, &gdiplusStartupInput, nullptr) != Gdiplus::Ok) {
-        DebugTrace(L"[App] ERROR: GdiplusStartup failed");
+        m_log.Trace(L"[App] ERROR: GdiplusStartup failed");
         FailStartup(L"gdiplus-startup");
         return;
     }
-    DebugTrace(L"[App] GDI+ initialized");
+    m_log.Trace(L"[App] GDI+ initialized");
 
     InitializeDeviceService();
     InitializeAppController();
@@ -416,7 +415,7 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept tr
     InitializeNotifications();
     SetupDeviceEvents();
     static_cast<void>(m_deviceService->Start());
-    DebugTrace(L"[App] Device watcher started");
+    m_log.Trace(L"[App] Device watcher started");
     InitializeCommandLineControl();
     const auto startupConnections = m_appController->RestoreStartupConnections();
 
@@ -424,34 +423,35 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept tr
         try {
             m_notificationService->ShowAppStarted();
         } catch (winrt::hresult_error const& ex) {
-            util::DebugTraceException(L"[App] startup notification failed", ex);
+            m_log.Exception(L"[App] startup notification failed", ex);
         } catch (std::exception const& ex) {
-            util::DebugTraceException(L"[App] startup notification failed", ex);
+            m_log.Exception(L"[App] startup notification failed", ex);
         } catch (...) {
-            util::DebugTraceUnknownException(L"[App] startup notification failed");
+            m_log.UnknownException(L"[App] startup notification failed");
         }
     }
     ScheduleDeviceVisualRefresh(false);
 
     s_wmTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
-    util::crash::CheckAndPromptCrashReports();
-    DebugTrace(L"[App] Initialization complete");
+    util::crash::CheckAndPromptCrashReports(m_log.Path());
+    m_log.Trace(L"[App] Initialization complete");
 } catch (winrt::hresult_error const& ex) {
-    util::DebugTraceException(L"[App] Initialization after MainWindow.Loaded failed", ex);
+    m_log.Exception(L"[App] Initialization after MainWindow.Loaded failed", ex);
     FailStartup(L"main-window-loaded-hresult");
 } catch (std::exception const& ex) {
-    util::DebugTraceException(L"[App] Initialization after MainWindow.Loaded failed", ex);
+    m_log.Exception(L"[App] Initialization after MainWindow.Loaded failed", ex);
     FailStartup(L"main-window-loaded-standard");
 } catch (...) {
-    util::DebugTraceUnknownException(L"[App] Initialization after MainWindow.Loaded failed");
+    m_log.UnknownException(L"[App] Initialization after MainWindow.Loaded failed");
     FailStartup(L"main-window-loaded-unknown");
 }
 
 void ApplicationHost::FailStartup(std::wstring_view stage) noexcept {
-    DebugTrace(L"[App] Startup aborted at stage={0}", stage);
+    m_log.Trace(L"[App] Startup aborted at stage={0}", stage);
     auto const settingsWindowClosed = PerformTeardown(SettingsShutdownMode::DiscardStartupFailure);
     auto const mainWindowClosed = CloseMainWindow(L"startup-failure");
-    if (!settingsWindowClosed || !mainWindowClosed) TerminateAfterWindowCloseFailure(L"startup-window-close-failure");
+    if (!settingsWindowClosed || !mainWindowClosed)
+        TerminateAfterWindowCloseFailure(m_emergencyLog, L"startup-window-close-failure");
 }
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -459,8 +459,8 @@ void ApplicationHost::FailStartup(std::wstring_view stage) noexcept {
 /*------------------------------------------------------------------------------------------------------------*/
 
 void ApplicationHost::InitializeTray() {
-    DebugTrace(L"[App] InitializeTray()");
-    m_trayController = std::make_shared<TrayController>();
+    m_log.Trace(L"[App] InitializeTray()");
+    m_trayController = std::make_shared<TrayController>(m_log);
     auto weak = weak_from_this();
     m_trayController->Initialize(
         m_hwnd,
@@ -475,12 +475,12 @@ void ApplicationHost::InitializeTray() {
                 if (result.Succeeded()) static_cast<void>(self->m_settingsWindowPresenter.ShowHelp());
             }
         });
-    DebugTrace(L"[App] TrayController initialized");
+    m_log.Trace(L"[App] TrayController initialized");
 }
 
 void ApplicationHost::InitializeNotifications() {
-    DebugTrace(L"[App] InitializeNotifications()");
-    m_notificationService = std::make_shared<NotificationService>();
+    m_log.Trace(L"[App] InitializeNotifications()");
+    m_notificationService = std::make_shared<NotificationService>(m_log);
     auto weak = weak_from_this();
     m_notificationService->SetShouldShowNotificationCallback([weak]() -> bool {
         if (auto self = weak.lock()) {
@@ -503,18 +503,21 @@ void ApplicationHost::InitializeNotifications() {
     });
     const auto notificationsAvailable = m_notificationService->Initialize(
         winrt::hstring(_("AppName")), winrt::Windows::Foundation::Uri(L"ms-appx:///Images/Square44x44Logo.png"));
-    DebugTrace(L"[App] Notifications available: {0}", notificationsAvailable);
+    m_log.Trace(L"[App] Notifications available: {0}", notificationsAvailable);
 }
 
 void ApplicationHost::InitializeDeviceService() {
-    DebugTrace(L"[App] InitializeDeviceService()");
-    m_deviceService = std::make_shared<apc::device::DeviceService>();
+    m_log.Trace(L"[App] InitializeDeviceService()");
+    m_deviceService =
+        std::make_shared<apc::device::DeviceService>(apc::device::DeviceServiceDependencies{.Log = m_log});
     auto weak = weak_from_this();
     auto weakSettings = std::weak_ptr<SettingsStore>(m_settingsStore);
-    m_startupTaskCoordinator = std::make_shared<StartupTaskCoordinator>([weakSettings](bool enabled) {
-        if (auto settings = weakSettings.lock()) (void)settings->SetStartWithWindows(enabled);
-    });
-    DebugTrace(L"[App] DeviceService initialized");
+    m_startupTaskCoordinator = std::make_shared<StartupTaskCoordinator>(
+        [weakSettings](bool enabled) {
+            if (auto settings = weakSettings.lock()) (void)settings->SetStartWithWindows(enabled);
+        },
+        m_log);
+    m_log.Trace(L"[App] DeviceService initialized");
 }
 
 apc::app::AppUiActionResult ApplicationHost::PresentDevicePicker(apc::app::DevicePickerOpenMode openMode,
@@ -622,11 +625,11 @@ void ApplicationHost::InitializeAppController() {
         m_settingsStore, m_deviceService, weak_from_this(), m_startupTaskCoordinator);
     m_controlCommandAdapter = std::make_unique<apc::control::ControlCommandAdapter>(
         *m_appController, apc::control::ControlCommandAdapter::Options{[](std::string_view key) { return _(key); }});
-    DebugTrace(L"[App] AppController and control adapter initialized");
+    m_log.Trace(L"[App] AppController and control adapter initialized");
 }
 
 void ApplicationHost::InitializeCommandLineControl() {
-    DebugTrace(L"[App] InitializeCommandLineControl()");
+    m_log.Trace(L"[App] InitializeCommandLineControl()");
     auto weak = weak_from_this();
     m_commandLineControlServer.Start([weak](apc::control::Request const& request,
                                             std::stop_token stopToken,
@@ -636,8 +639,8 @@ void ApplicationHost::InitializeCommandLineControl() {
         }
         return {apc::control::ExitCode::Unavailable, L""};
     });
-    DebugTrace(m_commandLineControlServer.IsRunning() ? L"[App] Command line control server started"
-                                                      : L"[App] Command line control server retry scheduled");
+    m_log.Trace(m_commandLineControlServer.IsRunning() ? L"[App] Command line control server started"
+                                                       : L"[App] Command line control server retry scheduled");
 }
 
 void ApplicationHost::InitializeAdaptiveResources() noexcept {
@@ -664,13 +667,13 @@ void ApplicationHost::InitializeAdaptiveResources() noexcept {
 
         if (!m_resourcePressureMonitor->Start()) {
             m_resourcePressureMonitor.reset();
-            DebugTrace(L"[App] Resource-pressure monitor unavailable; speculative preloading remains disabled");
+            m_log.Trace(L"[App] Resource-pressure monitor unavailable; speculative preloading remains disabled");
         } else {
             m_powerSavingStatusNotification =
                 RegisterPowerSettingNotification(m_hwnd, &GUID_POWER_SAVING_STATUS, DEVICE_NOTIFY_WINDOW_HANDLE);
             if (!m_powerSavingStatusNotification) {
-                DebugTrace(L"[App] Battery-saver notification registration unavailable; polling fallback remains "
-                           L"active");
+                m_log.Trace(L"[App] Battery-saver notification registration unavailable; polling fallback remains "
+                            L"active");
             }
         }
     } catch (...) {
@@ -728,15 +731,15 @@ void ApplicationHost::EvaluateAdaptiveResources(bool userInteraction, std::wstri
         auto decision = m_adaptiveResourcePolicy.Evaluate(input, now);
         if (decision.ResidencyChanged || decision.BackgroundResidencyChanged ||
             decision.Action != AdaptiveResourceAction::None) {
-            DebugTrace(L"[App] Adaptive resources reason={0} residency={1} background={2} action={3} memory={4} "
-                       L"activity={5} energySaver={6}",
-                       reason,
-                       static_cast<int>(decision.Residency),
-                       static_cast<int>(decision.BackgroundResidency),
-                       static_cast<int>(decision.Action),
-                       static_cast<int>(pressureValues.Memory),
-                       static_cast<int>(pressureValues.UserActivity),
-                       energySaver);
+            m_log.Trace(L"[App] Adaptive resources reason={0} residency={1} background={2} action={3} memory={4} "
+                        L"activity={5} energySaver={6}",
+                        reason,
+                        static_cast<int>(decision.Residency),
+                        static_cast<int>(decision.BackgroundResidency),
+                        static_cast<int>(decision.Action),
+                        static_cast<int>(pressureValues.Memory),
+                        static_cast<int>(pressureValues.UserActivity),
+                        energySaver);
         }
 
         switch (decision.Action) {
@@ -862,7 +865,7 @@ void ApplicationHost::HandlePowerSuspend() {
         [weak]() {
             if (auto self = weak.lock()) {
                 if (!self->m_settingsStore || self->m_settingsStore->FlushNow(3)) return;
-                DebugTrace(L"[App] SettingsStore synchronous suspend flush failed after bounded attempts");
+                self->m_log.Trace(L"[App] SettingsStore synchronous suspend flush failed after bounded attempts");
             }
         },
         [service = m_deviceService]() {
@@ -910,11 +913,11 @@ bool ApplicationHost::RunOnUIThread(std::function<void()> work) noexcept {
     try {
         hasThreadAccess = m_dispatcherQueue && m_dispatcherQueue.HasThreadAccess();
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[App] Failed to query DispatcherQueue thread access", ex);
+        m_log.Exception(L"[App] Failed to query DispatcherQueue thread access", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[App] Failed to query DispatcherQueue thread access", ex);
+        m_log.Exception(L"[App] Failed to query DispatcherQueue thread access", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[App] Failed to query DispatcherQueue thread access");
+        m_log.UnknownException(L"[App] Failed to query DispatcherQueue thread access");
     }
 
     if (hasThreadAccess) {
@@ -923,11 +926,11 @@ bool ApplicationHost::RunOnUIThread(std::function<void()> work) noexcept {
             work();
             return true;
         } catch (winrt::hresult_error const& ex) {
-            util::DebugTraceException(L"[App] Inline UI work failed", ex);
+            m_log.Exception(L"[App] Inline UI work failed", ex);
         } catch (std::exception const& ex) {
-            util::DebugTraceException(L"[App] Inline UI work failed", ex);
+            m_log.Exception(L"[App] Inline UI work failed", ex);
         } catch (...) {
-            util::DebugTraceUnknownException(L"[App] Inline UI work failed");
+            m_log.UnknownException(L"[App] Inline UI work failed");
         }
         return false;
     }
@@ -937,29 +940,28 @@ bool ApplicationHost::RunOnUIThread(std::function<void()> work) noexcept {
             auto weak = weak_from_this();
             auto dispatcherWork = work;
             if (m_dispatcherQueue.TryEnqueue(winrt::Microsoft::UI::Dispatching::DispatcherQueuePriority::Normal,
-                                             [weak, work = std::move(dispatcherWork)]() mutable noexcept {
+                                             [weak, log = m_log, work = std::move(dispatcherWork)]() mutable noexcept {
                                                  try {
                                                      if (auto self = weak.lock(); self && !self->m_exiting.load()) {
                                                          work();
                                                      }
                                                  } catch (winrt::hresult_error const& ex) {
-                                                     util::DebugTraceException(L"[App] UI-dispatched work failed", ex);
+                                                     log.Exception(L"[App] UI-dispatched work failed", ex);
                                                  } catch (std::exception const& ex) {
-                                                     util::DebugTraceException(L"[App] UI-dispatched work failed", ex);
+                                                     log.Exception(L"[App] UI-dispatched work failed", ex);
                                                  } catch (...) {
-                                                     util::DebugTraceUnknownException(
-                                                         L"[App] UI-dispatched work failed");
+                                                     log.UnknownException(L"[App] UI-dispatched work failed");
                                                  }
                                              })) {
                 return true;
             }
         }
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[App] Dispatcher queue rejected UI work", ex);
+        m_log.Exception(L"[App] Dispatcher queue rejected UI work", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[App] Dispatcher queue rejected UI work", ex);
+        m_log.Exception(L"[App] Dispatcher queue rejected UI work", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[App] Dispatcher queue rejected UI work");
+        m_log.UnknownException(L"[App] Dispatcher queue rejected UI work");
     }
 
     return QueueUiFallbackWork(std::move(work));
@@ -980,7 +982,7 @@ bool ApplicationHost::QueueUiFallbackWork(std::function<void()> work) noexcept {
         m_uiFallbackWork.clear();
     } catch (...) {
     }
-    DebugTrace(L"[App] ERROR: both DispatcherQueue and Win32 fallback rejected UI work");
+    m_log.Trace(L"[App] ERROR: both DispatcherQueue and Win32 fallback rejected UI work");
     return false;
 }
 
@@ -996,11 +998,11 @@ void ApplicationHost::DrainUiFallbackWork() noexcept {
         try {
             if (!m_exiting.load() && work) work();
         } catch (winrt::hresult_error const& ex) {
-            util::DebugTraceException(L"[App] Win32-fallback UI work failed", ex);
+            m_log.Exception(L"[App] Win32-fallback UI work failed", ex);
         } catch (std::exception const& ex) {
-            util::DebugTraceException(L"[App] Win32-fallback UI work failed", ex);
+            m_log.Exception(L"[App] Win32-fallback UI work failed", ex);
         } catch (...) {
-            util::DebugTraceUnknownException(L"[App] Win32-fallback UI work failed");
+            m_log.UnknownException(L"[App] Win32-fallback UI work failed");
         }
     }
 }
@@ -1066,18 +1068,18 @@ ApplicationHost::ControlUiActionResult ApplicationHost::RunControlUiAction(std::
 
 bool ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstring_view reason) {
     if (m_exiting.load() || !m_trayController || !m_appController) {
-        DebugTrace(L"[App] RefreshTrayVisualState skipped reason={0} exiting={1} hasTrayController={2} "
-                   L"hasAppController={3}",
-                   reason,
-                   m_exiting.load(),
-                   m_trayController != nullptr,
-                   m_appController != nullptr);
+        m_log.Trace(L"[App] RefreshTrayVisualState skipped reason={0} exiting={1} hasTrayController={2} "
+                    L"hasAppController={3}",
+                    reason,
+                    m_exiting.load(),
+                    m_trayController != nullptr,
+                    m_appController != nullptr);
         return true;
     }
     if (!m_hwnd || !IsWindow(m_hwnd)) {
-        DebugTrace(L"[App] RefreshTrayVisualState skipped reason={0} invalidHwnd hwnd=0x{1:X}",
-                   reason,
-                   reinterpret_cast<uintptr_t>(m_hwnd));
+        m_log.Trace(L"[App] RefreshTrayVisualState skipped reason={0} invalidHwnd hwnd=0x{1:X}",
+                    reason,
+                    reinterpret_cast<uintptr_t>(m_hwnd));
         return true;
     }
 
@@ -1105,7 +1107,7 @@ bool ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstri
                 m_connectingAnimationTimerActive = true;
             } else {
                 timersReady = false;
-                DebugTrace(L"[App] Connecting animation timer unavailable: {0}", GetLastError());
+                m_log.Trace(L"[App] Connecting animation timer unavailable: {0}", GetLastError());
             }
         }
         KillTimer(m_hwnd, c_timerTransientTrayError);
@@ -1122,7 +1124,7 @@ bool ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstri
         const auto delay = static_cast<UINT>(std::clamp<std::int64_t>(remaining.count(), 1, UINT_MAX));
         if (!SetTimer(m_hwnd, c_timerTransientTrayError, delay, nullptr)) {
             timersReady = false;
-            DebugTrace(L"[App] Transient tray error timer unavailable: {0}", GetLastError());
+            m_log.Trace(L"[App] Transient tray error timer unavailable: {0}", GetLastError());
         }
     } else {
         KillTimer(m_hwnd, c_timerAnimation);
@@ -1131,14 +1133,14 @@ bool ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstri
         m_trayErrorUntil = {};
     }
 
-    DebugTrace(L"[App] RefreshTrayVisualState reason={0} forceErrorWhenIdle={1} hasConnections={2} "
-               L"hasBusyOperations={3} transientError={4} desired={5}",
-               reason,
-               forceErrorWhenIdle,
-               hasConnections,
-               hasBusyOperations,
-               showTransientError,
-               TrayIconStateToString(desiredState));
+    m_log.Trace(L"[App] RefreshTrayVisualState reason={0} forceErrorWhenIdle={1} hasConnections={2} "
+                L"hasBusyOperations={3} transientError={4} desired={5}",
+                reason,
+                forceErrorWhenIdle,
+                hasConnections,
+                hasBusyOperations,
+                showTransientError,
+                TrayIconStateToString(desiredState));
     if (showTransientError && !m_transientTrayErrorTooltip.empty()) {
         m_trayController->UpdateTooltip(m_transientTrayErrorTooltip);
     } else {
@@ -1180,13 +1182,13 @@ void ApplicationHost::QueueDeviceVisualRefreshDrain() noexcept {
                     })) {
                     return;
                 }
-                DebugTrace(L"[App] Dispatcher rejected coalesced device visual refresh");
+                m_log.Trace(L"[App] Dispatcher rejected coalesced device visual refresh");
             } catch (winrt::hresult_error const& ex) {
-                util::DebugTraceException(L"[App] Failed to enqueue coalesced device visual refresh", ex);
+                m_log.Exception(L"[App] Failed to enqueue coalesced device visual refresh", ex);
             } catch (std::exception const& ex) {
-                util::DebugTraceException(L"[App] Failed to enqueue coalesced device visual refresh", ex);
+                m_log.Exception(L"[App] Failed to enqueue coalesced device visual refresh", ex);
             } catch (...) {
-                util::DebugTraceUnknownException(L"[App] Failed to enqueue coalesced device visual refresh");
+                m_log.UnknownException(L"[App] Failed to enqueue coalesced device visual refresh");
             }
         }
 
@@ -1200,7 +1202,7 @@ void ApplicationHost::QueueDeviceVisualRefreshDrain() noexcept {
         if (!m_deviceVisualRefreshCoalescer.ScheduleFailed()) return;
     }
 
-    DebugTrace(L"[App] ERROR: no UI scheduling path accepted the device visual refresh");
+    m_log.Trace(L"[App] ERROR: no UI scheduling path accepted the device visual refresh");
     m_deviceVisualRefreshCoalescer.AbandonSchedule();
 }
 
@@ -1219,11 +1221,11 @@ void ApplicationHost::DrainDeviceVisualRefresh() noexcept {
             }
         }
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[App] Coalesced device visual refresh failed", ex);
+        m_log.Exception(L"[App] Coalesced device visual refresh failed", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[App] Coalesced device visual refresh failed", ex);
+        m_log.Exception(L"[App] Coalesced device visual refresh failed", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[App] Coalesced device visual refresh failed");
+        m_log.UnknownException(L"[App] Coalesced device visual refresh failed");
     }
 
     if (m_exiting.load()) {
@@ -1249,7 +1251,7 @@ void ApplicationHost::DrainDeviceVisualRefresh() noexcept {
     m_deviceVisualRefreshConsecutiveFailures = std::min(m_deviceVisualRefreshConsecutiveFailures + 1U, 6U);
     auto const delay = std::min<UINT>(100U << (m_deviceVisualRefreshConsecutiveFailures - 1U), 5000U);
     if (m_hwnd && IsWindow(m_hwnd) && SetTimer(m_hwnd, c_timerDeviceVisualRefreshRetry, delay, nullptr)) {
-        DebugTrace(L"[App] Device visual refresh retry scheduled in {0} ms", delay);
+        m_log.Trace(L"[App] Device visual refresh retry scheduled in {0} ms", delay);
     } else {
         QueueDeviceVisualRefreshDrain();
     }
@@ -1314,7 +1316,7 @@ void ApplicationHost::HandleAppEvent(apc::app::AppController::EventNotification 
             } else if constexpr (std::is_same_v<T, SettingsChangedEvent>) {
                 if (m_appliedLanguage != event.Language) {
                     m_appliedLanguage = event.Language;
-                    StringResources::Instance().Initialize(GetModuleHandleW(nullptr), event.Language);
+                    StringResources::Instance().Initialize(GetModuleHandleW(nullptr), event.Language, m_log);
                     if (m_trayController) m_trayController->ApplyLanguage();
                 }
                 if (m_appliedBackdrop != event.UseSystemBackdropEffects) {
@@ -1330,18 +1332,19 @@ void ApplicationHost::HandleAppEvent(apc::app::AppController::EventNotification 
 
 bool ApplicationHost::ShowSettingsWindow() {
     if (m_exiting.load()) return false;
-    DebugTrace(L"[App] ShowSettingsWindow()");
+    m_log.Trace(L"[App] ShowSettingsWindow()");
     auto placement =
         m_trayController ? m_trayController->GetSettingsWindowPlacement() : util::CalculateSettingsWindowPlacement();
     return m_settingsWindowPresenter.Show(m_appController, placement);
 }
 
 void ApplicationHost::ExitApplication() noexcept {
-    DebugTrace(L"[App] ExitApplication() started");
+    m_log.Trace(L"[App] ExitApplication() started");
     auto const settingsWindowClosed = PerformTeardown(SettingsShutdownMode::Flush);
     auto const mainWindowClosed = CloseMainWindow(L"application-exit");
-    if (!settingsWindowClosed || !mainWindowClosed) TerminateAfterWindowCloseFailure(L"exit-window-close-failure");
-    DebugTrace(L"[App] ExitApplication() complete");
+    if (!settingsWindowClosed || !mainWindowClosed)
+        TerminateAfterWindowCloseFailure(m_emergencyLog, L"exit-window-close-failure");
+    m_log.Trace(L"[App] ExitApplication() complete");
 }
 
 bool ApplicationHost::CloseMainWindow(std::wstring_view reason) noexcept {
@@ -1350,11 +1353,11 @@ bool ApplicationHost::CloseMainWindow(std::wstring_view reason) noexcept {
         m_mainWindow.Close();
         return true;
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(std::wstring(L"[App] Failed to close MainWindow: ") + std::wstring(reason), ex);
+        m_log.Exception(std::wstring(L"[App] Failed to close MainWindow: ") + std::wstring(reason), ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(std::wstring(L"[App] Failed to close MainWindow: ") + std::wstring(reason), ex);
+        m_log.Exception(std::wstring(L"[App] Failed to close MainWindow: ") + std::wstring(reason), ex);
     } catch (...) {
-        util::DebugTraceUnknownException(std::wstring(L"[App] Failed to close MainWindow: ") + std::wstring(reason));
+        m_log.UnknownException(std::wstring(L"[App] Failed to close MainWindow: ") + std::wstring(reason));
     }
     return false;
 }
@@ -1364,7 +1367,7 @@ bool ApplicationHost::CloseMainWindow(std::wstring_view reason) noexcept {
 
 void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
     if (m_exiting.load() || !m_deviceService) return;
-    DebugTrace(L"[App] OnDeviceConnected: {0}", std::wstring(id));
+    m_log.Trace(L"[App] OnDeviceConnected: {0}", std::wstring(id));
 
     if (!m_deviceService->IsDeviceConnected(std::wstring_view(id))) {
         return;
@@ -1374,11 +1377,11 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
         try {
             m_notificationService->ShowDeviceConnected(id, ResolveKnownDeviceName(id));
         } catch (winrt::hresult_error const& ex) {
-            util::DebugTraceException(L"[App] OnDeviceConnected notification ERROR", ex);
+            m_log.Exception(L"[App] OnDeviceConnected notification ERROR", ex);
         } catch (std::exception const& ex) {
-            util::DebugTraceException(L"[App] OnDeviceConnected notification ERROR", ex);
+            m_log.Exception(L"[App] OnDeviceConnected notification ERROR", ex);
         } catch (...) {
-            util::DebugTraceUnknownException(L"[App] OnDeviceConnected notification ERROR");
+            m_log.UnknownException(L"[App] OnDeviceConnected notification ERROR");
         }
     }
 
@@ -1387,7 +1390,7 @@ void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
 
 void ApplicationHost::OnDeviceDisconnected(winrt::hstring const& id, bool notifyUser) {
     if (m_exiting.load()) return;
-    DebugTrace(L"[App] OnDeviceDisconnected: {0}", std::wstring(id));
+    m_log.Trace(L"[App] OnDeviceDisconnected: {0}", std::wstring(id));
 
     ScheduleDeviceVisualRefresh(false);
     if (!notifyUser || !m_notificationService) return;
@@ -1395,49 +1398,49 @@ void ApplicationHost::OnDeviceDisconnected(winrt::hstring const& id, bool notify
     try {
         m_notificationService->ShowDeviceDisconnected(id, ResolveKnownDeviceName(id));
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[App] OnDeviceDisconnected notification ERROR", ex);
+        m_log.Exception(L"[App] OnDeviceDisconnected notification ERROR", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[App] OnDeviceDisconnected notification ERROR", ex);
+        m_log.Exception(L"[App] OnDeviceDisconnected notification ERROR", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[App] OnDeviceDisconnected notification ERROR");
+        m_log.UnknownException(L"[App] OnDeviceDisconnected notification ERROR");
     }
 }
 
 void ApplicationHost::OnConnectionError(winrt::hstring const& id, winrt::hstring msg) {
     if (m_exiting.load()) return;
-    DebugTrace(L"[App] OnConnectionError: {0} - {1}", std::wstring(id), std::wstring(msg));
+    m_log.Trace(L"[App] OnConnectionError: {0} - {1}", std::wstring(id), std::wstring(msg));
     m_transientTrayErrorTooltip = std::wstring(_("AppName")) + L"\n" + std::wstring(msg);
     ScheduleDeviceVisualRefresh(true);
 }
 
 void ApplicationHost::OnAutoReconnectTriggered(winrt::hstring const& id) {
     if (m_exiting.load()) return;
-    DebugTrace(L"[App] OnAutoReconnectTriggered: {0}", std::wstring(id));
+    m_log.Trace(L"[App] OnAutoReconnectTriggered: {0}", std::wstring(id));
 
     winrt::hstring deviceName = ResolveKnownDeviceName(id);
     if (m_notificationService) {
         try {
             m_notificationService->ShowAutoReconnect(id, deviceName);
         } catch (winrt::hresult_error const& ex) {
-            util::DebugTraceException(L"[App] OnAutoReconnectTriggered notification ERROR", ex);
+            m_log.Exception(L"[App] OnAutoReconnectTriggered notification ERROR", ex);
         } catch (std::exception const& ex) {
-            util::DebugTraceException(L"[App] OnAutoReconnectTriggered notification ERROR", ex);
+            m_log.Exception(L"[App] OnAutoReconnectTriggered notification ERROR", ex);
         }
     }
 }
 
 void ApplicationHost::OnAutoReconnectFailed(winrt::hstring const& id) {
     if (m_exiting.load()) return;
-    DebugTrace(L"[App] OnAutoReconnectFailed: {0}", std::wstring(id));
+    m_log.Trace(L"[App] OnAutoReconnectFailed: {0}", std::wstring(id));
 
     winrt::hstring deviceName = ResolveKnownDeviceName(id);
     if (m_notificationService) {
         try {
             m_notificationService->ShowAutoReconnectFailed(id, deviceName);
         } catch (winrt::hresult_error const& ex) {
-            util::DebugTraceException(L"[App] OnAutoReconnectFailed notification ERROR", ex);
+            m_log.Exception(L"[App] OnAutoReconnectFailed notification ERROR", ex);
         } catch (std::exception const& ex) {
-            util::DebugTraceException(L"[App] OnAutoReconnectFailed notification ERROR", ex);
+            m_log.Exception(L"[App] OnAutoReconnectFailed notification ERROR", ex);
         }
     }
 }
@@ -1478,7 +1481,7 @@ LRESULT CALLBACK ApplicationHost::SubclassProc(
     }
 
     if (msg == WM_SETTINGCHANGE) {
-        ThemeHelper::OnSettingChange(hwnd, lParam);
+        ThemeHelper::OnSettingChange(lParam, host->m_log);
         return DefSubclassProc(hwnd, msg, wParam, lParam);
     }
 

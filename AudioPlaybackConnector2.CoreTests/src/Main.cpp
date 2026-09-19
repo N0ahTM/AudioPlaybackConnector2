@@ -27,6 +27,9 @@ int RunControlCommandAdapterTests();
 int RunAppWorkCoordinatorTests();
 int RunCommandClientTests();
 int RunCliParserTests();
+int RunLoggerTests();
+int RunCrashHandlerTests();
+int RunCrashHandlerChild();
 int RunCommandLineControlServerTests();
 int RunControlUiActionGateTests();
 int RunControlTargetMatcherTests();
@@ -81,6 +84,7 @@ bool PrepareTestEnvironment() {
 /*------------------------------------------------------------------------------------------------------------*/
 
 int main(int argc, char** argv) {
+    if (argc == 4 && std::string_view(argv[1]) == "--crash-child") return RunCrashHandlerChild();
     std::uint32_t seed = 0;
     std::string_view selectedSuite;
     bool shuffle = false;
@@ -114,6 +118,8 @@ int main(int argc, char** argv) {
         Suite{"AppWorkCoordinator", RunAppWorkCoordinatorTests},
         Suite{"CommandClient", RunCommandClientTests},
         Suite{"CliParser", RunCliParserTests},
+        Suite{"Logger", RunLoggerTests},
+        Suite{"CrashHandler", RunCrashHandlerTests},
         Suite{"CommandLineControlServer", RunCommandLineControlServerTests},
         Suite{"ControlUiActionGate", RunControlUiActionGateTests},
         Suite{"ControlTargetMatcher", RunControlTargetMatcherTests},

@@ -46,7 +46,7 @@ public:
     /*//////// Constructors / Destructor /////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    ApplicationHost();
+    explicit ApplicationHost(util::LogSink log, util::EmergencyLog emergency);
     ~ApplicationHost();
 
     /*------------------------------------------------------------------------------------------------------------*/
@@ -130,6 +130,8 @@ private:
     /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
+    util::LogSink m_log;
+    util::EmergencyLog m_emergencyLog;
     winrt::Microsoft::UI::Xaml::Window m_mainWindow{nullptr};
     winrt::event_token m_mainWindowLoadedToken{};
     HWND m_hwnd = nullptr;
@@ -188,6 +190,6 @@ private:
     unsigned int m_deviceVisualRefreshConsecutiveFailures = 0;
     std::mutex m_deviceVisualRefreshRetryTimerMutex;
     wil::unique_threadpool_timer m_deviceVisualRefreshRetryTimer;
-    PowerTransitionCoordinator m_powerTransitionCoordinator{m_exiting};
-    SettingsWindowPresenter m_settingsWindowPresenter;
+    PowerTransitionCoordinator m_powerTransitionCoordinator{m_exiting, {}, m_log};
+    SettingsWindowPresenter m_settingsWindowPresenter{m_log};
 };

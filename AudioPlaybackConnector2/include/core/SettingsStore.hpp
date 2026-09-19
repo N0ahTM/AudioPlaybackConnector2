@@ -2,6 +2,7 @@
 
 #include <core/SettingsData.hpp>
 #include <core/SettingsStoreWakeup.hpp>
+#include <util/Logger.hpp>
 
 #include <chrono>
 #include <cstdint>
@@ -93,7 +94,8 @@ public:
 
     explicit SettingsStore(std::filesystem::path persistenceDirectory = {},
                            std::shared_ptr<SettingsStoreStorage> storage = {},
-                           std::shared_ptr<SettingsStoreWakeup> wakeup = {});
+                           std::shared_ptr<SettingsStoreWakeup> wakeup = {},
+                           util::LogSink log = {});
     ~SettingsStore();
     SettingsStore(SettingsStore const&) = delete;
     SettingsStore& operator=(SettingsStore const&) = delete;

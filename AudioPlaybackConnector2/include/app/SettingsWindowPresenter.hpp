@@ -1,5 +1,6 @@
 #pragma once
 
+#include <util/Logger.hpp>
 #include <memory>
 #include <ui/WindowPlacement.hpp>
 
@@ -17,7 +18,7 @@ public:
     /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    SettingsWindowPresenter();
+    explicit SettingsWindowPresenter(util::LogSink log);
     ~SettingsWindowPresenter();
 
     [[nodiscard]] bool Show(std::shared_ptr<apc::app::AppController> appController,
@@ -41,5 +42,6 @@ private:
     static void AbandonWindow(std::shared_ptr<PresenterState> const& owner,
                               std::shared_ptr<WindowState> const& state) noexcept;
 
+    util::LogSink m_log;
     std::shared_ptr<PresenterState> m_state;
 };

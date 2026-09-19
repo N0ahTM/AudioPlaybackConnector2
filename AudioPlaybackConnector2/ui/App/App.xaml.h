@@ -1,6 +1,8 @@
 #pragma once
 
 #include <ui/App/App.xaml.g.h>
+#include <util/Logger.hpp>
+#include <util/CrashHandler.hpp>
 
 class ApplicationHost;
 
@@ -18,6 +20,8 @@ private:
     /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
+    util::Logger m_logger;
+    util::crash::CrashHandlers m_crashHandlers{m_logger.Emergency()};
     std::shared_ptr<ApplicationHost> m_host;
     bool m_unhandledExceptionHandlerRegistered = false;
 };

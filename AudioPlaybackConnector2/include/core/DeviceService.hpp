@@ -65,6 +65,7 @@ struct DeviceFact {
 };
 
 struct DeviceServiceDependencies {
+    util::LogSink Log;
     std::unique_ptr<DeviceWatcherPlatform> WatcherPlatform;
     std::unique_ptr<DeviceConnectionPlatform> ConnectionPlatform;
     std::unique_ptr<DeviceTimerPlatform> TimerPlatform;

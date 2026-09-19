@@ -25,13 +25,12 @@ void winrt::AudioPlaybackConnector2::implementation::App::RegisterUnhandledExcep
     if (m_unhandledExceptionHandlerRegistered) return;
     m_unhandledExceptionHandlerRegistered = true;
 
-    UnhandledException([](winrt::Windows::Foundation::IInspectable const&,
-                          winrt::Microsoft::UI::Xaml::UnhandledExceptionEventArgs const& args) noexcept {
+    UnhandledException([emergency = m_logger.Emergency()](
+                           winrt::Windows::Foundation::IInspectable const&,
+                           winrt::Microsoft::UI::Xaml::UnhandledExceptionEventArgs const& args) noexcept {
         try {
-            DebugTrace(L"[App] XAML unhandled exception: 0x{0:08X} {1}",
-                       static_cast<uint32_t>(args.Exception()),
-                       args.Message());
-            util::FlushInMemoryLogTailToFile(L"xaml-unhandled-exception", static_cast<uint32_t>(args.Exception()));
+            auto message = args.Message();
+            (void)emergency.Dump(std::wstring_view(message), static_cast<uint32_t>(args.Exception()));
         } catch (...) {
         }
     });
@@ -44,7 +43,7 @@ void winrt::AudioPlaybackConnector2::implementation::App::RegisterUnhandledExcep
 void winrt::AudioPlaybackConnector2::implementation::App::OnLaunched(
     [[maybe_unused]] Microsoft::UI::Xaml::LaunchActivatedEventArgs const& e) {
     if (!m_host) {
-        m_host = std::make_shared<ApplicationHost>();
+        m_host = std::make_shared<ApplicationHost>(m_logger.Sink(), m_logger.Emergency());
     }
     RegisterUnhandledExceptionHandler();
     m_host->Start();

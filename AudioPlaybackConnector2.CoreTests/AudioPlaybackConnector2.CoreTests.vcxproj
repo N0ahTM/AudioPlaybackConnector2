@@ -76,6 +76,8 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\Main.cpp" />
+    <ClCompile Include="src\LoggerTests.cpp" />
+    <ClCompile Include="src\CrashHandlerTests.cpp" />
     <ClCompile Include="src\AdaptiveResourceDiagnosticsTests.cpp" />
     <ClCompile Include="src\AdaptiveResourcePolicyTests.cpp" />
     <ClCompile Include="src\AppControllerTests.cpp" />

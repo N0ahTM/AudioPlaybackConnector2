@@ -7,6 +7,7 @@
 #include <util/Util.hpp>
 
 struct SettingsWindowPresenter::WindowState {
+    util::LogSink Log;
     winrt::Microsoft::UI::Xaml::Window Window{nullptr};
     winrt::event_token ClosedToken{};
     bool ClosedTokenRegistered = false;
@@ -23,7 +24,8 @@ struct SettingsWindowPresenter::PresenterState {
 /*//////// Constructors / Destructor /////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-SettingsWindowPresenter::SettingsWindowPresenter() : m_state(std::make_shared<PresenterState>()) {}
+SettingsWindowPresenter::SettingsWindowPresenter(util::LogSink log)
+    : m_log(std::move(log)), m_state(std::make_shared<PresenterState>()) {}
 
 SettingsWindowPresenter::~SettingsWindowPresenter() {
     auto owner = std::exchange(m_state, nullptr);
@@ -45,14 +47,14 @@ bool SettingsWindowPresenter::ShowHelp() {
         m_state->Current->Window.as<winrt::AudioPlaybackConnector2::implementation::SettingsWindow>()->ShowHelpPage();
         return true;
     } catch (...) {
-        util::DebugTraceUnknownException(L"[SettingsWindowPresenter] Failed to show help");
+        m_log.UnknownException(L"[SettingsWindowPresenter] Failed to show help");
         return false;
     }
 }
 
 bool SettingsWindowPresenter::Show(std::shared_ptr<apc::app::AppController> appController,
                                    util::SettingsWindowPlacement defaultPlacement) {
-    DebugTrace(L"[SettingsWindowPresenter] Show()");
+    m_log.Trace(L"[SettingsWindowPresenter] Show()");
     auto owner = m_state;
     if (!owner) return false;
 
@@ -69,21 +71,20 @@ bool SettingsWindowPresenter::Show(std::shared_ptr<apc::app::AppController> appC
                     hwnd && IsWindow(hwnd)) {
                     ShowWindow(hwnd, IsIconic(hwnd) ? SW_RESTORE : SW_SHOW);
                     SetForegroundWindow(hwnd);
-                    DebugTrace(L"[SettingsWindowPresenter] SettingsWindow brought to foreground");
+                    m_log.Trace(L"[SettingsWindowPresenter] SettingsWindow brought to foreground");
                     return true;
                 }
             } catch (winrt::hresult_error const& ex) {
-                util::DebugTraceException(L"[SettingsWindowPresenter] Failed to inspect existing SettingsWindow", ex);
+                m_log.Exception(L"[SettingsWindowPresenter] Failed to inspect existing SettingsWindow", ex);
             } catch (std::exception const& ex) {
-                util::DebugTraceException(L"[SettingsWindowPresenter] Failed to inspect existing SettingsWindow", ex);
+                m_log.Exception(L"[SettingsWindowPresenter] Failed to inspect existing SettingsWindow", ex);
             } catch (...) {
-                util::DebugTraceUnknownException(
-                    L"[SettingsWindowPresenter] Failed to inspect existing SettingsWindow");
+                m_log.UnknownException(L"[SettingsWindowPresenter] Failed to inspect existing SettingsWindow");
             }
 
-            DebugTrace(L"[SettingsWindowPresenter] Closing stale SettingsWindow before replacement");
+            m_log.Trace(L"[SettingsWindowPresenter] Closing stale SettingsWindow before replacement");
             if (!CloseWindow(owner, current)) {
-                DebugTrace(L"[SettingsWindowPresenter] ERROR: stale SettingsWindow could not be closed");
+                m_log.Trace(L"[SettingsWindowPresenter] ERROR: stale SettingsWindow could not be closed");
                 return false;
             }
         }
@@ -92,6 +93,7 @@ bool SettingsWindowPresenter::Show(std::shared_ptr<apc::app::AppController> appC
     std::shared_ptr<WindowState> candidate;
     try {
         candidate = std::make_shared<WindowState>();
+        candidate->Log = m_log;
         candidate->Window = winrt::AudioPlaybackConnector2::SettingsWindow();
         owner->Current = candidate;
 
@@ -109,7 +111,7 @@ bool SettingsWindowPresenter::Show(std::shared_ptr<apc::app::AppController> appC
         }
 
         auto impl = candidate->Window.as<winrt::AudioPlaybackConnector2::implementation::SettingsWindow>();
-        impl->SetAppController(std::move(appController));
+        impl->SetAppController(std::move(appController), m_log);
         if (initialSettings) impl->SetInitialSettingsSnapshot(std::move(*initialSettings));
         impl->SetDefaultPlacement(defaultPlacement);
         impl->SetTargetPlacement(placement);
@@ -123,7 +125,7 @@ bool SettingsWindowPresenter::Show(std::shared_ptr<apc::app::AppController> appC
         auto weakOwner = std::weak_ptr<PresenterState>(owner);
         auto weakCandidate = std::weak_ptr<WindowState>(candidate);
         candidate->ClosedToken =
-            candidate->Window.Closed([weakOwner, weakCandidate](auto const& sender, auto&) noexcept {
+            candidate->Window.Closed([weakOwner, weakCandidate, log = m_log](auto const& sender, auto&) noexcept {
                 try {
                     auto state = weakCandidate.lock();
                     if (!state) return;
@@ -131,39 +133,39 @@ bool SettingsWindowPresenter::Show(std::shared_ptr<apc::app::AppController> appC
                     if (!closedWindow) return;
                     HandleWindowClosed(weakOwner.lock(), state, closedWindow);
                 } catch (winrt::hresult_error const& ex) {
-                    util::DebugTraceException(L"[SettingsWindowPresenter] Closed callback failed", ex);
+                    log.Exception(L"[SettingsWindowPresenter] Closed callback failed", ex);
                 } catch (std::exception const& ex) {
-                    util::DebugTraceException(L"[SettingsWindowPresenter] Closed callback failed", ex);
+                    log.Exception(L"[SettingsWindowPresenter] Closed callback failed", ex);
                 } catch (...) {
-                    util::DebugTraceUnknownException(L"[SettingsWindowPresenter] Closed callback failed");
+                    log.UnknownException(L"[SettingsWindowPresenter] Closed callback failed");
                 }
             });
         candidate->ClosedTokenRegistered = true;
         candidate->Window.Activate();
         if (candidate->Closed || owner->Current != candidate) {
-            DebugTrace(L"[SettingsWindowPresenter] SettingsWindow closed while activating");
+            m_log.Trace(L"[SettingsWindowPresenter] SettingsWindow closed while activating");
             return false;
         }
         if (impl->InitializationStatus() ==
             winrt::AudioPlaybackConnector2::implementation::SettingsWindow::InitializationState::Failed) {
-            DebugTrace(L"[SettingsWindowPresenter] SettingsWindow initialization did not complete");
+            m_log.Trace(L"[SettingsWindowPresenter] SettingsWindow initialization did not complete");
             static_cast<void>(CloseWindow(owner, candidate));
             return false;
         }
         candidate->Activated = true;
 
-        DebugTrace(L"[SettingsWindowPresenter] SettingsWindow created off-screen (hidden until ready)");
+        m_log.Trace(L"[SettingsWindowPresenter] SettingsWindow created off-screen (hidden until ready)");
         return true;
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[SettingsWindowPresenter] Failed to create SettingsWindow", ex);
+        m_log.Exception(L"[SettingsWindowPresenter] Failed to create SettingsWindow", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[SettingsWindowPresenter] Failed to create SettingsWindow", ex);
+        m_log.Exception(L"[SettingsWindowPresenter] Failed to create SettingsWindow", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[SettingsWindowPresenter] Failed to create SettingsWindow");
+        m_log.UnknownException(L"[SettingsWindowPresenter] Failed to create SettingsWindow");
     }
 
     if (candidate && !CloseWindow(owner, candidate)) {
-        DebugTrace(L"[SettingsWindowPresenter] ERROR: failed SettingsWindow rollback could not close its window");
+        m_log.Trace(L"[SettingsWindowPresenter] ERROR: failed SettingsWindow rollback could not close its window");
     }
     return false;
 }
@@ -193,15 +195,15 @@ bool SettingsWindowPresenter::CloseWindow(std::shared_ptr<PresenterState> const&
         window.Close();
     } catch (winrt::hresult_error const& ex) {
         state->Closing = false;
-        util::DebugTraceException(L"[SettingsWindowPresenter] ERROR: failed to close SettingsWindow", ex);
+        state->Log.Exception(L"[SettingsWindowPresenter] ERROR: failed to close SettingsWindow", ex);
         return state->Closed;
     } catch (std::exception const& ex) {
         state->Closing = false;
-        util::DebugTraceException(L"[SettingsWindowPresenter] ERROR: failed to close SettingsWindow", ex);
+        state->Log.Exception(L"[SettingsWindowPresenter] ERROR: failed to close SettingsWindow", ex);
         return state->Closed;
     } catch (...) {
         state->Closing = false;
-        util::DebugTraceUnknownException(L"[SettingsWindowPresenter] ERROR: failed to close SettingsWindow");
+        state->Log.UnknownException(L"[SettingsWindowPresenter] ERROR: failed to close SettingsWindow");
         return state->Closed;
     }
 
@@ -214,7 +216,7 @@ void SettingsWindowPresenter::HandleWindowClosed(std::shared_ptr<PresenterState>
                                                  winrt::Microsoft::UI::Xaml::Window const& closedWindow) noexcept {
     if (!state || state->Closed || !state->Window || state->Window != closedWindow) return;
 
-    DebugTrace(L"[SettingsWindowPresenter] SettingsWindow closed");
+    state->Log.Trace(L"[SettingsWindowPresenter] SettingsWindow closed");
     state->Closed = true;
     state->Closing = false;
     RevokeWindowClosedHandler(state);
@@ -230,11 +232,11 @@ void SettingsWindowPresenter::RevokeWindowClosedHandler(std::shared_ptr<WindowSt
     try {
         state->Window.Closed(token);
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[SettingsWindowPresenter] Failed to revoke SettingsWindow Closed handler", ex);
+        state->Log.Exception(L"[SettingsWindowPresenter] Failed to revoke SettingsWindow Closed handler", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[SettingsWindowPresenter] Failed to revoke SettingsWindow Closed handler", ex);
+        state->Log.Exception(L"[SettingsWindowPresenter] Failed to revoke SettingsWindow Closed handler", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[SettingsWindowPresenter] Failed to revoke SettingsWindow Closed handler");
+        state->Log.UnknownException(L"[SettingsWindowPresenter] Failed to revoke SettingsWindow Closed handler");
     }
 }
 

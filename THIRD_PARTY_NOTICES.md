@@ -63,20 +63,45 @@ ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 
+## spdlog - product dependency
+
+Version 1.17.0, pinned in the repository manifest. The logger implementation uses
+the header-only configuration with native Windows filenames and the C++ standard
+formatter. The optional fmt dependency is disabled; its upstream metadata note
+is retained in the complete package copyright below.
+Upstream: https://github.com/gabime/spdlog
+
+The MIT License (MIT)
+
+Copyright (c) 2016 - present, Gabi Melman and spdlog contributors.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+-- NOTE: Third party dependency used by this software --
+This software depends on the fmt lib (MIT License),
+and users must comply to its license: https://raw.githubusercontent.com/fmtlib/fmt/master/LICENSE
+
 ## Dependency evaluation tools
 
-The isolated programs in `benchmarks/dependencies` evaluate the following
-components. They are not yet linked into the product or included in its packages.
-Their vcpkg baseline and versions are pinned in that directory. The probe runner
-copies each restored package's complete copyright text into its executable ZIP
-and records the license SHA-256 in `measurements.json`.
-
-| Component | Version | License | Upstream |
-|-----------|---------|---------|----------|
-| spdlog | 1.17.0 | MIT, with bundled notices in the package copyright file | https://github.com/gabime/spdlog |
-
+The isolated programs in benchmarks/dependencies use the same pinned libraries.
+Their runner includes each restored package's complete copyright text in its ZIP.
 See [the evaluation scope and remaining gates](benchmarks/dependencies/README.md).
-Product adoption requires updating product attribution and distribution artifacts.
 
 ---
 

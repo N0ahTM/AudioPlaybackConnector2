@@ -70,6 +70,7 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
     mutable std::mutex SnapshotMutex;
     DeviceServiceSnapshot PublishedSnapshot;
 
+    util::LogSink Log;
     std::unique_ptr<DeviceWatcherPlatform> WatcherPlatform;
     std::unique_ptr<DeviceConnectionPlatform> ConnectionPlatform;
     std::unique_ptr<DeviceTimerPlatform> TimerPlatform;
@@ -100,7 +101,8 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
             [weak](DeviceWatcherFact const& fact) {
                 if (auto service = weak.lock()) service->OnWatcherFact(fact);
             },
-            std::move(WatcherPlatform));
+            std::move(WatcherPlatform),
+            Log);
         UpdatePublishedSnapshot();
     }
 
@@ -144,7 +146,7 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
             try {
                 next.Work();
             } catch (...) {
-                util::DebugTraceUnknownException(L"[DeviceService] serialized task failed");
+                Log.UnknownException(L"[DeviceService] serialized task failed");
             }
             next.CompletionState->Signal();
         }
@@ -356,6 +358,7 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
 };
 
 DeviceService::DeviceService(DeviceServiceDependencies dependencies) : m_state(std::make_shared<State>()) {
+    m_state->Log = std::move(dependencies.Log);
     m_state->WatcherPlatform = std::move(dependencies.WatcherPlatform);
     m_state->ConnectionPlatform = std::move(dependencies.ConnectionPlatform);
     m_state->TimerPlatform = std::move(dependencies.TimerPlatform);

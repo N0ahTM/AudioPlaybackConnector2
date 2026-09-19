@@ -1,5 +1,7 @@
 #pragma once
 
+#include <util/Logger.hpp>
+
 #include <app/AppController.hpp>
 #include <DevicePickerView.g.h>
 #include <ui/DevicePickerViewState.hpp>
@@ -22,7 +24,8 @@ struct DevicePickerView : DevicePickerViewT<DevicePickerView> {
     ~DevicePickerView();
     void Initialize(std::weak_ptr<apc::app::AppController> controller,
                     std::function<void()> onClose,
-                    std::function<void()> showSettings);
+                    std::function<void()> showSettings,
+                    util::LogSink log);
     [[nodiscard]] bool LoadDevices();
     void CancelLoadDevices();
     void PrepareForRelease() noexcept;
@@ -52,7 +55,8 @@ private:
     static winrt::fire_and_forget RefreshDevicesAsync(winrt::weak_ref<DevicePickerView> weak,
                                                       winrt::Microsoft::UI::Dispatching::DispatcherQueue dispatcher,
                                                       std::shared_ptr<apc::app::AppController> controller,
-                                                      std::stop_token stop);
+                                                      std::stop_token stop,
+                                                      util::LogSink log);
     [[nodiscard]] std::optional<DeviceOptionsViewModel> DeviceOptions(std::wstring_view id) const;
     void RenderDeviceList(bool reconcilePendingActions = true, bool forceRender = false);
     winrt::Microsoft::UI::Xaml::Controls::ListViewItem
@@ -66,6 +70,7 @@ private:
     void ApplyGlobalActionState(bool visible, bool enabled);
     void SetRefreshIndicators(bool refreshing, bool blockingRefresh);
 
+    util::LogSink m_log;
     std::weak_ptr<apc::app::AppController> m_appController;
     DevicePickerViewState m_viewState;
     std::function<void()> m_onClose;

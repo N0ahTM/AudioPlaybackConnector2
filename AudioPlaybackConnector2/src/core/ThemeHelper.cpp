@@ -33,7 +33,7 @@ Theme ThemeHelper::GetSystemTheme() {
     return (status == ERROR_SUCCESS && value != 0) ? Theme::Light : Theme::Dark;
 }
 
-void ThemeHelper::OnSettingChange(HWND, LPARAM lParam) {
+void ThemeHelper::OnSettingChange(LPARAM lParam, util::LogSink const& log) {
     if (lParam &&
         CompareStringOrdinal(reinterpret_cast<LPCWCH>(lParam), -1, L"ImmersiveColorSet", -1, TRUE) == CSTR_EQUAL) {
         auto theme = GetSystemTheme();
@@ -68,7 +68,7 @@ void ThemeHelper::OnSettingChange(HWND, LPARAM lParam) {
             try {
                 handler();
             } catch (...) {
-                DebugTrace(L"[ThemeHelper] Theme changed handler failed");
+                log.Trace(L"[ThemeHelper] Theme changed handler failed");
             }
 
             {

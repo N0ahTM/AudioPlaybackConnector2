@@ -13,7 +13,7 @@ using namespace winrt::Microsoft::UI::Xaml::Controls;
 /*//////// Constructors / Destructor /////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-TrayController::TrayController() = default;
+TrayController::TrayController(util::LogSink log) : m_log(std::move(log)) {}
 
 TrayController::~TrayController() {
     Teardown();
@@ -43,21 +43,21 @@ void TrayController::Initialize(HWND hwnd,
     m_releaseDevicePickerPending = false;
     m_pickerRefreshPending = false;
 
-    m_trayIcon = std::make_unique<TrayIcon>();
+    m_trayIcon = std::make_unique<TrayIcon>(m_log);
     m_trayIcon->Initialize(m_hwnd, m_trayCallbackMsg);
-    DebugTrace(L"[TrayController] TrayIcon initialized");
+    m_log.Trace(L"[TrayController] TrayIcon initialized");
 
     auto weak = weak_from_this();
     m_themeChangedToken = ThemeHelper::AddThemeChangedHandler([weak]() {
         auto self = weak.lock();
         if (!self || self->m_isTearingDown.load() || !self->m_trayIcon) return;
-        DebugTrace(L"[TrayController] System theme changed");
+        self->m_log.Trace(L"[TrayController] System theme changed");
         self->m_trayIcon->UpdateTheme();
     });
 
     auto root = m_mainWindow.Content().as<Controls::Grid>();
     if (root && root.XamlRoot()) {
-        m_contextMenu = std::make_unique<TrayContextMenu>();
+        m_contextMenu = std::make_unique<TrayContextMenu>(m_log);
         m_contextMenu->Initialize(
             root,
             [weak]() {
@@ -82,7 +82,7 @@ void TrayController::Initialize(HWND hwnd,
                     SetWindowPos(self->m_hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                 }
             });
-        DebugTrace(L"[TrayController] TrayContextMenu initialized");
+        m_log.Trace(L"[TrayController] TrayContextMenu initialized");
     }
     if (auto owner = m_appController.lock())
         SetSystemBackdropEffectsEnabled(owner->Snapshot().Settings.UseSystemBackdropEffects);
@@ -107,11 +107,11 @@ void TrayController::SetSystemBackdropEffectsEnabled(bool enabled) noexcept try 
         }
         if (m_pickerFlyout.Content()) {
             apc::ui::ApplyFlyoutPresenterStyle(
-                m_pickerFlyout.Content().as<winrt::Microsoft::UI::Xaml::DependencyObject>(), enabled);
+                m_pickerFlyout.Content().as<winrt::Microsoft::UI::Xaml::DependencyObject>(), enabled, m_log);
         }
     }
 } catch (...) {
-    util::DebugTraceUnknownException(L"[TrayController] ERROR: failed to apply backdrop setting");
+    m_log.UnknownException(L"[TrayController] ERROR: failed to apply backdrop setting");
 }
 
 void TrayController::Teardown() noexcept try {
@@ -128,16 +128,16 @@ void TrayController::Teardown() noexcept try {
                     }
                     if (enqueued) return;
 
-                    DebugTrace(
+                    m_log.Trace(
                         L"[TrayController] UI dispatcher unavailable during teardown; continuing best-effort cleanup");
                 }
             }
         } catch (winrt::hresult_error const& ex) {
-            util::DebugTraceException(L"[TrayController] ERROR: failed to marshal teardown to UI thread", ex);
+            m_log.Exception(L"[TrayController] ERROR: failed to marshal teardown to UI thread", ex);
         } catch (std::exception const& ex) {
-            util::DebugTraceException(L"[TrayController] ERROR: failed to marshal teardown to UI thread", ex);
+            m_log.Exception(L"[TrayController] ERROR: failed to marshal teardown to UI thread", ex);
         } catch (...) {
-            util::DebugTraceUnknownException(L"[TrayController] ERROR: failed to marshal teardown to UI thread");
+            m_log.UnknownException(L"[TrayController] ERROR: failed to marshal teardown to UI thread");
         }
     }
 
@@ -145,7 +145,7 @@ void TrayController::Teardown() noexcept try {
         try {
             m_pickerFlyout.Hide();
         } catch (...) {
-            DebugTrace(L"[TrayController] ERROR: failed to hide picker flyout during teardown");
+            m_log.Trace(L"[TrayController] ERROR: failed to hide picker flyout during teardown");
         }
     }
     if (m_devicePickerView) {
@@ -153,11 +153,11 @@ void TrayController::Teardown() noexcept try {
             auto impl = m_devicePickerView.as<winrt::AudioPlaybackConnector2::implementation::DevicePickerView>();
             impl->PrepareForRelease();
         } catch (winrt::hresult_error const& ex) {
-            util::DebugTraceException(L"[TrayController] ERROR: failed to prepare picker for teardown", ex);
+            m_log.Exception(L"[TrayController] ERROR: failed to prepare picker for teardown", ex);
         } catch (std::exception const& ex) {
-            util::DebugTraceException(L"[TrayController] ERROR: failed to prepare picker for teardown", ex);
+            m_log.Exception(L"[TrayController] ERROR: failed to prepare picker for teardown", ex);
         } catch (...) {
-            util::DebugTraceUnknownException(L"[TrayController] ERROR: failed to prepare picker for teardown");
+            m_log.UnknownException(L"[TrayController] ERROR: failed to prepare picker for teardown");
         }
     }
     if (m_themeChangedToken) {
@@ -187,11 +187,11 @@ void TrayController::Teardown() noexcept try {
     m_lastPickerClosedOverTrayIconTick = 0;
     m_suppressNextTraySelectAfterPickerClosedOverTrayIcon = false;
 } catch (winrt::hresult_error const& ex) {
-    util::DebugTraceException(L"[TrayController] ERROR: unexpected teardown failure", ex);
+    m_log.Exception(L"[TrayController] ERROR: unexpected teardown failure", ex);
 } catch (std::exception const& ex) {
-    util::DebugTraceException(L"[TrayController] ERROR: unexpected teardown failure", ex);
+    m_log.Exception(L"[TrayController] ERROR: unexpected teardown failure", ex);
 } catch (...) {
-    util::DebugTraceUnknownException(L"[TrayController] ERROR: unexpected teardown failure");
+    m_log.UnknownException(L"[TrayController] ERROR: unexpected teardown failure");
 }
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -208,9 +208,9 @@ void TrayController::SetResourceStateChangedCallback(ResourceStateChangedCallbac
 
 void TrayController::ShowTrayMenu() {
     if (m_isTearingDown.load()) return;
-    DebugTrace(L"[TrayController] OnTrayIconRightClick()");
+    m_log.Trace(L"[TrayController] OnTrayIconRightClick()");
     if (!m_contextMenu) {
-        DebugTrace(L"[TrayController] ERROR: m_contextMenu is null");
+        m_log.Trace(L"[TrayController] ERROR: m_contextMenu is null");
         return;
     }
 
@@ -227,7 +227,7 @@ void TrayController::ShowTrayMenu() {
         static_cast<float>(pt.x) * USER_DEFAULT_SCREEN_DPI / static_cast<float>(dpi),
         static_cast<float>(pt.y) * USER_DEFAULT_SCREEN_DPI / static_cast<float>(dpi));
 
-    DebugTrace(L"[TrayController] ContextMenu showing at ({0}, {1}) with DPI={2}", point.X, point.Y, dpi);
+    m_log.Trace(L"[TrayController] ContextMenu showing at ({0}, {1}) with DPI={2}", point.X, point.Y, dpi);
 
     SetWindowPos(m_hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     auto resetTopmost = wil::scope_exit([this]() noexcept {
@@ -238,17 +238,17 @@ void TrayController::ShowTrayMenu() {
     try {
         if (m_contextMenu->ShowAt(point)) resetTopmost.release();
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[TrayController] ERROR: failed to show context menu", ex);
+        m_log.Exception(L"[TrayController] ERROR: failed to show context menu", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[TrayController] ERROR: failed to show context menu", ex);
+        m_log.Exception(L"[TrayController] ERROR: failed to show context menu", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[TrayController] ERROR: failed to show context menu");
+        m_log.UnknownException(L"[TrayController] ERROR: failed to show context menu");
     }
 }
 
 bool TrayController::ShowDevicePicker(bool toggleIfOpen) noexcept try {
     if (m_isTearingDown.load()) return false;
-    DebugTrace(L"[TrayController] OnTrayIconLeftClick()");
+    m_log.Trace(L"[TrayController] OnTrayIconLeftClick()");
 
     auto const flyoutState = m_pickerFlyoutState.load();
     if (flyoutState == PickerFlyoutState::Open && m_pickerFlyout) {
@@ -258,7 +258,7 @@ bool TrayController::ShowDevicePicker(bool toggleIfOpen) noexcept try {
     }
 
     if (flyoutState != PickerFlyoutState::Closed) {
-        DebugTrace(L"[TrayController] Picker flyout state is not closed, ignoring click");
+        m_log.Trace(L"[TrayController] Picker flyout state is not closed, ignoring click");
         return false;
     }
 
@@ -267,20 +267,20 @@ bool TrayController::ShowDevicePicker(bool toggleIfOpen) noexcept try {
         auto const elapsedSinceDismiss = GetTickCount64() - m_lastPickerClosedOverTrayIconTick;
         m_suppressNextTraySelectAfterPickerClosedOverTrayIcon = false;
         if (elapsedSinceDismiss < c_trayLightDismissSuppressMs) {
-            DebugTrace(L"[TrayController] Picker flyout reopen suppressed after tray light-dismiss");
+            m_log.Trace(L"[TrayController] Picker flyout reopen suppressed after tray light-dismiss");
             if (toggleIfOpen) return false;
         }
     }
 
     auto rect = m_trayIcon->GetIconRect();
     if (!rect) {
-        DebugTrace(L"[TrayController] ERROR: GetIconRect() returned null");
+        m_log.Trace(L"[TrayController] ERROR: GetIconRect() returned null");
         return false;
     }
 
     auto root = m_mainWindow.Content().as<Controls::Grid>();
     if (!root) {
-        DebugTrace(L"[TrayController] ERROR: MainWindow.Content() is not a Grid");
+        m_log.Trace(L"[TrayController] ERROR: MainWindow.Content() is not a Grid");
         return false;
     }
 
@@ -296,21 +296,21 @@ bool TrayController::ShowDevicePicker(bool toggleIfOpen) noexcept try {
         m_pickerFlyout = nullptr;
         m_pickerRefreshPending = false;
         NotifyResourceStateChanged(false);
-        util::DebugTraceException(L"[TrayController] ERROR: failed to create picker flyout", ex);
+        m_log.Exception(L"[TrayController] ERROR: failed to create picker flyout", ex);
         return false;
     } catch (std::exception const& ex) {
         m_pickerFlyoutState.store(PickerFlyoutState::Closed);
         m_pickerFlyout = nullptr;
         m_pickerRefreshPending = false;
         NotifyResourceStateChanged(false);
-        util::DebugTraceException(L"[TrayController] ERROR: failed to create picker flyout", ex);
+        m_log.Exception(L"[TrayController] ERROR: failed to create picker flyout", ex);
         return false;
     } catch (...) {
         m_pickerFlyoutState.store(PickerFlyoutState::Closed);
         m_pickerFlyout = nullptr;
         m_pickerRefreshPending = false;
         NotifyResourceStateChanged(false);
-        util::DebugTraceUnknownException(L"[TrayController] ERROR: failed to create picker flyout");
+        m_log.UnknownException(L"[TrayController] ERROR: failed to create picker flyout");
         return false;
     }
 
@@ -349,21 +349,21 @@ bool TrayController::ShowDevicePicker(bool toggleIfOpen) noexcept try {
         m_pickerFlyout = nullptr;
         m_pickerRefreshPending = false;
         NotifyResourceStateChanged(false);
-        util::DebugTraceException(L"[TrayController] ERROR: failed to show picker flyout", ex);
+        m_log.Exception(L"[TrayController] ERROR: failed to show picker flyout", ex);
         return false;
     } catch (std::exception const& ex) {
         m_pickerFlyoutState.store(PickerFlyoutState::Closed);
         m_pickerFlyout = nullptr;
         m_pickerRefreshPending = false;
         NotifyResourceStateChanged(false);
-        util::DebugTraceException(L"[TrayController] ERROR: failed to show picker flyout", ex);
+        m_log.Exception(L"[TrayController] ERROR: failed to show picker flyout", ex);
         return false;
     } catch (...) {
         m_pickerFlyoutState.store(PickerFlyoutState::Closed);
         m_pickerFlyout = nullptr;
         m_pickerRefreshPending = false;
         NotifyResourceStateChanged(false);
-        util::DebugTraceUnknownException(L"[TrayController] ERROR: failed to show picker flyout");
+        m_log.UnknownException(L"[TrayController] ERROR: failed to show picker flyout");
         return false;
     }
 } catch (winrt::hresult_error const& ex) {
@@ -372,7 +372,7 @@ bool TrayController::ShowDevicePicker(bool toggleIfOpen) noexcept try {
     m_pickerFlyout = nullptr;
     m_pickerRefreshPending = false;
     NotifyResourceStateChanged(false);
-    util::DebugTraceException(L"[TrayController] ERROR: unexpected device picker show failure", ex);
+    m_log.Exception(L"[TrayController] ERROR: unexpected device picker show failure", ex);
     return false;
 } catch (std::exception const& ex) {
     TryHideDevicePicker();
@@ -380,7 +380,7 @@ bool TrayController::ShowDevicePicker(bool toggleIfOpen) noexcept try {
     m_pickerFlyout = nullptr;
     m_pickerRefreshPending = false;
     NotifyResourceStateChanged(false);
-    util::DebugTraceException(L"[TrayController] ERROR: unexpected device picker show failure", ex);
+    m_log.Exception(L"[TrayController] ERROR: unexpected device picker show failure", ex);
     return false;
 } catch (...) {
     TryHideDevicePicker();
@@ -388,7 +388,7 @@ bool TrayController::ShowDevicePicker(bool toggleIfOpen) noexcept try {
     m_pickerFlyout = nullptr;
     m_pickerRefreshPending = false;
     NotifyResourceStateChanged(false);
-    util::DebugTraceUnknownException(L"[TrayController] ERROR: unexpected device picker show failure");
+    m_log.UnknownException(L"[TrayController] ERROR: unexpected device picker show failure");
     return false;
 }
 
@@ -421,11 +421,11 @@ bool TrayController::RefreshDevicePickerState() noexcept {
         impl->RefreshDeviceStates();
         return true;
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[TrayController] ERROR: failed to refresh picker device state", ex);
+        m_log.Exception(L"[TrayController] ERROR: failed to refresh picker device state", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[TrayController] ERROR: failed to refresh picker device state", ex);
+        m_log.Exception(L"[TrayController] ERROR: failed to refresh picker device state", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[TrayController] ERROR: failed to refresh picker device state");
+        m_log.UnknownException(L"[TrayController] ERROR: failed to refresh picker device state");
     }
     return false;
 }
@@ -436,11 +436,11 @@ bool TrayController::InvalidateDevicePickerInventory() noexcept {
         auto impl = m_devicePickerView.as<winrt::AudioPlaybackConnector2::implementation::DevicePickerView>();
         return impl->InvalidateDeviceInventory();
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[TrayController] ERROR: failed to invalidate picker inventory", ex);
+        m_log.Exception(L"[TrayController] ERROR: failed to invalidate picker inventory", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[TrayController] ERROR: failed to invalidate picker inventory", ex);
+        m_log.Exception(L"[TrayController] ERROR: failed to invalidate picker inventory", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[TrayController] ERROR: failed to invalidate picker inventory");
+        m_log.UnknownException(L"[TrayController] ERROR: failed to invalidate picker inventory");
     }
     return false;
 }
@@ -456,7 +456,7 @@ bool TrayController::AdvanceConnectingFrame() noexcept {
     try {
         return m_trayIcon->AdvanceConnectingFrame();
     } catch (...) {
-        util::DebugTraceUnknownException(L"[TrayController] ERROR: connecting frame update failed");
+        m_log.UnknownException(L"[TrayController] ERROR: connecting frame update failed");
         return false;
     }
 }
@@ -466,11 +466,11 @@ bool TrayController::ApplyPendingTrayUpdates() noexcept {
     try {
         return m_trayIcon->ApplyPendingUpdates();
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[TrayController] ERROR: pending tray update failed", ex);
+        m_log.Exception(L"[TrayController] ERROR: pending tray update failed", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[TrayController] ERROR: pending tray update failed", ex);
+        m_log.Exception(L"[TrayController] ERROR: pending tray update failed", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[TrayController] ERROR: pending tray update failed");
+        m_log.UnknownException(L"[TrayController] ERROR: pending tray update failed");
     }
     return false;
 }
@@ -483,7 +483,7 @@ void TrayController::Reregister() {
 
 void TrayController::SetState(TrayIconState state) {
     if (m_trayIcon) {
-        DebugTrace(L"[TrayController] SetState requested={0}", TrayIconStateToString(state));
+        m_log.Trace(L"[TrayController] SetState requested={0}", TrayIconStateToString(state));
         m_trayIcon->SetState(state);
     }
 }
@@ -508,7 +508,7 @@ void TrayController::HandleTrayMessage([[maybe_unused]] WPARAM wParam, LPARAM lP
             }
         });
         if (!enqueued) {
-            DebugTrace(L"[TrayController] ERROR: failed to marshal tray message to UI thread");
+            m_log.Trace(L"[TrayController] ERROR: failed to marshal tray message to UI thread");
         }
         return;
     }
@@ -566,14 +566,14 @@ void TrayController::HandleTrayMessage([[maybe_unused]] WPARAM wParam, LPARAM lP
         case NIN_BALLOONTIMEOUT:
         case NIN_BALLOONUSERCLICK: break;
 
-        default: DebugTrace(L"[TrayController] Unhandled tray message: 0x{0:X}", loword); break;
+        default: m_log.Trace(L"[TrayController] Unhandled tray message: 0x{0:X}", loword); break;
     }
 } catch (winrt::hresult_error const& ex) {
-    util::DebugTraceException(L"[TrayController] ERROR: tray message handling failed", ex);
+    m_log.Exception(L"[TrayController] ERROR: tray message handling failed", ex);
 } catch (std::exception const& ex) {
-    util::DebugTraceException(L"[TrayController] ERROR: tray message handling failed", ex);
+    m_log.Exception(L"[TrayController] ERROR: tray message handling failed", ex);
 } catch (...) {
-    util::DebugTraceUnknownException(L"[TrayController] ERROR: tray message handling failed");
+    m_log.UnknownException(L"[TrayController] ERROR: tray message handling failed");
 }
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -588,11 +588,11 @@ bool TrayController::EnsureDevicePickerViewCreated() noexcept {
     try {
         auto root = m_mainWindow.Content().as<Controls::Grid>();
         if (!root) {
-            DebugTrace(L"[TrayController] ERROR: EnsureDevicePickerViewCreated failed, Content() is not a Grid");
+            m_log.Trace(L"[TrayController] ERROR: EnsureDevicePickerViewCreated failed, Content() is not a Grid");
             return false;
         }
         if (!root.XamlRoot()) {
-            DebugTrace(L"[TrayController] ERROR: EnsureDevicePickerViewCreated failed, XamlRoot() is null");
+            m_log.Trace(L"[TrayController] ERROR: EnsureDevicePickerViewCreated failed, XamlRoot() is null");
             return false;
         }
 
@@ -607,16 +607,17 @@ bool TrayController::EnsureDevicePickerViewCreated() noexcept {
             [weak] {
                 if (auto self = weak.lock(); self && !self->m_isTearingDown.load())
                     self->ShowSettingsAfterPickerClosed();
-            });
+            },
+            m_log);
         m_devicePickerView = std::move(pickerView);
         m_releaseDevicePickerPending = false;
         return true;
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[TrayController] ERROR: failed to create device picker", ex);
+        m_log.Exception(L"[TrayController] ERROR: failed to create device picker", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[TrayController] ERROR: failed to create device picker", ex);
+        m_log.Exception(L"[TrayController] ERROR: failed to create device picker", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[TrayController] ERROR: failed to create device picker");
+        m_log.UnknownException(L"[TrayController] ERROR: failed to create device picker");
     }
     m_devicePickerView = nullptr;
     return false;
@@ -637,11 +638,11 @@ void TrayController::PreloadDevicePicker() noexcept {
             m_devicePickerPreloadInitialized = true;
         }
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[TrayController] ERROR: failed to preload device picker", ex);
+        m_log.Exception(L"[TrayController] ERROR: failed to preload device picker", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[TrayController] ERROR: failed to preload device picker", ex);
+        m_log.Exception(L"[TrayController] ERROR: failed to preload device picker", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[TrayController] ERROR: failed to preload device picker");
+        m_log.UnknownException(L"[TrayController] ERROR: failed to preload device picker");
     }
 }
 
@@ -669,7 +670,7 @@ void TrayController::ReleaseDevicePicker() noexcept {
 
         auto dispatcher = m_mainWindow ? m_mainWindow.DispatcherQueue() : nullptr;
         if (!dispatcher || !dispatcher.HasThreadAccess()) {
-            DebugTrace(L"[TrayController] ERROR: ReleaseDevicePicker must run on the UI thread");
+            m_log.Trace(L"[TrayController] ERROR: ReleaseDevicePicker must run on the UI thread");
             return;
         }
 
@@ -684,11 +685,11 @@ void TrayController::ReleaseDevicePicker() noexcept {
 
         ReleaseDevicePickerOnUIThread();
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[TrayController] ERROR: failed to request device picker release", ex);
+        m_log.Exception(L"[TrayController] ERROR: failed to request device picker release", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[TrayController] ERROR: failed to request device picker release", ex);
+        m_log.Exception(L"[TrayController] ERROR: failed to request device picker release", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[TrayController] ERROR: failed to request device picker release");
+        m_log.UnknownException(L"[TrayController] ERROR: failed to request device picker release");
     }
 }
 
@@ -727,13 +728,13 @@ void TrayController::TryHideDevicePicker() noexcept {
         m_pickerFlyout.Hide();
     } catch (winrt::hresult_error const& ex) {
         restoreVisiblePresentation();
-        util::DebugTraceException(L"[TrayController] ERROR: failed to hide device picker", ex);
+        m_log.Exception(L"[TrayController] ERROR: failed to hide device picker", ex);
     } catch (std::exception const& ex) {
         restoreVisiblePresentation();
-        util::DebugTraceException(L"[TrayController] ERROR: failed to hide device picker", ex);
+        m_log.Exception(L"[TrayController] ERROR: failed to hide device picker", ex);
     } catch (...) {
         restoreVisiblePresentation();
-        util::DebugTraceUnknownException(L"[TrayController] ERROR: failed to hide device picker");
+        m_log.UnknownException(L"[TrayController] ERROR: failed to hide device picker");
     }
 }
 
@@ -747,7 +748,7 @@ void TrayController::ReleaseDevicePickerOnUIThread() noexcept {
     try {
         auto dispatcher = m_mainWindow ? m_mainWindow.DispatcherQueue() : nullptr;
         if (!dispatcher || !dispatcher.HasThreadAccess()) {
-            DebugTrace(L"[TrayController] ERROR: picker release attempted outside the UI thread");
+            m_log.Trace(L"[TrayController] ERROR: picker release attempted outside the UI thread");
             return;
         }
         auto impl = m_devicePickerView.as<winrt::AudioPlaybackConnector2::implementation::DevicePickerView>();
@@ -756,13 +757,13 @@ void TrayController::ReleaseDevicePickerOnUIThread() noexcept {
         m_devicePickerPreloadInitialized = false;
         m_releaseDevicePickerPending = false;
         m_pickerRefreshPending = false;
-        DebugTrace(L"[TrayController] Device picker released");
+        m_log.Trace(L"[TrayController] Device picker released");
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[TrayController] ERROR: failed to release device picker", ex);
+        m_log.Exception(L"[TrayController] ERROR: failed to release device picker", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[TrayController] ERROR: failed to release device picker", ex);
+        m_log.Exception(L"[TrayController] ERROR: failed to release device picker", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[TrayController] ERROR: failed to release device picker");
+        m_log.UnknownException(L"[TrayController] ERROR: failed to release device picker");
     }
 }
 
@@ -778,7 +779,7 @@ Controls::Flyout TrayController::CreatePickerFlyout() {
     flyout.Content(m_devicePickerView);
 
     auto weak = weak_from_this();
-    flyout.Opened([weak](auto const& sender, auto&) noexcept {
+    flyout.Opened([weak, log = m_log](auto const& sender, auto&) noexcept {
         try {
             auto self = weak.lock();
             auto openedFlyout = sender.template try_as<Controls::Flyout>();
@@ -790,18 +791,19 @@ Controls::Flyout TrayController::CreatePickerFlyout() {
                 }
                 apc::ui::ApplyFlyoutPresenterStyle(
                     self->m_pickerFlyout.Content().as<winrt::Microsoft::UI::Xaml::DependencyObject>(),
-                    self->m_useSystemBackdropEffects);
+                    self->m_useSystemBackdropEffects,
+                    self->m_log);
             }
         } catch (winrt::hresult_error const& ex) {
-            util::DebugTraceException(L"[TrayController] ERROR: Picker flyout opened handler failed", ex);
+            log.Exception(L"[TrayController] ERROR: Picker flyout opened handler failed", ex);
         } catch (std::exception const& ex) {
-            util::DebugTraceException(L"[TrayController] ERROR: Picker flyout opened handler failed", ex);
+            log.Exception(L"[TrayController] ERROR: Picker flyout opened handler failed", ex);
         } catch (...) {
-            util::DebugTraceUnknownException(L"[TrayController] ERROR: Picker flyout opened handler failed");
+            log.UnknownException(L"[TrayController] ERROR: Picker flyout opened handler failed");
         }
     });
 
-    flyout.Closing([weak](auto const& sender, auto&) noexcept {
+    flyout.Closing([weak, log = m_log](auto const& sender, auto&) noexcept {
         try {
             auto self = weak.lock();
             auto closingFlyout = sender.template try_as<Controls::Flyout>();
@@ -816,22 +818,22 @@ Controls::Flyout TrayController::CreatePickerFlyout() {
                 impl->CancelLoadDevices();
             }
         } catch (winrt::hresult_error const& ex) {
-            util::DebugTraceException(L"[TrayController] ERROR: Picker flyout closing handler failed", ex);
+            log.Exception(L"[TrayController] ERROR: Picker flyout closing handler failed", ex);
         } catch (std::exception const& ex) {
-            util::DebugTraceException(L"[TrayController] ERROR: Picker flyout closing handler failed", ex);
+            log.Exception(L"[TrayController] ERROR: Picker flyout closing handler failed", ex);
         } catch (...) {
-            util::DebugTraceUnknownException(L"[TrayController] ERROR: Picker flyout closing handler failed");
+            log.UnknownException(L"[TrayController] ERROR: Picker flyout closing handler failed");
         }
     });
 
-    flyout.Closed([weak](auto const& sender, auto&) noexcept {
+    flyout.Closed([weak, log = m_log](auto const& sender, auto&) noexcept {
         try {
             auto self = weak.lock();
             auto closedFlyout = sender.template try_as<Controls::Flyout>();
             if (!self || self->m_isTearingDown.load() || !closedFlyout || self->m_pickerFlyout != closedFlyout) {
                 return;
             }
-            DebugTrace(L"[TrayController] Picker flyout closed");
+            log.Trace(L"[TrayController] Picker flyout closed");
             auto const leftButtonDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
             if (leftButtonDown && self->IsCursorOverTrayIcon()) {
                 self->m_lastPickerClosedOverTrayIconTick = GetTickCount64();
@@ -852,11 +854,11 @@ Controls::Flyout TrayController::CreatePickerFlyout() {
                     (void)controller->ShowSettings(apc::app::AppCommandContext::Detached());
             }
         } catch (winrt::hresult_error const& ex) {
-            util::DebugTraceException(L"[TrayController] ERROR: Picker flyout closed handler failed", ex);
+            log.Exception(L"[TrayController] ERROR: Picker flyout closed handler failed", ex);
         } catch (std::exception const& ex) {
-            util::DebugTraceException(L"[TrayController] ERROR: Picker flyout closed handler failed", ex);
+            log.Exception(L"[TrayController] ERROR: Picker flyout closed handler failed", ex);
         } catch (...) {
-            util::DebugTraceUnknownException(L"[TrayController] ERROR: Picker flyout closed handler failed");
+            log.UnknownException(L"[TrayController] ERROR: Picker flyout closed handler failed");
         }
     });
 
@@ -868,11 +870,11 @@ void TrayController::NotifyResourceStateChanged(bool userInteraction) noexcept {
     try {
         m_resourceStateChangedCallback(userInteraction);
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[TrayController] resource-state callback failed", ex);
+        m_log.Exception(L"[TrayController] resource-state callback failed", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[TrayController] resource-state callback failed", ex);
+        m_log.Exception(L"[TrayController] resource-state callback failed", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[TrayController] resource-state callback failed");
+        m_log.UnknownException(L"[TrayController] resource-state callback failed");
     }
 }
 
@@ -890,7 +892,7 @@ bool TrayController::IsCursorOverTrayIcon() const {
 
 void TrayController::OnTrayIconDoubleClick() {
     if (m_isTearingDown.load()) return;
-    DebugTrace(L"[TrayController] OnTrayIconDoubleClick()");
+    m_log.Trace(L"[TrayController] OnTrayIconDoubleClick()");
     if (auto controller = m_appController.lock())
         (void)controller->ToggleDefault(apc::app::AppCommandContext::Detached());
 }
@@ -899,24 +901,24 @@ void TrayController::LaunchBluetoothSettings() {
     try {
         auto op =
             winrt::Windows::System::Launcher::LaunchUriAsync(winrt::Windows::Foundation::Uri(L"ms-settings:bluetooth"));
-        op.Completed([](auto const& sender, auto const&) noexcept {
+        op.Completed([log = m_log](auto const& sender, auto const&) noexcept {
             try {
                 if (!sender.GetResults()) {
-                    DebugTrace(L"[TrayController] LaunchUriAsync(ms-settings:bluetooth) failed");
+                    log.Trace(L"[TrayController] LaunchUriAsync(ms-settings:bluetooth) failed");
                 }
             } catch (winrt::hresult_error const& ex) {
-                util::DebugTraceException(L"[TrayController] LaunchUriAsync(ms-settings:bluetooth) failed", ex);
+                log.Exception(L"[TrayController] LaunchUriAsync(ms-settings:bluetooth) failed", ex);
             } catch (std::exception const& ex) {
-                util::DebugTraceException(L"[TrayController] LaunchUriAsync(ms-settings:bluetooth) failed", ex);
+                log.Exception(L"[TrayController] LaunchUriAsync(ms-settings:bluetooth) failed", ex);
             } catch (...) {
-                util::DebugTraceUnknownException(L"[TrayController] LaunchUriAsync(ms-settings:bluetooth) failed");
+                log.UnknownException(L"[TrayController] LaunchUriAsync(ms-settings:bluetooth) failed");
             }
         });
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[TrayController] LaunchUriAsync(ms-settings:bluetooth) failed", ex);
+        m_log.Exception(L"[TrayController] LaunchUriAsync(ms-settings:bluetooth) failed", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[TrayController] LaunchUriAsync(ms-settings:bluetooth) failed", ex);
+        m_log.Exception(L"[TrayController] LaunchUriAsync(ms-settings:bluetooth) failed", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[TrayController] LaunchUriAsync(ms-settings:bluetooth) failed");
+        m_log.UnknownException(L"[TrayController] LaunchUriAsync(ms-settings:bluetooth) failed");
     }
 }

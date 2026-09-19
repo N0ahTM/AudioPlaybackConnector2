@@ -1,11 +1,14 @@
 #pragma once
 
+#include <util/Logger.hpp>
+
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Tray Context Menu /////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
 class TrayContextMenu {
 public:
+    explicit TrayContextMenu(util::LogSink log) : m_log(std::move(log)) {}
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
@@ -26,6 +29,7 @@ private:
     /*------------------------------------------------------------------------------------------------------------*/
 
     winrt::Microsoft::UI::Xaml::Controls::MenuFlyout m_menu{nullptr};
+    util::LogSink m_log;
     winrt::Microsoft::UI::Xaml::FrameworkElement m_anchor{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::MenuFlyoutItem m_settingsItem{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::MenuFlyoutItem m_helpItem{nullptr};

@@ -348,3 +348,37 @@ under the mutex, so a superseded evaluation cannot restore positive authorizatio
 This matters because picker preload reads `AppController::Snapshot`, which calls back into the host's
 `ResourceStatus` and acquires the same mutex. Holding it across preload would wait on the same thread.
 The UI call graph and lock scopes have been inspected; headless tests do not instantiate this WinUI path.
+
+## Logging ownership and native crash registration
+
+App constructs Logger, then CrashHandlers, then ApplicationHost. Host teardown precedes destruction of
+the native registration and logger. LogSink holds a weak reference; it neither owns a worker nor keeps
+the application alive. Admission closes once at shutdown. Accepted calls finish before the private
+spdlog queue drains; overflow replaces queued entries and contributes to the reported drop count.
+Explicit flush requests share that queue and are best effort. Successful Shutdown is the acknowledged
+drain boundary. A deadline does not force destruction of live worker state: the preallocated Windows
+work callback retains it, joins the worker and releases the sink. The emergency path and buffer remain
+owned by that state until cleanup finishes, even if App has already returned from its bounded wait.
+
+EmergencyLog owns only its immutable path and fixed 100-record tail. Dump uses preallocated scratch
+storage, rejects concurrent dumps, and uses a try-lock for its snapshot. No tail lock spans file I/O.
+It does not acquire the asynchronous logger or its queue. LoggerTests cover overflow accounting,
+concurrent shutdown, late calls, rotation, sink failures, Unicode paths and emergency output after
+Logger destruction. The product sink test holds a native exclusive filesystem oplock on the rotation
+backup and observes its break before checking the shutdown deadline. It covers both a retained owner
+and owner destruction while rotation is blocked, then acknowledges the break and verifies completion
+or final state release. No fake sink or product test hook replaces the real file operation.
+CrashHandlerTests run 25 registration/restoration cycles and five fatal paths in separate processes:
+terminate, abort, invalid parameter, unhandled SEH and a fatal vectored exception. Every fatal case
+runs after normal Logger destruction and checks the exit code, diagnostic tail, minidump signature
+and companion exception code. These tests do not simulate a corrupted heap or exhausted stack.
+
+The native callback signatures require a process registration slot. Only CrashHandlers accesses this
+slot outside the callbacks. Its construction and destruction belong to the serialized App lifetime.
+Callbacks increment an entry count before reading the slot; both operations and the owner's close
+use sequential consistency. The owner closes the slot before restoring previous handlers and drains
+entries before releasing the context. A callback that observed the context is therefore protected;
+one that observes the closed slot cannot access it. Fatal processing terminates the process rather
+than returning to normal execution. An in-flight fatal dump may delay teardown until process exit;
+this is not a bounded recovery guarantee for a corrupted process. Minidump creation still invokes
+Windows/DbgHelp and is best effort, not guaranteed safe in every corrupted-stack or heap state.

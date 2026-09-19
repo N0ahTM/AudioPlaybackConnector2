@@ -31,7 +31,7 @@ constexpr auto c_maxRetryDelay = std::chrono::minutes(5);
     return std::min(milliseconds, std::chrono::duration_cast<std::chrono::milliseconds>(c_maxRetryDelay));
 }
 
-bool BackupUnreadableSettingsFile(std::filesystem::path const& path) noexcept {
+bool BackupUnreadableSettingsFile(std::filesystem::path const& path, util::LogSink const& log) noexcept {
     try {
         if (path.empty() || !std::filesystem::exists(path)) return false;
         auto backup = path;
@@ -41,21 +41,24 @@ bool BackupUnreadableSettingsFile(std::filesystem::path const& path) noexcept {
             backup += std::format(L".corrupt.{}.bak", suffix);
         }
         if (!MoveFileExW(path.c_str(), backup.c_str(), MOVEFILE_WRITE_THROUGH)) {
-            DebugTrace(L"[SettingsStore] ERROR: failed to preserve corrupt file: {0}", path.wstring());
+            log.Trace(L"[SettingsStore] ERROR: failed to preserve corrupt file: {0}", path.wstring());
             return false;
         }
         return true;
     } catch (std::exception const& exception) {
-        DebugTrace(L"[SettingsStore] ERROR: corrupt-file preservation failed: {0}",
-                   util::Utf8ToUtf16(exception.what()));
+        log.Trace(L"[SettingsStore] ERROR: corrupt-file preservation failed: {0}", util::Utf8ToUtf16(exception.what()));
     } catch (...) {
-        DebugTrace(L"[SettingsStore] ERROR: corrupt-file preservation failed");
+        log.Trace(L"[SettingsStore] ERROR: corrupt-file preservation failed");
     }
     return false;
 }
 
 class FilesystemSettingsStoreStorage final : public SettingsStoreStorage {
+    util::LogSink log;
+
 public:
+    explicit FilesystemSettingsStoreStorage(util::LogSink sink) : log(std::move(sink)) {}
+
     std::optional<std::string> Read(std::filesystem::path const& path) override {
         wil::unique_hfile file(CreateFileW(
             path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
@@ -105,7 +108,7 @@ public:
     }
 
     bool PreserveCorrupt(std::filesystem::path const& path) noexcept override {
-        return BackupUnreadableSettingsFile(path);
+        return BackupUnreadableSettingsFile(path, log);
     }
 };
 
@@ -154,12 +157,14 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
 
     explicit Impl(std::filesystem::path directory,
                   std::shared_ptr<SettingsStoreStorage> persistenceStorage,
-                  std::shared_ptr<SettingsStoreWakeup> persistenceWakeup)
-        : persistenceDirectory(std::move(directory)), storage(std::move(persistenceStorage)),
+                  std::shared_ptr<SettingsStoreWakeup> persistenceWakeup,
+                  util::LogSink logger)
+        : log(std::move(logger)), persistenceDirectory(std::move(directory)), storage(std::move(persistenceStorage)),
           wakeup(persistenceWakeup ? std::move(persistenceWakeup) : std::make_shared<SystemSettingsWakeup>()) {
-        if (!storage) storage = std::make_shared<FilesystemSettingsStoreStorage>();
+        if (!storage) storage = std::make_shared<FilesystemSettingsStoreStorage>(log);
     }
 
+    util::LogSink log;
     std::mutex mutex;
     std::mutex publicationMutex;
     std::condition_variable publicationChanged;
@@ -287,9 +292,9 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
             const auto utf8 = apc::settings::Encode(snapshot);
             return storage->WriteAtomically(Path(), utf8);
         } catch (std::exception const& exception) {
-            DebugTrace(L"[SettingsStore] write failed: {0}", util::Utf8ToUtf16(exception.what()));
+            log.Trace(L"[SettingsStore] write failed: {0}", util::Utf8ToUtf16(exception.what()));
         } catch (...) {
-            DebugTrace(L"[SettingsStore] write failed");
+            log.Trace(L"[SettingsStore] write failed");
         }
         return false;
     }
@@ -442,7 +447,7 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
                 try {
                     subscription->Callback(publication.Snapshot);
                 } catch (...) {
-                    DebugTrace(L"[SettingsStore] subscriber threw");
+                    log.Trace(L"[SettingsStore] subscriber threw");
                 }
                 subscription->CompleteCallback();
             }
@@ -543,8 +548,10 @@ void SettingsStore::Subscription::Reset() noexcept {
 
 SettingsStore::SettingsStore(std::filesystem::path persistenceDirectory,
                              std::shared_ptr<SettingsStoreStorage> storage,
-                             std::shared_ptr<SettingsStoreWakeup> wakeup)
-    : m_impl(std::make_shared<Impl>(std::move(persistenceDirectory), std::move(storage), std::move(wakeup))) {
+                             std::shared_ptr<SettingsStoreWakeup> wakeup,
+                             util::LogSink log)
+    : m_impl(std::make_shared<Impl>(
+          std::move(persistenceDirectory), std::move(storage), std::move(wakeup), std::move(log))) {
     // Without its persistence executor the store cannot offer a bounded shutdown.
     // Fail construction instead of falling back to storage I/O on a UI or callback thread.
     m_impl->worker = std::jthread([impl = m_impl](std::stop_token stopToken) { impl->Worker(stopToken); });
@@ -618,11 +625,11 @@ void SettingsStore::Load() {
         }
         loaded = apc::settings::Decode(*bytes);
     } catch (std::exception const& exception) {
-        DebugTrace(L"[SettingsStore] load failed: {0}", util::Utf8ToUtf16(exception.what()));
+        lifetime->log.Trace(L"[SettingsStore] load failed: {0}", util::Utf8ToUtf16(exception.what()));
         lifetime->CompleteLoadWithoutCommit(lifetime->storage->PreserveCorrupt(path));
         return;
     } catch (...) {
-        DebugTrace(L"[SettingsStore] load failed");
+        lifetime->log.Trace(L"[SettingsStore] load failed");
         lifetime->CompleteLoadWithoutCommit(lifetime->storage->PreserveCorrupt(path));
         return;
     }
@@ -893,6 +900,6 @@ bool SettingsStore::Shutdown(SettingsShutdownMode mode,
     impl->shutdownChanged.notify_all();
     const auto publicationsDrained = impl->WaitForPublicationDrain(deadline);
     if (!result || !publicationsDrained)
-        DebugTrace(L"[SettingsStore] shutdown incomplete: persistence or publication did not drain");
+        impl->log.Trace(L"[SettingsStore] shutdown incomplete: persistence or publication did not drain");
     return result && publicationsDrained;
 }

@@ -2,7 +2,8 @@
 
 These isolated programs are the first stage of the rewrite's dependency evaluation.
 The JSON library is used by the product settings codec and string loader; CLI11
-is used by the product CLI parser. spdlog remains probe-only. Product builds
+is used by the product CLI parser. The product logger now uses spdlog, with
+consumer ownership and crash-path migration still in progress. Product builds
 continue to use the existing MSBuild solution; CMake is used only for these probes.
 
 Run locally with PowerShell 7, CMake 4.2 or newer and Visual Studio 2026 with v145,
@@ -62,9 +63,14 @@ while the sink was blocked, delivery of both admitted records after release,
 and completion only after pool destruction. The work callback closes its own
 work item; Windows defers native release until the callback returns, as specified
 by [CloseThreadpoolWork](https://learn.microsoft.com/en-us/windows/win32/api/threadpoolapiset/nf-threadpoolapiset-closethreadpoolwork).
-This validates the release mechanism, not the complete product logger: producer
-admission, concurrent shutdown, drop reporting, error sinks and the independent
-crash path still require integration tests.
+This validates the release mechanism, not the complete product logger.
+The CoreTests Logger suite exercises the product adapter's parallel writes,
+record/drop accounting, concurrent shutdown, inert late handles, Unicode paths,
+rotation, actual sink failure and injected SettingsStore diagnostics. Its emergency
+tests retain the independent emergency handle after normal logger destruction,
+check the last 100 records in order, and validate UTF-8 after bounded truncation.
+A controlled stalled-I/O test of the product adapter and native process-crash
+handler tests remain open; the isolated release probe does not replace them.
 
 The expanded probe passed on x64 and compiled for ARM64 with `/W4 /WX` and no
 PCH. ARM64 execution is not claimed. The initial size/build table below predates
@@ -134,3 +140,12 @@ License sources: [CLI11 BSD-3-Clause](https://github.com/CLIUtils/CLI11),
 [spdlog MIT and bundled notices](https://github.com/gabime/spdlog). The exact
 restored license files, rather than these abbreviated labels, accompany every
 generated probe package.
+
+The product logging tests now exercise blocked rotation using a real Windows
+exclusive oplock on the backup destination. They observe the break notification,
+verify bounded shutdown and owner destruction while I/O is blocked, release the
+lock and verify cleanup. This adds product integration evidence beyond the
+standalone pool probe without adding a fake sink to production. Native crash
+children verify all five installed fatal paths after normal Logger destruction,
+including actual minidump files and retained emergency records. Package size,
+supply-chain checks and final acceptance across the complete plan remain open.

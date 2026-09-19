@@ -69,6 +69,11 @@ public:
                   std::shared_ptr<apc::device::DeviceService> devices,
                   std::weak_ptr<AppPresentation> presentation = {},
                   std::shared_ptr<StartupTaskCoordinator> startupTask = {});
+    // Callback-safe: closes admission without waiting for admitted calls or observers.
+    // Already admitted calls may finish; the lifecycle owner drains them with Shutdown.
+    void RequestStop() noexcept;
+    // Lifecycle join: call outside controller calls and owner/observer callbacks.
+    // Keep the controller alive until every admitted caller has returned.
     void Shutdown() noexcept;
     ~AppController();
 

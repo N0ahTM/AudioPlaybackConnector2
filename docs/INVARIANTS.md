@@ -21,8 +21,14 @@ Presentation diagnostics are read at their own boundary; they are not part of th
 ## Controller event delivery
 
 The controller retains concrete `SettingsStore` and `DeviceService` owners. Commands and snapshots acquire
-an admission lease before accessing them. Shutdown closes admission monotonically, and every shutdown caller
-waits for outstanding leases without holding the state mutex, then closes event delivery. The host requests transport cancellation before
+an admission lease before accessing them. `RequestStop` monotonically closes command and event admission,
+invalidates queued recipients and cancels pending settings policy without waiting for calls or observers.
+It is safe inside an admitted call's observer; that call may still finish and retain its committed result.
+`Shutdown` requests stop, then drains outstanding leases and event delivery without holding owner locks.
+This lifecycle join must run outside admitted controller calls and owner/observer callbacks; such callbacks
+use `RequestStop`. The caller retains the controller until admitted calls return. Tests cover a stop request
+inside a settings commit callback, a foreign blocked callback and the subsequent lifecycle join.
+The host requests transport cancellation before
 draining the controller. The presentation boundary is weakly held and contains only UI admission, window
 acknowledgement and presentation diagnostics; it cannot mutate device or persistence state.
 

@@ -58,19 +58,23 @@ struct AppController::EventState {
         // Handler captures may own another subscription or reenter application code when released.
     }
 
-    void Close() noexcept {
+    void RequestStop() noexcept {
         SettingsCancellation.request_stop();
         std::vector<std::shared_ptr<Entry>> removed;
         std::deque<Delivery> discarded;
         {
-            std::unique_lock lock(Mutex);
+            std::lock_guard lock(Mutex);
             Closed = true;
             for (auto const& entry : Handlers)
                 entry->Active = false;
             removed.swap(Handlers);
             discarded.swap(Pending);
-            if (DrainThread != std::this_thread::get_id()) Changed.wait(lock, [this] { return !Draining; });
         }
+    }
+
+    void Drain() noexcept {
+        std::unique_lock lock(Mutex);
+        if (DrainThread != std::this_thread::get_id()) Changed.wait(lock, [this] { return !Draining; });
     }
 
     void Publish(AppEvent const& event, std::optional<DeviceFactPublicationFence::Token> token = {}) {
@@ -237,18 +241,25 @@ AppController::~AppController() {
     if (m_devices && m_deviceSubscription) m_devices->Unsubscribe(m_deviceSubscription);
 }
 
-void AppController::Shutdown() noexcept {
+void AppController::RequestStop() noexcept {
     {
-        std::unique_lock lock(m_stateMutex);
-        // Every caller drains admission, including concurrent shutdown calls.
+        std::lock_guard lock(m_stateMutex);
         if (m_running) {
             m_running = false;
             AdvanceGeneration(m_generation);
         }
+    }
+    m_eventState->RequestStop();
+}
+
+void AppController::Shutdown() noexcept {
+    RequestStop();
+    {
+        std::unique_lock lock(m_stateMutex);
         m_noActiveCalls.wait(lock, [this] { return m_activeCalls == 0; });
     }
-    // Closing delivery may wait for a foreign observer; it must run unlocked.
-    m_eventState->Close();
+    // Join only from the lifecycle owner, never from a call being drained.
+    m_eventState->Drain();
 }
 
 AppController::Subscription AppController::Subscribe(EventHandler handler) {

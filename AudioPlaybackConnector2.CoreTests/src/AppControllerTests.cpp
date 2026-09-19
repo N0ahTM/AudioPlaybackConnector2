@@ -109,6 +109,46 @@ void TestShutdownClosesEventAdmission() {
           "shutdown must reject later device delivery and new observers without reviving the snapshot");
 }
 
+void TestStopRequestInsideAdmittedMutation() {
+    apc::tests::AppFixture fixture;
+    int delivered = 0;
+    auto first = fixture.Controller.Subscribe([&](auto const&) {
+        ++delivered;
+        fixture.Controller.RequestStop();
+        fixture.Controller.RequestStop();
+    });
+    auto remaining = fixture.Controller.Subscribe([&](auto const&) { ++delivered; });
+    auto const mutation = fixture.Controller.SetPrivacyMode(true);
+    Check(mutation.IsApplied() && fixture.Settings->Snapshot().Data.PrivacyModeEnabled && delivered == 1,
+          "a stop request in a committed mutation's observer must return and skip remaining recipients");
+    Check(fixture.Controller.SetPrivacyMode(false).Status == SettingsMutationStatus::Rejected &&
+              !fixture.Controller.Snapshot().IsRunning,
+          "a callback stop request must reject subsequent commands and snapshot admission");
+    fixture.Controller.Shutdown();
+}
+
+void TestStopRequestDoesNotWaitForForeignCallback() {
+    apc::tests::AppFixture fixture;
+    std::binary_semaphore entered(0), release(0);
+    int calls = 0;
+    auto first = fixture.Controller.Subscribe([&](auto const&) {
+        ++calls;
+        entered.release();
+        release.acquire();
+    });
+    auto remaining = fixture.Controller.Subscribe([&](auto const&) { ++calls; });
+    auto mutation = std::async(std::launch::async, [&] { return fixture.Controller.SetPrivacyMode(true); });
+    entered.acquire();
+    fixture.Controller.RequestStop();
+    auto joined = std::async(std::launch::async, [&] { fixture.Controller.Shutdown(); });
+    Check(joined.wait_for(std::chrono::milliseconds(100)) == std::future_status::timeout,
+          "the lifecycle join must still drain a callback after the nonwaiting stop request");
+    release.release();
+    Check(mutation.get().IsApplied(), "the admitted commit must retain its result during stop");
+    joined.get();
+    Check(calls == 1, "stopping during delivery must invalidate remaining recipients");
+}
+
 void TestEventOrderingAndReentrantUnsubscribe() {
     apc::tests::AppFixture fixture;
     auto& controller = fixture.Controller;
@@ -403,6 +443,8 @@ int RunAppControllerTests() {
     TestPreflightAndShutdownCloseAdmission();
     TestPresentationBoundaryRetainsPickerIntent();
     TestShutdownClosesEventAdmission();
+    TestStopRequestInsideAdmittedMutation();
+    TestStopRequestDoesNotWaitForForeignCallback();
     TestEventOrderingAndReentrantUnsubscribe();
     TestConcurrentAndReentrantPublicationsHaveOneOrder();
     TestResetDrainsAdmittedCallbackAndSkipsQueuedDelivery();

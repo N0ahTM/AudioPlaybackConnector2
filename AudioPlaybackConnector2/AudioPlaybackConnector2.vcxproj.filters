@@ -26,50 +26,14 @@
     <ClCompile Include="src\app\ApplicationHost.cpp">
       <Filter>src\app</Filter>
     </ClCompile>
-    <ClCompile Include="src\app\AdaptiveResourcePolicy.cpp">
-      <Filter>src\app</Filter>
-    </ClCompile>
-    <ClCompile Include="src\app\AdaptiveActionRetryBackoff.cpp">
-      <Filter>src\app</Filter>
-    </ClCompile>
-    <ClCompile Include="src\app\AdaptiveScheduleState.cpp">
-      <Filter>src\app</Filter>
-    </ClCompile>
-    <ClCompile Include="src\app\ResourcePressureMonitor.cpp">
-      <Filter>src\app</Filter>
-    </ClCompile>
-    <ClCompile Include="src\app\ResourcePressureState.cpp">
-      <Filter>src\app</Filter>
-    </ClCompile>
 
-    <ClCompile Include="src\app\SingleInstanceGuard.cpp">
-      <Filter>src\app</Filter>
-    </ClCompile>
-    <ClCompile Include="src\app\PowerTransitionCoordinator.cpp">
-      <Filter>src\app</Filter>
-    </ClCompile>
     <ClCompile Include="src\app\SettingsWindowPresenter.cpp">
       <Filter>src\app</Filter>
-    </ClCompile>
-    <ClCompile Include="src\core\StringResources.cpp">
-      <Filter>src\core</Filter>
     </ClCompile>
     <ClCompile Include="src\core\ThemeHelper.cpp">
       <Filter>src\core</Filter>
     </ClCompile>
-    <ClCompile Include="src\core\AudioConnectionService.cpp">
-      <Filter>src\core</Filter>
-    </ClCompile>
     <ClCompile Include="src\services\NotificationService.cpp">
-      <Filter>src\services</Filter>
-    </ClCompile>
-    <ClCompile Include="src\services\StartupTaskController.cpp">
-      <Filter>src\services</Filter>
-    </ClCompile>
-    <ClCompile Include="src\services\CommandLineControlServer.cpp">
-      <Filter>src\services</Filter>
-    </ClCompile>
-    <ClCompile Include="src\services\ToastContentBuilder.cpp">
       <Filter>src\services</Filter>
     </ClCompile>
     <ClCompile Include="src\services\TrayController.cpp">
@@ -78,13 +42,7 @@
     <ClCompile Include="src\ui\FlyoutPresenterStyle.cpp">
       <Filter>src\ui</Filter>
     </ClCompile>
-    <ClCompile Include="src\ui\DiagnosticsLogCollector.cpp">
-      <Filter>src\ui</Filter>
-    </ClCompile>
     <ClCompile Include="src\ui\SettingsDiagnosticsReport.cpp">
-      <Filter>src\ui</Filter>
-    </ClCompile>
-    <ClCompile Include="src\ui\SettingsDiagnosticsReportBuilder.cpp">
       <Filter>src\ui</Filter>
     </ClCompile>
     <ClCompile Include="src\ui\TrayIcon.cpp">
@@ -92,12 +50,6 @@
     </ClCompile>
     <ClCompile Include="src\ui\TrayContextMenu.cpp">
       <Filter>src\ui</Filter>
-    </ClCompile>
-    <ClCompile Include="src\util\Logger.cpp">
-      <Filter>src\util</Filter>
-    </ClCompile>
-    <ClCompile Include="src\util\CrashHandler.cpp">
-      <Filter>src\util</Filter>
     </ClCompile>
     <ClCompile Include="ui\App\App.xaml.cpp">
       <Filter>UI\App</Filter>
@@ -336,11 +288,6 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <Text Include="res\readme.txt">
-      <Filter>res</Filter>
-    </Text>
-  </ItemGroup>
-  <ItemGroup>
     <Manifest Include="res\app.manifest">
       <Filter>res</Filter>
     </Manifest>
@@ -356,5 +303,80 @@
     <ResourceCompile Include="res\AudioPlaybackConnector2.rc">
       <Filter>res</Filter>
     </ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\ui\CrashReports.cpp">
+      <Filter>src\ui</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\app\AppModels.hpp">
+      <Filter>include\app</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\app\DeviceFactPublicationFence.hpp">
+      <Filter>include\app</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\control\CommandPipeSecurity.hpp">
+      <Filter>include\control</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\control\ControlTargetMatcher.hpp">
+      <Filter>include\control</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\control\ControlUiActionGate.hpp">
+      <Filter>include\control</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\core\DeviceId.hpp">
+      <Filter>include\core</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\core\DeviceService.hpp">
+      <Filter>include\core</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\core\DeviceSession.hpp">
+      <Filter>include\core</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\core\DeviceWatcher.hpp">
+      <Filter>include\core</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\core\ReconnectPolicy.hpp">
+      <Filter>include\core</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\ui\WindowPlacement.hpp">
+      <Filter>include\ui</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\ui\XamlWindowInterop.hpp">
+      <Filter>include\ui</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\util\Event.hpp">
+      <Filter>include\util</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="include\util\RuntimeApartment.hpp">
+      <Filter>include\util</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

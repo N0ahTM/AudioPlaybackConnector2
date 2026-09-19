@@ -43,6 +43,25 @@ AudioPlaybackConnector2 is a per-user Windows tray application. WinUI 3 provides
 - Localization keys are defined by English resources. Selected locales overlay English at runtime.
 - Long-running or asynchronous device actions have an explicit owner and cancellation/lifetime boundary.
 
+## Thread ownership
+
+The normal app creates two dedicated background workers in addition to its UI thread: one SettingsStore
+persistence worker and one worker in the logger's private spdlog pool. This is a source-level ownership count,
+not the process's total thread count. Windows, WinUI, COM and Bluetooth may create additional runtime threads.
+
+| Work | Execution owner |
+| --- | --- |
+| Windows, tray, picker and settings rendering | UI dispatcher |
+| Settings writes and flush | One SettingsStore `jthread` |
+| Queued log output and rotation | One private spdlog worker |
+| Pipe I/O, resource monitoring, resume/refresh timers and deferred cleanup | Shared Windows threadpool |
+| Device start/open/close, picker discovery and diagnostic collection | WinRT background scheduling |
+
+DeviceService, AppController and StartupTaskCoordinator serialize their state without creating a dedicated
+thread for each owner or device. Thread-ID fields identify the current drainer and are not thread allocations.
+Timer and threadpool-I/O registrations also do not imply one permanently allocated thread per registration.
+The two dedicated I/O workers keep slow settings storage and slow log output from blocking each other or the UI.
+
 ## Dependency and code rules
 
 - A source file includes the declarations it uses. `pch.h` is a compilation cache, not an undeclared dependency contract.

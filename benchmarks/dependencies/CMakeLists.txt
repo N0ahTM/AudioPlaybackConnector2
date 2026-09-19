@@ -14,4 +14,7 @@ foreach(probe IN ITEMS baseline cli11 json spdlog)
 endforeach()
 target_link_libraries(probe_cli11 PRIVATE CLI11::CLI11)
 target_link_libraries(probe_json PRIVATE nlohmann_json::nlohmann_json)
-target_link_libraries(probe_spdlog PRIVATE spdlog::spdlog)
+# Keep the Windows filename configuration local to this implementation unit.
+# The prebuilt narrow-filename library has a different filename_t ABI.
+target_link_libraries(probe_spdlog PRIVATE spdlog::spdlog_header_only)
+target_compile_definitions(probe_spdlog PRIVATE SPDLOG_WCHAR_FILENAMES SPDLOG_DISABLE_DEFAULT_LOGGER)

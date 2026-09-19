@@ -24,6 +24,13 @@ The manifest fixes CLI11 2.6.2, nlohmann/json 3.12.0 (port revision 2), and spdl
 spdlog's optional default features are disabled; it uses the standard formatter.
 Third-party headers are confined to the individual `.cpp` files.
 
+The logging probe now uses `spdlog::spdlog_header_only` in its single implementation
+unit, with `SPDLOG_WCHAR_FILENAMES` and `SPDLOG_DISABLE_DEFAULT_LOGGER`. The restored
+compiled library uses narrow filenames; changing the filename type only in a
+consumer would mismatch that library's ABI. Header-only integration keeps native
+UTF-16 paths without a custom port, a second dependency, or process-wide locale
+changes. The product adapter must retain the same single-unit boundary.
+
 ## What is measured
 
 `measurements.json` records elapsed target build time, executable and ZIP sizes,
@@ -38,11 +45,31 @@ ZIP sizes are isolated probe artifacts, **not product MSIX size deltas**.
   native-parser comparisons with the product's existing `connect --id` contract.
 - JSON: Unicode round trip, malformed input and explicit type inspection.
 - spdlog: file rotation, bounded queue overflow accounting and a private pool
-  with a deliberately blocked sink. No global logger registry is used.
+  with a deliberately blocked sink. Native UTF-16 directory names include Latin,
+  Japanese and supplementary-plane characters; the current log is read back to
+  verify its UTF-8 payload after rotation. No global logger registry is used.
 
 The blocked-sink probe reports whether shutdown remained unfinished during a
 short observation window. This is diagnostic evidence, not a bounded-shutdown
 guarantee or an exhaustive scheduling test. The sink is released before joining.
+
+The additional release probe creates a Windows threadpool work item before any
+I/O begins. At shutdown, that work item takes ownership of the private spdlog
+pool and destroys it off the caller's stack. A separately shared completion
+signal lets the caller bound its wait while the pool continues owning its
+worker, pending records and blocked sink. Twenty x64 iterations verified timeout
+while the sink was blocked, delivery of both admitted records after release,
+and completion only after pool destruction. The work callback closes its own
+work item; Windows defers native release until the callback returns, as specified
+by [CloseThreadpoolWork](https://learn.microsoft.com/en-us/windows/win32/api/threadpoolapiset/nf-threadpoolapiset-closethreadpoolwork).
+This validates the release mechanism, not the complete product logger: producer
+admission, concurrent shutdown, drop reporting, error sinks and the independent
+crash path still require integration tests.
+
+The expanded probe passed on x64 and compiled for ARM64 with `/W4 /WX` and no
+PCH. ARM64 execution is not claimed. The initial size/build table below predates
+these additions and the switch to header-only integration; it is not a current
+measurement or a final product-size comparison.
 
 ## Initial local result, 2026-09-19
 
@@ -96,7 +123,9 @@ of final dependency acceptance.
   package size and supply-chain acceptance remain part of the final verification.
 - spdlog: the product owner, bounded shutdown during stalled I/O, crash-path
   independence, error handling and drop reporting. The raw pool destructor
-  waits for its worker and is insufficient for the required shutdown contract.
+  waits for its worker and is insufficient for the required shutdown contract;
+  the owned Windows-work release probe establishes a bounded caller wait without
+  invalidating the still-running worker's resources.
 - Full product builds for both architectures, runtime checks where hardware is
   available, distribution notices, vulnerability review and reproducible SBOM.
 

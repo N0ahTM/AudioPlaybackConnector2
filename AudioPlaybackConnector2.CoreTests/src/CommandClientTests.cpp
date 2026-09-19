@@ -2,10 +2,15 @@
 
 #include <control/CommandClient.hpp>
 #include <control/CommandPipeIo.hpp>
+#include <control/Win32CommandTransport.hpp>
+
+#include <appmodel.h>
 
 #include <deque>
 #include <iostream>
+#include <memory>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -225,6 +230,24 @@ void TestLaunchAndReplayBoundaries() {
               expiredBeforeLaunch.Attempts == 1 && expiredBeforeLaunch.Launches == 0,
           "an expired overall deadline must suppress package launch");
 }
+void TestNativeTransportRejectsForeignIdentityAndUnpackagedActivation() {
+    apc::control::client::Win32CommandTransport transport;
+    apc::control::client::ServerIdentityPtr observed;
+    auto foreignIdentity = std::make_shared<Identity>();
+    apc::control::Response response{apc::control::ExitCode::Busy, L"unchanged"};
+    Check(
+        transport.TrySendOnce(Request(), response, 250, apc::control::DeadlineAfter(1000), observed, foreignIdentity) ==
+                apc::control::client::AttemptResult::ServerChanged &&
+            !observed && response.Code == apc::control::ExitCode::Busy && response.Payload == L"unchanged",
+        "native replay must reject an identity from another transport before sending a request");
+
+    UINT32 packageLength = 0;
+    auto const packageResult = GetCurrentPackageFamilyName(&packageLength, nullptr);
+    Check(packageResult == APPMODEL_ERROR_NO_PACKAGE, "the native transport fixture must be unpackaged");
+    if (packageResult == APPMODEL_ERROR_NO_PACKAGE) {
+        Check(!transport.LaunchPackagedApp(), "an unpackaged client must not synthesize a package activation target");
+    }
+}
 } // namespace
 
 int RunCommandClientTests() {
@@ -234,5 +257,6 @@ int RunCommandClientTests() {
     TestRejectedEndpointMayLaunchTrustedApp();
     TestOverallDeadlineBoundsReplay();
     TestLaunchAndReplayBoundaries();
+    TestNativeTransportRejectsForeignIdentityAndUnpackagedActivation();
     return g_failures;
 }

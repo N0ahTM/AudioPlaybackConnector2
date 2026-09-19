@@ -1,12 +1,9 @@
 #include <windows.h>
-#include <appmodel.h>
 #include <bcrypt.h>
-#include <shellapi.h>
 
 #include <control/CommandClient.hpp>
-#include <control/CommandPipeSecurity.hpp>
+#include <control/Win32CommandTransport.hpp>
 #include <control/CommandProtocol.hpp>
-#include <control/CommandPipeIo.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -20,38 +17,6 @@
 #include <vector>
 
 namespace {
-
-constexpr DWORD c_retryIntervalMs = 200;
-constexpr DWORD c_pipeExchangeTimeoutMs = 42000;
-
-class UniqueProcessHandle {
-public:
-    UniqueProcessHandle() = default;
-    explicit UniqueProcessHandle(HANDLE value) noexcept : m_value(value) {}
-    ~UniqueProcessHandle() {
-        if (m_value) CloseHandle(m_value);
-    }
-    UniqueProcessHandle(UniqueProcessHandle const&) = delete;
-    UniqueProcessHandle& operator=(UniqueProcessHandle const&) = delete;
-    UniqueProcessHandle(UniqueProcessHandle&& other) noexcept : m_value(std::exchange(other.m_value, nullptr)) {}
-    UniqueProcessHandle& operator=(UniqueProcessHandle&& other) noexcept {
-        if (this != &other) {
-            if (m_value) CloseHandle(m_value);
-            m_value = std::exchange(other.m_value, nullptr);
-        }
-        return *this;
-    }
-    [[nodiscard]] HANDLE Get() const noexcept { return m_value; }
-
-private:
-    HANDLE m_value = nullptr;
-};
-
-struct Win32ServerIdentity final : apc::control::client::ServerIdentity {
-    DWORD ProcessId = 0;
-    FILETIME CreationTime{};
-    UniqueProcessHandle Process;
-};
 
 struct ParseResult {
     bool Send = false;
@@ -168,25 +133,6 @@ bool JsonRequested(int argc, wchar_t** argv) noexcept {
         if (EqualsIgnoreCase(argument, L"--json")) return true;
     }
     return false;
-}
-
-std::optional<std::wstring> ExpectedUnpackagedServerPath() {
-    DWORD capacity = 260;
-    for (;;) {
-        std::wstring modulePath(capacity, L'\0');
-        const DWORD length = GetModuleFileNameW(nullptr, modulePath.data(), capacity);
-        if (length == 0) return std::nullopt;
-        if (length < capacity) {
-            modulePath.resize(length);
-            const auto separator = modulePath.find_last_of(L"\\/");
-            if (separator == std::wstring::npos) return std::nullopt;
-            modulePath.resize(separator + 1);
-            modulePath += L"AudioPlaybackConnector2\\AudioPlaybackConnector2.exe";
-            return modulePath;
-        }
-        if (capacity >= 32'768) return std::nullopt;
-        capacity = std::min<DWORD>(capacity * 2, 32'768);
-    }
 }
 
 void AppendJsonString(std::wstring& output, std::wstring_view value) {
@@ -504,30 +450,6 @@ ParseResult ParseCommandLine(int argc, wchar_t** argv) {
     return {.Send = true, .Request = std::move(request)};
 }
 
-std::optional<std::wstring> CurrentPackageFamilyName() {
-    UINT32 length = 0;
-    const LONG initial = GetCurrentPackageFamilyName(&length, nullptr);
-    if (initial != ERROR_INSUFFICIENT_BUFFER || length == 0) return std::nullopt;
-
-    std::wstring familyName(length, L'\0');
-    if (GetCurrentPackageFamilyName(&length, familyName.data()) != ERROR_SUCCESS || length == 0) return std::nullopt;
-    familyName.resize(length - 1);
-    return familyName;
-}
-
-bool TryLaunchPackagedApp() {
-    auto familyName = CurrentPackageFamilyName();
-    if (!familyName) return false;
-
-    auto target = L"shell:AppsFolder\\" + *familyName + L"!App";
-    SHELLEXECUTEINFOW info{sizeof(info)};
-    info.fMask = SEE_MASK_FLAG_NO_UI;
-    info.lpVerb = L"open";
-    info.lpFile = target.c_str();
-    info.nShow = SW_SHOWNORMAL;
-    return ShellExecuteExW(&info) == TRUE;
-}
-
 apc::control::CorrelationId CreateCorrelationId() noexcept {
     apc::control::CorrelationId value;
     if (BCryptGenRandom(nullptr,
@@ -548,150 +470,6 @@ apc::control::CorrelationId CreateCorrelationId() noexcept {
     return value;
 }
 
-std::shared_ptr<Win32ServerIdentity>
-CaptureServerIdentity(HANDLE pipe,
-                      std::optional<apc::control::ExecutableFileIdentity> const& expectedUnpackagedServerIdentity) {
-    ULONG processId = 0;
-    if (!GetNamedPipeServerProcessId(pipe, &processId) || processId == 0) return {};
-
-    UniqueProcessHandle process(
-        OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, static_cast<DWORD>(processId)));
-    if (!process.Get()) return {};
-    if (!apc::control::IsTrustedPeerProcess(
-            process.Get(), static_cast<DWORD>(processId), expectedUnpackagedServerIdentity)) {
-        return {};
-    }
-
-    FILETIME creation{};
-    FILETIME exit{};
-    FILETIME kernel{};
-    FILETIME user{};
-    if (!GetProcessTimes(process.Get(), &creation, &exit, &kernel, &user) ||
-        WaitForSingleObject(process.Get(), 0) != WAIT_TIMEOUT) {
-        return {};
-    }
-    auto identity = std::make_shared<Win32ServerIdentity>();
-    identity->ProcessId = static_cast<DWORD>(processId);
-    identity->CreationTime = creation;
-    identity->Process = std::move(process);
-    return identity;
-}
-
-bool IsSameLiveServer(Win32ServerIdentity const& expected, Win32ServerIdentity const& observed) noexcept {
-    return expected.ProcessId == observed.ProcessId &&
-           CompareFileTime(&expected.CreationTime, &observed.CreationTime) == 0 && expected.Process.Get() &&
-           WaitForSingleObject(expected.Process.Get(), 0) == WAIT_TIMEOUT;
-}
-
-apc::control::client::AttemptResult
-TrySendOnce(apc::control::Request const& request,
-            apc::control::Response& response,
-            DWORD waitMs,
-            std::uint64_t overallDeadline,
-            std::wstring const& pipeName,
-            std::optional<apc::control::ExecutableFileIdentity> const& expectedUnpackagedServerIdentity,
-            std::shared_ptr<Win32ServerIdentity>& observedServer,
-            Win32ServerIdentity const* expectedServer) {
-    const auto connectionDeadline = std::min(apc::control::DeadlineAfter(waitMs), overallDeadline);
-    const auto firstInstance = static_cast<std::size_t>(request.CorrelationId.Low % apc::control::c_pipeInstanceCount);
-    bool sawRejectedEndpoint = false;
-    bool sawDifferentServer = false;
-
-    while (true) {
-        for (std::size_t offset = 0; offset < apc::control::c_pipeInstanceCount; ++offset) {
-            const auto instance = (firstInstance + offset) % apc::control::c_pipeInstanceCount;
-            const auto instanceName = apc::control::PipeInstanceName(pipeName, instance);
-            HANDLE pipe = CreateFileW(instanceName.c_str(),
-                                      GENERIC_READ | FILE_WRITE_DATA,
-                                      0,
-                                      nullptr,
-                                      OPEN_EXISTING,
-                                      FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
-                                      nullptr);
-            if (pipe == INVALID_HANDLE_VALUE) {
-                const auto error = GetLastError();
-                if (error != ERROR_PIPE_BUSY && error != ERROR_FILE_NOT_FOUND) sawRejectedEndpoint = true;
-                continue;
-            }
-            const auto closePipe = [pipe]() { CloseHandle(pipe); };
-            struct Guard {
-                decltype(closePipe)& Close;
-                ~Guard() { Close(); }
-            } guard{closePipe};
-
-            auto currentServer = CaptureServerIdentity(pipe, expectedUnpackagedServerIdentity);
-            if (!currentServer) {
-                sawRejectedEndpoint = true;
-                continue;
-            }
-            if (expectedServer && !IsSameLiveServer(*expectedServer, *currentServer)) {
-                sawDifferentServer = true;
-                continue;
-            }
-            observedServer = currentServer;
-
-            const auto exchangeDeadline =
-                std::min(apc::control::DeadlineAfter(c_pipeExchangeTimeoutMs), overallDeadline);
-            if (apc::control::RemainingWait(exchangeDeadline) == 0) {
-                return apc::control::client::AttemptResult::NotConnected;
-            }
-            if (apc::control::WriteRequest(pipe, request, nullptr, exchangeDeadline) !=
-                apc::control::IoStatus::Success) {
-                return apc::control::client::AttemptResult::Indeterminate;
-            }
-            if (apc::control::ReadResponse(pipe, response, nullptr, exchangeDeadline) !=
-                    apc::control::IoStatus::Success ||
-                response.CorrelationId != request.CorrelationId) {
-                return apc::control::client::AttemptResult::Indeterminate;
-            }
-            (void)apc::control::WriteAcknowledgement(pipe, request.CorrelationId, nullptr, exchangeDeadline);
-            return apc::control::client::AttemptResult::Complete;
-        }
-
-        if (apc::control::RemainingWait(connectionDeadline) == 0) {
-            if (sawDifferentServer) return apc::control::client::AttemptResult::ServerChanged;
-            return sawRejectedEndpoint ? apc::control::client::AttemptResult::Rejected
-                                       : apc::control::client::AttemptResult::NotConnected;
-        }
-        Sleep(std::min<DWORD>(c_retryIntervalMs, apc::control::RemainingWait(connectionDeadline)));
-    }
-}
-
-class Win32Transport final : public apc::control::client::Transport {
-public:
-    apc::control::client::AttemptResult
-    TrySendOnce(apc::control::Request const& request,
-                apc::control::Response& response,
-                DWORD waitMs,
-                std::uint64_t overallDeadline,
-                apc::control::client::ServerIdentityPtr& observedServer,
-                apc::control::client::ServerIdentityPtr const& expectedServer) override {
-        if (!m_pipeName) return apc::control::client::AttemptResult::NotConnected;
-        auto expected = std::dynamic_pointer_cast<Win32ServerIdentity const>(expectedServer);
-        if (expectedServer && !expected) return apc::control::client::AttemptResult::ServerChanged;
-        std::shared_ptr<Win32ServerIdentity> observed;
-        const auto result = ::TrySendOnce(request,
-                                          response,
-                                          waitMs,
-                                          overallDeadline,
-                                          *m_pipeName,
-                                          m_expectedUnpackagedServerIdentity,
-                                          observed,
-                                          expected.get());
-        observedServer = std::move(observed);
-        return result;
-    }
-
-    bool LaunchPackagedApp() override { return TryLaunchPackagedApp(); }
-
-private:
-    std::optional<std::wstring> m_pipeName = apc::control::PipeName();
-    std::optional<apc::control::ExecutableFileIdentity> m_expectedUnpackagedServerIdentity = [] {
-        auto path = ExpectedUnpackagedServerPath();
-        return path ? apc::control::ExecutableIdentityFromPath(*path) : std::nullopt;
-    }();
-};
-
 } // namespace
 
 int Run(int argc, wchar_t** argv, bool jsonRequestedOnError, apc::control::ExitCode& unexpectedFailureCode) {
@@ -711,7 +489,7 @@ int Run(int argc, wchar_t** argv, bool jsonRequestedOnError, apc::control::ExitC
 
     parsed.Request.CorrelationId = CreateCorrelationId();
     apc::control::Response response;
-    Win32Transport transport;
+    apc::control::client::Win32CommandTransport transport;
     unexpectedFailureCode = apc::control::ExitCode::Indeterminate;
     const auto sendResult = apc::control::client::SendRequest(transport, parsed.Request, response);
     if (sendResult == apc::control::client::SendResult::InvalidRequest) {

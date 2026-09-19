@@ -11,7 +11,7 @@ env:
 
 jobs:
   quality:
-    runs-on: windows-2022
+    runs-on: windows-2025-vs2026
     steps:
     - name: Checkout
       uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -83,7 +83,7 @@ jobs:
 
   build:
     name: Build (${{ matrix.architecture }})
-    runs-on: windows-2022
+    runs-on: windows-2025-vs2026
     strategy:
       fail-fast: false
       matrix:

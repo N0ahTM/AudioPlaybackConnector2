@@ -137,7 +137,7 @@ jobs:
         fail_on_unmatched_files: true
 
   validate-promotion:
-    runs-on: windows-2022
+    runs-on: windows-2025-vs2026
     needs: version
     if: ${{ github.event_name == 'workflow_dispatch' && !inputs.store_only }}
     permissions:
@@ -252,7 +252,7 @@ jobs:
         ) -join "`n" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
 
   rebuild-store-upload:
-    runs-on: windows-2022
+    runs-on: windows-2025-vs2026
     needs: version
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.store_only }}
     permissions:
@@ -537,7 +537,7 @@ jobs:
           -ProductId 9N366PGKJZ0K `
           -PackagePath '${{ steps.store-package.outputs.PATH }}' `
           -Version '${{ needs.version.outputs.semver }}' `
-          -WhatsNewPath './store-automation/store/whats-new.json'
+          -WhatsNewPath './store/whats-new.json'
 
         @(
           '## Microsoft Store submission',

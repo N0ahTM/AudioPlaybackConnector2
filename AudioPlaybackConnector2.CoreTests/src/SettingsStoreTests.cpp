@@ -277,8 +277,7 @@ void TestMissingEmptyAndCurrentRoundTrip() {
     const auto data = current.Snapshot().Data;
     Check(data.GlobalConnectOnStartup && data.GlobalReconnectOnConnectionLoss && data.AllowIncomingConnections &&
               data.StartWithWindows && !data.ShowNotifications && !data.UseSystemBackdropEffects &&
-              data.Language == L"de" && data.LastUpdateCheckUnixSeconds == 5 &&
-              data.LastNotifiedUpdateVersion == L"2.0" && data.PrivacyModeEnabled &&
+              data.Language == L"de" && data.PrivacyModeEnabled &&
               data.DefaultDevice == DefaultDeviceMode::SpecificDevice && data.DefaultDeviceId == L"a" &&
               data.SettingsWindowBounds == PersistedWindowBounds{1, 2, 3, 4, 144} && data.Devices.size() == 1 &&
               data.Devices.front() == DeviceSettings{L"a", L"A", L"Desk", true, true} &&
@@ -778,9 +777,10 @@ void TestPersistedMutationRoundTrip() {
     Check(writer.SetDefaultDevice(L"primary").IsApplied(), "default-device mutation must persist");
     Check(writer.ClearDefaultDevice().IsApplied(), "clear-default mutation must persist");
     Check(writer.SetDefaultDevice(L"primary").IsApplied(), "default-device reset must persist");
-    Check(writer.RecordUpdateCheckMetadata(42, std::wstring(L"2.0")).IsApplied(),
-          "update metadata mutation must persist");
     Check(writer.FlushNow(2), "all persisted mutation fields must serialize in one snapshot");
+    Check(storage->Output().find("lastUpdateCheckUnixSeconds") == std::string::npos &&
+              storage->Output().find("lastNotifiedUpdateVersion") == std::string::npos,
+          "obsolete update metadata must not be written");
     storage->SetInput(storage->Output());
     static_cast<void>(writer.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
 
@@ -789,8 +789,7 @@ void TestPersistedMutationRoundTrip() {
     const auto& data = reader.Snapshot().Data;
     Check(data.GlobalConnectOnStartup && data.GlobalReconnectOnConnectionLoss && data.AllowIncomingConnections &&
               data.StartWithWindows && !data.ShowNotifications && !data.UseSystemBackdropEffects &&
-              data.Language == L"de" && data.PrivacyModeEnabled && data.LastUpdateCheckUnixSeconds == 42 &&
-              data.LastNotifiedUpdateVersion == L"2.0" &&
+              data.Language == L"de" && data.PrivacyModeEnabled &&
               data.SettingsWindowBounds == PersistedWindowBounds{1, 2, 320, 240, 144} &&
               data.DefaultDevice == DefaultDeviceMode::SpecificDevice && data.DefaultDeviceId == L"primary" &&
               data.Devices ==

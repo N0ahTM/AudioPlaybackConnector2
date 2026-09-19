@@ -329,57 +329,13 @@
                                     Text="" />
                             </Grid>
                         </Button>
-                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8" Margin="0,8,0,0">
+                        <Grid Margin="0,8,0,0">
                             <TextBlock
                                 x:Name="VersionText"
                                 Text=""
                                 TextWrapping="Wrap"
                                 VerticalAlignment="Center" />
-                            <Grid Grid.Column="1" ColumnDefinitions="Auto,Auto" ColumnSpacing="8">
-                                <ProgressRing
-                                    x:Name="UpdateCheckProgress"
-                                    Width="20"
-                                    Height="20"
-                                    IsActive="False"
-                                    Visibility="Collapsed" />
-                                <Button
-                                    x:Name="CheckForUpdatesButton"
-                                    Click="CheckForUpdatesButton_Click"
-                                    Grid.Column="1"
-                                    MinWidth="32"
-                                    MinHeight="32"
-                                    Padding="8">
-                                    <FontIcon FontSize="14" Glyph="&#xE72C;" />
-                                </Button>
-                            </Grid>
                         </Grid>
-                        <InfoBar
-                            x:Name="UpdateInfoBar"
-                            HorizontalAlignment="Stretch"
-                            IsClosable="True"
-                            IsOpen="False">
-                            <InfoBar.ActionButton>
-                                <Button
-                                    x:Name="OpenAppInstallerButton"
-                                    Click="OpenAppInstallerButton_Click"
-                                    Visibility="Collapsed">
-                                    <Button.Content>
-                                        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="6">
-                                            <FontIcon
-                                                VerticalAlignment="Center"
-                                                FontSize="14"
-                                                Glyph="&#xE8A7;" />
-                                            <TextBlock
-                                                x:Name="OpenAppInstallerButtonText"
-                                                Grid.Column="1"
-                                                MinWidth="0"
-                                                TextWrapping="WrapWholeWords"
-                                                Text="" />
-                                        </Grid>
-                                    </Button.Content>
-                                </Button>
-                            </InfoBar.ActionButton>
-                        </InfoBar>
                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                             <TextBlock
                                 x:Name="CopyrightText"

@@ -5,7 +5,6 @@
 class ISettingsController;
 class StartupTaskCoordinator;
 class TrayController;
-class UpdateCoordinator;
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Settings Window Presenter /////////////////////////////////////////////////////////////////////////*/
@@ -22,8 +21,7 @@ public:
 
     [[nodiscard]] bool Show(std::shared_ptr<ISettingsController> settingsController,
                             std::shared_ptr<StartupTaskCoordinator> startupTaskCoordinator,
-                            std::shared_ptr<TrayController> trayController,
-                            std::shared_ptr<UpdateCoordinator> updateCoordinator);
+                            std::shared_ptr<TrayController> trayController);
     [[nodiscard]] bool Close() noexcept;
     [[nodiscard]] bool ShowHelp();
 

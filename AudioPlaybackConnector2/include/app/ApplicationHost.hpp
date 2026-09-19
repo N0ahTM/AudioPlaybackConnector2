@@ -33,8 +33,6 @@
 #include <stop_token>
 #include <string_view>
 
-class UpdateCoordinator;
-
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Application Host //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
@@ -75,7 +73,6 @@ private:
     void SetupDeviceEvents();
     void TeardownDeviceEvents();
     void TryAutoReconnect();
-    winrt::fire_and_forget CheckForUpdatesOnStartupAsync();
     void HandlePowerSuspend();
     void HandlePowerResume();
     void ExecuteTrayCommand(
@@ -146,7 +143,6 @@ private:
     winrt::Microsoft::UI::Dispatching::DispatcherQueueTimer m_mainWindowLoadedWatchdog{nullptr};
 
     std::shared_ptr<NotificationService> m_notificationService;
-    std::shared_ptr<UpdateCoordinator> m_updateCoordinator;
     std::shared_ptr<TrayController> m_trayController;
     std::shared_ptr<apc::app::LegacyAppUseCaseBridge> m_appBridge;
     std::unique_ptr<apc::app::AppController> m_appController;

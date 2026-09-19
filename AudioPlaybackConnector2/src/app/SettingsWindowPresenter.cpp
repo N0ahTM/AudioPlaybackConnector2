@@ -4,7 +4,6 @@
 
 #include <SettingsWindow/SettingsWindow.xaml.h>
 #include <services/TrayController.hpp>
-#include <services/UpdateCoordinator.hpp>
 #include <ui/XamlWindowInterop.hpp>
 #include <util/Util.hpp>
 
@@ -54,8 +53,7 @@ bool SettingsWindowPresenter::ShowHelp() {
 
 bool SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settingsController,
                                    std::shared_ptr<StartupTaskCoordinator> startupTaskCoordinator,
-                                   std::shared_ptr<TrayController> trayController,
-                                   std::shared_ptr<UpdateCoordinator> updateCoordinator) {
+                                   std::shared_ptr<TrayController> trayController) {
     DebugTrace(L"[SettingsWindowPresenter] Show()");
     auto owner = m_state;
     if (!owner) return false;
@@ -118,7 +116,6 @@ bool SettingsWindowPresenter::Show(std::shared_ptr<ISettingsController> settings
         impl->SetSettingsController(std::move(settingsController));
         impl->SetStartupTaskCoordinator(std::move(startupTaskCoordinator));
         if (initialSettings) impl->SetInitialSettingsSnapshot(std::move(*initialSettings));
-        impl->SetUpdateCoordinator(std::move(updateCoordinator));
         impl->SetDefaultPlacement(defaultPlacement);
         impl->SetTargetPlacement(placement);
 

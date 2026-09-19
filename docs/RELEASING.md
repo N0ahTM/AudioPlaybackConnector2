@@ -77,7 +77,7 @@ Microsoft certification is asynchronous. A successful workflow means the submiss
 
 ## Store-only retry
 
-Use `store_only=true` only when the GitHub release is already public and the Store submission alone must be retried. Use the same tag. The workflow rebuilds the Store-linked package from that exact tag with current Store verification logic and does not republish GitHub assets or the App Installer feed.
+Use `store_only=true` only when the GitHub release is already public and the Store submission alone must be retried. Use the same tag. The workflow rebuilds the Store-linked package from that exact tag with current Store verification logic, reads `store/whats-new.json` from that tag, and does not republish GitHub assets or the App Installer feed.
 
 Do not use Store-only mode to change application code, package contents, or release notes that should have been part of the immutable tag. Create a new patch release instead.
 

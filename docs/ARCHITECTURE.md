@@ -4,7 +4,7 @@ AudioPlaybackConnector2 is a per-user Windows tray application. WinUI 3 provides
 
 ## Projects
 
-- `AudioPlaybackConnector2`: packaged desktop executable, application coordination, Bluetooth services, tray UI, WinUI views, localization, settings, diagnostics, and update handling
+- `AudioPlaybackConnector2`: packaged desktop executable, application coordination, Bluetooth services, tray UI, WinUI views, localization, settings, and diagnostics; Store or Windows App Installer owns updates outside the process
 - `AudioPlaybackConnector2.Control`: `apc2ctl.exe` parser and trusted named-pipe client
 - `AudioPlaybackConnector2.CoreRuntime`: runtime boundary used by non-UI core code
 - `AudioPlaybackConnector2.CoreTests`: native regression tests, including application coordination, command handling, settings, device behavior, and runtime boundaries
@@ -30,7 +30,7 @@ AudioPlaybackConnector2 is a per-user Windows tray application. WinUI 3 provides
 ## Dependency and code rules
 
 - A source file includes the declarations it uses. `pch.h` is a compilation cache, not an undeclared dependency contract.
-- Prefer C++23 and the standard library when they express the requirement clearly; use Windows, WinRT, or WIL facilities for Windows-specific ownership and APIs.
+- Build in MSVC's C++26 draft mode (`/std:c++latest`, v145/14.51 or newer). Prefer the standard library when it expresses the requirement clearly; use Windows, WinRT, or WIL facilities for Windows-specific ownership and APIs.
 - Introduce a helper, class, or interface only when it names a real responsibility, lifetime, invariant, or test boundary.
 - Keep one primary non-trivial type per file when that improves navigation; tiny closely related value types may remain together.
 - Avoid forwarding the same immutable context through many layers. Give stable shared state one clear owner and pass references, pointers, or focused views where lifetime is explicit.

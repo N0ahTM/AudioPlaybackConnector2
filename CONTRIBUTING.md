@@ -4,7 +4,7 @@ Thank you for your interest in contributing to AudioPlaybackConnector2.
 
 ## Prerequisites
 
-- Visual Studio 2022 17.14 or later, or a current Visual Studio release, with:
+- Visual Studio 2026 18.6 or later with MSVC Build Tools 14.51 (v145), with:
   - **Desktop development with C++**
   - **Windows application development** (for WinUI 3 / Windows App SDK)
 - Windows SDK 10.0.26100.0 or later
@@ -40,7 +40,7 @@ foreach ($architecture in @('x64', 'ARM64')) {
 
 If Visual Studio fails to launch the packaging project with `DEP0840` and mentions missing `MicrosoftCorporationII.WinAppRuntime.Main.2` or `MicrosoftCorporationII.WinAppRuntime.Singleton` packages, install the [Windows App SDK 2.0 runtime](https://learn.microsoft.com/en-us/windows/apps/windows-app-sdk/downloads#windows-app-sdk-20) and [WinAppRuntime.Singleton](https://apps.microsoft.com/detail/9p5z076k079h) on your development machine, then launch the project again.
 
-If C++23 features are not accepted by the compiler, set the project's C++ language standard to `/std:c++latest`.
+The projects target the C++26 draft through MSVC `/std:c++latest` (`stdcpplatest` in MSBuild). MSVC has no fixed `/std:c++26` switch yet. Use v145 and MSVC 14.51 or newer; do not silently downgrade an individual project to C++23.
 
 If package signing fails because the configured certificate thumbprint is not available on your machine, open `Package.appxmanifest`, go to **Packaging**, choose or create a local test certificate, then update `PackageCertificateThumbprint` in the `AudioPlaybackConnector2 (Package)` project properties.
 
@@ -105,13 +105,13 @@ Small documentation or single-language translation changes do not require an unr
 
 ## Code Style
 
-- **C++ standard:** C++23 (`/std:c++latest`)
+- **C++ standard:** C++26 draft mode (`/std:c++latest`, MSVC 14.51 or newer)
 - **Warnings:** `/W4 /WX` — all warnings are errors; do not introduce new warnings
 - **Includes:** Every source or header file includes what it uses. `pch.h` is a build cache, not an undeclared dependency contract.
 - **Strings:** User-visible strings go through the localization resources. English is canonical; other locales may fall back to it and preserve all formatting placeholders.
 - **Ownership:** Give mutable state, asynchronous work, and cancellation one explicit owner. Do not forward unchanged global context through unrelated layers.
 - **Thread safety:** Protect shared mutable state at its owning boundary and do not expose references that outlive the lock or snapshot.
-- **Design:** Prefer C++23 and the standard library for general-purpose behavior. Add a helper or abstraction only for a real responsibility, invariant, lifetime, platform boundary, or test seam.
+- **Design:** Prefer the standard library in the configured C++26 draft mode for general-purpose behavior. Adopt a new C++26 facility only when the pinned toolchain supports it and it simplifies a real contract. Add a helper or abstraction only for a real responsibility, invariant, lifetime, platform boundary, or test seam.
 - **Comments:** Only where the *why* is non-obvious — well-named identifiers do the rest
 
 Maintainer releases follow [Releasing](docs/RELEASING.md). Contributors normally add user-visible changes beneath `[Unreleased]`; release preparation creates the dated version section.

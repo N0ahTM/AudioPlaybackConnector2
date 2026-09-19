@@ -46,7 +46,6 @@ public:
     void ShowDeviceDisconnected(winrt::hstring const& id, winrt::hstring const& deviceName);
     void ShowAutoReconnect(winrt::hstring const& id, winrt::hstring const& deviceName);
     void ShowAutoReconnectFailed(winrt::hstring const& id, winrt::hstring const& deviceName);
-    [[nodiscard]] bool ShowUpdateAvailable(std::wstring const& latestVersion);
 
     void
     OnNotificationInvoked(winrt::Microsoft::Windows::AppNotifications::AppNotificationActivatedEventArgs const& args);

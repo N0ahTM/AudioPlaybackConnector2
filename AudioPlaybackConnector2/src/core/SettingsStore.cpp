@@ -30,7 +30,6 @@ constexpr auto c_maxRetryDelay = std::chrono::minutes(5);
     if (data.Devices.size() > apc::limits::c_maxPersistedDeviceCount ||
         data.LastConnectedIds.size() > apc::limits::c_maxPersistedDeviceCount ||
         !apc::limits::IsSupportedLanguage(data.Language) ||
-        !apc::limits::IsBoundedUtf16(data.LastNotifiedUpdateVersion, apc::limits::c_maxVersionCharacters) ||
         !apc::limits::IsBoundedUtf16(data.DefaultDeviceId, apc::limits::c_maxDeviceIdCharacters) ||
         ((data.DefaultDevice == DefaultDeviceMode::SpecificDevice) != !data.DefaultDeviceId.empty())) {
         return false;
@@ -72,19 +71,6 @@ GetOptionalBoolean(winrt::Windows::Data::Json::JsonObject const& json, winrt::hs
     if (!json.HasKey(key)) return fallback;
     const auto value = json.Lookup(key);
     return value.ValueType() == winrt::Windows::Data::Json::JsonValueType::String ? value.GetString() : fallback;
-}
-
-[[nodiscard]] std::int64_t
-GetOptionalInt64(winrt::Windows::Data::Json::JsonObject const& json, winrt::hstring const& key, std::int64_t fallback) {
-    if (!json.HasKey(key)) return fallback;
-    const auto value = json.Lookup(key);
-    if (value.ValueType() != winrt::Windows::Data::Json::JsonValueType::Number) return fallback;
-    const auto number = value.GetNumber();
-    constexpr double c_int64Min = -9223372036854775808.0;
-    constexpr double c_int64ExclusiveMax = 9223372036854775808.0;
-    if (!std::isfinite(number) || std::trunc(number) != number || number < c_int64Min || number >= c_int64ExclusiveMax)
-        return fallback;
-    return static_cast<std::int64_t>(number);
 }
 
 [[nodiscard]] std::int32_t
@@ -367,11 +353,6 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
             json.Insert(L"privacyModeEnabled",
                         winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.PrivacyModeEnabled));
             json.Insert(L"language", winrt::Windows::Data::Json::JsonValue::CreateStringValue(snapshot.Language));
-            json.Insert(L"lastUpdateCheckUnixSeconds",
-                        winrt::Windows::Data::Json::JsonValue::CreateNumberValue(
-                            static_cast<double>(snapshot.LastUpdateCheckUnixSeconds)));
-            json.Insert(L"lastNotifiedUpdateVersion",
-                        winrt::Windows::Data::Json::JsonValue::CreateStringValue(snapshot.LastNotifiedUpdateVersion));
             json.Insert(L"defaultDeviceMode",
                         winrt::Windows::Data::Json::JsonValue::CreateStringValue(
                             winrt::hstring(SerializeDefaultDeviceMode(snapshot.DefaultDevice))));
@@ -750,9 +731,6 @@ void SettingsStore::Load() {
         loaded.ShowNotifications = GetOptionalBoolean(json, L"showNotifications", true);
         loaded.UseSystemBackdropEffects = GetOptionalBoolean(json, L"useSystemBackdropEffects", true);
         loaded.PrivacyModeEnabled = GetOptionalBoolean(json, L"privacyModeEnabled", false);
-        loaded.LastUpdateCheckUnixSeconds = GetOptionalInt64(json, L"lastUpdateCheckUnixSeconds", 0);
-        loaded.LastNotifiedUpdateVersion = BoundedString(GetOptionalString(json, L"lastNotifiedUpdateVersion", L""),
-                                                         apc::limits::c_maxVersionCharacters);
         const auto language = GetOptionalString(json, L"language", L"system");
         loaded.Language = apc::limits::IsSupportedLanguage(language) ? std::wstring(language) : L"system";
         loaded.DefaultDevice = ParseDefaultDeviceMode(GetOptionalString(json, L"defaultDeviceMode", L""));
@@ -1036,19 +1014,6 @@ RecordConnectedDeviceResult SettingsStore::RecordConnectedDevice(std::wstring_vi
         });
     return result;
 }
-SettingsMutationResult SettingsStore::RecordUpdateCheckMetadata(std::int64_t unixSeconds,
-                                                                std::optional<std::wstring> notifiedVersion) {
-    if (notifiedVersion && !apc::limits::IsBoundedUtf16(*notifiedVersion, apc::limits::c_maxVersionCharacters))
-        return {SettingsMutationStatus::Rejected, Snapshot().Revision};
-    return m_impl->Commit([unixSeconds, notifiedVersion = std::move(notifiedVersion)](auto& data) {
-        const auto changed = data.LastUpdateCheckUnixSeconds != unixSeconds ||
-                             (notifiedVersion && data.LastNotifiedUpdateVersion != *notifiedVersion);
-        data.LastUpdateCheckUnixSeconds = unixSeconds;
-        if (notifiedVersion) data.LastNotifiedUpdateVersion = *notifiedVersion;
-        return changed;
-    });
-}
-
 bool SettingsStore::FlushNow(unsigned int maximumAttempts) noexcept {
     return m_impl->FlushSynchronously(maximumAttempts);
 }

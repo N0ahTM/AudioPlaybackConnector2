@@ -4,14 +4,11 @@
 
 #include <MainWindow/MainWindow.xaml.h>
 #include <app/AutoReconnectPlanner.hpp>
-#include <app/StartupUpdateCoordinator.hpp>
 #include <core/DeviceService.hpp>
 #include <core/SettingsLimits.hpp>
 #include <core/SettingsStore.hpp>
 #include <core/StringResources.hpp>
 #include <core/ThemeHelper.hpp>
-#include <services/UpdateCoordinator.hpp>
-#include <services/UpdateService.hpp>
 #include <ui/TrayContextMenu.hpp>
 #include <ui/TrayIcon.hpp>
 #include <ui/XamlWindowInterop.hpp>
@@ -287,9 +284,6 @@ bool ApplicationHost::PerformTeardown(SettingsShutdownMode settingsShutdownMode)
     // the final placement mutation can be committed before Store shutdown.
     auto const settingsWindowClosed = m_settingsWindowPresenter.Close();
     m_teardownWindowCloseSucceeded.store(settingsWindowClosed);
-    if (m_updateCoordinator) {
-        m_updateCoordinator->Shutdown();
-    }
     if (m_startupTaskCoordinator) {
         m_startupTaskCoordinator->Shutdown();
     }
@@ -326,7 +320,6 @@ bool ApplicationHost::PerformTeardown(SettingsShutdownMode settingsShutdownMode)
         m_deviceService.reset();
     }
     m_notificationService.reset();
-    m_updateCoordinator.reset();
     m_startupTaskCoordinator.reset();
     m_trayController.reset();
     if (m_gdiplusToken) {
@@ -470,10 +463,6 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept tr
     StringResources::Instance().Initialize(GetModuleHandleW(nullptr), settingsSnapshot.Data.Language);
     DebugTrace(L"[App] StringResources initialized");
 
-    m_updateCoordinator = std::make_shared<UpdateCoordinator>(
-        [](std::stop_token stopToken) { return UpdateService::CheckForUpdatesAsync(stopToken); });
-    DebugTrace(L"[App] UpdateCoordinator initialized");
-
     Gdiplus::GdiplusStartupInput gdiplusStartupInput;
     if (Gdiplus::GdiplusStartup(&m_gdiplusToken, &gdiplusStartupInput, nullptr) != Gdiplus::Ok) {
         DebugTrace(L"[App] ERROR: GdiplusStartup failed");
@@ -517,7 +506,6 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept tr
     ScheduleDeviceVisualRefresh(false);
 
     s_wmTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
-    CheckForUpdatesOnStartupAsync();
     util::crash::CheckAndPromptCrashReports();
     DebugTrace(L"[App] Initialization complete");
 } catch (winrt::hresult_error const& ex) {
@@ -986,9 +974,7 @@ void ApplicationHost::InitializeCommandLineControl() {
 }
 
 void ApplicationHost::InitializeAdaptiveResources() noexcept {
-    if (!m_trayController || !m_updateCoordinator) return;
-
-    m_updateCoordinator->SetAutomaticChecksAllowed(false);
+    if (!m_trayController) return;
     try {
         auto weak = weak_from_this();
         m_trayController->SetResourceStateChangedCallback([weak](bool userInteraction) {
@@ -1004,9 +990,6 @@ void ApplicationHost::InitializeAdaptiveResources() noexcept {
                         std::scoped_lock authorizationLock(self->m_resourceAuthorizationMutex);
                         self->m_latestConstrainedResourcePressureSequence =
                             std::max(self->m_latestConstrainedResourcePressureSequence, value.Sequence);
-                        if (self->m_updateCoordinator) {
-                            self->m_updateCoordinator->SetAutomaticChecksAllowed(false);
-                        }
                     }
                     self->HandleResourcePressureSnapshot(value);
                 }
@@ -1014,8 +997,7 @@ void ApplicationHost::InitializeAdaptiveResources() noexcept {
 
         if (!m_resourcePressureMonitor->Start()) {
             m_resourcePressureMonitor.reset();
-            DebugTrace(L"[App] Resource-pressure monitor unavailable; speculative preloading and automatic updates "
-                       L"remain disabled");
+            DebugTrace(L"[App] Resource-pressure monitor unavailable; speculative preloading remains disabled");
         } else {
             m_powerSavingStatusNotification =
                 RegisterPowerSettingNotification(m_hwnd, &GUID_POWER_SAVING_STATUS, DEVICE_NOTIFY_WINDOW_HANDLE);
@@ -1059,10 +1041,6 @@ void ApplicationHost::EvaluateAdaptiveResources(bool userInteraction, std::wstri
         std::unique_lock authorizationLock(m_resourceAuthorizationMutex);
         const bool positiveAuthorizationCurrent = IsPositiveResourceAuthorizationCurrent(
             m_lastResourcePressureSequence, m_latestConstrainedResourcePressureSequence);
-        if (m_updateCoordinator) {
-            m_updateCoordinator->SetAutomaticChecksAllowed(snapshotFresh && positiveAuthorizationCurrent &&
-                                                           !backgroundConstrained);
-        }
         AdaptiveResourcePolicyInput input{
             .MemoryPressure = pressureValues.IsMemoryPressure(),
             .PreloadAllowed = snapshotFresh && positiveAuthorizationCurrent && pressureValues.CanPreload(),
@@ -1271,24 +1249,6 @@ void ApplicationHost::HandlePowerResume() {
             });
             if (!accepted) finish({});
         });
-}
-
-winrt::fire_and_forget ApplicationHost::CheckForUpdatesOnStartupAsync() {
-    try {
-        auto lifetime = shared_from_this();
-        auto settingsStore = m_settingsStore;
-        auto notificationService = m_notificationService;
-        auto updateCoordinator = m_updateCoordinator;
-        if (m_exiting.load() || !settingsStore || !notificationService || !updateCoordinator) co_return;
-        co_await StartupUpdateCoordinator::CheckForUpdatesAsync(
-            *settingsStore, notificationService, updateCoordinator, m_exiting);
-    } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[App] Startup update check failed", ex);
-    } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[App] Startup update check failed", ex);
-    } catch (...) {
-        util::DebugTraceUnknownException(L"[App] Startup update check failed");
-    }
 }
 
 bool ApplicationHost::RunOnUIThread(std::function<void()> work) noexcept {
@@ -1736,8 +1696,7 @@ void ApplicationHost::PublishDeviceFact(Bridge::DeviceFact fact) noexcept {
 bool ApplicationHost::ShowSettingsWindow() {
     if (m_exiting.load()) return false;
     DebugTrace(L"[App] ShowSettingsWindow()");
-    return m_settingsWindowPresenter.Show(
-        m_settingsController, m_startupTaskCoordinator, m_trayController, m_updateCoordinator);
+    return m_settingsWindowPresenter.Show(m_settingsController, m_startupTaskCoordinator, m_trayController);
 }
 
 void ApplicationHost::ExitApplication() noexcept {

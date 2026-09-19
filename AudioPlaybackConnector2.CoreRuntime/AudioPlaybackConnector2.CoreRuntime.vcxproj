@@ -24,7 +24,7 @@
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries Condition="'$(Configuration)'=='Debug'">true</UseDebugLibraries>
     <UseDebugLibraries Condition="'$(Configuration)'=='Release'">false</UseDebugLibraries>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
     <PreferredToolArchitecture>x64</PreferredToolArchitecture>
   </PropertyGroup>
@@ -51,7 +51,7 @@
       <TreatWarningAsError>true</TreatWarningAsError>
       <SDLCheck>true</SDLCheck>
       <ConformanceMode>true</ConformanceMode>
-      <LanguageStandard>stdcpp23</LanguageStandard>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
       <AdditionalIncludeDirectories>$(ProjectDir)include;..\AudioPlaybackConnector2\include;..\AudioPlaybackConnector2\src;..\AudioPlaybackConnector2\res;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>APC_CORE_RUNTIME;WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
@@ -116,9 +116,6 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\StartupTaskCoordinator.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\ToastContentBuilder.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\ToastXmlSanitizer.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\services\UpdateCoordinator.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\services\AutomaticUpdateWindow.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\services\UpdateService.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\util\Event.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\util\Logger.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\util\RuntimeApartment.hpp" />
@@ -156,9 +153,6 @@
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\StartupTaskController.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\app\StartupTaskCoordinator.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\services\ToastContentBuilder.cpp" />
-    <ClCompile Include="..\AudioPlaybackConnector2\src\services\UpdateCoordinator.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
-    <ClCompile Include="..\AudioPlaybackConnector2\src\services\AutomaticUpdateWindow.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
-    <ClCompile Include="..\AudioPlaybackConnector2\src\services\UpdateService.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\util\Logger.cpp" />
   </ItemGroup>
   <ItemGroup><None Include="packages.config" /></ItemGroup>

@@ -118,9 +118,6 @@ public:
     [[nodiscard]] SettingsMutationResult ForgetDevice(std::wstring_view deviceId);
     [[nodiscard]] RecordConnectedDeviceResult RecordConnectedDevice(std::wstring_view deviceId,
                                                                     std::wstring_view deviceName);
-    [[nodiscard]] SettingsMutationResult
-    RecordUpdateCheckMetadata(std::int64_t unixSeconds, std::optional<std::wstring> notifiedVersion = std::nullopt);
-
     // A synchronous boundary for suspend and normal shutdown. It waits for the active attempt,
     // then writes the newest captured revision without ever overlapping the background worker.
     // Shutdown has one executor; concurrent callers receive its stored core result and wait for publication

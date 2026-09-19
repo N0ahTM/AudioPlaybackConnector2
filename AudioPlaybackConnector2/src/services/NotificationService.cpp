@@ -2,7 +2,6 @@
 #include <services/NotificationService.hpp>
 #include <core/StringResources.hpp>
 #include <services/ToastContentBuilder.hpp>
-#include <services/UpdateService.hpp>
 #include <util/Util.hpp>
 
 #include <utility>
@@ -384,22 +383,6 @@ void NotificationService::ShowAutoReconnectFailed(winrt::hstring const& id, winr
     ShowStatusToast(xml, ExpirationFromNow(std::chrono::hours(1)));
 }
 
-bool NotificationService::ShowUpdateAvailable(std::wstring const& latestVersion) {
-    if (!ShouldShowNotifications()) return false;
-    auto title = NotificationText("Notification_UpdateAvailable_Title", latestVersion);
-    auto body = NotificationText("Notification_UpdateAvailable_Body");
-    auto xml =
-        ToastXmlBuilder{}
-            .Title(title)
-            .Body(body)
-            .Action(NotificationText("Notification_UpdateAvailable_Action"), ToastArguments{}.Action(L"openUpdate"))
-            .AppLogoOverride(L"ms-appx:///Images/ToastInfo.png")
-            .SilentAudio()
-            .Build();
-
-    return ShowStatusToast(xml, ExpirationFromNow(std::chrono::hours(6)));
-}
-
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Event Handler /////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
@@ -409,16 +392,6 @@ void NotificationService::OnNotificationInvoked(AppNotifications::AppNotificatio
         auto parsedArguments = ToastArguments::Parse(args.Argument());
         auto action = ToastArguments::Find(parsedArguments, L"action");
         auto deviceId = ToastArguments::Find(parsedArguments, L"deviceId");
-
-        if (action && *action == L"openUpdate") {
-            {
-                auto guard = m_lock.lock_shared();
-                if (m_isTearingDown) return;
-            }
-            DebugTrace(L"[NotificationService] App notification invoked: action=openUpdate");
-            UpdateService::LaunchAppInstallerAsync();
-            return;
-        }
 
         if (!deviceId) {
             DebugTrace(L"[NotificationService] App notification invoked without deviceId: {0}",

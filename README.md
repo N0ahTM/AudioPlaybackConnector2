@@ -38,9 +38,9 @@ For commands and certificate-store options, see [Installation](docs/INSTALLATION
 - Support and diagnostics tools for Bluetooth settings, log folder access, and redacted bug-report details.
 - Guarded device actions so repeated clicks do not start overlapping connect/disconnect work.
 - Animated, theme-aware tray icons for idle, connecting, connected, and error states.
-- Toast notifications for connection events, failures, and available updates.
+- Toast notifications for connection events and failures.
 - Optional start with Windows.
-- Built-in GitHub release checks with App Installer handoff when an update is available.
+- Microsoft Store or Windows App Installer manages updates, depending on the installation path; the app does not check for updates itself.
 - Settings window placement persistence.
 - Local crash reports and minidumps for troubleshooting.
 - Localized UI in eight languages.
@@ -65,7 +65,7 @@ For commands and certificate-store options, see [Installation](docs/INSTALLATION
 - **Device options:** Click **…** beside a device. Use the back arrow to return to the list.
 - **Quick toggle:** Double-click the tray icon to toggle the default device, falling back to the last connected device.
 - **Settings:** Use the gear in the picker or the tray menu for language, startup, connection policies, notifications, privacy, and window placement.
-- **Help and updates:** Choose **Help** in the tray menu or **? Help** in Settings. Diagnostics are grouped in an expandable section; the update button sits beside the version.
+- **Help:** Choose **Help** in the tray menu or **? Help** in Settings. Diagnostics are grouped in an expandable section; the installed version is shown in Settings. Updates are managed by Microsoft Store or Windows App Installer, not by an in-app button.
 - **Command line:** Use `apc2ctl.exe` from PowerShell, MacroPads, or scripts:
 
 ```powershell
@@ -108,7 +108,7 @@ Use [GitHub Discussions](https://github.com/N0ahTM/AudioPlaybackConnector2/discu
 
 - Settings are stored locally in the current user profile.
 - No telemetry is sent by the app.
-- Update checks query GitHub release metadata.
+- The app does not query GitHub release metadata or perform update checks.
 - Privacy mode can redact real Bluetooth device names and IDs from the UI, command-line output, and copied diagnostics.
 - Crash reports and minidumps stay on your machine unless you choose to share them.
 - Minidumps may contain sensitive memory; review them before attaching them to an issue.

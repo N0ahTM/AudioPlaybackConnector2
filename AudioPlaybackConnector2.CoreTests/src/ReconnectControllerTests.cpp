@@ -272,7 +272,6 @@ int RunSettingsLimitsTests();
 int RunSingleInstanceGuardTests();
 int RunStartupTaskCoordinatorTests();
 int RunTrayTooltipBuilderTests();
-int RunUpdateCoordinatorTests();
 
 int main() {
     TestCommandProtocolRoundTrip();
@@ -308,7 +307,6 @@ int main() {
     g_failures += RunSingleInstanceGuardTests();
     g_failures += RunStartupTaskCoordinatorTests();
     g_failures += RunTrayTooltipBuilderTests();
-    g_failures += RunUpdateCoordinatorTests();
 
     if (g_failures != 0) {
         std::cerr << g_failures << " core test(s) failed\n";

@@ -8,8 +8,6 @@
 #include <core/SettingsData.hpp>
 #include <core/SettingsLimits.hpp>
 #include <core/StringResources.hpp>
-#include <services/UpdateCoordinator.hpp>
-#include <services/UpdateService.hpp>
 #include <ui/ButtonHelpers.hpp>
 #include <ui/DiagnosticsLogCollector.hpp>
 #include <ui/SettingsDiagnosticsReport.hpp>
@@ -327,10 +325,6 @@ void SettingsWindow::LocalizeSettingsText() {
     VersionText().Text(winrt::hstring(BuildVersionText()));
     CopyrightText().Text(winrt::hstring(_("About_Copyright")));
     apc::ui::SetButtonLabel(RepositoryButton(), RepositoryButtonText(), winrt::hstring(_("Settings_Repository")));
-    apc::ui::SetTooltipText(CheckForUpdatesButton(), winrt::hstring(_("Settings_CheckForUpdates_Desc")));
-    apc::ui::SetButtonLabel(CheckForUpdatesButton(), winrt::hstring(_("Settings_CheckForUpdates")));
-    apc::ui::SetButtonLabel(
-        OpenAppInstallerButton(), OpenAppInstallerButtonText(), winrt::hstring(_("Settings_OpenAppInstaller")));
 
     SetAutomationName(ConnectOnStartupToggle(), _("Settings_ConnectOnStartup"));
     SetAutomationName(ReconnectOnConnectionLossToggle(), _("Settings_ReconnectOnConnectionLoss"));
@@ -446,14 +440,6 @@ void SettingsWindow::StartWithWindowsToggle_Toggled(IInspectable const& sender, 
     if (m_suppressStartupToggle) return;
     auto toggle = sender.as<ToggleSwitch>();
     if (m_startupTaskCoordinator) m_startupTaskCoordinator->RequestDesired(toggle.IsOn());
-}
-
-void SettingsWindow::CheckForUpdatesButton_Click(IInspectable const&, RoutedEventArgs const&) {
-    RunManualUpdateCheckAsync();
-}
-
-void SettingsWindow::OpenAppInstallerButton_Click(IInspectable const&, RoutedEventArgs const&) {
-    UpdateService::LaunchAppInstallerAsync();
 }
 
 void SettingsWindow::ResetWindowPlacementButton_Click(IInspectable const&, RoutedEventArgs const&) {
@@ -874,93 +860,10 @@ std::wstring SettingsWindow::BuildReportBugUri() const {
            PercentEncode(body);
 }
 
-winrt::fire_and_forget SettingsWindow::RunManualUpdateCheckAsync() {
-    auto weak = get_weak();
-    auto updateCoordinator = m_updateCoordinator;
-    auto requestId = ++m_updateCheckRequestId;
-    SetUpdateCheckBusy(true);
-    bool completed = false;
-    winrt::apartment_context ui;
-
-    try {
-        UpdateCheckResult result;
-        if (updateCoordinator) {
-            result = co_await updateCoordinator->CheckForUpdatesAsync(UpdateCheckReason::Manual);
-        } else {
-            result = co_await UpdateService::CheckForUpdatesAsync();
-        }
-        co_await ui;
-
-        auto self = weak.get();
-        if (!self || requestId != self->m_updateCheckRequestId.load()) co_return;
-        self->SetUpdateCheckBusy(false);
-        if (result.Status == UpdateCheckStatus::Cancelled) co_return;
-        self->ShowUpdateCheckResult(result);
-        completed = true;
-    } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] RunManualUpdateCheckAsync failed", ex);
-    } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[SettingsWindow] RunManualUpdateCheckAsync failed", ex);
-    } catch (...) {
-        util::DebugTraceUnknownException(L"[SettingsWindow] RunManualUpdateCheckAsync failed");
-    }
-
-    try {
-        co_await ui;
-        auto self = weak.get();
-        if (self && !completed && requestId == self->m_updateCheckRequestId.load()) {
-            self->SetUpdateCheckBusy(false);
-            self->ShowUpdateCheckResult(UpdateCheckResult{UpdateCheckStatus::Failed, L"", L""});
-        }
-    } catch (...) {
-    }
-}
-
-void SettingsWindow::SetUpdateCheckBusy(bool busy) {
-    CheckForUpdatesButton().IsEnabled(!busy);
-    UpdateCheckProgress().IsActive(busy);
-    UpdateCheckProgress().Visibility(busy ? Visibility::Visible : Visibility::Collapsed);
-    if (busy) {
-        OpenAppInstallerButton().Visibility(Visibility::Collapsed);
-        UpdateInfoBar().IsOpen(false);
-    }
-}
-
 void SettingsWindow::SetStartupTaskBusy(bool busy) {
     StartWithWindowsToggle().IsEnabled(!busy);
     StartupTaskProgress().IsActive(busy);
     StartupTaskProgress().Visibility(busy ? Visibility::Visible : Visibility::Collapsed);
-}
-
-void SettingsWindow::ShowUpdateCheckResult(UpdateCheckResult const& result) {
-    OpenAppInstallerButton().Visibility(Visibility::Collapsed);
-
-    switch (result.Status) {
-        case UpdateCheckStatus::UpdateAvailable:
-            UpdateInfoBar().Severity(InfoBarSeverity::Informational);
-            UpdateInfoBar().Title(winrt::hstring(_("Settings_UpdateAvailable_Title")));
-            UpdateInfoBar().Message(
-                winrt::hstring(util::ReplacePlaceholders(_("Settings_UpdateAvailable_Message"), result.LatestVersion)));
-            OpenAppInstallerButton().Visibility(Visibility::Visible);
-            break;
-        case UpdateCheckStatus::UpToDate:
-            UpdateInfoBar().Severity(InfoBarSeverity::Success);
-            UpdateInfoBar().Title(winrt::hstring(_("Settings_UpdateCurrent_Title")));
-            UpdateInfoBar().Message(winrt::hstring(_("Settings_UpdateCurrent_Message")));
-            break;
-        case UpdateCheckStatus::Cancelled: return;
-        case UpdateCheckStatus::Failed:
-        default:
-            UpdateInfoBar().Severity(InfoBarSeverity::Error);
-            UpdateInfoBar().Title(winrt::hstring(_("Settings_UpdateFailed_Title")));
-            if (!result.ErrorMessage.empty()) {
-                DebugTrace(L"[SettingsWindow] Manual update check failed: {0}", result.ErrorMessage);
-            }
-            UpdateInfoBar().Message(winrt::hstring(_("Settings_UpdateFailed_Message")));
-            break;
-    }
-
-    UpdateInfoBar().IsOpen(true);
 }
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -1065,10 +968,6 @@ void SettingsWindow::SetStartupTaskCoordinator(std::shared_ptr<StartupTaskCoordi
 void SettingsWindow::SetInitialSettingsSnapshot(SettingsData snapshot) {
     m_hadPersistedPlacement = snapshot.SettingsWindowBounds.has_value();
     m_initialSettingsSnapshot = std::move(snapshot);
-}
-
-void SettingsWindow::SetUpdateCoordinator(std::shared_ptr<UpdateCoordinator> coordinator) {
-    m_updateCoordinator = std::move(coordinator);
 }
 
 void SettingsWindow::SetDefaultPlacement(util::SettingsWindowPlacement placement) {

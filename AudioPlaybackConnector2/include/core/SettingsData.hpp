@@ -37,8 +37,6 @@ struct SettingsData {
     bool ShowNotifications = true;
     bool UseSystemBackdropEffects = true;
     std::wstring Language = L"system";
-    int64_t LastUpdateCheckUnixSeconds = 0;
-    std::wstring LastNotifiedUpdateVersion;
     std::optional<PersistedWindowBounds> SettingsWindowBounds;
     bool PrivacyModeEnabled = false;
     DefaultDeviceMode DefaultDevice = DefaultDeviceMode::LastConnected;

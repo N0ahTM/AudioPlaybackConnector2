@@ -55,7 +55,7 @@
   </ItemGroup>
   <PropertyGroup Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
-    <PlatformToolset>v143</PlatformToolset>
+    <PlatformToolset>v145</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
     <DesktopCompatible>true</DesktopCompatible>
     <PreferredToolArchitecture>x64</PreferredToolArchitecture>
@@ -89,7 +89,7 @@
       <ProcessorNumber>4</ProcessorNumber>
       <WarningLevel>Level4</WarningLevel>
       <AdditionalIncludeDirectories>$(ProjectDir)include;$(ProjectDir)src;$(ProjectDir)res;$(ProjectDir)ui;$(ProjectDir)Generated Files;$(ProjectDir)Generated Files\ui\App;$(ProjectDir)Generated Files\ui\MainWindow;$(ProjectDir)Generated Files\ui\SettingsWindow;$(ProjectDir)Generated Files\ui\DevicePickerView;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <LanguageStandard>stdcpp23</LanguageStandard>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
       <AdditionalOptions>%(AdditionalOptions) /bigobj</AdditionalOptions>
       <TreatWarningAsError>true</TreatWarningAsError>
       <ConformanceMode>true</ConformanceMode>
@@ -140,7 +140,6 @@
     <ClInclude Include="include\app\SettingsWindowPresenter.hpp" />
     <ClInclude Include="include\app\SettingsWindowCommandExecutor.hpp" />
     <ClInclude Include="include\app\SingleInstanceGuard.hpp" />
-    <ClInclude Include="include\app\StartupUpdateCoordinator.hpp" />
     <ClInclude Include="include\app\LatestStartupTaskRequestState.hpp" />
     <ClInclude Include="include\app\StartupTaskCoordinator.hpp" />
     <ClInclude Include="include\app\UiRefreshCoalescer.hpp" />
@@ -168,8 +167,6 @@
     <ClInclude Include="include\core\DeviceWatcher.hpp" />
     <ClInclude Include="include\core\ReconnectPolicy.hpp" />
     <ClInclude Include="include\services\NotificationService.hpp" />
-    <ClInclude Include="include\services\AutomaticUpdateWindow.hpp" />
-    <ClInclude Include="include\services\UpdateCoordinator.hpp" />
     <ClInclude Include="include\services\SettingsController.hpp" />
     <ClInclude Include="include\control\ControlTargetMatcher.hpp" />
     <ClInclude Include="include\control\ControlCommandAdapter.hpp" />
@@ -178,7 +175,6 @@
     <ClInclude Include="include\services\ToastContentBuilder.hpp" />
     <ClInclude Include="include\services\ToastXmlSanitizer.hpp" />
     <ClInclude Include="include\services\TrayController.hpp" />
-    <ClInclude Include="include\services\UpdateService.hpp" />
     <ClInclude Include="include\ui\ButtonHelpers.hpp" />
     <ClInclude Include="include\ui\DevicePickerViewModel.hpp" />
     <ClInclude Include="include\ui\FlyoutPresenterStyle.hpp" />
@@ -219,7 +215,6 @@
     <ClCompile Include="src\app\ApplicationHost.cpp" />
     <ClCompile Include="src\app\ApplicationHostVisualRefreshRetry.cpp" />
     <ClCompile Include="src\app\SettingsWindowPresenter.cpp" />
-    <ClCompile Include="src\app\StartupUpdateCoordinator.cpp" />
     <ClCompile Include="src\core\ThemeHelper.cpp" />
     <ClCompile Include="src\services\NotificationService.cpp" />
     <ClCompile Include="src\services\TrayController.cpp" />

@@ -75,9 +75,6 @@ private:
     void TryAutoReconnect();
     void HandlePowerSuspend();
     void HandlePowerResume();
-    void ExecuteTrayCommand(
-        apc::app::AppCommand command,
-        apc::app::AppCommandContext::CompletionMode completion = apc::app::AppCommandContext::CompletionMode::Detached);
     [[nodiscard]] bool RefreshTrayVisualState(bool forceErrorWhenIdle = false,
                                               std::wstring_view reason = L"unspecified");
     void ScheduleDeviceVisualRefresh(bool forceErrorWhenIdle = false,

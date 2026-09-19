@@ -45,7 +45,7 @@ void TestUiAndCliEquivalentCommandsUseOneExecutor() {
         },
         [&]() { return snapshot; });
 
-    auto const uiResult = controller.Execute(command);
+    auto const uiResult = controller.Connect(*command.Target, {});
     auto const cliResult = controller.Execute(command);
 
     Check(uiResult == cliResult, "UI and CLI adapters must receive equivalent normalized results");
@@ -82,6 +82,36 @@ void TestTrayPrimaryActivationUsesSharedExecutorAndDetachedUiIntent() {
     executedCommand.reset();
     callback();
     Check(!executedCommand, "a retained tray callback must not invoke an expired controller");
+}
+
+void TestExplicitDeviceActionsPreserveDetachedContextAndTargets() {
+    std::vector<AppCommand> commands;
+    AppController controller(
+        [&](AppCommand const& command, AppCommandContext const& context) {
+            commands.push_back(command);
+            Check(context.Completion == AppCommandContext::CompletionMode::Detached,
+                  "UI device actions must retain nonblocking completion");
+            return AppResult{AppResultCode::OperationFailed, command.Kind};
+        },
+        [] { return AppSnapshot{}; });
+    auto const target = *DeviceSelector::ById(L"device-a");
+    auto const context = AppCommandContext::Detached();
+    Check(controller.Connect(target, context).Code == AppResultCode::OperationFailed &&
+              controller.Disconnect(target, context).Code == AppResultCode::OperationFailed &&
+              controller.Reconnect(target, context).Code == AppResultCode::OperationFailed &&
+              controller.ToggleDefault(context).Code == AppResultCode::OperationFailed &&
+              controller.DisconnectAll(context).Code == AppResultCode::OperationFailed &&
+              controller.ReconnectAll(context).Code == AppResultCode::OperationFailed &&
+              controller.ShowSettings(context).Code == AppResultCode::OperationFailed,
+          "explicit actions must preserve backend failures");
+    Check(commands == std::vector<AppCommand>{{AppCommandKind::Connect, target, {}},
+                                              {AppCommandKind::Disconnect, target, {}},
+                                              {AppCommandKind::Reconnect, target, {}},
+                                              {AppCommandKind::ToggleLast, DeviceSelector::Default(), {}},
+                                              {AppCommandKind::DisconnectAll, {}, {}},
+                                              {AppCommandKind::ReconnectAll, {}, {}},
+                                              {AppCommandKind::ShowSettings, {}, {}}},
+          "explicit actions must preserve their targets and run each requested use case once");
 }
 
 void TestMalformedCancelledAndExpiredCommandsShortCircuit() {
@@ -244,6 +274,7 @@ void TestDeviceSettingsUseControllerMethods() {
 int RunAppControllerTests() {
     TestUiAndCliEquivalentCommandsUseOneExecutor();
     TestTrayPrimaryActivationUsesSharedExecutorAndDetachedUiIntent();
+    TestExplicitDeviceActionsPreserveDetachedContextAndTargets();
     TestMalformedCancelledAndExpiredCommandsShortCircuit();
     TestExecutorExceptionsBecomeInternalErrors();
     TestSnapshotIsReturnedByValue();

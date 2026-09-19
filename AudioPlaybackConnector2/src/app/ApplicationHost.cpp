@@ -557,59 +557,57 @@ void ApplicationHost::InitializeTray() {
     }
     m_trayController->SetHelpCallback([weak] {
         if (auto self = weak.lock(); self && !self->m_exiting.load() && self->m_appController) {
-            auto result =
-                self->m_appController->Execute(apc::app::AppCommand{apc::app::AppCommandKind::ShowSettings, {}, {}});
+            auto result = self->m_appController->ShowSettings();
             if (result.Succeeded()) static_cast<void>(self->m_settingsWindowPresenter.ShowHelp());
         }
     });
+    auto controller = std::weak_ptr<apc::app::AppController>(m_appController);
     m_trayController->SetCallbacks(
-        [weak]() {
-            if (auto self = weak.lock()) {
-                self->ExecuteTrayCommand(apc::app::AppCommand{apc::app::AppCommandKind::ShowSettings, {}, {}});
+        [controller]() {
+            if (auto owner = controller.lock()) {
+                (void)owner->ShowSettings(apc::app::AppCommandContext::Detached());
             }
         },
         apc::ui::MakeTrayPrimaryActivationCallback(m_appController),
         [weak]() {
             if (auto self = weak.lock()) self->ExitApplication();
         },
-        [weak](winrt::hstring id) {
-            if (auto self = weak.lock()) {
-                if (auto selector = apc::app::DeviceSelector::ById(std::wstring(id))) {
-                    self->ExecuteTrayCommand(
-                        apc::app::AppCommand{apc::app::AppCommandKind::Connect, std::move(*selector), {}});
+        [controller](winrt::hstring id) {
+            if (auto owner = controller.lock()) {
+                if (auto selector = apc::app::DeviceSelector::ById(std::wstring_view(id))) {
+                    (void)owner->Connect(std::move(*selector), apc::app::AppCommandContext::Detached());
                 }
             }
         },
-        [weak](winrt::hstring id) {
-            if (auto self = weak.lock()) {
-                if (auto selector = apc::app::DeviceSelector::ById(std::wstring(id))) {
-                    self->ExecuteTrayCommand(
-                        apc::app::AppCommand{apc::app::AppCommandKind::Disconnect, std::move(*selector), {}});
+        [controller](winrt::hstring id) {
+            if (auto owner = controller.lock()) {
+                if (auto selector = apc::app::DeviceSelector::ById(std::wstring_view(id))) {
+                    (void)owner->Disconnect(std::move(*selector), apc::app::AppCommandContext::Detached());
                 }
             }
         },
-        [weak](winrt::hstring id) {
-            if (auto self = weak.lock()) {
-                if (auto selector = apc::app::DeviceSelector::ById(std::wstring(id))) {
-                    self->ExecuteTrayCommand(
-                        apc::app::AppCommand{apc::app::AppCommandKind::Reconnect, std::move(*selector), {}});
+        [controller](winrt::hstring id) {
+            if (auto owner = controller.lock()) {
+                if (auto selector = apc::app::DeviceSelector::ById(std::wstring_view(id))) {
+                    (void)owner->Reconnect(std::move(*selector), apc::app::AppCommandContext::Detached());
                 }
             }
         },
         [weak]() {
-            if (auto self = weak.lock()) {
-                self->ExecuteTrayCommand(apc::app::AppCommand{
-                    apc::app::AppCommandKind::ToggleLast, apc::app::DeviceSelector::Default(), {}});
+            if (auto self = weak.lock(); self && !self->m_exiting.load() && self->m_appController) {
+                if (self->m_appController->ToggleDefault(apc::app::AppCommandContext::Detached()).Succeeded()) {
+                    self->ScheduleDeviceVisualRefresh(false);
+                }
             }
         },
-        [weak]() {
-            if (auto self = weak.lock()) {
-                self->ExecuteTrayCommand(apc::app::AppCommand{apc::app::AppCommandKind::DisconnectAll, {}, {}});
+        [controller]() {
+            if (auto owner = controller.lock()) {
+                (void)owner->DisconnectAll(apc::app::AppCommandContext::Detached());
             }
         },
-        [weak]() {
-            if (auto self = weak.lock()) {
-                self->ExecuteTrayCommand(apc::app::AppCommand{apc::app::AppCommandKind::ReconnectAll, {}, {}});
+        [controller]() {
+            if (auto owner = controller.lock()) {
+                (void)owner->ReconnectAll(apc::app::AppCommandContext::Detached());
             }
         });
     DebugTrace(L"[App] TrayController initialized");
@@ -629,10 +627,10 @@ void ApplicationHost::InitializeNotifications() {
         if (auto self = weak.lock()) {
             static_cast<void>(self->RunOnUIThread([weak, deviceId = std::move(deviceId)]() mutable {
                 if (auto self = weak.lock()) {
-                    if (self->m_exiting.load()) return;
-                    if (auto selector = apc::app::DeviceSelector::ById(std::wstring(deviceId))) {
-                        self->ExecuteTrayCommand(
-                            apc::app::AppCommand{apc::app::AppCommandKind::Reconnect, std::move(*selector), {}});
+                    if (self->m_exiting.load() || !self->m_appController) return;
+                    if (auto selector = apc::app::DeviceSelector::ById(std::wstring_view(deviceId))) {
+                        (void)self->m_appController->Reconnect(std::move(*selector),
+                                                               apc::app::AppCommandContext::Detached());
                     }
                 }
             }));
@@ -1162,19 +1160,6 @@ winrt::hstring ApplicationHost::ResolveKnownDeviceName(winrt::hstring const& id)
         if (!it->Name.empty()) return winrt::hstring(it->Name);
     }
     return settings.PrivacyModeEnabled ? winrt::hstring(_("Privacy_RedactedDevice")) : id;
-}
-
-void ApplicationHost::ExecuteTrayCommand(apc::app::AppCommand command,
-                                         apc::app::AppCommandContext::CompletionMode completion) {
-    if (m_exiting.load() || !m_appController) return;
-
-    const auto kind = command.Kind;
-    apc::app::AppCommandContext context;
-    context.Completion = completion;
-    const auto result = m_appController->Execute(std::move(command), context);
-    if (kind == apc::app::AppCommandKind::ToggleLast && result.Code == apc::app::AppResultCode::Success) {
-        ScheduleDeviceVisualRefresh(false);
-    }
 }
 
 void ApplicationHost::TryAutoReconnect() {

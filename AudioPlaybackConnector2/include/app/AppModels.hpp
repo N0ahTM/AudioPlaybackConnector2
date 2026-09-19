@@ -394,6 +394,8 @@ struct AppCommandContext {
     TimePoint Deadline = TimePoint::max();
     CompletionMode Completion = CompletionMode::WaitForCompletion;
 
+    [[nodiscard]] static AppCommandContext Detached() noexcept { return {.Completion = CompletionMode::Detached}; }
+
     [[nodiscard]] bool IsCancellationRequested() const noexcept { return StopToken.stop_requested(); }
     [[nodiscard]] bool IsExpired(TimePoint now) const noexcept {
         return Deadline != TimePoint::max() && now >= Deadline;

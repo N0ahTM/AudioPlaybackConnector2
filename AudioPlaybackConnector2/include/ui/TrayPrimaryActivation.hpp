@@ -22,9 +22,8 @@ MakeTrayPrimaryActivationCallback(std::weak_ptr<apc::app::AppController> control
         if (!owner) return;
 
         // The tray callback runs on the UI thread and cannot wait for its own Opened event.
-        apc::app::AppCommandContext context;
-        context.Completion = apc::app::AppCommandContext::CompletionMode::Detached;
-        (void)owner->ShowDevicePicker(apc::app::DevicePickerOpenMode::ToggleIfOpen, context);
+        (void)owner->ShowDevicePicker(apc::app::DevicePickerOpenMode::ToggleIfOpen,
+                                      apc::app::AppCommandContext::Detached());
     };
 }
 

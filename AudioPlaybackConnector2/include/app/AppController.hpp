@@ -60,6 +60,18 @@ public:
     /*------------------------------------------------------------------------------------------------------------*/
 
     [[nodiscard]] AppResult ShowDevicePicker(DevicePickerOpenMode mode, AppCommandContext context = {}) const noexcept;
+    [[nodiscard]] AppResult ShowSettings(AppCommandContext context = {}) const noexcept;
+
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Device Actions ////////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
+
+    [[nodiscard]] AppResult Connect(DeviceSelector target, AppCommandContext context) const;
+    [[nodiscard]] AppResult Disconnect(DeviceSelector target, AppCommandContext context) const;
+    [[nodiscard]] AppResult Reconnect(DeviceSelector target, AppCommandContext context) const;
+    [[nodiscard]] AppResult ToggleDefault(AppCommandContext context) const;
+    [[nodiscard]] AppResult DisconnectAll(AppCommandContext context) const noexcept;
+    [[nodiscard]] AppResult ReconnectAll(AppCommandContext context) const noexcept;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Device Settings ///////////////////////////////////////////////////////////////////////////////////*/

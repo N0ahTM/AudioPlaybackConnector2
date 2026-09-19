@@ -93,6 +93,38 @@ AppResult AppController::ShowDevicePicker(DevicePickerOpenMode mode, AppCommandC
     return Execute({AppCommandKind::ShowDevicePicker, {}, {}, mode}, context);
 }
 
+AppResult AppController::ShowSettings(AppCommandContext context) const noexcept {
+    return Execute({AppCommandKind::ShowSettings, {}, {}}, context);
+}
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Device Actions ////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
+AppResult AppController::Connect(DeviceSelector target, AppCommandContext context) const {
+    return Execute({AppCommandKind::Connect, std::move(target), {}}, context);
+}
+
+AppResult AppController::Disconnect(DeviceSelector target, AppCommandContext context) const {
+    return Execute({AppCommandKind::Disconnect, std::move(target), {}}, context);
+}
+
+AppResult AppController::Reconnect(DeviceSelector target, AppCommandContext context) const {
+    return Execute({AppCommandKind::Reconnect, std::move(target), {}}, context);
+}
+
+AppResult AppController::ToggleDefault(AppCommandContext context) const {
+    return Execute({AppCommandKind::ToggleLast, DeviceSelector::Default(), {}}, context);
+}
+
+AppResult AppController::DisconnectAll(AppCommandContext context) const noexcept {
+    return Execute({AppCommandKind::DisconnectAll, {}, {}}, context);
+}
+
+AppResult AppController::ReconnectAll(AppCommandContext context) const noexcept {
+    return Execute({AppCommandKind::ReconnectAll, {}, {}}, context);
+}
+
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Device Settings ///////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/

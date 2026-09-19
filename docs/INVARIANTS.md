@@ -382,3 +382,12 @@ one that observes the closed slot cannot access it. Fatal processing terminates 
 than returning to normal execution. An in-flight fatal dump may delay teardown until process exit;
 this is not a bounded recovery guarantee for a corrupted process. Minidump creation still invokes
 Windows/DbgHelp and is best effort, not guaranteed safe in every corrupted-stack or heap state.
+
+## Tray theme delivery
+
+The host window procedure forwards WM_SETTINGCHANGE directly to its TrayController on the UI thread.
+TrayController initializes and owns the last observed theme and refreshes the icon when ImmersiveColorSet
+changes that value. Teardown and delivery share that UI context; no global subscriber registry, callback
+lease, mutex or cross-thread unsubscribe exists. The taskbar recreation path retains its forced refresh.
+GetSystemTheme only queries Windows and owns no mutable state. This contract has a call-site audit and
+product build verification; an actual interactive WinUI theme switch remains a manual runtime check.

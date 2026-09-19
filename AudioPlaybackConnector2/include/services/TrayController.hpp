@@ -5,6 +5,7 @@
 #include <ui/TrayContextMenu.hpp>
 #include <DevicePickerView/DevicePickerView.xaml.h>
 #include <ui/WindowPlacement.hpp>
+#include <core/ThemeHelper.hpp>
 
 #include <functional>
 #include <memory>
@@ -68,6 +69,7 @@ public:
     [[nodiscard]] bool InvalidateDevicePickerInventory() noexcept;
     void OnThemeChanged();
     void ApplyLanguage();
+    void OnSettingChange(LPARAM setting);
     void SetSystemBackdropEffectsEnabled(bool enabled) noexcept;
     [[nodiscard]] bool AdvanceConnectingFrame() noexcept;
     [[nodiscard]] bool ApplyPendingTrayUpdates() noexcept;
@@ -114,7 +116,7 @@ private:
     ResourceStateChangedCallback m_resourceStateChangedCallback;
 
     UINT m_trayCallbackMsg = WM_APP + 1;
-    std::size_t m_themeChangedToken = 0;
+    Theme m_theme = Theme::Dark;
     ULONGLONG m_lastLeftClickTick = 0;
     ULONGLONG m_lastRightClickTick = 0;
     ULONGLONG m_lastLeftDoubleClickTick = 0;

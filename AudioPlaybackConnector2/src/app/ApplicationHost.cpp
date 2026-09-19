@@ -7,7 +7,6 @@
 #include <core/DeviceService.hpp>
 #include <core/SettingsStore.hpp>
 #include <core/StringResources.hpp>
-#include <core/ThemeHelper.hpp>
 #include <core/TrayTooltipBuilder.hpp>
 #include <ui/TrayContextMenu.hpp>
 #include <ui/TrayIcon.hpp>
@@ -1481,7 +1480,7 @@ LRESULT CALLBACK ApplicationHost::SubclassProc(
     }
 
     if (msg == WM_SETTINGCHANGE) {
-        ThemeHelper::OnSettingChange(lParam, host->m_log);
+        if (host->m_trayController) host->m_trayController->OnSettingChange(lParam);
         return DefSubclassProc(hwnd, msg, wParam, lParam);
     }
 

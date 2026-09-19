@@ -205,7 +205,7 @@
     <ClCompile Include="src\app\ApplicationHost.cpp" />
     <ClCompile Include="src\app\ApplicationHostVisualRefreshRetry.cpp" />
     <ClCompile Include="src\app\SettingsWindowPresenter.cpp" />
-    <ClCompile Include="src\core\ThemeHelper.cpp" />
+    <ClCompile Include="src\core\ThemeHelper.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="src\services\NotificationService.cpp" />
     <ClCompile Include="src\services\TrayController.cpp" />
     <ClCompile Include="src\ui\FlyoutPresenterStyle.cpp" />

@@ -43,17 +43,12 @@ void TrayController::Initialize(HWND hwnd,
     m_releaseDevicePickerPending = false;
     m_pickerRefreshPending = false;
 
+    m_theme = GetSystemTheme();
     m_trayIcon = std::make_unique<TrayIcon>(m_log);
     m_trayIcon->Initialize(m_hwnd, m_trayCallbackMsg);
     m_log.Trace(L"[TrayController] TrayIcon initialized");
 
     auto weak = weak_from_this();
-    m_themeChangedToken = ThemeHelper::AddThemeChangedHandler([weak]() {
-        auto self = weak.lock();
-        if (!self || self->m_isTearingDown.load() || !self->m_trayIcon) return;
-        self->m_log.Trace(L"[TrayController] System theme changed");
-        self->m_trayIcon->UpdateTheme();
-    });
 
     auto root = m_mainWindow.Content().as<Controls::Grid>();
     if (root && root.XamlRoot()) {
@@ -86,6 +81,17 @@ void TrayController::Initialize(HWND hwnd,
     }
     if (auto owner = m_appController.lock())
         SetSystemBackdropEffectsEnabled(owner->Snapshot().Settings.UseSystemBackdropEffects);
+}
+
+// Called directly by the host's window procedure on the owning UI thread.
+void TrayController::OnSettingChange(LPARAM setting) {
+    if (m_isTearingDown.load() || !m_trayIcon || !setting) return;
+    if (CompareStringOrdinal(reinterpret_cast<LPCWCH>(setting), -1, L"ImmersiveColorSet", -1, TRUE) != CSTR_EQUAL)
+        return;
+    const auto theme = GetSystemTheme();
+    if (theme == m_theme) return;
+    m_theme = theme;
+    m_trayIcon->UpdateTheme();
 }
 
 void TrayController::ApplyLanguage() {
@@ -159,10 +165,6 @@ void TrayController::Teardown() noexcept try {
         } catch (...) {
             m_log.UnknownException(L"[TrayController] ERROR: failed to prepare picker for teardown");
         }
-    }
-    if (m_themeChangedToken) {
-        ThemeHelper::RemoveThemeChangedHandler(m_themeChangedToken);
-        m_themeChangedToken = 0;
     }
     m_showHelpCallback = nullptr;
     m_openSettingsAfterPickerClosed = false;

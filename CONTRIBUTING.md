@@ -91,6 +91,14 @@ pwsh ./scripts/validate-markdown-links.ps1
 pwsh ./scripts/update-cli-reference.ps1 -Check
 ```
 
+For the packaged UI, use a disposable x64 Windows test account with a branch package installed, Application Verifier, the x64 Windows SDK debugger (`cdb.exe`), and an elevated PowerShell 7 session:
+
+```powershell
+./scripts/test/run-appverifier.ps1 -PackageFullName '<installed test package full name>' -Iterations 3
+```
+
+This runner enables [AppVerifier Basics](https://learn.microsoft.com/en-us/windows-hardware/drivers/devtest/application-verifier-testing-applications) (including full-page heap, handles and locks), launches the installed executable under CDB, exercises CLI status/picker/settings, and closes the app through WM_CLOSE. Each iteration has a watchdog. Existing app processes/debugger settings and published 0.9.1 packages are rejected; settings created by the runner are removed in `finally`. Failure logs stay in the reported temporary directory; successful diagnostics are removed. Bluetooth, resume, Explorer restart and interactive toast activation still require the separate hardware/UI acceptance matrix. After interrupting the PowerShell process itself, inspect the image's AppVerifier settings before another launch.
+
 Runner isolates LOCALAPPDATA per process and retains real logger output there. Tests inject platform boundaries, not link-time replacements. Pipe fixtures admit their own process; Release keeps production trust checks, including real-pipe rejection of unpackaged peers. Debug additionally allows exact executable-file matches; Release does not inherit that allowance.
 
 ## How to Contribute

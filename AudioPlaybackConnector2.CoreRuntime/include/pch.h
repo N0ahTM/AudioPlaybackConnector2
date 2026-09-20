@@ -1,5 +1,8 @@
 #pragma once
 
+// PCH-off builds must validate direct includes, not merely disable the binary cache.
+#ifndef APC_NO_PCH_INCLUDES
+
 #include <targetver.h>
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -76,3 +79,5 @@
 #include <winrt/Windows.Web.Http.h>
 
 #include <util/Logger.hpp>
+
+#endif // APC_NO_PCH_INCLUDES

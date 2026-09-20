@@ -1,5 +1,7 @@
 #include <pch.h>
 
+#include <winrt/Windows.Storage.h>
+
 #include <core/SettingsStore.hpp>
 #include <core/SettingsCodec.hpp>
 

@@ -1,4 +1,7 @@
 #include <pch.h>
+#include <winrt/Windows.Foundation.Collections.h>
+
+#include <winrt/Windows.Media.Audio.h>
 
 #include <core/DeviceWatcher.hpp>
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <winrt/base.h>
+
 #include <optional>
 #include <string>
 #include <string_view>

@@ -25,6 +25,7 @@
     <ItemGroup>
       <ClCompile>
         <PrecompiledHeader>NotUsing</PrecompiledHeader>
+        <PreprocessorDefinitions>APC_NO_PCH_INCLUDES;%(ClCompile.PreprocessorDefinitions)</PreprocessorDefinitions>
       </ClCompile>
     </ItemGroup>
   </Target>

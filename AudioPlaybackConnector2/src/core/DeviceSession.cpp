@@ -1,4 +1,5 @@
 #include <pch.h>
+#include <winrt/Windows.System.Threading.h>
 
 #include <core/AudioConnectionService.hpp>
 #include <core/DeviceSession.hpp>

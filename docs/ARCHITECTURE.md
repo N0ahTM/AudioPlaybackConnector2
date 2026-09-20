@@ -54,3 +54,24 @@ DeviceService, AppController and StartupTaskCoordinator serialize state without 
 - Mutable state and replaceable dependencies belong to instances; process-wide constants may be static.
 
 Current contracts belong here/in INVARIANTS; remaining work belongs in the local plan, user-visible history in CHANGELOG.
+
+## Reproducible source measurements
+
+The immutable starting point is `f5404c597080f8e2d892e6b9787fee38bbb17113` (the original `main`). The checked-in [measurement record](source-measurements.json) compares it with `511ba95049b300dffab3d5d6c91f76cb53cd2605`; this is an intermediate observation, not final acceptance.
+
+| Measure | Starting point | Measured revision |
+| --- | ---: | ---: |
+| Production C++ files | 136 | 127 |
+| Physical lines | 26,239 | 22,913 |
+| Nonblank lines | 23,297 | 20,333 |
+| Stored source bytes | 1,140,260 | 1,014,669 |
+
+Counts include comments, declarations and includes in tracked `.cpp`, `.hpp` and `.h` files under the app, Control and CoreRuntime projects. They exclude tests, benchmarks, generated build outputs, resources and project files. Bytes come from Git blobs, independent of checkout CRLF conversion. The record contains the ten largest files at each revision. Totals were independently checked against Git archives after normalizing exported CRLF to stored LF.
+
+Reproduce the record from the repository root without checking out or building either revision:
+
+```powershell
+python scripts/measure-source.py --baseline f5404c597080f8e2d892e6b9787fee38bbb17113 --revision 511ba95049b300dffab3d5d6c91f76cb53cd2605 --output docs/source-measurements.json
+```
+
+For a later comparison, supply the exact accepted commit as `--revision` and update this table with the resulting record. Physical line counts do not establish simpler control flow, fewer public APIs, fewer helpers or preserved behavior. Those reviews, comparable fresh build timings and package-size measurements remain separate. The isolated dependency probes are historical evidence and remain until their results and the product comparison are fully retained.

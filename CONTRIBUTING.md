@@ -89,6 +89,7 @@ cppcheck `
 .\x64\Release\tests\AudioPlaybackConnector2.CoreTests.exe
 
 pwsh ./scripts/validate-localizations.ps1
+pwsh ./scripts/test-localizations.ps1
 pwsh ./scripts/validate-markdown-links.ps1
 pwsh ./scripts/update-cli-reference.ps1 -Check
 ```

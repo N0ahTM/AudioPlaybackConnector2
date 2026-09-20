@@ -47,6 +47,9 @@ foreach ($fileName in $expectedFiles | Where-Object { $_ -ne 'en.json' }) {
     $missingKeys = @($english.Keys | Where-Object { -not $table.ContainsKey($_) } | Sort-Object)
     $unknownKeys = @($table.Keys | Where-Object { -not $english.ContainsKey($_) } | Sort-Object)
 
+    foreach ($key in $missingKeys) {
+        $failures.Add("$fileName is missing key '$key'.")
+    }
     foreach ($key in $unknownKeys) {
         $failures.Add("$fileName contains unknown key '$key'.")
     }
@@ -59,7 +62,7 @@ foreach ($fileName in $expectedFiles | Where-Object { $_ -ne 'en.json' }) {
     }
 
     $translatedCount = $english.Count - $missingKeys.Count
-    $summary.Add("$fileName`: $translatedCount/$($english.Count) keys; English fallback for $($missingKeys.Count).")
+    $summary.Add("$fileName`: $translatedCount/$($english.Count) keys.")
 }
 
 if ($failures.Count -gt 0) {

@@ -4,6 +4,8 @@
 #include <core/DeviceService.hpp>
 
 #include <winerror.h>
+#include <windows.h>
+#include <wil/resource.h>
 
 #include <algorithm>
 #include <array>
@@ -189,6 +191,7 @@ public:
     void RevokeCallbacks() noexcept { ++RevokeCalls; }
     void Add(std::wstring id, std::wstring name) { Callbacks.DeviceAdded({std::move(id), std::move(name)}); }
     void Remove(std::wstring id) { Callbacks.DeviceRemoved(std::move(id)); }
+    void CompleteEnumeration() { Callbacks.EnumerationCompleted(); }
 
     DeviceWatcherCallbacks Callbacks;
     int StartCalls = 0;
@@ -223,10 +226,34 @@ public:
 
     winrt::Windows::Foundation::IAsyncAction RefreshAsync(RefreshCompletion completion) override {
         if (BeforeRefreshCompletion) BeforeRefreshCompletion();
-        if (completion) completion(nullptr, {});
+        auto gate = RefreshGate;
+        if (!gate) {
+            if (completion) completion(nullptr, {});
+            co_return;
+        }
+
+        co_await winrt::resume_background();
+        SetEvent(gate->Started.get());
+        WaitForSingleObject(gate->Released.get(), INFINITE);
+        if (completion) completion(nullptr, gate->Inventory);
         co_return;
     }
 
+    struct PendingRefresh {
+        wil::unique_handle Started{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+        wil::unique_handle Released{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+        std::vector<apc::device_picker::DeviceIdentity> Inventory;
+    };
+
+    [[nodiscard]] std::shared_ptr<PendingRefresh>
+    BeginRefresh(std::vector<apc::device_picker::DeviceIdentity> inventory) {
+        auto gate = std::make_shared<PendingRefresh>();
+        gate->Inventory = std::move(inventory);
+        RefreshGate = gate;
+        return gate;
+    }
+
+    std::shared_ptr<PendingRefresh> RefreshGate;
     std::function<void()> BeforeRefreshCompletion;
     FakeWatcherState* LastWatcher = nullptr;
     std::vector<std::shared_ptr<FakeWatcherState>> Watchers;

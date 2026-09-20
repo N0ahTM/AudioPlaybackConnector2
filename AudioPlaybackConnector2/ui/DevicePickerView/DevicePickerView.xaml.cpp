@@ -26,6 +26,24 @@ constexpr double c_pickerMinWidth = 260.0;
 constexpr double c_pickerMaxWidth = 520.0;
 constexpr double c_globalActionsChromeWidth = 82.0;
 
+Button
+CreateIconButton(std::wstring_view glyph, winrt::hstring const& label, Media::Brush const& foreground = nullptr) {
+    Button button;
+    button.Width(32);
+    button.Height(32);
+    button.Padding({0.0, 0.0, 0.0, 0.0});
+    button.VerticalAlignment(VerticalAlignment::Center);
+    button.Background(Media::SolidColorBrush(winrt::Windows::UI::Colors::Transparent()));
+    button.BorderThickness({0.0, 0.0, 0.0, 0.0});
+    apc::ui::SetButtonLabel(button, label);
+    FontIcon icon;
+    icon.FontSize(14.0);
+    icon.Glyph(winrt::hstring(glyph));
+    if (foreground) icon.Foreground(foreground);
+    button.Content(icon);
+    return button;
+}
+
 double DevicePickerWidth(bool showGlobalActions, StringResources const& strings) {
     const auto measureText = [](std::wstring_view text, double fontSize = 14.0) {
         auto block = TextBlock();
@@ -643,12 +661,9 @@ ListViewItem DevicePickerView::BuildDeviceListItem(apc::device_picker::DeviceSna
     grid.Children().Append(primary);
 
     if (device.IsConnected) {
-        apc::ui::IconButtonOptions reconnectOptions;
-        reconnectOptions.Width = 32;
-        reconnectOptions.Height = 32;
-        reconnectOptions.Foreground = apc::ui::TryThemeBrush(L"TextFillColorPrimaryBrush");
-        auto reconnectBtn =
-            apc::ui::CreateIconButton(L"\xE72C", winrt::hstring(m_strings->Get("Reconnect")), reconnectOptions);
+        auto reconnectBtn = CreateIconButton(L"\xE72C",
+                                             winrt::hstring(m_strings->Get("Reconnect")),
+                                             apc::ui::TryThemeBrush(L"TextFillColorPrimaryBrush"));
         reconnectBtn.IsEnabled(!isBusy);
         reconnectBtn.Click([weak, id](auto const&, auto const&) {
             if (auto self = weak.get()) self->OnDeviceReconnectClicked(id);
@@ -657,13 +672,8 @@ ListViewItem DevicePickerView::BuildDeviceListItem(apc::device_picker::DeviceSna
         grid.Children().Append(reconnectBtn);
     }
 
-    apc::ui::IconButtonOptions options;
-    options.Width = 32;
-    options.Height = 32;
-    auto optionsButton = apc::ui::CreateIconButton(
-        L"\xE712",
-        winrt::hstring(std::format(L"{}: {}", m_strings->Get("DeviceOptions_Title"), device.DisplayName)),
-        options);
+    auto optionsButton = CreateIconButton(
+        L"\xE712", winrt::hstring(std::format(L"{}: {}", m_strings->Get("DeviceOptions_Title"), device.DisplayName)));
     optionsButton.Click([weak, id](auto const&, auto const&) {
         if (auto self = weak.get()) self->ShowDeviceOptions(std::wstring(id));
     });

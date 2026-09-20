@@ -114,7 +114,7 @@ Only the latest completed request persists known OS state. Superseded completion
 
 | State | Owner and synchronization | Lifetime boundary |
 | --- | --- | --- |
-| Latest request, active operation and confirmed OS state | `StartupTaskCoordinator::State` serial drainer; request-state mutex is never nested under the owner mutex | Only queued owner work may start a set/query or accept a completion |
+| Latest request, active operation and confirmed OS state | `StartupTaskCoordinator::State` serial drainer; the request policy has no separate mutex or shutdown API | Only queued owner work may start a set/query or accept a completion |
 | Published snapshot, queue admission, registrations and active delivery | `State::Mutex`; short capture/update only | Shutdown closes admission and discards queued work; foreign draining is awaited without holding the mutex |
 | WinRT operations | Shared internal State across coroutine suspension; no facade capture | Continuations post to the owner; after shutdown they cannot launch the next query, persist or notify |
 | Persistence and observer callbacks | Serial drainer, outside all owner locks | Reentrant requests enqueue; reentrant shutdown invalidates remaining work without waiting on itself; foreign unsubscribe drains its active callback |

@@ -7,6 +7,8 @@
 #include <winrt/Windows.ApplicationModel.h>
 
 #include <atomic>
+#include <barrier>
+#include <thread>
 #include <chrono>
 #include <condition_variable>
 #include <iostream>
@@ -73,6 +75,11 @@ public:
     [[nodiscard]] std::shared_ptr<Gate> GateAt(std::size_t index) const {
         std::scoped_lock lock(m_mutex);
         return m_gates.at(index);
+    }
+
+    [[nodiscard]] std::size_t CallCount() const {
+        std::scoped_lock lock(m_mutex);
+        return m_gates.size();
     }
 
     void Release(std::size_t index, bool result, bool shouldThrow = false) {
@@ -328,6 +335,54 @@ void TestLatestDesiredIntentRunsSeriallyAndAlonePublishes() {
     fixture.Coordinator->Unsubscribe(token);
 }
 
+void TestConcurrentCallersShareOneBackendFlight() {
+    CoordinatorFixture fixture;
+    Check(fixture.Coordinator->RequestDesired(true), "initial request must be accepted");
+    if (!fixture.Backend->WaitForCalls(1)) {
+        Check(false, "initial backend flight must start");
+        return;
+    }
+    constexpr int callers = 16;
+    std::barrier start(callers);
+    std::atomic<int> accepted = 0;
+    std::vector<std::jthread> threads;
+    for (int index = 0; index < callers; ++index) {
+        threads.emplace_back([&, index] {
+            start.arrive_and_wait();
+            if (fixture.Coordinator->RequestDesired(index % 2 == 0)) ++accepted;
+        });
+    }
+    threads.clear();
+    Check(accepted == callers, "the coordinator must admit every concurrent caller");
+    Check(fixture.Coordinator->RequestDesired(false), "the final explicit intent must be accepted");
+    Check(fixture.Backend->CallCount() == 1, "concurrent callers must not overlap the active backend flight");
+    fixture.Backend->Release(0, true);
+    if (!fixture.Backend->WaitForCalls(2)) {
+        Check(false, "set must be followed by query");
+        return;
+    }
+    fixture.Backend->Release(1, true);
+    if (!fixture.Backend->WaitForCalls(3)) {
+        Check(false, "the latest intent must start after query");
+        return;
+    }
+    Check(fixture.Backend->GateAt(2)->Kind == FakeStartupTaskBackend::CallKind::Set &&
+              !fixture.Backend->GateAt(2)->Desired,
+          "only the final false intent must follow the active flight");
+    Check(fixture.CommitSnapshot().empty(), "the superseded initial result must not be persisted");
+    fixture.Backend->Release(2, true);
+    if (!fixture.Backend->WaitForCalls(4)) {
+        Check(false, "the final set must be verified");
+        return;
+    }
+    fixture.Backend->Release(3, false);
+    Check(fixture.WaitForCommits(1), "the final verified state must be persisted");
+    fixture.Coordinator->Shutdown();
+    Check(fixture.CommitSnapshot() == std::vector<bool>{false}, "only the latest state may be committed");
+    Check(!fixture.Coordinator->RequestDesired(true) && !fixture.Coordinator->Refresh(),
+          "the coordinator alone must reject requests after shutdown");
+}
+
 void TestSameDesiredIntentCoalescesWhileRunning() {
     CoordinatorFixture fixture;
     fixture.Coordinator->RequestDesired(true);
@@ -457,6 +512,7 @@ int RunStartupTaskCoordinatorTests() {
     TestRefreshPublishesAuthoritativeState();
     TestLatestDesiredIntentRunsSeriallyAndAlonePublishes();
     TestSameDesiredIntentCoalescesWhileRunning();
+    TestConcurrentCallersShareOneBackendFlight();
     TestReopenRefreshJoinsProcessFlightWithoutReplacingDesiredIntent();
     TestBackendFailurePublishesVerifiedActualState();
     TestUnknownFailureRestoresLastConfirmedState();

@@ -3,59 +3,36 @@
 #include <control/CommandProtocol.hpp>
 #include <control/CommandPipeIo.hpp>
 
+#include <wil/resource.h>
+
 #include <atomic>
-#include <iostream>
 #include <string_view>
 #include <thread>
-#include <utility>
 
 namespace {
 
-class UniqueHandle {
-public:
-    UniqueHandle() = default;
-    explicit UniqueHandle(HANDLE value) : m_value(value) {}
-    ~UniqueHandle() {
-        if (m_value && m_value != INVALID_HANDLE_VALUE) CloseHandle(m_value);
-    }
-    UniqueHandle(UniqueHandle const&) = delete;
-    UniqueHandle& operator=(UniqueHandle const&) = delete;
-    UniqueHandle(UniqueHandle&& other) noexcept : m_value(std::exchange(other.m_value, nullptr)) {}
-    UniqueHandle& operator=(UniqueHandle&& other) noexcept {
-        if (this != &other) {
-            UniqueHandle cleanup(std::exchange(m_value, std::exchange(other.m_value, nullptr)));
-        }
-        return *this;
-    }
-    [[nodiscard]] HANDLE get() const noexcept { return m_value; }
-    [[nodiscard]] explicit operator bool() const noexcept { return m_value && m_value != INVALID_HANDLE_VALUE; }
-
-private:
-    HANDLE m_value = nullptr;
-};
-
-bool CreatePipePair(UniqueHandle& server, UniqueHandle& client) {
+bool CreatePipePair(wil::unique_hfile& server, wil::unique_hfile& client) {
     static std::atomic_uint32_t counter = 0;
     const auto name = L"\\\\.\\pipe\\AudioPlaybackConnector2.CoreTests." + std::to_wstring(GetCurrentProcessId()) +
                       L"." + std::to_wstring(++counter);
-    server = UniqueHandle(CreateNamedPipeW(name.c_str(),
-                                           PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
-                                           PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-                                           1,
-                                           apc::control::c_pipeBufferBytes,
-                                           apc::control::c_pipeBufferBytes,
-                                           0,
-                                           nullptr));
+    server.reset(CreateNamedPipeW(name.c_str(),
+                                  PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+                                  PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                                  1,
+                                  apc::control::c_pipeBufferBytes,
+                                  apc::control::c_pipeBufferBytes,
+                                  0,
+                                  nullptr));
     if (!server) return false;
 
-    UniqueHandle connected(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+    wil::unique_handle connected(CreateEventW(nullptr, TRUE, FALSE, nullptr));
     if (!connected) return false;
     OVERLAPPED overlapped{};
     overlapped.hEvent = connected.get();
     if (ConnectNamedPipe(server.get(), &overlapped)) return false;
     if (GetLastError() != ERROR_IO_PENDING) return false;
 
-    client = UniqueHandle(CreateFileW(
+    client.reset(CreateFileW(
         name.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr));
     if (!client) return false;
     if (WaitForSingleObject(connected.get(), 1000) != WAIT_OBJECT_0) return false;
@@ -65,8 +42,8 @@ bool CreatePipePair(UniqueHandle& server, UniqueHandle& client) {
 }
 
 void TestCommandProtocolRoundTrip() {
-    UniqueHandle server;
-    UniqueHandle client;
+    wil::unique_hfile server;
+    wil::unique_hfile client;
     Check(CreatePipePair(server, client), "overlapped test pipe must connect");
     if (!server || !client) return;
 
@@ -109,8 +86,8 @@ void TestCommandProtocolRoundTrip() {
 }
 
 void TestCommandProtocolDelayedResponseReader() {
-    UniqueHandle server;
-    UniqueHandle client;
+    wil::unique_hfile server;
+    wil::unique_hfile client;
     Check(CreatePipePair(server, client), "delayed-reader pipe must connect");
     if (!server || !client) return;
 
@@ -169,8 +146,8 @@ void TestCommandProtocolStrictValidation() {
 
 void TestCommandProtocolTimeoutAndCancellation() {
     {
-        UniqueHandle server;
-        UniqueHandle client;
+        wil::unique_hfile server;
+        wil::unique_hfile client;
         Check(CreatePipePair(server, client), "timeout test pipe must connect");
         apc::control::Request request;
         const auto started = GetTickCount64();
@@ -180,10 +157,10 @@ void TestCommandProtocolTimeoutAndCancellation() {
     }
 
     {
-        UniqueHandle server;
-        UniqueHandle client;
+        wil::unique_hfile server;
+        wil::unique_hfile client;
         Check(CreatePipePair(server, client), "cancellation test pipe must connect");
-        UniqueHandle stopEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr));
+        wil::unique_handle stopEvent(CreateEventW(nullptr, TRUE, FALSE, nullptr));
         std::jthread cancel([event = stopEvent.get()] {
             Sleep(20);
             SetEvent(event);
@@ -198,8 +175,8 @@ void TestCommandProtocolTimeoutAndCancellation() {
 }
 
 void TestCommandProtocolRejectsInvalidHeader() {
-    UniqueHandle server;
-    UniqueHandle client;
+    wil::unique_hfile server;
+    wil::unique_hfile client;
     Check(CreatePipePair(server, client), "invalid-header test pipe must connect");
     if (!server || !client) return;
 

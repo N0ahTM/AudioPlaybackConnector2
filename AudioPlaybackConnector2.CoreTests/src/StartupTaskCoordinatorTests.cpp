@@ -5,6 +5,7 @@
 
 #include <windows.h>
 #include <winrt/Windows.ApplicationModel.h>
+#include <wil/resource.h>
 
 #include <atomic>
 #include <barrier>
@@ -27,16 +28,15 @@ public:
     Event() : m_handle(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {
         if (!m_handle) throw std::runtime_error("CreateEventW failed");
     }
-    ~Event() { CloseHandle(m_handle); }
 
     Event(Event const&) = delete;
     Event& operator=(Event const&) = delete;
 
-    [[nodiscard]] HANDLE Get() const noexcept { return m_handle; }
-    void Signal() const noexcept { SetEvent(m_handle); }
+    [[nodiscard]] HANDLE Get() const noexcept { return m_handle.get(); }
+    void Signal() const noexcept { SetEvent(m_handle.get()); }
 
 private:
-    HANDLE m_handle = nullptr;
+    wil::unique_handle m_handle;
 };
 
 class FakeStartupTaskBackend {

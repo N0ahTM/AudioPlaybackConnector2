@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <windows.h>
+#include <wil/resource.h>
 
 namespace {
 
@@ -97,24 +98,15 @@ public:
         }
 
         co_await winrt::resume_background();
-        SetEvent(gate->Started);
-        WaitForSingleObject(gate->Released, INFINITE);
+        SetEvent(gate->Started.get());
+        WaitForSingleObject(gate->Released.get(), INFINITE);
         if (completion) completion(nullptr, gate->Inventory);
         co_return;
     }
 
     struct PendingRefresh {
-        PendingRefresh()
-            : Started(CreateEventW(nullptr, TRUE, FALSE, nullptr)),
-              Released(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {}
-
-        ~PendingRefresh() {
-            if (Started) CloseHandle(Started);
-            if (Released) CloseHandle(Released);
-        }
-
-        HANDLE Started = nullptr;
-        HANDLE Released = nullptr;
+        wil::unique_handle Started{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
+        wil::unique_handle Released{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
         std::vector<DeviceIdentity> Inventory;
     };
 
@@ -261,12 +253,12 @@ void TestRefreshDoesNotOverwriteNewerCallbackInventory() {
     auto refreshGate = fixture.PlatformAccess->BeginRefresh({{L"stale", L"Stale"}});
     auto refresh = fixture.Watcher.RefreshAsync();
 
-    Check(WaitForSingleObject(refreshGate->Started, 2'000) == WAIT_OBJECT_0,
+    Check(WaitForSingleObject(refreshGate->Started.get(), 2'000) == WAIT_OBJECT_0,
           "the controlled refresh must reach its deterministic release point");
     platformWatcher->Add(L"fresh", L"Fresh");
     fixture.Executor.RunAll();
 
-    SetEvent(refreshGate->Released);
+    SetEvent(refreshGate->Released.get());
     refresh.get();
     fixture.Executor.RunAll();
 

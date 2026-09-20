@@ -467,7 +467,8 @@ AppResult AppController::ReconnectAll(AppCommandContext context) const noexcept 
 /*//////// Alias Actions /////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-AppResult AppController::SetAlias(DeviceSelector target, std::wstring_view alias, AppCommandContext context) const {
+AppResult
+AppController::SetAlias(DeviceSelector const& target, std::wstring_view alias, AppCommandContext context) const {
     constexpr auto kind = AppCommandKind::SetAlias;
     if (!IsExplicitTarget(target) || alias.empty() || alias.size() > c_maxAppCommandTextCharacters ||
         alias.find_first_of(std::wstring_view{L"\r\n\0", 3}) != std::wstring_view::npos)
@@ -475,7 +476,7 @@ AppResult AppController::SetAlias(DeviceSelector target, std::wstring_view alias
     return WriteAlias(kind, target, alias, context);
 }
 
-AppResult AppController::ClearAlias(DeviceSelector target, AppCommandContext context) const {
+AppResult AppController::ClearAlias(DeviceSelector const& target, AppCommandContext context) const {
     constexpr auto kind = AppCommandKind::ClearAlias;
     if (!IsExplicitTarget(target)) return InvalidInput(kind);
     return WriteAlias(kind, target, {}, context);

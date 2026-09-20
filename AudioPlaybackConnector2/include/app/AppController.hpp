@@ -142,8 +142,9 @@ public:
     [[nodiscard]] AppResult SetAlias(std::wstring_view deviceId, std::wstring_view alias) const;
     [[nodiscard]] AppResult ClearAlias(std::wstring_view deviceId) const;
     [[nodiscard]] AppResult SetDefault(DeviceSelector target, AppCommandContext context) const;
-    [[nodiscard]] AppResult SetAlias(DeviceSelector target, std::wstring_view alias, AppCommandContext context) const;
-    [[nodiscard]] AppResult ClearAlias(DeviceSelector target, AppCommandContext context) const;
+    [[nodiscard]] AppResult
+    SetAlias(DeviceSelector const& target, std::wstring_view alias, AppCommandContext context) const;
+    [[nodiscard]] AppResult ClearAlias(DeviceSelector const& target, AppCommandContext context) const;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Queries ///////////////////////////////////////////////////////////////////////////////////////////*/

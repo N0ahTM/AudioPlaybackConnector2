@@ -52,6 +52,8 @@ Version comes from nearest reachable release tag (`git fetch --tags` if missing)
 
 `config/Concurrency.ruleset` treats MSVC findings as errors; PCH uses ordinary WIL defaults. CoreRuntime analysis does not replace full-app analysis or runtime race tests. Runner supports `--list`, `--suite SettingsStore`, `--seed 42`; seeds shuffle suites, not every thread interleaving. Stress logs retain seed, replay command, output and timing; deterministic scenarios remain necessary.
 
+Failed headless restore/builds retain an MSBuild binlog at the reported private temporary path; successful logs are deleted. Imported project text is excluded (`ProjectImports=None`), but logs can still contain paths, environment values and command arguments. Inspect before sharing. The unsigned CI build uploads its failed binlog only when a manual **Build** run enables `upload_failure_binlog`, with one-day retention; routine runs do not upload it. Signing/publishing steps deliberately do not capture binlogs because certificate credentials reach MSBuild. Never include diagnostics in release assets.
+
 ## Build and launch notes
 
 For DEP0840 naming WinAppRuntime.Main.2/Singleton, install the [Windows App SDK runtime](https://learn.microsoft.com/en-us/windows/apps/windows-app-sdk/downloads#windows-app-sdk-20) and [Singleton](https://apps.microsoft.com/detail/9p5z076k079h).

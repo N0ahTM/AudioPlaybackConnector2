@@ -2,6 +2,11 @@ name: Build
 
 on:
   workflow_dispatch:
+    inputs:
+      upload_failure_binlog:
+        description: 'Upload unsigned build failure diagnostics for 1 day (may contain paths/environment)'
+        type: boolean
+        default: false
   push:
     branches: [main, develop]
   pull_request:
@@ -202,6 +207,7 @@ jobs:
       run: msbuild AudioPlaybackConnector2.slnx -t:restore -p:RestorePackagesConfig=true
 
     - name: Build unsigned release
+      id: unsigned-build
       run: >
         msbuild AudioPlaybackConnector2.slnx
         /p:Configuration=Release
@@ -210,6 +216,21 @@ jobs:
         /p:AppxBundlePlatforms=${{ matrix.architecture }}
         /p:AppxPackageSigningEnabled=false
         /t:Rebuild
+        "-bl:${{ runner.temp }}/unsigned-build.binlog;ProjectImports=None"
+
+    - name: Upload explicitly requested unsigned build failure diagnostics
+      if: ${{ failure() && steps.unsigned-build.outcome == 'failure' && inputs.upload_failure_binlog }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: unsigned-build-failure-${{ matrix.architecture }}
+        path: ${{ runner.temp }}/unsigned-build.binlog
+        if-no-files-found: ignore
+        retention-days: 1
+
+    - name: Remove unsigned build diagnostics
+      if: ${{ always() }}
+      shell: pwsh
+      run: Remove-Item -LiteralPath "$env:RUNNER_TEMP/unsigned-build.binlog" -Force -ErrorAction SilentlyContinue
 
     - name: Verify restored dependency licenses
       shell: pwsh

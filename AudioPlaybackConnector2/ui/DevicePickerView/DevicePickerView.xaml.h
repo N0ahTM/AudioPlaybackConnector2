@@ -14,13 +14,11 @@
 #include <winrt/Microsoft.UI.Xaml.Media.Animation.h>
 #include <chrono>
 #include <stop_token>
-#include <memory>
 
 namespace winrt::Microsoft::UI::Xaml {
 struct RoutedEventArgs;
 }
 namespace winrt::Microsoft::UI::Xaml::Controls {
-struct SelectionChangedEventArgs;
 struct ListViewItem;
 } // namespace winrt::Microsoft::UI::Xaml::Controls
 namespace winrt::AudioPlaybackConnector2::implementation {
@@ -35,7 +33,8 @@ struct DevicePickerView : DevicePickerViewT<DevicePickerView> {
     [[nodiscard]] bool LoadDevices();
     void CancelLoadDevices();
     void PrepareForRelease() noexcept;
-    void RefreshDeviceStates();
+    enum class RenderReason { SnapshotChanged, PresentationChanged };
+    void RenderDeviceList(RenderReason reason = RenderReason::SnapshotChanged);
     void ApplyLanguage();
     [[nodiscard]] bool InvalidateDeviceInventory();
     void SetPresentationActive(bool active) noexcept;
@@ -63,8 +62,6 @@ private:
                                                       std::stop_token stop,
                                                       util::LogSink log);
     [[nodiscard]] std::optional<DeviceOptionsViewModel> DeviceOptions(std::wstring_view id) const;
-    enum class RenderReason { SnapshotChanged, PresentationChanged };
-    void RenderDeviceList(RenderReason reason = RenderReason::SnapshotChanged);
     winrt::Microsoft::UI::Xaml::Controls::ListViewItem
     BuildDeviceListItem(apc::device_picker::DeviceSnapshotItem const& device);
     void ApplyGlobalActionState(bool visible, bool enabled);

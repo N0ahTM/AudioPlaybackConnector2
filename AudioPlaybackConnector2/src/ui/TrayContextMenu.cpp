@@ -42,34 +42,22 @@ void TrayContextMenu::Initialize(winrt::Microsoft::UI::Xaml::FrameworkElement an
         else if (action)
             action();
     };
-    MenuFlyoutItem settingsItem;
-    settingsItem.Text(winrt::hstring(m_strings->Get("OpenSettings")));
-    FontIcon settingsIcon;
-    settingsIcon.Glyph(L"\xE713");
-    settingsItem.Icon(settingsIcon);
-    settingsItem.Click([onSettings, invokeAfterClose](auto, auto) { invokeAfterClose(onSettings); });
-
-    MenuFlyoutItem btItem;
-    MenuFlyoutItem helpItem;
-    helpItem.Text(winrt::hstring(m_strings->Get("Settings_Help")));
-    FontIcon helpIcon;
-    helpIcon.Glyph(L"\xE897");
-    helpItem.Icon(helpIcon);
-    helpItem.Click([onHelp, invokeAfterClose](auto, auto) { invokeAfterClose(onHelp); });
-    btItem.Text(winrt::hstring(m_strings->Get("BluetoothSettings")));
-    FontIcon btIcon;
-    btIcon.Glyph(L"\xE702");
-    btItem.Icon(btIcon);
-    btItem.Click([onBluetooth, invokeAfterClose](auto, auto) { invokeAfterClose(onBluetooth); });
+    auto addItem = [this, invokeAfterClose](std::string_view key, wchar_t const* glyph, std::function<void()> action) {
+        MenuFlyoutItem item;
+        item.Text(winrt::hstring(m_strings->Get(key)));
+        FontIcon icon;
+        icon.Glyph(glyph);
+        item.Icon(icon);
+        item.Click([action, invokeAfterClose](auto, auto) { invokeAfterClose(action); });
+        return item;
+    };
+    auto settingsItem = addItem("OpenSettings", L"\xE713", onSettings);
+    auto helpItem = addItem("Settings_Help", L"\xE897", onHelp);
+    auto btItem = addItem("BluetoothSettings", L"\xE702", onBluetooth);
 
     MenuFlyoutSeparator sep;
 
-    MenuFlyoutItem exitItem;
-    exitItem.Text(winrt::hstring(m_strings->Get("Exit")));
-    FontIcon exitIcon;
-    exitIcon.Glyph(L"\xE8BB");
-    exitItem.Icon(exitIcon);
-    exitItem.Click([onExit, invokeAfterClose](auto, auto) { invokeAfterClose(onExit); });
+    auto exitItem = addItem("Exit", L"\xE8BB", onExit);
 
     menu.Items().Append(settingsItem);
     menu.Items().Append(helpItem);

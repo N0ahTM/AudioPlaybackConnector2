@@ -288,10 +288,6 @@ void DevicePickerView::PrepareForRelease() noexcept {
     m_viewState = {};
 }
 
-void DevicePickerView::RefreshDeviceStates() {
-    RenderDeviceList();
-}
-
 void DevicePickerView::ApplyLanguage() {
     if (m_preparedForRelease) return;
     TitleText().Text(winrt::hstring(m_strings->Get("TrayMenu_SelectDevice")));

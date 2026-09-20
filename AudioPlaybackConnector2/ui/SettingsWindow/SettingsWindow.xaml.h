@@ -100,8 +100,6 @@ private:
                                                        apc::ui::SettingsDiagnosticsReportContext context,
                                                        std::uint64_t requestId,
                                                        util::LogSink log);
-    void StartWithWindowsToggle_Toggled(winrt::Windows::Foundation::IInspectable const& sender,
-                                        winrt::Microsoft::UI::Xaml::RoutedEventArgs const& e);
     util::SettingsWindowPlacement m_defaultPlacement = util::CalculateSettingsWindowPlacement();
     util::SettingsWindowPlacement m_targetPlacement = util::CalculateSettingsWindowPlacement();
     winrt::Microsoft::UI::Dispatching::DispatcherQueueTimer m_placementSaveTimer{nullptr};

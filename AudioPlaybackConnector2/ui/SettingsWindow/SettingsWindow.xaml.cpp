@@ -464,12 +464,6 @@ bool SettingsWindow::StoreCurrentPlacement() {
         .IsApplied();
 }
 
-void SettingsWindow::StartWithWindowsToggle_Toggled(IInspectable const& sender, RoutedEventArgs const&) {
-    if (m_suppressStartupToggle) return;
-    auto toggle = sender.as<ToggleSwitch>();
-    if (m_appController) m_appController->SetStartWithWindows(toggle.IsOn());
-}
-
 void SettingsWindow::ResetWindowPlacementButton_Click(IInspectable const&, RoutedEventArgs const&) {
     ResetWindowPlacement();
 }
@@ -539,8 +533,7 @@ void SettingsWindow::ReportBugButton_Click(IInspectable const&, RoutedEventArgs 
 }
 
 void SettingsWindow::SettingsHelpButton_Click(IInspectable const&, RoutedEventArgs const&) {
-    ShowSettingsPage(SettingsPage::Help);
-    SettingsBackButton().Focus(FocusState::Programmatic);
+    ShowHelpPage();
 }
 
 void SettingsWindow::SettingsBackButton_Click(IInspectable const&, RoutedEventArgs const&) {
@@ -676,37 +669,19 @@ void SettingsWindow::InitializeSettingsContent() {
     PrivacyModeToggle().OffContent(box_value(L""));
     PrivacyModeToggle().OnContent(box_value(L""));
     auto weak = get_weak();
-    ConnectOnStartupToggle().Toggled([weak](auto const& s, auto) {
-        if (auto self = weak.get()) {
-            if (auto appController = self->m_appController) {
-                appController->SetGlobalConnectOnStartup(s.template as<ToggleSwitch>().IsOn());
+    auto bindToggle = [weak](ToggleSwitch toggle, auto setter) {
+        toggle.Toggled([weak, setter](auto const& s, auto) {
+            if (auto self = weak.get()) {
+                if (auto appController = self->m_appController) {
+                    ((*appController).*setter)(s.template as<ToggleSwitch>().IsOn());
+                }
             }
-        }
-    });
-
-    ReconnectOnConnectionLossToggle().Toggled([weak](auto const& s, auto) {
-        if (auto self = weak.get()) {
-            if (auto appController = self->m_appController) {
-                appController->SetGlobalReconnectOnConnectionLoss(s.template as<ToggleSwitch>().IsOn());
-            }
-        }
-    });
-
-    AllowIncomingConnectionsToggle().Toggled([weak](auto const& s, auto) {
-        if (auto self = weak.get()) {
-            if (auto appController = self->m_appController) {
-                appController->SetAllowIncomingConnections(s.template as<ToggleSwitch>().IsOn());
-            }
-        }
-    });
-
-    PrivacyModeToggle().Toggled([weak](auto const& s, auto) {
-        if (auto self = weak.get()) {
-            if (auto appController = self->m_appController) {
-                appController->SetPrivacyMode(s.template as<ToggleSwitch>().IsOn());
-            }
-        }
-    });
+        });
+    };
+    bindToggle(ConnectOnStartupToggle(), &apc::app::AppController::SetGlobalConnectOnStartup);
+    bindToggle(ReconnectOnConnectionLossToggle(), &apc::app::AppController::SetGlobalReconnectOnConnectionLoss);
+    bindToggle(AllowIncomingConnectionsToggle(), &apc::app::AppController::SetAllowIncomingConnections);
+    bindToggle(PrivacyModeToggle(), &apc::app::AppController::SetPrivacyMode);
 
     // Show cached value immediately; async init below corrects it from the actual task state.
     StartWithWindowsToggle().IsOn(settings.StartWithWindows);
@@ -743,19 +718,15 @@ void SettingsWindow::InitializeSettingsContent() {
         StartWithWindowsToggle().IsEnabled(false);
     }
 
-    StartWithWindowsToggle().Toggled([weak](auto const& sender, auto const& args) {
+    StartWithWindowsToggle().Toggled([weak](auto const& sender, auto) {
         if (auto self = weak.get()) {
-            self->StartWithWindowsToggle_Toggled(sender, args);
+            if (self->m_suppressStartupToggle) return;
+            auto toggle = sender.template as<ToggleSwitch>();
+            if (auto appController = self->m_appController) appController->SetStartWithWindows(toggle.IsOn());
         }
     });
 
-    ShowNotificationsToggle().Toggled([weak](auto const& s, auto) {
-        if (auto self = weak.get()) {
-            if (auto appController = self->m_appController) {
-                appController->SetShowNotifications(s.template as<ToggleSwitch>().IsOn());
-            }
-        }
-    });
+    bindToggle(ShowNotificationsToggle(), &apc::app::AppController::SetShowNotifications);
 
     SystemBackdropEffectsToggle().Toggled([weak](auto const& s, auto) {
         if (auto self = weak.get()) {
@@ -992,10 +963,6 @@ winrt::fire_and_forget SettingsWindow::CopyDiagnosticsAsync(winrt::weak_ref<Sett
 }
 
 /*------------------------------------------------------------------------------------------------------------*/
-/*//////// Private Implementation ////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------*/
-
-/*------------------------------------------------------------------------------------------------------------*/
 /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
@@ -1020,9 +987,6 @@ void SettingsWindow::SetTargetPlacement(util::SettingsWindowPlacement placement)
     m_targetPlacement = placement;
 }
 
-} // namespace winrt::AudioPlaybackConnector2::implementation
-
-namespace winrt::AudioPlaybackConnector2::implementation {
 void SettingsWindow::ShowSettingsPage(SettingsPage page) {
     const bool changed = m_currentPage != page;
     StopPageTransition();

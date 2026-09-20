@@ -533,7 +533,7 @@ bool TrayController::RefreshDevicePickerState() noexcept {
     }
     try {
         auto impl = m_devicePickerView.as<winrt::AudioPlaybackConnector2::implementation::DevicePickerView>();
-        impl->RefreshDeviceStates();
+        impl->RenderDeviceList();
         return true;
     } catch (winrt::hresult_error const& ex) {
         m_log.Exception(L"[TrayController] ERROR: failed to refresh picker device state", ex);

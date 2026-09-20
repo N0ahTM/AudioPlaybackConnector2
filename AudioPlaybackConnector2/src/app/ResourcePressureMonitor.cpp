@@ -6,6 +6,7 @@
 #endif
 #include <windows.h>
 #include <shellapi.h>
+#include <wil/resource.h>
 
 #include <app/ResourcePressureMonitor.hpp>
 
@@ -93,26 +94,26 @@ struct ResourcePressureMonitor::Impl {
         ~RunContext() { Shutdown(true); }
 
         [[nodiscard]] bool Initialize() noexcept {
-            LowMemory = CreateMemoryResourceNotification(LowMemoryResourceNotification);
+            LowMemory.reset(CreateMemoryResourceNotification(LowMemoryResourceNotification));
             if (!LowMemory) return false;
-            HighMemory = CreateMemoryResourceNotification(HighMemoryResourceNotification);
+            HighMemory.reset(CreateMemoryResourceNotification(HighMemoryResourceNotification));
             if (!HighMemory) return false;
 
-            LowWait = CreateThreadpoolWait(&MemoryCallback, this, nullptr);
+            LowWait.reset(CreateThreadpoolWait(&MemoryCallback, this, nullptr));
             if (!LowWait) return false;
-            HighWait = CreateThreadpoolWait(&MemoryCallback, this, nullptr);
+            HighWait.reset(CreateThreadpoolWait(&MemoryCallback, this, nullptr));
             if (!HighWait) return false;
-            PollTimer = CreateThreadpoolTimer(&TimerCallback, this, nullptr);
-            return PollTimer != nullptr;
+            PollTimer.reset(CreateThreadpoolTimer(&TimerCallback, this, nullptr));
+            return static_cast<bool>(PollTimer);
         }
 
         void Arm() noexcept {
             std::scoped_lock lock(ControlMutex);
             Running.store(true);
-            SetThreadpoolWait(LowWait, LowMemory, nullptr);
-            SetThreadpoolWait(HighWait, HighMemory, nullptr);
+            SetThreadpoolWait(LowWait.get(), LowMemory.get(), nullptr);
+            SetThreadpoolWait(HighWait.get(), HighMemory.get(), nullptr);
             auto dueTime = RelativeDueTime(std::chrono::milliseconds{1});
-            SetThreadpoolTimer(PollTimer, &dueTime, 0, std::min<DWORD>(NormalPeriod / 5, 1000));
+            SetThreadpoolTimer(PollTimer.get(), &dueTime, 0, std::min<DWORD>(NormalPeriod / 5, 1000));
         }
 
         [[nodiscard]] bool RequestProbe() noexcept {
@@ -120,7 +121,7 @@ struct ResourcePressureMonitor::Impl {
                 std::scoped_lock lock(ControlMutex);
                 if (!Running.load() || !IsOwnerEpochCurrent() || !PollTimer) return false;
                 auto dueTime = RelativeDueTime(std::chrono::milliseconds{1});
-                SetThreadpoolTimer(PollTimer, &dueTime, 0, 0);
+                SetThreadpoolTimer(PollTimer.get(), &dueTime, 0, 0);
                 return true;
             } catch (...) {
                 return false;
@@ -133,30 +134,21 @@ struct ResourcePressureMonitor::Impl {
 
             {
                 std::scoped_lock lock(ControlMutex);
-                if (LowWait) SetThreadpoolWait(LowWait, nullptr, nullptr);
-                if (HighWait) SetThreadpoolWait(HighWait, nullptr, nullptr);
-                if (PollTimer) SetThreadpoolTimer(PollTimer, nullptr, 0, 0);
+                if (LowWait) SetThreadpoolWait(LowWait.get(), nullptr, nullptr);
+                if (HighWait) SetThreadpoolWait(HighWait.get(), nullptr, nullptr);
+                if (PollTimer) SetThreadpoolTimer(PollTimer.get(), nullptr, 0, 0);
             }
 
-            if (LowWait) WaitForThreadpoolWaitCallbacks(LowWait, TRUE);
-            if (HighWait) WaitForThreadpoolWaitCallbacks(HighWait, TRUE);
-            if (PollTimer) WaitForThreadpoolTimerCallbacks(PollTimer, TRUE);
+            if (LowWait) WaitForThreadpoolWaitCallbacks(LowWait.get(), TRUE);
+            if (HighWait) WaitForThreadpoolWaitCallbacks(HighWait.get(), TRUE);
+            if (PollTimer) WaitForThreadpoolTimerCallbacks(PollTimer.get(), TRUE);
 
-            if (LowWait) {
-                CloseThreadpoolWait(std::exchange(LowWait, nullptr));
-            }
-            if (HighWait) {
-                CloseThreadpoolWait(std::exchange(HighWait, nullptr));
-            }
-            if (PollTimer) {
-                CloseThreadpoolTimer(std::exchange(PollTimer, nullptr));
-            }
-            if (LowMemory) {
-                CloseHandle(std::exchange(LowMemory, nullptr));
-            }
-            if (HighMemory) {
-                CloseHandle(std::exchange(HighMemory, nullptr));
-            }
+            // All native callbacks have drained above; these owners only close resources.
+            LowWait.reset();
+            HighWait.reset();
+            PollTimer.reset();
+            LowMemory.reset();
+            HighMemory.reset();
 
             if (waitForPublicCallbacks && g_activeResourcePressureCallback != OwnerIdentity) {
                 WaitForPublicCallbacks();
@@ -213,8 +205,8 @@ struct ResourcePressureMonitor::Impl {
                 if (!Running.load() || !IsOwnerEpochCurrent()) return;
 
                 ResourcePressureProbe probe{
-                    .LowMemorySignaled = QueryMemoryState(LowMemory),
-                    .HighMemorySignaled = QueryMemoryState(HighMemory),
+                    .LowMemorySignaled = QueryMemoryState(LowMemory.get()),
+                    .HighMemorySignaled = QueryMemoryState(HighMemory.get()),
                     .MemoryProbeAttempted = true,
                 };
                 probe.UserActivity = QueryUserActivity();
@@ -277,14 +269,14 @@ struct ResourcePressureMonitor::Impl {
 
         void ArmMemoryWaits(std::optional<bool> lowMemorySignaled, std::optional<bool> highMemorySignaled) noexcept {
             auto const plan = PlanMemoryNotificationWaits(lowMemorySignaled, highMemorySignaled);
-            SetThreadpoolWait(LowWait, plan.ArmLow ? LowMemory : nullptr, nullptr);
-            SetThreadpoolWait(HighWait, plan.ArmHigh ? HighMemory : nullptr, nullptr);
+            SetThreadpoolWait(LowWait.get(), plan.ArmLow ? LowMemory.get() : nullptr, nullptr);
+            SetThreadpoolWait(HighWait.get(), plan.ArmHigh ? HighMemory.get() : nullptr, nullptr);
         }
 
         void ScheduleNextPoll(bool constrained) noexcept {
             auto const period = constrained ? ConstrainedPeriod : NormalPeriod;
             auto dueTime = RelativeDueTime(std::chrono::milliseconds{period});
-            SetThreadpoolTimer(PollTimer, &dueTime, 0, std::min<DWORD>(period / 5, 1000));
+            SetThreadpoolTimer(PollTimer.get(), &dueTime, 0, std::min<DWORD>(period / 5, 1000));
         }
 
         [[nodiscard]] bool IsOwnerEpochCurrent() const noexcept { return OwnerEpoch->load() == Epoch; }
@@ -316,22 +308,22 @@ struct ResourcePressureMonitor::Impl {
         std::uint64_t Epoch = 0;
         std::chrono::milliseconds HeartbeatInterval;
         bool DeliveryActive = false;
-        HANDLE LowMemory = nullptr;
-        HANDLE HighMemory = nullptr;
-        PTP_WAIT LowWait = nullptr;
-        PTP_WAIT HighWait = nullptr;
-        PTP_TIMER PollTimer = nullptr;
+        wil::unique_handle LowMemory;
+        wil::unique_handle HighMemory;
+        wil::unique_threadpool_wait_nowait LowWait;
+        wil::unique_threadpool_wait_nowait HighWait;
+        wil::unique_threadpool_timer_nowait PollTimer;
     };
 
     explicit Impl(Callback callback, Config config) : Handler(std::move(callback)), MonitorConfig(config) {
-        DeferredStopWork = CreateThreadpoolWork(&DeferredStopCallback, this, nullptr);
+        DeferredStopWork.reset(CreateThreadpoolWork(&DeferredStopCallback, this, nullptr));
     }
 
     ~Impl() {
         Stop();
         if (DeferredStopWork) {
-            WaitForThreadpoolWorkCallbacks(DeferredStopWork, TRUE);
-            CloseThreadpoolWork(std::exchange(DeferredStopWork, nullptr));
+            WaitForThreadpoolWorkCallbacks(DeferredStopWork.get(), TRUE);
+            DeferredStopWork.reset();
         }
     }
 
@@ -375,7 +367,7 @@ struct ResourcePressureMonitor::Impl {
         if (calledFromCallback) {
             std::unique_lock lock(LifecycleMutex, std::try_to_lock);
             if (!lock.owns_lock()) {
-                if (DeferredStopWork) SubmitThreadpoolWork(DeferredStopWork);
+                if (DeferredStopWork) SubmitThreadpoolWork(DeferredStopWork.get());
                 return;
             }
             auto const pendingStop = StopRequestFlags.exchange(0);
@@ -442,7 +434,7 @@ struct ResourcePressureMonitor::Impl {
     mutable std::mutex LifecycleMutex;
     std::shared_ptr<RunContext> Active;
     std::shared_ptr<RunContext> Retiring;
-    PTP_WORK DeferredStopWork = nullptr;
+    wil::unique_threadpool_work_nowait DeferredStopWork;
 };
 
 /*------------------------------------------------------------------------------------------------------------*/

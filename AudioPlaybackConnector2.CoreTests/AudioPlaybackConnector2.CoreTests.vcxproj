@@ -92,6 +92,7 @@
     <ClCompile Include="src\PowerTransitionCoordinatorTests.cpp" />
 
     <ClCompile Include="src\CommandLineControlServerTests.cpp" />
+    <ClCompile Include="src\CommandPipeSecurityTests.cpp" />
     <ClCompile Include="src\CommandClientTests.cpp" />
     <ClCompile Include="src\CliParserTests.cpp" />
     <ClCompile Include="src\ControlUiActionGateTests.cpp" />

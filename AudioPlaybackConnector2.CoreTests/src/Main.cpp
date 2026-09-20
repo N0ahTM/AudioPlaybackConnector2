@@ -35,6 +35,7 @@ int RunStringResourcesTests();
 int RunCrashHandlerTests();
 int RunCrashHandlerChild();
 int RunCommandLineControlServerTests();
+int RunCommandPipeSecurityTests();
 int RunControlUiActionGateTests();
 int RunControlTargetMatcherTests();
 int RunDeviceServiceTests();
@@ -132,6 +133,7 @@ int main(int argc, char** argv) {
         Suite{"StringResources", RunStringResourcesTests},
         Suite{"CrashHandler", RunCrashHandlerTests},
         Suite{"CommandLineControlServer", RunCommandLineControlServerTests},
+        Suite{"CommandPipeSecurity", RunCommandPipeSecurityTests},
         Suite{"ControlUiActionGate", RunControlUiActionGateTests},
         Suite{"ControlTargetMatcher", RunControlTargetMatcherTests},
         Suite{"DeviceService", RunDeviceServiceTests},

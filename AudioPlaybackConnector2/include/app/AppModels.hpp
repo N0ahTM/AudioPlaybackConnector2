@@ -85,33 +85,26 @@ public:
     // P07 identity bound. Use IdText() to retain longer P01 input.
     [[nodiscard]] std::optional<apc::core::DeviceId> Id() const {
         if (m_kind != DeviceSelectorKind::Id) return std::nullopt;
-        if (auto const* idText = std::get_if<std::wstring>(&m_value)) {
-            return apc::core::DeviceId::TryCreate(*idText);
-        }
-        return std::nullopt;
+        return apc::core::DeviceId::TryCreate(m_value);
     }
 
     // Returns the exact external ID text, including IDs too large for the
     // validated internal DeviceId P07 bound.
     [[nodiscard]] std::wstring_view IdText() const noexcept {
         if (m_kind != DeviceSelectorKind::Id) return {};
-        if (auto const* idText = std::get_if<std::wstring>(&m_value)) return *idText;
-        return {};
+        return m_value;
     }
 
     // Non-empty only for Name, Mac, Auto, and Alias selectors.
     [[nodiscard]] std::wstring_view Query() const noexcept {
         if (!IsQueryKind(m_kind)) return {};
-        if (auto const* query = std::get_if<std::wstring>(&m_value)) return *query;
-        return {};
+        return m_value;
     }
 
     friend bool operator==(DeviceSelector const&, DeviceSelector const&) = default;
 
 private:
-    using Value = std::variant<std::monostate, std::wstring>;
-
-    DeviceSelector(DeviceSelectorKind kind, Value value) noexcept : m_kind(kind), m_value(std::move(value)) {}
+    DeviceSelector(DeviceSelectorKind kind, std::wstring value) noexcept : m_kind(kind), m_value(std::move(value)) {}
 
     [[nodiscard]] static bool IsValidCommandText(std::wstring_view value) noexcept {
         // CommandProtocol::IsRequestValid deliberately accepts any bounded
@@ -126,7 +119,7 @@ private:
     }
 
     DeviceSelectorKind m_kind;
-    Value m_value;
+    std::wstring m_value;
 };
 
 enum class AppCommandKind {

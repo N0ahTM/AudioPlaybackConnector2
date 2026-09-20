@@ -379,9 +379,6 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="include\util\Event.hpp">
-      <Filter>include\util</Filter>
-    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\util\RuntimeApartment.hpp">

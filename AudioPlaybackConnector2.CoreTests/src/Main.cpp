@@ -39,7 +39,6 @@ int RunControlTargetMatcherTests();
 int RunDeviceServiceTests();
 int RunDeviceWatcherTests();
 int RunDiagnosticsLogCollectorTests();
-int RunEventTests();
 int RunSettingsDiagnosticsReportBuilderTests();
 int RunSettingsStoreTests();
 int RunDevicePickerViewStateTests();
@@ -132,7 +131,6 @@ int main(int argc, char** argv) {
         Suite{"DeviceService", RunDeviceServiceTests},
         Suite{"DeviceWatcher", RunDeviceWatcherTests},
         Suite{"DiagnosticsLogCollector", RunDiagnosticsLogCollectorTests},
-        Suite{"Event", RunEventTests},
         Suite{"SettingsDiagnosticsReportBuilder", RunSettingsDiagnosticsReportBuilderTests},
         Suite{"SettingsStore", RunSettingsStoreTests},
         Suite{"DevicePickerViewState", RunDevicePickerViewStateTests},

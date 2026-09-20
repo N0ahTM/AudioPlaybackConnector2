@@ -1,6 +1,6 @@
 # Translating AudioPlaybackConnector2
 
-English `en.json` is canonical; locales overlay it, with missing keys falling back to English. Files under `AudioPlaybackConnector2/res/strings/` are UTF-8 JSON objects of non-empty strings.
+English `en.json` is canonical. All eight committed locales must contain exactly its keys and matching placeholders. Runtime English fallback remains available when a language resource cannot be loaded. Files under `AudioPlaybackConnector2/res/strings/` are UTF-8 JSON objects of non-empty strings.
 
 ## Supported locales
 
@@ -24,7 +24,7 @@ English `en.json` is canonical; locales overlay it, with missing keys falling ba
 
 ## Add or change an English string
 
-Add a stable descriptive key to `en.json`; do not reuse an unrelated key for matching wording. Temporary English fallback is allowed; review validator completeness before release and coordinate missing text in [Discussions](https://github.com/N0ahTM/AudioPlaybackConnector2/discussions).
+Add a stable descriptive key to `en.json`; do not reuse an unrelated key for matching wording. Update all eight locale tables together and run the validator before opening the PR; missing keys fail the quality gate. Coordinate translations in [Discussions](https://github.com/N0ahTM/AudioPlaybackConnector2/discussions).
 
 ## Add a new language
 

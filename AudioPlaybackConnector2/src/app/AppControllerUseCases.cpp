@@ -1,5 +1,6 @@
 #include <app/AppController.hpp>
 #include <app/StartupTaskCoordinator.hpp>
+#include <control/ControlTargetMatcher.hpp>
 #include <core/DeviceService.hpp>
 #include <winrt/Windows.Foundation.h>
 
@@ -821,31 +822,15 @@ AppController::Resolution AppController::Resolve(DeviceSelector const& selector,
         return result;
     }
     if (selector.Kind() == DeviceSelectorKind::Auto) {
-        std::vector<DeviceRecord> matches;
+        std::vector<apc::control::TargetCandidateView> candidates;
+        candidates.reserve(devices.size());
         for (auto const& device : devices) {
-            if (EqualsIgnoreCase(device.Id, query)) matches.push_back(device);
+            candidates.push_back({device.Id, device.Name, device.Alias});
         }
-        if (matches.empty()) {
-            for (auto const& device : devices) {
-                if (EqualsIgnoreCase(device.Alias, query) || EqualsIgnoreCase(device.Name, query)) {
-                    matches.push_back(device);
-                }
-            }
-        }
-        if (matches.empty()) {
-            const auto normalized = NormalizeHex(query);
-            if (normalized.size() >= 6) {
-                for (auto const& device : devices) {
-                    if (NormalizeHex(device.Id).find(normalized) != std::wstring::npos) matches.push_back(device);
-                }
-            }
-        }
-        if (matches.empty()) {
-            for (auto const& device : devices) {
-                if (ContainsIgnoreCase(device.Alias, query) || ContainsIgnoreCase(device.Name, query)) {
-                    matches.push_back(device);
-                }
-            }
+        auto const found = apc::control::FindAutoTargetMatches(candidates, query);
+        std::vector<DeviceRecord> matches;
+        for (auto const index : found.Indices) {
+            matches.push_back(devices[index]);
         }
         matchOne(std::move(matches), query);
         return result;

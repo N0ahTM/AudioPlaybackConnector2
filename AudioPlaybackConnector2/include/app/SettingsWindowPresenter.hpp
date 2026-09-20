@@ -1,10 +1,16 @@
 #pragma once
 
-#include <core/StringResources.hpp>
 #include <memory>
+#include <string_view>
 
 #include <util/Logger.hpp>
 #include <ui/WindowPlacement.hpp>
+
+class StringResources;
+
+namespace winrt::Microsoft::UI::Xaml {
+struct Window;
+}
 
 namespace apc::app {
 class AppController;
@@ -22,6 +28,9 @@ public:
 
     explicit SettingsWindowPresenter(util::LogSink log, std::shared_ptr<StringResources const> strings);
     ~SettingsWindowPresenter();
+
+    SettingsWindowPresenter(SettingsWindowPresenter const&) = delete;
+    SettingsWindowPresenter& operator=(SettingsWindowPresenter const&) = delete;
 
     [[nodiscard]] bool Show(std::shared_ptr<apc::app::AppController> appController,
                             util::SettingsWindowPlacement defaultPlacement);
@@ -47,5 +56,7 @@ private:
 
     util::LogSink m_log;
     std::shared_ptr<StringResources const> m_strings;
+    // UI-only owner; Close may synchronously invoke Closed and clear Current.
+    // Operations retain state across that reentrancy; callbacks hold only weak references.
     std::shared_ptr<PresenterState> m_state;
 };

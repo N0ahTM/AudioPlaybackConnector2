@@ -1,10 +1,15 @@
 #include <pch.h>
 
 #include <app/SettingsWindowPresenter.hpp>
+#include <app/AppController.hpp>
+#include <core/StringResources.hpp>
+
+#include <exception>
+#include <optional>
+#include <utility>
 
 #include <SettingsWindow/SettingsWindow.xaml.h>
 #include <ui/XamlWindowInterop.hpp>
-#include <util/Util.hpp>
 
 struct SettingsWindowPresenter::WindowState {
     util::LogSink Log;

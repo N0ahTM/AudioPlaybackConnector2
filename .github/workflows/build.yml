@@ -74,6 +74,8 @@ jobs:
         ./scripts/update-cli-reference.ps1 -Check
         ./scripts/test-release-metadata.ps1
         ./scripts/test-release-version.ps1
+        python scripts/test-dependency-licenses.py
+        if ($LASTEXITCODE -ne 0) { throw "Dependency license gate tests failed." }
         ./scripts/test-package-notices.ps1
 
     - name: Add MSBuild to PATH
@@ -176,6 +178,13 @@ jobs:
         /p:AppxBundlePlatforms=${{ matrix.architecture }}
         /p:AppxPackageSigningEnabled=false
         /t:Rebuild
+
+    - name: Verify restored dependency licenses
+      shell: pwsh
+      run: |
+        $triplet = '${{ matrix.architecture }}'.ToLowerInvariant() + '-windows-static-md'
+        python scripts/verify-dependency-licenses.py --triplet $triplet
+        if ($LASTEXITCODE -ne 0) { throw 'Dependency license verification failed.' }
 
     - name: Run native regression tests
       if: ${{ matrix.architecture == 'x64' }}

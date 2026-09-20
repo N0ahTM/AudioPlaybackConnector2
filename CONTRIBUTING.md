@@ -181,3 +181,12 @@ Please check the existing [GitHub Issues](https://github.com/N0ahTM/AudioPlaybac
 ## License
 
 By contributing, you agree that your contributions will be licensed under the [MIT License](LICENSE).
+
+The reviewed vcpkg license inventory is `config/dependency-licenses.json`. After a restore/build, run
+`python scripts/verify-dependency-licenses.py --triplet x64-windows-static-md` (or
+`arm64-windows-static-md`). The check compares manifest pins, restored product and build dependencies,
+normalized copyright hashes, and complete notice text. A new dependency, optional feature, version,
+or license text requires review of the inventory and notices; do not blindly regenerate the hashes.
+`python scripts/test-dependency-licenses.py` checks the rejection paths without a restore.
+This gate covers vcpkg dependencies; it does not replace NuGet notice review, vulnerability scanning,
+or the release-drop SBOM.

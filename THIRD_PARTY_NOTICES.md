@@ -129,9 +129,9 @@ The Windows App SDK package is not licensed as a single MIT component. Its NuGet
 
 ## C++/WinRT (microsoft/cppwinrt)
 
-**Version:** 2.0.250303.1  
-**License:** MIT  
-**Source:** https://github.com/microsoft/cppwinrt  
+**Version:** 2.0.250303.1
+**License:** MIT
+**Source:** https://github.com/microsoft/cppwinrt
 
 > Copyright (c) Microsoft Corporation. All rights reserved.
 >
@@ -141,9 +141,9 @@ The Windows App SDK package is not licensed as a single MIT component. Its NuGet
 
 ## Windows Implementation Libraries (WIL)
 
-**Version:** 1.0.260126.7  
-**License:** MIT  
-**Source:** https://github.com/microsoft/wil  
+**Version:** 1.0.260126.7
+**License:** MIT
+**Source:** https://github.com/microsoft/wil
 
 > Copyright (c) Microsoft Corporation. All rights reserved.
 >
@@ -153,9 +153,9 @@ The Windows App SDK package is not licensed as a single MIT component. Its NuGet
 
 ## Microsoft Fluent UI System Icons
 
-**Usage:** Derived toast status icon assets under `AudioPlaybackConnector2 (Package)/Images/Toast*.scale-*.png`  
-**License:** MIT  
-**Source:** https://github.com/microsoft/fluentui-system-icons  
+**Usage:** Derived toast status icon assets under `AudioPlaybackConnector2 (Package)/Images/Toast*.scale-*.png`
+**License:** MIT
+**Source:** https://github.com/microsoft/fluentui-system-icons
 
 > Copyright (c) Microsoft Corporation.
 >
@@ -185,7 +185,7 @@ The Windows App SDK package is not licensed as a single MIT component. Its NuGet
 
 ## Microsoft Edge WebView2
 
-**Version:** 1.0.3719.77  
+**Version:** 1.0.3719.77
 **Source and package notices:** [Microsoft.Web.WebView2 1.0.3719.77](https://www.nuget.org/packages/Microsoft.Web.WebView2/1.0.3719.77)
 
 > Copyright (C) Microsoft Corporation. All rights reserved.
@@ -208,16 +208,16 @@ The following packages are used to build or package the application and are not 
 
 ### Windows SDK Build Tools
 
-**Package:** Microsoft.Windows.SDK.BuildTools 10.0.28000.1839  
-**License:** Microsoft Software License  
+**Package:** Microsoft.Windows.SDK.BuildTools 10.0.28000.1839
+**License:** Microsoft Software License
 **Source:** https://developer.microsoft.com/en-us/windows/downloads/windows-sdk/
 
 ---
 
 ### Windows SDK Build Tools (MSIX)
 
-**Package:** Microsoft.Windows.SDK.BuildTools.MSIX 1.7.251221100  
-**License:** Microsoft Software License  
+**Package:** Microsoft.Windows.SDK.BuildTools.MSIX 1.7.251221100
+**License:** Microsoft Software License
 **Source:** https://developer.microsoft.com/en-us/windows/downloads/windows-sdk/
 
 ---
@@ -232,3 +232,56 @@ The following Windows import libraries are used at link time. Their correspondin
 - `comctl32.lib` — Common Controls
 - `shlwapi.lib` — Shell Lightweight Utility API
 - `dwmapi.lib` — Desktop Window Manager API
+
+## vcpkg-cmake - build dependency
+
+Version 2024-04-23. MIT license. Used only during vcpkg package builds.
+
+MIT License
+
+Copyright (c) Microsoft Corporation
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this
+software and associated documentation files (the "Software"), to deal in the Software
+without restriction, including without limitation the rights to use, copy, modify,
+merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be included in all copies
+or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## vcpkg-cmake-config - build dependency
+
+Version 2024-05-23. MIT license. Used only during vcpkg package builds.
+
+Copyright (c) Microsoft Corporation
+
+All rights reserved.
+
+MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED *AS IS*, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

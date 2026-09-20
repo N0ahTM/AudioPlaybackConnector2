@@ -169,7 +169,7 @@ Publish language before tray/settings relocalization on UI. Selection handler do
 
 ## Notification ownership
 
-Host constructs/calls/destroys NotificationService on UI. Native activation captures dispatcher, weak service, generation and weak log sink; copies arguments to UI without acquiring service on native thread. Queued delivery checks generation/teardown before host reconnect; no service mutex or second dispatcher hop.
+Host constructs/calls/destroys NotificationService on UI. Native activation captures dispatcher, weak service, generation and weak log sink; copies arguments to UI without acquiring service on native thread. Queued delivery checks generation/teardown before calling the controller directly; no service mutex or second dispatcher hop. NotificationService holds a weak controller reference, reads preferences and device labels from one AppSnapshot per event, and never reads SettingsStore or calls host policy callbacks. The host checks event currency before delivery.
 
 Teardown invalidates generation and detaches manager before native revoke. Initialize/Show retain UI owner across Windows calls that may pump messages; late registration cannot republish after teardown. Nested Show is declined. Last status tag commits only on success; unique tags prevent stale removal of newer notifications. Cleanup coroutines retain manager/tag/group/log values only.
 

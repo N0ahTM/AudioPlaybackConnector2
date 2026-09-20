@@ -487,21 +487,7 @@ void ApplicationHost::InitializeTray() {
 
 void ApplicationHost::InitializeNotifications() {
     m_log.Trace(L"[App] InitializeNotifications()");
-    m_notificationService = std::make_shared<NotificationService>(m_log, m_strings, m_dispatcherQueue);
-    auto weak = weak_from_this();
-    m_notificationService->SetShouldShowNotificationCallback([weak]() -> bool {
-        if (auto self = weak.lock()) {
-            if (self->m_settingsStore) return self->m_settingsStore->Snapshot().Data.ShowNotifications;
-        }
-        return true;
-    });
-    m_notificationService->SetReconnectCallback([weak](winrt::hstring deviceId) {
-        if (auto self = weak.lock(); self && !self->m_exiting.load() && self->m_appController) {
-            if (auto selector = apc::app::DeviceSelector::ById(std::wstring_view(deviceId))) {
-                (void)self->m_appController->Reconnect(std::move(*selector), apc::app::AppCommandContext::Detached());
-            }
-        }
-    });
+    m_notificationService = std::make_shared<NotificationService>(m_log, m_strings, m_dispatcherQueue, m_appController);
     const auto notificationsAvailable =
         m_notificationService->Initialize(winrt::hstring(m_strings->Get("AppName")),
                                           winrt::Windows::Foundation::Uri(L"ms-appx:///Images/Square44x44Logo.png"));
@@ -825,19 +811,6 @@ void ApplicationHost::ScheduleAdaptiveResourceEvaluation(
         m_adaptiveResourceFallbackTimer = nullptr;
         OutputDebugStringW(L"[AudioPlaybackConnector2] Failed to schedule adaptive resource fallback timer\n");
     }
-}
-
-winrt::hstring ApplicationHost::ResolveKnownDeviceName(winrt::hstring const& id) const {
-    if (!m_settingsStore) return id;
-    const auto settingsSnapshot = m_settingsStore->Snapshot();
-    auto const& settings = settingsSnapshot.Data;
-    auto it = std::ranges::find_if(settings.Devices, [&](const auto& device) { return device.Id == id; });
-    if (it != settings.Devices.end()) {
-        if (!it->Alias.empty()) return winrt::hstring(it->Alias);
-        if (settings.PrivacyModeEnabled) return winrt::hstring(m_strings->Get("Privacy_RedactedDevice"));
-        if (!it->Name.empty()) return winrt::hstring(it->Name);
-    }
-    return settings.PrivacyModeEnabled ? winrt::hstring(m_strings->Get("Privacy_RedactedDevice")) : id;
 }
 
 void ApplicationHost::HandlePowerSuspend() {
@@ -1182,9 +1155,12 @@ void ApplicationHost::HandleAppEvent(apc::app::AppController::EventNotification 
             using T = std::decay_t<decltype(event)>;
             using namespace apc::app;
             if constexpr (std::is_same_v<T, DeviceConnectedEvent>) {
-                OnDeviceConnected(winrt::hstring(event.Id.View()));
+                if (m_deviceService->IsDeviceConnected(event.Id.View())) {
+                    m_powerTransitionCoordinator.NotifyDeviceConnected(event.Id.View());
+                    ScheduleDeviceVisualRefresh(VisualRefresh::Tray);
+                }
             } else if constexpr (std::is_same_v<T, DeviceDisconnectedEvent>) {
-                OnDeviceDisconnected(winrt::hstring(event.Id.View()), event.NotifyUser);
+                ScheduleDeviceVisualRefresh(VisualRefresh::Tray);
             } else if constexpr (std::is_same_v<T, DeviceConnectionErrorEvent>) {
                 using Reason = DeviceConnectionErrorEvent::Reason;
                 auto const key = [&] {
@@ -1196,11 +1172,10 @@ void ApplicationHost::HandleAppEvent(apc::app::AppController::EventNotification 
                     }
                     return "UnknownError";
                 }();
-                OnConnectionError(winrt::hstring(event.Id.View()), winrt::hstring(m_strings->Get(key)));
-            } else if constexpr (std::is_same_v<T, AutoReconnectTriggeredEvent>) {
-                OnAutoReconnectTriggered(winrt::hstring(event.Id.View()));
-            } else if constexpr (std::is_same_v<T, AutoReconnectFailedEvent>) {
-                OnAutoReconnectFailed(winrt::hstring(event.Id.View()));
+                m_transientTrayErrorTooltip =
+                    std::wstring(m_strings->Get("AppName")) + L"\n" + std::wstring(m_strings->Get(key));
+                ScheduleDeviceVisualRefresh(VisualRefresh::TrayWithError);
+
             } else if constexpr (std::is_same_v<T, DeviceStatusChangedEvent>) {
                 ScheduleDeviceVisualRefresh(event.State == DeviceConnectionState::Failed ? VisualRefresh::TrayWithError
                                                                                          : VisualRefresh::Tray);
@@ -1224,6 +1199,7 @@ void ApplicationHost::HandleAppEvent(apc::app::AppController::EventNotification 
             }
         },
         notification.Event);
+    if (m_notificationService) m_notificationService->HandleEvent(notification.Event);
 }
 
 bool ApplicationHost::ShowSettingsWindow() {
@@ -1260,86 +1236,6 @@ bool ApplicationHost::CloseMainWindow(std::wstring_view reason) noexcept {
 
 /*//////// Device Event Handlers /////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
-
-void ApplicationHost::OnDeviceConnected(winrt::hstring const& id) {
-    if (m_exiting.load() || !m_deviceService) return;
-    m_log.Trace(L"[App] OnDeviceConnected: {0}", std::wstring(id));
-
-    if (!m_deviceService->IsDeviceConnected(std::wstring_view(id))) {
-        return;
-    }
-    m_powerTransitionCoordinator.NotifyDeviceConnected(std::wstring_view(id));
-    if (m_notificationService) {
-        try {
-            m_notificationService->ShowDeviceConnected(id, ResolveKnownDeviceName(id));
-        } catch (winrt::hresult_error const& ex) {
-            m_log.Exception(L"[App] OnDeviceConnected notification ERROR", ex);
-        } catch (std::exception const& ex) {
-            m_log.Exception(L"[App] OnDeviceConnected notification ERROR", ex);
-        } catch (...) {
-            m_log.UnknownException(L"[App] OnDeviceConnected notification ERROR");
-        }
-    }
-
-    ScheduleDeviceVisualRefresh(VisualRefresh::Tray);
-}
-
-void ApplicationHost::OnDeviceDisconnected(winrt::hstring const& id, bool notifyUser) {
-    if (m_exiting.load()) return;
-    m_log.Trace(L"[App] OnDeviceDisconnected: {0}", std::wstring(id));
-
-    ScheduleDeviceVisualRefresh(VisualRefresh::Tray);
-    if (!notifyUser || !m_notificationService) return;
-
-    try {
-        m_notificationService->ShowDeviceDisconnected(id, ResolveKnownDeviceName(id));
-    } catch (winrt::hresult_error const& ex) {
-        m_log.Exception(L"[App] OnDeviceDisconnected notification ERROR", ex);
-    } catch (std::exception const& ex) {
-        m_log.Exception(L"[App] OnDeviceDisconnected notification ERROR", ex);
-    } catch (...) {
-        m_log.UnknownException(L"[App] OnDeviceDisconnected notification ERROR");
-    }
-}
-
-void ApplicationHost::OnConnectionError(winrt::hstring const& id, winrt::hstring msg) {
-    if (m_exiting.load()) return;
-    m_log.Trace(L"[App] OnConnectionError: {0} - {1}", std::wstring(id), std::wstring(msg));
-    m_transientTrayErrorTooltip = std::wstring(m_strings->Get("AppName")) + L"\n" + std::wstring(msg);
-    ScheduleDeviceVisualRefresh(VisualRefresh::TrayWithError);
-}
-
-void ApplicationHost::OnAutoReconnectTriggered(winrt::hstring const& id) {
-    if (m_exiting.load()) return;
-    m_log.Trace(L"[App] OnAutoReconnectTriggered: {0}", std::wstring(id));
-
-    winrt::hstring deviceName = ResolveKnownDeviceName(id);
-    if (m_notificationService) {
-        try {
-            m_notificationService->ShowAutoReconnect(id, deviceName);
-        } catch (winrt::hresult_error const& ex) {
-            m_log.Exception(L"[App] OnAutoReconnectTriggered notification ERROR", ex);
-        } catch (std::exception const& ex) {
-            m_log.Exception(L"[App] OnAutoReconnectTriggered notification ERROR", ex);
-        }
-    }
-}
-
-void ApplicationHost::OnAutoReconnectFailed(winrt::hstring const& id) {
-    if (m_exiting.load()) return;
-    m_log.Trace(L"[App] OnAutoReconnectFailed: {0}", std::wstring(id));
-
-    winrt::hstring deviceName = ResolveKnownDeviceName(id);
-    if (m_notificationService) {
-        try {
-            m_notificationService->ShowAutoReconnectFailed(id, deviceName);
-        } catch (winrt::hresult_error const& ex) {
-            m_log.Exception(L"[App] OnAutoReconnectFailed notification ERROR", ex);
-        } catch (std::exception const& ex) {
-            m_log.Exception(L"[App] OnAutoReconnectFailed notification ERROR", ex);
-        }
-    }
-}
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Window Subclass ///////////////////////////////////////////////////////////////////////////////////*/

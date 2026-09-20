@@ -93,7 +93,6 @@ private:
     void HandleResourcePressureSnapshot(ResourcePressureSnapshot snapshot);
     void EvaluateAdaptiveResources(bool userInteraction, std::wstring_view reason) noexcept;
     void ScheduleAdaptiveResourceEvaluation(std::optional<AdaptiveResourcePolicy::TimePoint> reevaluateAt) noexcept;
-    [[nodiscard]] winrt::hstring ResolveKnownDeviceName(winrt::hstring const& id) const;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Actions ///////////////////////////////////////////////////////////////////////////////////////////*/
@@ -109,16 +108,6 @@ private:
     ControlUiActionResult RunControlUiAction(std::function<bool()> work, apc::app::AppCommandContext const& context);
 
     void HandleAppEvent(apc::app::AppController::EventNotification const& event);
-
-    /*------------------------------------------------------------------------------------------------------------*/
-    /*//////// Device Event Handlers /////////////////////////////////////////////////////////////////////////////*/
-    /*------------------------------------------------------------------------------------------------------------*/
-
-    void OnDeviceConnected(winrt::hstring const& id);
-    void OnDeviceDisconnected(winrt::hstring const& id, bool notifyUser);
-    void OnConnectionError(winrt::hstring const& id, winrt::hstring msg);
-    void OnAutoReconnectTriggered(winrt::hstring const& id);
-    void OnAutoReconnectFailed(winrt::hstring const& id);
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Window Subclass ///////////////////////////////////////////////////////////////////////////////////*/

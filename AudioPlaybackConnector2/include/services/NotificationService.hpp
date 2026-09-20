@@ -51,11 +51,6 @@ public:
     void HandleEvent(apc::app::AppEvent const& event) noexcept;
 
 private:
-    void ShowDeviceConnected(winrt::hstring const& id, winrt::hstring const& deviceName);
-    void ShowDeviceDisconnected(winrt::hstring const& id, winrt::hstring const& deviceName);
-    void ShowAutoReconnect(winrt::hstring const& id, winrt::hstring const& deviceName);
-    void ShowAutoReconnectFailed(winrt::hstring const& id, winrt::hstring const& deviceName);
-
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Internal Helpers //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/

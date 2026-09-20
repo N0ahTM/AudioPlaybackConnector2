@@ -314,14 +314,33 @@ void NotificationService::HandleEvent(apc::app::AppEvent const& notification) no
                     if (device != settings.Devices.end() && !device->Name.empty()) return winrt::hstring(device->Name);
                     return id;
                 }();
-                if constexpr (std::is_same_v<T, DeviceConnectedEvent>)
-                    ShowDeviceConnected(id, name);
-                else if constexpr (std::is_same_v<T, DeviceDisconnectedEvent>)
-                    ShowDeviceDisconnected(id, name);
-                else if constexpr (std::is_same_v<T, AutoReconnectTriggeredEvent>)
-                    ShowAutoReconnect(id, name);
-                else
-                    ShowAutoReconnectFailed(id, name);
+                Content content;
+                if constexpr (std::is_same_v<T, DeviceConnectedEvent>) {
+                    content = {.title = "Notification_Connected",
+                               .caption = "Notification_Connected_Caption",
+                               .image = L"ms-appx:///Images/ToastConnected.png",
+                               .audio = L"ms-winsoundevent:Notification.Default",
+                               .actionText = "Reconnect",
+                               .action = L"reconnect",
+                               .duration = L"long"};
+                } else if constexpr (std::is_same_v<T, DeviceDisconnectedEvent>) {
+                    content = {.title = "Notification_Disconnected",
+                               .body = "Notification_Disconnected_Body",
+                               .image = L"ms-appx:///Images/ToastWarning.png"};
+                } else if constexpr (std::is_same_v<T, AutoReconnectTriggeredEvent>) {
+                    content = {.title = "Notification_AutoReconnect",
+                               .body = "Notification_AutoReconnect_Body",
+                               .image = L"ms-appx:///Images/ToastReconnect.png"};
+                } else {
+                    content = {.title = "Notification_AutoReconnectFailed_Title",
+                               .body = "Notification_AutoReconnectFailed_Body",
+                               .image = L"ms-appx:///Images/ToastError.png",
+                               .audio = L"ms-winsoundevent:Notification.Looping.Alarm2",
+                               .actionText = "Notification_Retry",
+                               .action = L"retry",
+                               .lifetime = std::chrono::hours(1)};
+                }
+                ShowNotification(content, id, name);
             }
         },
         notification);
@@ -331,46 +350,6 @@ void NotificationService::HandleEvent(apc::app::AppEvent const& notification) no
     m_log.Exception(L"[NotificationService] Device notification failed", ex);
 } catch (...) {
     m_log.UnknownException(L"[NotificationService] Device notification failed");
-}
-
-void NotificationService::ShowDeviceConnected(winrt::hstring const& id, winrt::hstring const& deviceName) {
-    ShowNotification({.title = "Notification_Connected",
-                      .caption = "Notification_Connected_Caption",
-                      .image = L"ms-appx:///Images/ToastConnected.png",
-                      .audio = L"ms-winsoundevent:Notification.Default",
-                      .actionText = "Reconnect",
-                      .action = L"reconnect",
-                      .duration = L"long"},
-                     id,
-                     deviceName);
-}
-
-void NotificationService::ShowDeviceDisconnected(winrt::hstring const& id, winrt::hstring const& deviceName) {
-    ShowNotification({.title = "Notification_Disconnected",
-                      .body = "Notification_Disconnected_Body",
-                      .image = L"ms-appx:///Images/ToastWarning.png"},
-                     id,
-                     deviceName);
-}
-
-void NotificationService::ShowAutoReconnect(winrt::hstring const& id, winrt::hstring const& deviceName) {
-    ShowNotification({.title = "Notification_AutoReconnect",
-                      .body = "Notification_AutoReconnect_Body",
-                      .image = L"ms-appx:///Images/ToastReconnect.png"},
-                     id,
-                     deviceName);
-}
-
-void NotificationService::ShowAutoReconnectFailed(winrt::hstring const& id, winrt::hstring const& deviceName) {
-    ShowNotification({.title = "Notification_AutoReconnectFailed_Title",
-                      .body = "Notification_AutoReconnectFailed_Body",
-                      .image = L"ms-appx:///Images/ToastError.png",
-                      .audio = L"ms-winsoundevent:Notification.Looping.Alarm2",
-                      .actionText = "Notification_Retry",
-                      .action = L"retry",
-                      .lifetime = std::chrono::hours(1)},
-                     id,
-                     deviceName);
 }
 
 /*------------------------------------------------------------------------------------------------------------*/

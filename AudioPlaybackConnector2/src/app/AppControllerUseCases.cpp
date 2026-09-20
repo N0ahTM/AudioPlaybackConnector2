@@ -2,6 +2,7 @@
 #include <app/StartupTaskCoordinator.hpp>
 #include <control/ControlTargetMatcher.hpp>
 #include <core/DeviceService.hpp>
+#include <util/Text.hpp>
 #include <winrt/Windows.Foundation.h>
 
 #include <core/SettingsLimits.hpp>
@@ -27,35 +28,6 @@ AppResult InvalidInput(AppCommandKind kind) {
 
 bool IsExplicitTarget(DeviceSelector const& target) noexcept {
     return target.Kind() != DeviceSelectorKind::Last && target.Kind() != DeviceSelectorKind::Default;
-}
-
-std::wstring LowerInvariant(std::wstring_view value) {
-    std::wstring lowered;
-    lowered.reserve(value.size());
-    for (const auto character : value) {
-        lowered.push_back(static_cast<wchar_t>(std::towlower(character)));
-    }
-    return lowered;
-}
-
-bool EqualsIgnoreCase(std::wstring_view left, std::wstring_view right) {
-    return LowerInvariant(left) == LowerInvariant(right);
-}
-
-bool ContainsIgnoreCase(std::wstring_view value, std::wstring_view query) {
-    return !query.empty() && LowerInvariant(value).find(LowerInvariant(query)) != std::wstring::npos;
-}
-
-std::wstring NormalizeHex(std::wstring_view value) {
-    std::wstring normalized;
-    normalized.reserve(value.size());
-    for (const auto character : value) {
-        if ((character >= L'0' && character <= L'9') || (character >= L'a' && character <= L'f') ||
-            (character >= L'A' && character <= L'F')) {
-            normalized.push_back(static_cast<wchar_t>(std::towlower(character)));
-        }
-    }
-    return normalized;
 }
 
 std::wstring DeviceName(auto const& device) {
@@ -535,7 +507,7 @@ AppResult AppController::WriteAlias(AppCommandKind kind,
                                                                         : AppOutcomeReason::AliasCleared);
         const auto committedDevice =
             std::ranges::find_if(committedSettings->Data.Devices, [&resolution](auto const& device) {
-                return EqualsIgnoreCase(device.Id, resolution.Target.Id);
+                return util::EqualsIgnoreCase(device.Id, resolution.Target.Id);
             });
         result.Alias =
             committedDevice == committedSettings->Data.Devices.end() ? std::wstring{} : committedDevice->Alias;
@@ -787,22 +759,22 @@ AppController::Resolution AppController::Resolve(DeviceSelector const& selector,
     if (selector.Kind() == DeviceSelectorKind::Name) {
         std::vector<DeviceRecord> matches;
         for (auto const& device : devices) {
-            if (EqualsIgnoreCase(device.Name, query)) matches.push_back(device);
+            if (util::EqualsIgnoreCase(device.Name, query)) matches.push_back(device);
         }
         if (matches.empty()) {
             for (auto const& device : devices) {
-                if (ContainsIgnoreCase(device.Name, query)) matches.push_back(device);
+                if (util::ContainsIgnoreCase(device.Name, query)) matches.push_back(device);
             }
         }
         matchOne(std::move(matches), query);
         return result;
     }
     if (selector.Kind() == DeviceSelectorKind::Mac) {
-        const auto normalized = NormalizeHex(query);
+        const auto normalized = util::NormalizeHex(query);
         std::vector<DeviceRecord> matches;
         if (normalized.size() >= 6) {
             for (auto const& device : devices) {
-                if (NormalizeHex(device.Id).find(normalized) != std::wstring::npos) matches.push_back(device);
+                if (util::NormalizeHex(device.Id).find(normalized) != std::wstring::npos) matches.push_back(device);
             }
         }
         matchOne(std::move(matches), query);
@@ -811,11 +783,11 @@ AppController::Resolution AppController::Resolve(DeviceSelector const& selector,
     if (selector.Kind() == DeviceSelectorKind::Alias) {
         std::vector<DeviceRecord> matches;
         for (auto const& device : devices) {
-            if (EqualsIgnoreCase(device.Alias, query)) matches.push_back(device);
+            if (util::EqualsIgnoreCase(device.Alias, query)) matches.push_back(device);
         }
         if (matches.empty()) {
             for (auto const& device : devices) {
-                if (ContainsIgnoreCase(device.Alias, query)) matches.push_back(device);
+                if (util::ContainsIgnoreCase(device.Alias, query)) matches.push_back(device);
             }
         }
         matchOne(std::move(matches), query);
@@ -975,10 +947,10 @@ std::vector<AppController::DeviceRecord> AppController::MergeDevices(std::vector
 
     ApplySessionStates(merged, connected);
     std::ranges::sort(merged, [](auto const& left, auto const& right) {
-        const auto leftLabel = LowerInvariant(DeviceName(left));
-        const auto rightLabel = LowerInvariant(DeviceName(right));
+        const auto leftLabel = util::LowerInvariant(DeviceName(left));
+        const auto rightLabel = util::LowerInvariant(DeviceName(right));
         if (leftLabel != rightLabel) return leftLabel < rightLabel;
-        return LowerInvariant(left.Id) < LowerInvariant(right.Id);
+        return util::LowerInvariant(left.Id) < util::LowerInvariant(right.Id);
     });
     return merged;
 }
@@ -1117,7 +1089,8 @@ std::optional<DeviceSnapshot> AppController::PostOperationDevice(std::wstring_vi
 
 std::optional<AppController::DeviceRecord> AppController::FindById(std::vector<DeviceRecord> const& devices,
                                                                    std::wstring_view id) {
-    auto found = std::ranges::find_if(devices, [id](auto const& device) { return EqualsIgnoreCase(device.Id, id); });
+    auto found =
+        std::ranges::find_if(devices, [id](auto const& device) { return util::EqualsIgnoreCase(device.Id, id); });
     if (found == devices.end()) return std::nullopt;
     return *found;
 }

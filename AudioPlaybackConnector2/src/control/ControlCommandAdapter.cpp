@@ -1,6 +1,7 @@
 #include <control/ControlCommandAdapter.hpp>
 #include <control/CommandPipeIo.hpp>
 #include <app/AppModels.hpp>
+#include <util/Text.hpp>
 
 #include <windows.h>
 #include <winrt/Windows.Foundation.Collections.h>
@@ -185,14 +186,6 @@ bool IsPreDispatchTermination(AppResult const& result) noexcept {
            (result.Code == AppResultCode::Cancelled || result.Code == AppResultCode::TimedOut);
 }
 
-std::wstring LowerInvariant(std::wstring_view value) {
-    std::wstring lowered;
-    lowered.reserve(value.size());
-    for (const auto character : value)
-        lowered.push_back(static_cast<wchar_t>(std::towlower(character)));
-    return lowered;
-}
-
 std::wstring DeviceIdText(apc::app::DeviceSnapshot const& device) {
     return device.Id.ToString();
 }
@@ -253,11 +246,11 @@ std::vector<apc::app::DeviceSnapshot> SortedDevices(std::vector<apc::app::Device
 
     std::ranges::sort(merged, [](auto const& left, auto const& right) {
         const auto leftLabel =
-            LowerInvariant(left.Alias.empty() ? (left.Name.empty() ? left.Id.View() : left.Name) : left.Alias);
-        const auto rightLabel =
-            LowerInvariant(right.Alias.empty() ? (right.Name.empty() ? right.Id.View() : right.Name) : right.Alias);
+            util::LowerInvariant(left.Alias.empty() ? (left.Name.empty() ? left.Id.View() : left.Name) : left.Alias);
+        const auto rightLabel = util::LowerInvariant(
+            right.Alias.empty() ? (right.Name.empty() ? right.Id.View() : right.Name) : right.Alias);
         if (leftLabel != rightLabel) return leftLabel < rightLabel;
-        return LowerInvariant(left.Id.View()) < LowerInvariant(right.Id.View());
+        return util::LowerInvariant(left.Id.View()) < util::LowerInvariant(right.Id.View());
     });
     return merged;
 }

@@ -1,4 +1,5 @@
 #include <control/CliParser.hpp>
+#include <util/Text.hpp>
 #include <CLI/CLI.hpp>
 
 #include <algorithm>
@@ -17,12 +18,6 @@ namespace {
 
 std::wstring_view ToView(wchar_t const* value) {
     return value ? std::wstring_view(value) : std::wstring_view();
-}
-
-bool EqualsIgnoreCase(std::wstring_view lhs, std::wstring_view rhs) {
-    return lhs.size() == rhs.size() && std::equal(lhs.begin(), lhs.end(), rhs.begin(), [](wchar_t a, wchar_t b) {
-               return towlower(a) == towlower(b);
-           });
 }
 
 std::wstring HelpText() {
@@ -160,20 +155,20 @@ ParseResult ParseWithCli(CommandSpec const& spec, int argc, wchar_t const* const
             ended = true;
             continue;
         }
-        const auto selector =
-            std::ranges::find_if(c_selectors, [&](auto const& value) { return EqualsIgnoreCase(arg, value.Name); });
-        if (!ended && (EqualsIgnoreCase(arg, L"--json") || EqualsIgnoreCase(arg, L"--raw"))) {
-            tokens.push_back(EqualsIgnoreCase(arg, L"--json") ? "--json" : "--raw");
+        const auto selector = std::ranges::find_if(
+            c_selectors, [&](auto const& value) { return util::EqualsIgnoreCase(arg, value.Name); });
+        if (!ended && (util::EqualsIgnoreCase(arg, L"--json") || util::EqualsIgnoreCase(arg, L"--raw"))) {
+            tokens.push_back(util::EqualsIgnoreCase(arg, L"--json") ? "--json" : "--raw");
             continue;
         }
         if (!ended && targets && !aliasValue &&
-            (EqualsIgnoreCase(arg, L"--last") || EqualsIgnoreCase(arg, L"--default"))) {
-            tokens.push_back(EqualsIgnoreCase(arg, L"--last") ? "--last" : "--default");
+            (util::EqualsIgnoreCase(arg, L"--last") || util::EqualsIgnoreCase(arg, L"--default"))) {
+            tokens.push_back(util::EqualsIgnoreCase(arg, L"--last") ? "--last" : "--default");
             continue;
         }
         const auto index = "v" + std::to_string(inputs.size());
         if (!ended && targets &&
-            (selector != std::end(c_selectors) || (aliasValue && EqualsIgnoreCase(arg, L"--value")))) {
+            (selector != std::end(c_selectors) || (aliasValue && util::EqualsIgnoreCase(arg, L"--value")))) {
             inputs.push_back({arg, ReadOptionValue(i, argc, argv)});
             tokens.push_back((selector != std::end(c_selectors) ? narrowName(selector->Name) : "--value") + "=" +
                              index);
@@ -281,9 +276,9 @@ ParseResult ParseWithCli(CommandSpec const& spec, int argc, wchar_t const* const
 bool JsonRequested(int argc, wchar_t const* const* argv) noexcept {
     for (int i = 1; i < argc; ++i) {
         const auto argument = ToView(argv[i]);
-        if (EqualsIgnoreCase(argument, L"--id") || EqualsIgnoreCase(argument, L"--name") ||
-            EqualsIgnoreCase(argument, L"--mac") || EqualsIgnoreCase(argument, L"--alias") ||
-            EqualsIgnoreCase(argument, L"--value")) {
+        if (util::EqualsIgnoreCase(argument, L"--id") || util::EqualsIgnoreCase(argument, L"--name") ||
+            util::EqualsIgnoreCase(argument, L"--mac") || util::EqualsIgnoreCase(argument, L"--alias") ||
+            util::EqualsIgnoreCase(argument, L"--value")) {
             if (i + 1 < argc && ToView(argv[i + 1]) == L"--") {
                 i += std::min(2, argc - i - 1);
             } else if (i + 1 < argc && (ToView(argv[i + 1]).empty() || ToView(argv[i + 1]).front() != L'-')) {
@@ -292,7 +287,7 @@ bool JsonRequested(int argc, wchar_t const* const* argv) noexcept {
             continue;
         }
         if (argument == L"--") return false;
-        if (EqualsIgnoreCase(argument, L"--json")) return true;
+        if (util::EqualsIgnoreCase(argument, L"--json")) return true;
     }
     return false;
 }
@@ -313,22 +308,23 @@ std::wstring LocalError(bool jsonRequested, apc::control::ExitCode code, std::ws
 ParseResult ParseCommandLine(int argc, wchar_t const* const* argv) {
     if (argc <= 1) return Error(0, HelpText());
     auto command = ToView(argv[1]);
-    if (EqualsIgnoreCase(command, L"help") || EqualsIgnoreCase(command, L"--help") || EqualsIgnoreCase(command, L"-h"))
+    if (util::EqualsIgnoreCase(command, L"help") || util::EqualsIgnoreCase(command, L"--help") ||
+        util::EqualsIgnoreCase(command, L"-h"))
         return Error(0, HelpText());
-    const bool family = EqualsIgnoreCase(command, L"default") || EqualsIgnoreCase(command, L"alias");
+    const bool family = util::EqualsIgnoreCase(command, L"default") || util::EqualsIgnoreCase(command, L"alias");
     if (family && argc < 3)
         return Error(3,
-                     EqualsIgnoreCase(command, L"default") ? L"default requires show, set, or clear.\n"
-                                                           : L"alias requires list, set, or clear.\n");
+                     util::EqualsIgnoreCase(command, L"default") ? L"default requires show, set, or clear.\n"
+                                                                 : L"alias requires list, set, or clear.\n");
     const auto subcommand = family ? ToView(argv[2]) : std::wstring_view{};
     const auto spec = std::ranges::find_if(c_commands, [&](auto const& value) {
-        return EqualsIgnoreCase(command, value.Name) && EqualsIgnoreCase(subcommand, value.Subcommand);
+        return util::EqualsIgnoreCase(command, value.Name) && util::EqualsIgnoreCase(subcommand, value.Subcommand);
     });
     if (spec == std::end(c_commands)) {
         if (family)
             return Error(3,
-                         std::wstring(EqualsIgnoreCase(command, L"default") ? L"Unknown default command: "
-                                                                            : L"Unknown alias command: ") +
+                         std::wstring(util::EqualsIgnoreCase(command, L"default") ? L"Unknown default command: "
+                                                                                  : L"Unknown alias command: ") +
                              std::wstring(subcommand) + L"\n");
         return Error(3, L"Unknown command: " + std::wstring(command) + L"\n\n" + HelpText());
     }

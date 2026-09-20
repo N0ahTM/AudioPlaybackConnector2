@@ -142,6 +142,7 @@
     <ClInclude Include="include\control\CommandProtocol.hpp" />
     <ClInclude Include="include\control\CommandPipeSecurity.hpp" />
     <ClInclude Include="include\util\Logger.hpp" />
+    <ClInclude Include="include\util\Text.hpp" />
     <ClInclude Include="include\util\Util.hpp" />
     <ClInclude Include="include\core\StringResources.hpp" />
     <ClInclude Include="include\core\TrayTooltipBuilder.hpp" />

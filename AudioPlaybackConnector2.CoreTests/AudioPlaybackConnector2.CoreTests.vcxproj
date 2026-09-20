@@ -153,6 +153,7 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\UiRefreshCoalescer.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\ReconnectPolicy.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\util\RuntimeApartment.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\util\Text.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\ToastXmlSanitizer.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\services\CommandLineControlServer.hpp" />
   </ItemGroup>

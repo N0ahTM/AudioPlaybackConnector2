@@ -1,4 +1,5 @@
 #include <util/Logger.hpp>
+#include <util/Text.hpp>
 #include <sal.h>
 #include <concurrencysal.h>
 
@@ -471,11 +472,7 @@ Logger::Logger() noexcept {
 namespace {
 bool ShouldPersistReleaseTrace(std::wstring_view message) noexcept {
     try {
-        std::wstring lower;
-        lower.reserve(message.size());
-        for (wchar_t ch : message) {
-            lower.push_back(static_cast<wchar_t>(std::towlower(ch)));
-        }
+        const std::wstring lower = util::LowerInvariant(message);
 
         constexpr std::array<std::wstring_view, 9> keywords{
             L"error", L"failed", L"warning", L"crash", L"exception", L"denied", L"timeout", L"corrupt", L"unsupported"};

@@ -116,6 +116,7 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\CliParser.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\util\Logger.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\util\RuntimeApartment.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\util\Text.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\util\Util.hpp" />
   </ItemGroup>
   <ItemGroup>

@@ -135,6 +135,9 @@
     <ClInclude Include="include\util\Util.hpp">
       <Filter>include\util</Filter>
     </ClInclude>
+    <ClInclude Include="include\util\Text.hpp">
+      <Filter>include\util</Filter>
+    </ClInclude>
     <ClInclude Include="include\core\StringResources.hpp">
       <Filter>include\core</Filter>
     </ClInclude>

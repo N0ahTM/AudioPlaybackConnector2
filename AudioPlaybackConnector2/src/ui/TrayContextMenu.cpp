@@ -1,4 +1,6 @@
 #include <pch.h>
+#include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
+#include <winrt/Windows.Foundation.Collections.h>
 #include <ui/TrayContextMenu.hpp>
 #include <core/StringResources.hpp>
 #include <ui/FlyoutPresenterStyle.hpp>

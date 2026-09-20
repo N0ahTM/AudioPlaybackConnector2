@@ -1,4 +1,7 @@
 #include <pch.h>
+#include <windows.h>
+#include <commctrl.h>
+#include <winrt/Microsoft.UI.Windowing.h>
 
 #include <app/ApplicationHost.hpp>
 #include <type_traits>

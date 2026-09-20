@@ -1,5 +1,16 @@
 #pragma once
 
+#include <windows.h>
+// Win32 macro conflicts with the WinUI animation projection included by Controls.
+#undef GetCurrentTime
+
+#include <atomic>
+#include <functional>
+#include <utility>
+#include <winrt/Microsoft.UI.Xaml.h>
+#include <winrt/Microsoft.UI.Xaml.Controls.h>
+#include <winrt/Windows.Foundation.h>
+
 #include <core/StringResources.hpp>
 #include <memory>
 

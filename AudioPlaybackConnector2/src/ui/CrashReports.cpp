@@ -1,4 +1,6 @@
 #include <pch.h>
+#include <windows.h>
+#include <shellapi.h>
 #include <util/CrashHandler.hpp>
 #include <core/StringResources.hpp>
 

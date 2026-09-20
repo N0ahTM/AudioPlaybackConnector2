@@ -1,4 +1,7 @@
 #include <pch.h>
+#include <winrt/Microsoft.UI.Dispatching.h>
+#include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
+#include <winrt/Windows.Foundation.Collections.h>
 #include <ui/DevicePickerView/DevicePickerView.xaml.h>
 #if __has_include("DevicePickerView.g.cpp")
 #include <DevicePickerView.g.cpp>

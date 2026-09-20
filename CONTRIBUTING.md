@@ -44,7 +44,7 @@ foreach ($architecture in @('x64', 'ARM64')) {
 }
 ```
 
-Headless validates CoreRuntime/CoreTests/Control boundaries, restores/builds only those projects and runs tests without WinUI/XAML. `-Platform ARM64` cross-builds; run tests on ARM64 hardware. `-DisablePrecompiledHeaders` checks direct includes: MSBuild disables the binary PCH and defines `APC_NO_PCH_INCLUDES`, which makes both pch.h files empty. Disabling only the binary cache would still hide missing includes behind the textual PCH. Root vcpkg manifest restores automatically; architecture-specific install roots/triplets prevent cross-removal. No global `vcpkg integrate install` or Classic Mode needed.
+Headless validates CoreRuntime/CoreTests/Control boundaries, restores/builds only those projects and runs tests without WinUI/XAML. `-Platform ARM64` cross-builds; run tests on ARM64 hardware. `-DisablePrecompiledHeaders` checks direct includes: MSBuild disables the binary PCH and defines `APC_NO_PCH_INCLUDES`, which makes both pch.h files empty. Disabling only the binary cache would still hide missing includes behind the textual PCH. `WIN32_LEAN_AND_MEAN` and `NOMINMAX` are shared compiler definitions, independent of the PCH. For the full app, pass `/p:ApcDisablePrecompiledHeaders=true` to its vcxproj build as well. Root vcpkg manifest restores automatically; architecture-specific install roots/triplets prevent cross-removal. No global `vcpkg integrate install` or Classic Mode needed.
 
 Builds use C++26 draft `/std:c++latest` (`stdcpplatest`), not a fixed `/std:c++26` switch. Directory.Build.props/targets enforce common rules and MSVC 14.51+; do not silently downgrade projects.
 

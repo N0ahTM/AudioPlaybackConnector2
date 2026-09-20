@@ -1,4 +1,6 @@
 #include <pch.h>
+#include <winrt/Microsoft.UI.Windowing.h>
+#include <winrt/Windows.Foundation.h>
 
 #include <app/SettingsWindowPresenter.hpp>
 #include <app/AppController.hpp>

@@ -5,6 +5,9 @@
 
 #include <util/Logger.hpp>
 
+// Win32 aliases GetCurrentTime to GetTickCount; WinUI uses it as a method name.
+#undef GetCurrentTime
+
 #include <app/AppController.hpp>
 #include <DevicePickerView.g.h>
 #include <ui/DevicePickerViewState.hpp>

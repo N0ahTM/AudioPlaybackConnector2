@@ -1,4 +1,9 @@
 #include <pch.h>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Microsoft.UI.Xaml.h>
+#include <winrt/Microsoft.UI.Xaml.Media.h>
+#include <shlwapi.h>
 #include <ui/TrayIcon.hpp>
 #include <core/StringResources.hpp>
 #include <util/Util.hpp>

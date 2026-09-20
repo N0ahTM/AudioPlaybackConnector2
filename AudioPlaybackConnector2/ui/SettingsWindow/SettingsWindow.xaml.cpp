@@ -1,4 +1,14 @@
 #include <pch.h>
+#include <winrt/Microsoft.UI.Dispatching.h>
+#include <windows.h>
+#undef GetCurrentTime
+#include <shellapi.h>
+#include <commctrl.h>
+#include <dwmapi.h>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Foundation.Collections.h>
+#include <winrt/Microsoft.UI.Windowing.h>
+#include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Windows.UI.ViewManagement.h>
 #include <ui/SettingsWindow/SettingsWindow.xaml.h>
 #if __has_include("SettingsWindow.g.cpp")

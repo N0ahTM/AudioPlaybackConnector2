@@ -1,4 +1,7 @@
 #include <pch.h>
+#include <winrt/Windows.System.h>
+#include <winrt/Microsoft.UI.Dispatching.h>
+#include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
 #include <services/TrayController.hpp>
 #include <core/StringResources.hpp>
 #include <core/ThemeHelper.hpp>

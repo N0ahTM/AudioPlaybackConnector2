@@ -1,5 +1,14 @@
 #pragma once
 
+#include <windows.h>
+#include <shellapi.h>
+#include <objidl.h>
+#include <gdiplus.h>
+#include <wil/resource.h>
+#include <array>
+#include <cstdint>
+#include <optional>
+
 #include <util/Logger.hpp>
 
 #include <string_view>

@@ -1,4 +1,8 @@
 #include <pch.h>
+#include <windows.h>
+#include <appmodel.h>
+#include <objbase.h>
+#include <winrt/Windows.Foundation.h>
 #include <services/NotificationService.hpp>
 #include <app/AppController.hpp>
 #include <algorithm>

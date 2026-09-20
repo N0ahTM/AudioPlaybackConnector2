@@ -1,6 +1,10 @@
 #include <pch.h>
+#include <winrt/Windows.Foundation.h>
 #include <ui/FlyoutPresenterStyle.hpp>
 #include <util/Util.hpp>
+
+#include <winrt/Microsoft.UI.Xaml.Controls.h>
+#include <winrt/Microsoft.UI.Xaml.Media.h>
 
 namespace apc::ui {
 

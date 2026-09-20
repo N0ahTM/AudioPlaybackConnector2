@@ -1,5 +1,7 @@
 #pragma once
 
+#include <winrt/Microsoft.UI.Xaml.h>
+
 #include <util/Logger.hpp>
 
 namespace apc::ui {

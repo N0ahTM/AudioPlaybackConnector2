@@ -99,9 +99,8 @@ and users must comply to its license: https://raw.githubusercontent.com/fmtlib/f
 
 ## Dependency evaluation tools
 
-The isolated programs in benchmarks/dependencies use the same pinned libraries.
-Their runner includes each restored package's complete copyright text in its ZIP.
-See [the evaluation scope and remaining gates](benchmarks/dependencies/README.md).
+The isolated evaluation probes were removed after their evidence was captured.
+See [the dependency acceptance record](docs/DEPENDENCIES.md).
 
 ---
 

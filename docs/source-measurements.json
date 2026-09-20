@@ -83,23 +83,23 @@
     ]
   },
   "current": {
-    "commit": "511ba95049b300dffab3d5d6c91f76cb53cd2605",
-    "file_count": 127,
-    "bytes": 1014669,
-    "lines": 22913,
-    "nonblank_lines": 20333,
+    "commit": "68a25963a690719a175897685a76c10437a1266c",
+    "file_count": 128,
+    "bytes": 1004830,
+    "lines": 22657,
+    "nonblank_lines": 20103,
     "largest_files": [
       {
         "path": "AudioPlaybackConnector2/src/app/AppControllerUseCases.cpp",
-        "bytes": 63539,
-        "lines": 1338,
-        "nonblank_lines": 1203
+        "bytes": 60962,
+        "lines": 1271,
+        "nonblank_lines": 1145
       },
       {
         "path": "AudioPlaybackConnector2/src/services/CommandLineControlServer.cpp",
-        "bytes": 52886,
-        "lines": 1218,
-        "nonblank_lines": 1115
+        "bytes": 52022,
+        "lines": 1211,
+        "nonblank_lines": 1108
       },
       {
         "path": "AudioPlaybackConnector2/src/core/DeviceSession.cpp",
@@ -108,16 +108,16 @@
         "nonblank_lines": 1005
       },
       {
-        "path": "AudioPlaybackConnector2/ui/SettingsWindow/SettingsWindow.xaml.cpp",
-        "bytes": 49811,
-        "lines": 1076,
-        "nonblank_lines": 951
+        "path": "AudioPlaybackConnector2/src/services/TrayController.cpp",
+        "bytes": 43805,
+        "lines": 1043,
+        "nonblank_lines": 947
       },
       {
-        "path": "AudioPlaybackConnector2/src/services/TrayController.cpp",
-        "bytes": 43763,
-        "lines": 1047,
-        "nonblank_lines": 950
+        "path": "AudioPlaybackConnector2/ui/SettingsWindow/SettingsWindow.xaml.cpp",
+        "bytes": 48516,
+        "lines": 1040,
+        "nonblank_lines": 921
       },
       {
         "path": "AudioPlaybackConnector2/src/core/SettingsStore.cpp",
@@ -127,34 +127,34 @@
       },
       {
         "path": "AudioPlaybackConnector2/src/core/DeviceService.cpp",
-        "bytes": 36515,
-        "lines": 844,
-        "nonblank_lines": 780
+        "bytes": 36090,
+        "lines": 831,
+        "nonblank_lines": 769
       },
       {
         "path": "AudioPlaybackConnector2/src/control/ControlCommandAdapter.cpp",
-        "bytes": 43017,
-        "lines": 812,
-        "nonblank_lines": 748
+        "bytes": 42814,
+        "lines": 805,
+        "nonblank_lines": 742
       },
       {
         "path": "AudioPlaybackConnector2/src/app/ApplicationHost.cpp",
-        "bytes": 34682,
-        "lines": 788,
-        "nonblank_lines": 705
+        "bytes": 34491,
+        "lines": 783,
+        "nonblank_lines": 701
       },
       {
         "path": "AudioPlaybackConnector2/ui/DevicePickerView/DevicePickerView.xaml.cpp",
-        "bytes": 35418,
-        "lines": 732,
-        "nonblank_lines": 684
+        "bytes": 35755,
+        "lines": 738,
+        "nonblank_lines": 690
       }
     ]
   },
   "delta": {
-    "file_count": -9,
-    "bytes": -125591,
-    "lines": -3326,
-    "nonblank_lines": -2964
+    "file_count": -8,
+    "bytes": -135430,
+    "lines": -3582,
+    "nonblank_lines": -3194
   }
 }

@@ -187,24 +187,14 @@ void TestVisibleUiPinsAColdBackgroundDecision() {
 
     input.MemoryPressure = true;
     auto pinned = policy.Evaluate(input, At(1s));
-    Check(pinned.BackgroundResidency == ResidencyPolicy::Cold, "memory pressure must remain observable while pinned");
-    Check(pinned.Residency == ResidencyPolicy::Hot, "visible UI must remain hot while its release is pinned");
-    Check(pinned.Pinned && pinned.ReleaseDeferred, "visible UI must report its deferred cold transition");
+    Check(pinned.BackgroundResidency == ResidencyPolicy::Cold, "memory pressure must remain observable while visible");
+    Check(pinned.Residency == ResidencyPolicy::Hot, "visible UI must remain hot under memory pressure");
     Check(pinned.Action == AdaptiveResourceAction::None, "visible UI must never be released underneath the user");
 
     input.UiVisible = false;
-    input.UiPinned = true;
-    auto transitioning = policy.Evaluate(input, At(2s));
-    Check(transitioning.Residency == ResidencyPolicy::Hot && transitioning.Pinned,
-          "explicit pinning must protect UI during non-visible opening or closing transitions");
-    Check(transitioning.Action == AdaptiveResourceAction::None,
-          "explicit pinning must defer release until the transition has finished");
-
-    input.UiPinned = false;
-    auto unpinned = policy.Evaluate(input, At(3s));
+    auto unpinned = policy.Evaluate(input, At(2s));
     Check(unpinned.Residency == ResidencyPolicy::Cold, "closing UI must apply the pending cold state immediately");
-    Check(unpinned.Action == AdaptiveResourceAction::ReleaseUi, "closing pinned UI must release its resources");
-    Check(!unpinned.Pinned && !unpinned.ReleaseDeferred, "closed UI must clear pin metadata");
+    Check(unpinned.Action == AdaptiveResourceAction::ReleaseUi, "closing UI must release its resources");
 }
 
 void TestInteractionTemporarilyOverridesCold() {
@@ -215,7 +205,6 @@ void TestInteractionTemporarilyOverridesCold() {
     Check(requested.BackgroundResidency == ResidencyPolicy::Cold, "interaction must not hide background pressure");
     Check(requested.Residency == ResidencyPolicy::Hot, "user interaction must make UI available even while cold");
     Check(requested.Action == AdaptiveResourceAction::PreloadUi, "cold interaction must request UI on demand");
-    Check(!requested.Pinned && requested.ReleaseDeferred, "interaction hold is distinct from visible pinning");
     Check(requested.ReevaluateAt == At(10s), "interaction hold must expose its release deadline");
 
     input.UserInteraction = false;

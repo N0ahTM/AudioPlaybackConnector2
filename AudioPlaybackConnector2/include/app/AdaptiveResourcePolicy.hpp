@@ -25,7 +25,6 @@ struct AdaptiveResourcePolicyInput {
     bool FullscreenOrPresentation = false;
     bool EnergySaver = false;
     bool UiVisible = false;
-    bool UiPinned = false;
     bool UserInteraction = false;
     bool UiResourcesLoaded = false;
     bool UiResourcesInitialized = false;
@@ -37,8 +36,6 @@ struct AdaptiveResourcePolicyDecision {
     AdaptiveResourceAction Action = AdaptiveResourceAction::None;
     bool ResidencyChanged = false;
     bool BackgroundResidencyChanged = false;
-    bool Pinned = false;
-    bool ReleaseDeferred = false;
     std::optional<std::chrono::steady_clock::time_point> ReevaluateAt;
 };
 

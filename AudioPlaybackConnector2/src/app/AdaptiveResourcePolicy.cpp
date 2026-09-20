@@ -63,8 +63,7 @@ AdaptiveResourcePolicyDecision AdaptiveResourcePolicy::Evaluate(AdaptiveResource
         m_interactionUntil.reset();
     }
 
-    const bool pinned = input.UiVisible || input.UiPinned;
-    const bool foregroundDemand = pinned || interactionHeld;
+    const bool foregroundDemand = input.UiVisible || interactionHeld;
     const auto effectiveResidency = foregroundDemand ? ResidencyPolicy::Hot : m_backgroundResidency;
     const auto previousEffectiveResidency = m_effectiveResidency;
     m_effectiveResidency = effectiveResidency;
@@ -84,8 +83,6 @@ AdaptiveResourcePolicyDecision AdaptiveResourcePolicy::Evaluate(AdaptiveResource
         .Action = action,
         .ResidencyChanged = effectiveResidency != previousEffectiveResidency,
         .BackgroundResidencyChanged = m_backgroundResidency != previousBackgroundResidency,
-        .Pinned = pinned,
-        .ReleaseDeferred = foregroundDemand && m_backgroundResidency != ResidencyPolicy::Hot,
         .ReevaluateAt = NextReevaluation(input, now, foregroundDemand),
     };
 }
@@ -173,8 +170,7 @@ std::optional<AdaptiveResourcePolicy::TimePoint> AdaptiveResourcePolicy::NextRee
         consider(SaturatingAdd(*m_preloadAllowedSince, m_config.WarmToHotDelay));
     }
 
-    if (foregroundDemand && !input.UiVisible && !input.UiPinned && m_backgroundResidency != ResidencyPolicy::Hot &&
-        m_interactionUntil) {
+    if (foregroundDemand && !input.UiVisible && m_backgroundResidency != ResidencyPolicy::Hot && m_interactionUntil) {
         consider(*m_interactionUntil);
     }
     return next;

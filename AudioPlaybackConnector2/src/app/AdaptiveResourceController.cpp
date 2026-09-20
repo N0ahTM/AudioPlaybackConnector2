@@ -194,7 +194,6 @@ void AdaptiveResourceController::Evaluate(bool userInteraction, std::wstring_vie
             .FullscreenOrPresentation = backgroundConstrained && !pressureValues.IsMemoryPressure() && !energySaver,
             .EnergySaver = energySaver,
             .UiVisible = tray->IsDevicePickerVisibleOrTransitioning(),
-            .UiPinned = false,
             .UserInteraction = userInteraction,
             .UiResourcesLoaded = tray->IsDevicePickerLoaded(),
             .UiResourcesInitialized = tray->IsDevicePickerPreloadInitialized(),

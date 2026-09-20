@@ -1,6 +1,5 @@
 #pragma once
 
-#include <filesystem>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -48,21 +47,6 @@ inline std::string Utf16ToUtf8(std::wstring_view utf16) {
                                                  nullptr,
                                                  nullptr));
     return out;
-}
-
-inline std::filesystem::path GetModuleFsPath(HMODULE hModule) {
-    std::wstring path(MAX_PATH, L'\0');
-    DWORD actual = 0;
-    while (true) {
-        actual = GetModuleFileNameW(hModule, path.data(), static_cast<DWORD>(path.size()));
-        THROW_LAST_ERROR_IF(actual == 0);
-        if (static_cast<size_t>(actual) >= path.size())
-            path.resize(path.size() * 2);
-        else
-            break;
-    }
-    path.resize(actual);
-    return std::filesystem::path(path);
 }
 
 } // namespace util

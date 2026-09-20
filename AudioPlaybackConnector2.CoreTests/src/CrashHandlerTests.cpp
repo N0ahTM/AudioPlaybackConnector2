@@ -11,6 +11,8 @@
 #include <string>
 #include <shellapi.h>
 #include <wil/resource.h>
+#include <wil/stl.h>
+#include <wil/win32_helpers.h>
 
 namespace {
 LONG WINAPI PreviousFilter(EXCEPTION_POINTERS*) {
@@ -91,7 +93,7 @@ int RunCrashHandlerChild() {
 int RunCrashHandlerTests() {
     const auto root = std::filesystem::temp_directory_path() /
                       std::format(L"APC-CrashTests-{}-{}", GetCurrentProcessId(), GetTickCount64());
-    const auto executable = util::GetModuleFsPath(nullptr);
+    const auto executable = std::filesystem::path(wil::GetModuleFileNameW<std::wstring>());
     struct Case {
         wchar_t const* Mode;
         DWORD ExitCode;

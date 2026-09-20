@@ -7,6 +7,8 @@
 #include <util/Logger.hpp>
 #include <util/RuntimeApartment.hpp>
 #include <util/Util.hpp>
+#include <wil/stl.h>
+#include <wil/win32_helpers.h>
 
 #include <condition_variable>
 #include <deque>
@@ -284,7 +286,8 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
                 if (!error) return directory / L"AudioPlaybackConnector2.json";
             }
         }
-        return util::GetModuleFsPath(GetModuleHandleW(nullptr)).remove_filename() / L"AudioPlaybackConnector2.json";
+        return std::filesystem::path(wil::GetModuleFileNameW<std::wstring>()).parent_path() /
+               L"AudioPlaybackConnector2.json";
     }
 
     [[nodiscard]] bool Write(SettingsData const& snapshot) noexcept {

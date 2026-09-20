@@ -139,6 +139,8 @@ Before suites, runner isolates LOCALAPPDATA in a unique process temp directory; 
 
 Runner owns a WinRT apartment for all suites; individual workers initialize theirs. Suite-local apartment lifetime cannot keep factories alive for later suites. Seed 314159 reproduced stale JSON factory lifetime; process ownership passed that seed including ASan.
 
+DeviceServiceTests cover commands, completions, facts and settings policy; DeviceReconnectTests cover retry/close barriers; DeviceIncomingTests cover listener coexistence; DevicePowerTests cover suspend/resume recovery. They share DeviceTestFixture rather than copies of backend setup. Controller normalization and device-event lifetime tests belong to AppControllerTests and use the existing AppTestFixture. Every suite links the production CoreRuntime.
+
 Suites run sequentially; seed shuffles suite order, not all interleavings. Atomic failure counters and serialized source-location output support concurrent assertions. scripts/test/run-concurrency-stress.ps1 retains seed/output and enforces per-process/global watchdog; timeout or nonzero exit fails. Deterministic race tests remain necessary.
 
 ## UI resource evaluation and snapshot reentrancy

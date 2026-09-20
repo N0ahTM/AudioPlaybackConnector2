@@ -38,6 +38,10 @@ int RunCommandLineControlServerTests();
 int RunControlUiActionGateTests();
 int RunControlTargetMatcherTests();
 int RunDeviceServiceTests();
+int RunDeviceReconnectTests();
+int RunDeviceIncomingTests();
+int RunDevicePowerTests();
+
 int RunDeviceWatcherTests();
 int RunDiagnosticsLogCollectorTests();
 int RunSettingsDiagnosticsReportBuilderTests();
@@ -131,6 +135,10 @@ int main(int argc, char** argv) {
         Suite{"ControlUiActionGate", RunControlUiActionGateTests},
         Suite{"ControlTargetMatcher", RunControlTargetMatcherTests},
         Suite{"DeviceService", RunDeviceServiceTests},
+        Suite{"DeviceReconnect", RunDeviceReconnectTests},
+        Suite{"DeviceIncoming", RunDeviceIncomingTests},
+        Suite{"DevicePower", RunDevicePowerTests},
+
         Suite{"DeviceWatcher", RunDeviceWatcherTests},
         Suite{"DiagnosticsLogCollector", RunDiagnosticsLogCollectorTests},
         Suite{"SettingsDiagnosticsReportBuilder", RunSettingsDiagnosticsReportBuilderTests},

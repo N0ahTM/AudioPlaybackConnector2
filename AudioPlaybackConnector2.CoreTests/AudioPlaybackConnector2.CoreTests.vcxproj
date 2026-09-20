@@ -97,6 +97,10 @@
     <ClCompile Include="src\ControlUiActionGateTests.cpp" />
     <ClCompile Include="src\ControlTargetMatcherTests.cpp" />
     <ClCompile Include="src\DeviceServiceTests.cpp" />
+    <ClCompile Include="src\DeviceReconnectTests.cpp" />
+    <ClCompile Include="src\DeviceIncomingTests.cpp" />
+    <ClCompile Include="src\DevicePowerTests.cpp" />
+
     <ClCompile Include="src\DeviceWatcherTests.cpp" />
     <ClCompile Include="src\DiagnosticsLogCollectorTests.cpp" />
     <ClCompile Include="src\SettingsDiagnosticsReportBuilderTests.cpp" />

@@ -18,6 +18,10 @@
 #include <optional>
 #include <utility>
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Windows Probes ////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 namespace {
 thread_local void const* g_activeResourcePressureCallback = nullptr;
 
@@ -68,6 +72,10 @@ FILETIME RelativeDueTime(std::chrono::milliseconds delay) noexcept {
     return {.dwLowDateTime = value.LowPart, .dwHighDateTime = value.HighPart};
 }
 } // namespace
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Monitor Lifetime and Callbacks ////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 struct ResourcePressureMonitor::Impl {
     struct RunContext : std::enable_shared_from_this<RunContext> {
@@ -436,6 +444,10 @@ struct ResourcePressureMonitor::Impl {
     std::shared_ptr<RunContext> Retiring;
     PTP_WORK DeferredStopWork = nullptr;
 };
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 ResourcePressureMonitor::ResourcePressureMonitor(Callback callback, Config config)
     : m_impl(std::make_unique<Impl>(std::move(callback), config)) {}

@@ -17,6 +17,10 @@
 
 namespace apc::app {
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Identity and Selectors ////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 // Decoded command text is bounded by the existing P01 64 KiB payload limit.
 // Persistence-specific limits remain in their owning settings boundary.
 inline constexpr std::size_t c_maxAppCommandTextCharacters = 64u * 1024u / sizeof(wchar_t);
@@ -113,6 +117,10 @@ private:
     std::wstring m_value;
 };
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Actions and Outcomes //////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 enum class AppCommandKind {
     ShowDevicePicker,
     ShowSettings,
@@ -192,6 +200,10 @@ enum class AppOutcomeReason {
     Unsupported,
     InternalError
 };
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Application Snapshots /////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 // Snapshot values own all strings and containers. The controller publishes
 // copies; they do not expose service locks, XAML objects, or transport state.
@@ -298,6 +310,10 @@ struct AppSnapshot {
     friend bool operator==(AppSnapshot const&, AppSnapshot const&) = default;
 };
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Action Results and Context ////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 struct AppResult {
     AppResultCode Code = AppResultCode::Success;
     AppCommandKind Command = AppCommandKind::Status;
@@ -334,6 +350,10 @@ struct AppCommandContext {
         return Deadline != TimePoint::max() && now >= Deadline;
     }
 };
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Application Events ////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 struct DeviceConnectedEvent {
     // Device events originate at the P01 transport/device boundary. They

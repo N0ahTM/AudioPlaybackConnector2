@@ -9,6 +9,10 @@
 
 namespace apc::app {
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Device Fact Publication Fence /////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 // DeviceService facts can arrive while their UI presentation is queued. The controller owns this fence
 // and advances it when normalizing facts; the UI consumer verifies its token before presentation.
 // Equal facts deliberately share a generation so duplicate

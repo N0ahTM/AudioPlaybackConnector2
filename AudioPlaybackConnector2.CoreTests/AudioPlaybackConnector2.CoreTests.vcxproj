@@ -105,6 +105,7 @@
     <ClCompile Include="src\LatestStartupTaskRequestStateTests.cpp" />
     <ClCompile Include="src\AppControllerUseCasesTests.cpp" />
     <ClCompile Include="src\ProtocolBoundaryTests.cpp" />
+    <ClCompile Include="src\ToastContentBuilderTests.cpp" />
     <ClCompile Include="src\ReconnectPolicyTests.cpp" />
     <ClCompile Include="src\ResourcePressureMonitorTests.cpp" />
     <ClCompile Include="src\RuntimeApartmentTests.cpp" />

@@ -19,6 +19,7 @@
 /*------------------------------------------------------------------------------------------------------------*/
 
 int RunProtocolBoundaryTests();
+int RunToastContentBuilderTests();
 int RunAdaptiveResourcePolicyTests();
 int RunAppControllerTests();
 int RunAppModelsTests();
@@ -112,6 +113,7 @@ int main(int argc, char** argv) {
     }
     std::array suites{
         Suite{"ProtocolBoundary", RunProtocolBoundaryTests},
+        Suite{"ToastContentBuilder", RunToastContentBuilderTests},
         Suite{"AdaptiveResourcePolicy", RunAdaptiveResourcePolicyTests},
         Suite{"AppController", RunAppControllerTests},
         Suite{"AppModels", RunAppModelsTests},

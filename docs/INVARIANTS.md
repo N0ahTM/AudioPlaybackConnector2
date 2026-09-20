@@ -179,7 +179,7 @@ Host constructs/calls/destroys NotificationService on UI. Native activation capt
 
 Teardown invalidates generation and detaches manager before native revoke. Initialize/Show retain UI owner across Windows calls that may pump messages; late registration cannot republish after teardown. Nested Show is declined. Last status tag commits only on success; unique tags prevent stale removal of newer notifications. Cleanup coroutines retain manager/tag/group/log values only.
 
-Source/build/static checks exist; headless tests do not instantiate AppNotificationManager. Packaged/unpackaged activation, shutdown during delivery and interactive notification behavior remain runtime checks.
+ToastContentBuilderTests link the production CoreRuntime builder. They cover Unicode/delimiter round trips, a fixed 1,000-case generated corpus (seed 920040), exactly-once percent decoding, malformed percent input, missing targets and the existing XML sanitizer cases. Windows XmlDocument independently parses generated toasts to verify element counts, attribute/text recovery, action argument round trips and optional/audio replacement behavior. These checks do not instantiate AppNotificationManager. Packaged/unpackaged activation, shutdown during delivery and interactive notification behavior remain runtime checks.
 
 ## Settings window ownership
 

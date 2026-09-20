@@ -2,7 +2,6 @@
 
 #include <control/CommandProtocol.hpp>
 #include <control/CommandPipeIo.hpp>
-#include <services/ToastXmlSanitizer.hpp>
 
 #include <atomic>
 #include <iostream>
@@ -219,25 +218,6 @@ void TestCommandProtocolRejectsInvalidHeader() {
           "oversized payload headers must be rejected before allocation");
 }
 
-void TestToastXmlSanitization() {
-    Check(apc::toast::EscapeXml(L"&<>\"'\t\n\r") == L"&amp;&lt;&gt;&quot;&apos;\t\n\r",
-          "toast XML metacharacters must be escaped without removing legal whitespace");
-
-    std::wstring invalid{L'A',
-                         L'\0',
-                         static_cast<wchar_t>(0x1F),
-                         static_cast<wchar_t>(0xD800),
-                         L'B',
-                         static_cast<wchar_t>(0xDC00),
-                         L'C',
-                         static_cast<wchar_t>(0xFFFE)};
-    Check(apc::toast::EscapeXml(invalid) == L"A\uFFFD\uFFFD\uFFFDB\uFFFDC\uFFFD",
-          "illegal XML controls and unpaired UTF-16 surrogates must be replaced");
-
-    std::wstring surrogatePair{static_cast<wchar_t>(0xD83D), static_cast<wchar_t>(0xDE00)};
-    Check(apc::toast::EscapeXml(surrogatePair) == surrogatePair, "valid UTF-16 surrogate pairs must be preserved");
-}
-
 } // namespace
 
 int RunProtocolBoundaryTests() {
@@ -246,6 +226,5 @@ int RunProtocolBoundaryTests() {
     TestCommandProtocolStrictValidation();
     TestCommandProtocolTimeoutAndCancellation();
     TestCommandProtocolRejectsInvalidHeader();
-    TestToastXmlSanitization();
     return g_failures;
 }

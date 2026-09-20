@@ -15,6 +15,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  dependency-review:
+    name: Dependency review
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+    - name: Review dependency changes
+      uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+      with:
+        fail-on-severity: low
+        fail-on-scopes: runtime, development, unknown
+        license-check: false
+        comment-summary-in-pr: never
+
   headless:
     name: Headless (${{ matrix.platform }}, PCH disabled=${{ matrix.disable_pch }})
     runs-on: windows-2025-vs2026
@@ -78,6 +94,8 @@ jobs:
         ./scripts/test-build-attestations.ps1
         python scripts/test-sbom.py
         if ($LASTEXITCODE -ne 0) { throw "SBOM gate tests failed." }
+        python scripts/test-dependency-vulnerabilities.py
+        if ($LASTEXITCODE -ne 0) { throw "Dependency vulnerability gate tests failed." }
         python scripts/test-dependency-licenses.py
         if ($LASTEXITCODE -ne 0) { throw "Dependency license gate tests failed." }
         ./scripts/test-package-notices.ps1
@@ -189,6 +207,13 @@ jobs:
         $triplet = '${{ matrix.architecture }}'.ToLowerInvariant() + '-windows-static-md'
         python scripts/verify-dependency-licenses.py --triplet $triplet
         if ($LASTEXITCODE -ne 0) { throw 'Dependency license verification failed.' }
+
+    - name: Check dependency vulnerabilities
+      if: ${{ matrix.architecture == 'x64' }}
+      shell: pwsh
+      run: |
+        python scripts/check-dependency-vulnerabilities.py --report "$env:RUNNER_TEMP/dependency-vulnerabilities.json"
+        if ($LASTEXITCODE -ne 0) { throw 'Dependency vulnerability check failed; inspect the report or query error.' }
 
     - name: Run native regression tests
       if: ${{ matrix.architecture == 'x64' }}

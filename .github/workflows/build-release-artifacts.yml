@@ -81,6 +81,8 @@ jobs:
         ./scripts/test-build-attestations.ps1
         python scripts/test-sbom.py
         if ($LASTEXITCODE -ne 0) { throw "SBOM gate tests failed." }
+        python scripts/test-dependency-vulnerabilities.py
+        if ($LASTEXITCODE -ne 0) { throw "Dependency vulnerability gate tests failed." }
         python scripts/test-dependency-licenses.py
         if ($LASTEXITCODE -ne 0) { throw "Dependency license gate tests failed." }
         ./scripts/test-package-notices.ps1
@@ -198,6 +200,12 @@ jobs:
           python scripts/verify-dependency-licenses.py --triplet $triplet
           if ($LASTEXITCODE -ne 0) { throw "Dependency license verification failed: $triplet" }
         }
+
+    - name: Check dependency vulnerabilities
+      shell: pwsh
+      run: |
+        python scripts/check-dependency-vulnerabilities.py --report "$env:RUNNER_TEMP/dependency-vulnerabilities.json"
+        if ($LASTEXITCODE -ne 0) { throw 'Dependency vulnerability check failed; inspect the report or query error.' }
 
     - name: Run x64 regression tests
       run: .\x64\Release\tests\AudioPlaybackConnector2.CoreTests.exe

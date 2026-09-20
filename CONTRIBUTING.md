@@ -208,3 +208,22 @@ repository, tag commit and reusable build workflow. The archive is checked again
 hashes by the existing promotion verifier. Offline policy tests are
 `scripts/test-build-attestations.ps1` and `scripts/test-release-promotion.ps1`; these mock GitHub
 and do not establish that real signed attestations have passed verification.
+
+Dependabot checks GitHub Actions, the three NuGet project manifests and the vcpkg registry monthly,
+with at most one open version-update PR per ecosystem. Updates require review and the normal checks;
+there is no automatic merge. The vcpkg baseline update does not replace review of explicit overrides,
+`config/dependency-licenses.json`, or notices. Dependency Review rejects reported vulnerabilities in
+all dependency scopes on PRs and needs only read access. License approval remains in the explicit
+license inventory rather than treating missing Microsoft package license metadata as approval.
+GitHub's dependency graph does not cover vcpkg advisories, and SHA-pinned Actions do not receive
+SemVer-based advisory alerts. These checks must not be described as complete vulnerability coverage
+of the C++ libraries or build tools; the separate OSV check below complements that coverage.
+
+After x64 restore, run `python scripts/check-dependency-vulnerabilities.py --report <report.json>`.
+It validates the restored license inventory, resolves the upstream Git references recorded in the
+three product libraries' vcpkg SPDX metadata, and queries OSV for those commits and all exact project
+NuGet versions. Only public dependency identifiers are sent to GitHub/OSV. Query failures, incomplete
+responses and any returned advisory fail the check. The timestamped JSON records every query and result.
+No advisory returned means no match in OSV's current data; it does not prove database coverage or
+absence of vulnerabilities. vcpkg build helper ports and SHA-pinned Actions still need upstream review.
+`python scripts/test-dependency-vulnerabilities.py` exercises the rejection paths offline.

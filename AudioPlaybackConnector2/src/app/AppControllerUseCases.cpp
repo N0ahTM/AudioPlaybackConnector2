@@ -548,28 +548,19 @@ AppResult AppController::WriteAlias(AppCommandKind kind,
 /*------------------------------------------------------------------------------------------------------------*/
 
 AppResult AppController::Connect(DeviceSelector target, AppCommandContext context) const {
-    constexpr auto kind = AppCommandKind::Connect;
-
-    return WithSettings(kind, context, [&](SettingsSnapshot const& input) {
-        auto const& settings = input.Data;
-        auto devices = BuildDevices(IsRefreshNeeded(target.Kind()), context, settings);
-        return RunDeviceOperation(kind, target, context, devices, settings);
-    });
+    return RunConnectionAction(AppCommandKind::Connect, std::move(target), context);
 }
 
 AppResult AppController::Disconnect(DeviceSelector target, AppCommandContext context) const {
-    constexpr auto kind = AppCommandKind::Disconnect;
-
-    return WithSettings(kind, context, [&](SettingsSnapshot const& input) {
-        auto const& settings = input.Data;
-        auto devices = BuildDevices(IsRefreshNeeded(target.Kind()), context, settings);
-        return RunDeviceOperation(kind, target, context, devices, settings);
-    });
+    return RunConnectionAction(AppCommandKind::Disconnect, std::move(target), context);
 }
 
 AppResult AppController::Reconnect(DeviceSelector target, AppCommandContext context) const {
-    constexpr auto kind = AppCommandKind::Reconnect;
+    return RunConnectionAction(AppCommandKind::Reconnect, std::move(target), context);
+}
 
+AppResult
+AppController::RunConnectionAction(AppCommandKind kind, DeviceSelector target, AppCommandContext context) const {
     return WithSettings(kind, context, [&](SettingsSnapshot const& input) {
         auto const& settings = input.Data;
         auto devices = BuildDevices(IsRefreshNeeded(target.Kind()), context, settings);

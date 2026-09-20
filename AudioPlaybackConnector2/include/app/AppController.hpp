@@ -222,6 +222,8 @@ private:
                                                AppCommandContext const& context,
                                                std::vector<DeviceRecord> const& devices,
                                                SettingsData const& settings) const;
+    [[nodiscard]] AppResult
+    RunConnectionAction(AppCommandKind kind, DeviceSelector target, AppCommandContext context) const;
     [[nodiscard]] Resolution Resolve(DeviceSelector const& selector,
                                      std::vector<DeviceRecord> const& devices,
                                      SettingsData const& settings) const;

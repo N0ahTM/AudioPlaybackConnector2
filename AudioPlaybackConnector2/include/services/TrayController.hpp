@@ -80,11 +80,10 @@ public:
     [[nodiscard]] bool OnVisualTimer(UINT_PTR timerId) noexcept;
     [[nodiscard]] bool RefreshDevicePickerState() noexcept;
     [[nodiscard]] bool InvalidateDevicePickerInventory() noexcept;
-    void OnThemeChanged();
     void ApplyLanguage();
     void OnSettingChange(LPARAM setting);
     void SetSystemBackdropEffectsEnabled(bool enabled) noexcept;
-    void Reregister();
+    void OnTaskbarCreated();
     [[nodiscard]] util::SettingsWindowPlacement GetSettingsWindowPlacement() const;
 
     void HandleTrayMessage(WPARAM wParam, LPARAM lParam) noexcept;

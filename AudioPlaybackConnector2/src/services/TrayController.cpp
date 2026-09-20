@@ -560,10 +560,12 @@ bool TrayController::InvalidateDevicePickerInventory() noexcept {
     return false;
 }
 
-void TrayController::OnThemeChanged() {
-    if (m_trayIcon) {
-        m_trayIcon->UpdateTheme();
-    }
+void TrayController::OnTaskbarCreated() {
+    if (!m_trayIcon) return;
+    m_trayIcon->Reregister();
+    // Explorer may have restarted while theme messages were lost; resync the cache.
+    m_theme = GetSystemTheme();
+    m_trayIcon->UpdateTheme();
 }
 
 bool TrayController::AdvanceConnectingFrame() noexcept {
@@ -588,12 +590,6 @@ bool TrayController::ApplyPendingTrayUpdates() noexcept {
         m_log.UnknownException(L"[TrayController] ERROR: pending tray update failed");
     }
     return false;
-}
-
-void TrayController::Reregister() {
-    if (m_trayIcon) {
-        m_trayIcon->Reregister();
-    }
 }
 
 util::SettingsWindowPlacement TrayController::GetSettingsWindowPlacement() const {

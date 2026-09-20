@@ -772,8 +772,7 @@ LRESULT CALLBACK ApplicationHost::SubclassProc(
 
     if (host->m_taskbarCreatedMessage && msg == host->m_taskbarCreatedMessage) {
         if (host->m_trayController) {
-            host->m_trayController->Reregister();
-            host->m_trayController->OnThemeChanged();
+            host->m_trayController->OnTaskbarCreated();
             host->ScheduleDeviceVisualRefresh(c_visualRefreshRequested);
         }
         return 0;

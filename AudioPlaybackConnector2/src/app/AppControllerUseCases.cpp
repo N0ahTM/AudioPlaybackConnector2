@@ -163,7 +163,7 @@ AppSnapshot AppController::CaptureSnapshot() const {
             pickerGeneration = std::max(pickerGeneration, presentation->PickerOpenedGeneration());
         std::vector<DeviceRecord> inventory;
         for (auto const& device : deviceState.Inventory.Devices)
-            inventory.push_back({device.Id, device.Name, {}, DeviceConnectionState::Idle, false, true, false});
+            inventory.push_back({device.Id, device.Name, {}, DeviceConnectionState::Idle, false, true});
         auto records = MergeDevices(std::move(inventory), SessionRecords(deviceState), settings->Data);
         auto snapshot = BuildSnapshot(std::move(records), settings->Data, generation, pickerGeneration, true);
         // Reading each version again establishes an overlapping stable interval
@@ -907,7 +907,7 @@ std::vector<AppController::DeviceRecord> AppController::BuildDevicesWithoutRefre
     auto const snapshot = m_devices->Snapshot();
     std::vector<DeviceRecord> inventory;
     for (auto const& device : snapshot.Inventory.Devices)
-        inventory.push_back({device.Id, device.Name, {}, DeviceConnectionState::Idle, false, true, false});
+        inventory.push_back({device.Id, device.Name, {}, DeviceConnectionState::Idle, false, true});
     return MergeDevices(std::move(inventory), SessionRecords(snapshot), settings);
 }
 
@@ -960,13 +960,8 @@ AppController::SessionRecords(apc::device::DeviceServiceSnapshot const& snapshot
                 break;
             case apc::device::DeviceLifecycleState::Failed: state = DeviceConnectionState::Failed; break;
         }
-        records.push_back({session.DeviceId,
-                           session.DeviceName,
-                           {},
-                           state,
-                           state == DeviceConnectionState::Connected,
-                           true,
-                           IsBusyState(state)});
+        records.push_back(
+            {session.DeviceId, session.DeviceName, {}, state, state == DeviceConnectionState::Connected, true});
     }
     return records;
 }
@@ -988,7 +983,6 @@ std::vector<AppController::DeviceRecord> AppController::MergeDevices(std::vector
         if (!device.Alias.empty()) current.Alias = std::move(device.Alias);
         current.IsConnected = current.IsConnected || device.IsConnected;
         current.IsKnown = current.IsKnown || device.IsKnown;
-        current.IsBusy = current.IsBusy || device.IsBusy;
         if (current.State == DeviceConnectionState::Idle && device.State != DeviceConnectionState::Idle) {
             current.State = device.State;
         }
@@ -1000,7 +994,7 @@ std::vector<AppController::DeviceRecord> AppController::MergeDevices(std::vector
     for (auto const& device : connected)
         upsert(device);
     for (auto const& device : settings.Devices) {
-        upsert(DeviceRecord{device.Id, device.Name, device.Alias, DeviceConnectionState::Idle, false, true, false});
+        upsert(DeviceRecord{device.Id, device.Name, device.Alias, DeviceConnectionState::Idle, false, true});
     }
 
     ApplySessionStates(merged, connected);
@@ -1061,7 +1055,8 @@ AppSnapshot AppController::BuildSnapshot(std::vector<DeviceRecord> devices,
 
     snapshot.Tray.Generation = generation;
     snapshot.Tray.DevicePickerOpenedGeneration = pickerGeneration;
-    snapshot.Tray.HasBusyOperations = std::ranges::any_of(devices, [](auto const& device) { return device.IsBusy; });
+    snapshot.Tray.HasBusyOperations =
+        std::ranges::any_of(devices, [](auto const& device) { return IsBusyState(device.State); });
     for (auto const& device : snapshot.Devices) {
         if (device.IsConnected) snapshot.Tray.ConnectedDevices.push_back(device);
     }
@@ -1135,7 +1130,7 @@ std::optional<DeviceSnapshot> AppController::ToSnapshot(DeviceRecord const& reco
                           record.State,
                           record.IsKnown,
                           record.IsConnected,
-                          record.IsBusy || IsBusyState(record.State)};
+                          IsBusyState(record.State)};
 }
 
 std::optional<DeviceSnapshot> AppController::PostOperationDevice(std::wstring_view deviceId,
@@ -1189,13 +1184,11 @@ void AppController::ApplySessionStates(std::vector<DeviceRecord>& devices,
             current.State = source->State;
             current.IsConnected = source->IsConnected;
             current.IsKnown = current.IsKnown || source->IsKnown;
-            current.IsBusy = source->IsBusy;
             continue;
         }
 
         current.IsConnected = false;
         current.State = DeviceConnectionState::Idle;
-        current.IsBusy = false;
     }
 }
 

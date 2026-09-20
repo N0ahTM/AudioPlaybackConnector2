@@ -188,7 +188,6 @@ private:
         DeviceConnectionState State = DeviceConnectionState::Idle;
         bool IsConnected = false;
         bool IsKnown = false;
-        bool IsBusy = false;
 
         friend bool operator==(DeviceRecord const&, DeviceRecord const&) = default;
     };

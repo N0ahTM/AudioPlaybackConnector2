@@ -168,19 +168,6 @@ struct ResourcePressureMonitor::Impl {
         }
 
     private:
-        struct PublicCallbackGuard {
-            explicit PublicCallbackGuard(std::shared_ptr<RunContext> owner) : Owner(std::move(owner)) {}
-            ~PublicCallbackGuard() { Owner->FinishPublicCallback(); }
-            std::shared_ptr<RunContext> Owner;
-        };
-
-        struct ActiveCallbackScope {
-            explicit ActiveCallbackScope(void const* current) noexcept
-                : Previous(std::exchange(g_activeResourcePressureCallback, current)) {}
-            ~ActiveCallbackScope() { g_activeResourcePressureCallback = Previous; }
-            void const* Previous;
-        };
-
         static void CALLBACK MemoryCallback(PTP_CALLBACK_INSTANCE instance,
                                             void* context,
                                             PTP_WAIT,
@@ -245,9 +232,11 @@ struct ResourcePressureMonitor::Impl {
             }
 
             if (!deliverSnapshots) return;
-            PublicCallbackGuard callbackGuard(shared_from_this());
+            auto callbackGuard = wil::scope_exit([owner = shared_from_this()] { owner->FinishPublicCallback(); });
             DisassociateCurrentThreadFromCallback(instance);
-            ActiveCallbackScope callbackScope(OwnerIdentity);
+            const auto previousCallback = std::exchange(g_activeResourcePressureCallback, OwnerIdentity);
+            auto callbackScope =
+                wil::scope_exit([previousCallback] { g_activeResourcePressureCallback = previousCallback; });
             for (;;) {
                 std::optional<ResourcePressureSnapshot> snapshot;
                 {

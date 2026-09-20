@@ -730,11 +730,12 @@ void CALLBACK CommandLineControlServer::OnHandlerReady(PTP_CALLBACK_INSTANCE cal
             instance->Response = responseToSend;
             instance->AcknowledgementRecord = acknowledgementRecord;
             acknowledgementRecord.reset();
-            instance->ResponseHeader = {};
-            instance->ResponseHeader.CorrelationHigh = instance->Response.CorrelationId.High;
-            instance->ResponseHeader.CorrelationLow = instance->Response.CorrelationId.Low;
-            instance->ResponseHeader.ExitCode = static_cast<std::uint32_t>(instance->Response.Code);
-            instance->ResponseHeader.PayloadBytes = apc::control::PayloadByteCount(instance->Response.Payload).value();
+            auto const responseHeader = apc::control::MakeResponseHeader(instance->Response);
+            if (!responseHeader) {
+                owner->FinishClientLocked(*instance);
+                return;
+            }
+            instance->ResponseHeader = *responseHeader;
             instance->ResponseDeadline = apc::control::DeadlineAfter(owner->m_options.ResponseTimeoutMs);
             instance->Phase = PipePhase::WritingResponseHeader;
             if (!owner->StartTransferLocked(*instance,
@@ -908,12 +909,7 @@ void CommandLineControlServer::HandleCompletedTransferLocked(PipeInstance& insta
     switch (instance.Phase) {
         case PipePhase::ReadingRequestHeader: {
             const auto& header = instance.RequestHeader;
-            const apc::control::CorrelationId correlation{header.CorrelationHigh, header.CorrelationLow};
-            if (header.Magic != apc::control::c_requestMagic || header.Version != apc::control::c_protocolVersion ||
-                correlation.Empty() || !apc::control::IsKnownCommand(header.Command) ||
-                !apc::control::IsKnownTarget(header.Target) ||
-                (header.Flags & ~(apc::control::CommandFlagJson | apc::control::CommandFlagRaw)) != 0 ||
-                !apc::control::IsPayloadByteCountValid(header.PayloadBytes)) {
+            if (!apc::control::IsRequestHeaderValid(header)) {
                 FinishClientLocked(instance);
                 return;
             }
@@ -921,7 +917,7 @@ void CommandLineControlServer::HandleCompletedTransferLocked(PipeInstance& insta
             instance.Request.Command = static_cast<apc::control::CommandType>(header.Command);
             instance.Request.Target = static_cast<apc::control::TargetKind>(header.Target);
             instance.Request.Flags = header.Flags;
-            instance.Request.CorrelationId = correlation;
+            instance.Request.CorrelationId = {header.CorrelationHigh, header.CorrelationLow};
             instance.Request.Payload.assign(header.PayloadBytes / sizeof(wchar_t), L'\0');
             if (header.PayloadBytes == 0) {
                 DispatchRequestLocked(instance);
@@ -972,10 +968,7 @@ void CommandLineControlServer::HandleCompletedTransferLocked(PipeInstance& insta
             return;
         case PipePhase::ReadingAcknowledgement: {
             const auto& acknowledgement = instance.Acknowledgement;
-            if (acknowledgement.Magic == apc::control::c_acknowledgementMagic &&
-                acknowledgement.Version == apc::control::c_protocolVersion &&
-                acknowledgement.CorrelationHigh == instance.Request.CorrelationId.High &&
-                acknowledgement.CorrelationLow == instance.Request.CorrelationId.Low &&
+            if (apc::control::IsAcknowledgementValid(acknowledgement, instance.Request.CorrelationId) &&
                 instance.AcknowledgementRecord) {
                 auto record = std::move(instance.AcknowledgementRecord);
                 CompleteDelivery(instance.Request.CorrelationId, record, true);

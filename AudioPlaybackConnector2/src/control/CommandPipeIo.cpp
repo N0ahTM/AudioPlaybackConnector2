@@ -138,11 +138,8 @@ IoStatus ReadRequest(HANDLE pipe, Request& request, HANDLE stopEvent, std::uint6
     RequestHeader header{};
     auto status = ReadExact(pipe, &header, sizeof(header), stopEvent, deadline);
     if (status != IoStatus::Success) return status;
+    if (!IsRequestHeaderValid(header)) return IoStatus::InvalidData;
     const CorrelationId correlationId{header.CorrelationHigh, header.CorrelationLow};
-    if (header.Magic != c_requestMagic || header.Version != c_protocolVersion || correlationId.Empty() ||
-        !IsKnownCommand(header.Command) || !IsKnownTarget(header.Target) ||
-        (header.Flags & ~(CommandFlagJson | CommandFlagRaw)) != 0 || !IsPayloadByteCountValid(header.PayloadBytes))
-        return IoStatus::InvalidData;
 
     std::wstring payload(header.PayloadBytes / sizeof(wchar_t), L'\0');
     if (header.PayloadBytes > 0) {
@@ -197,21 +194,12 @@ IoStatus ReadResponse(HANDLE pipe, Response& response, HANDLE stopEvent, std::ui
 }
 
 IoStatus WriteResponse(HANDLE pipe, Response const& response, HANDLE stopEvent, std::uint64_t deadline) {
-    auto payloadBytes = PayloadByteCount(response.Payload);
-    if (!payloadBytes || response.CorrelationId.Empty() ||
-        !IsKnownExitCode(static_cast<std::uint32_t>(response.Code))) {
-        return IoStatus::InvalidData;
-    }
+    const auto header = MakeResponseHeader(response);
+    if (!header) return IoStatus::InvalidData;
 
-    ResponseHeader header{};
-    header.CorrelationHigh = response.CorrelationId.High;
-    header.CorrelationLow = response.CorrelationId.Low;
-    header.ExitCode = static_cast<std::uint32_t>(response.Code);
-    header.PayloadBytes = *payloadBytes;
-
-    auto status = WriteExact(pipe, &header, sizeof(header), stopEvent, deadline);
-    if (status != IoStatus::Success || *payloadBytes == 0) return status;
-    return WriteExact(pipe, response.Payload.data(), *payloadBytes, stopEvent, deadline);
+    auto status = WriteExact(pipe, &*header, sizeof(*header), stopEvent, deadline);
+    if (status != IoStatus::Success || header->PayloadBytes == 0) return status;
+    return WriteExact(pipe, response.Payload.data(), header->PayloadBytes, stopEvent, deadline);
 }
 
 IoStatus
@@ -228,10 +216,7 @@ ReadAcknowledgement(HANDLE pipe, CorrelationId correlationId, HANDLE stopEvent, 
     Acknowledgement acknowledgement{};
     const auto status = ReadExact(pipe, &acknowledgement, sizeof(acknowledgement), stopEvent, deadline);
     if (status != IoStatus::Success) return status;
-    if (acknowledgement.Magic != c_acknowledgementMagic || acknowledgement.Version != c_protocolVersion ||
-        acknowledgement.CorrelationHigh != correlationId.High || acknowledgement.CorrelationLow != correlationId.Low) {
-        return IoStatus::InvalidData;
-    }
+    if (!IsAcknowledgementValid(acknowledgement, correlationId)) return IoStatus::InvalidData;
     return IoStatus::Success;
 }
 

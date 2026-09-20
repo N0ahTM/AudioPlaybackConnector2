@@ -201,4 +201,30 @@ inline std::optional<std::uint32_t> PayloadByteCount(std::wstring_view payload) 
     return byteCount;
 }
 
+inline bool IsRequestHeaderValid(RequestHeader const& header) noexcept {
+    const CorrelationId correlation{header.CorrelationHigh, header.CorrelationLow};
+    return header.Magic == c_requestMagic && header.Version == c_protocolVersion && !correlation.Empty() &&
+           IsKnownCommand(header.Command) && IsKnownTarget(header.Target) &&
+           (header.Flags & ~(CommandFlagJson | CommandFlagRaw)) == 0 && IsPayloadByteCountValid(header.PayloadBytes);
+}
+
+inline std::optional<ResponseHeader> MakeResponseHeader(Response const& response) noexcept {
+    const auto payloadBytes = PayloadByteCount(response.Payload);
+    if (!payloadBytes || response.CorrelationId.Empty() ||
+        !IsKnownExitCode(static_cast<std::uint32_t>(response.Code))) {
+        return std::nullopt;
+    }
+    ResponseHeader header{};
+    header.CorrelationHigh = response.CorrelationId.High;
+    header.CorrelationLow = response.CorrelationId.Low;
+    header.ExitCode = static_cast<std::uint32_t>(response.Code);
+    header.PayloadBytes = *payloadBytes;
+    return header;
+}
+
+inline bool IsAcknowledgementValid(Acknowledgement const& acknowledgement, CorrelationId expected) noexcept {
+    return acknowledgement.Magic == c_acknowledgementMagic && acknowledgement.Version == c_protocolVersion &&
+           acknowledgement.CorrelationHigh == expected.High && acknowledgement.CorrelationLow == expected.Low;
+}
+
 } // namespace apc::control

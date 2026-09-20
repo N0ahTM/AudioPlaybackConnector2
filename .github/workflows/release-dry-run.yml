@@ -34,6 +34,10 @@ jobs:
 
   build-artifacts:
     needs: version
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/build-release-artifacts.yml
     with:
       source_ref: ${{ github.sha }}

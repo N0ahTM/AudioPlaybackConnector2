@@ -74,6 +74,8 @@ jobs:
         ./scripts/update-cli-reference.ps1 -Check
         ./scripts/test-release-metadata.ps1
         ./scripts/test-release-version.ps1
+        python scripts/test-sbom.py
+        if ($LASTEXITCODE -ne 0) { throw "SBOM gate tests failed." }
         python scripts/test-dependency-licenses.py
         if ($LASTEXITCODE -ne 0) { throw "Dependency license gate tests failed." }
         ./scripts/test-package-notices.ps1

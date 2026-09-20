@@ -43,6 +43,8 @@ jobs:
     runs-on: windows-2025-vs2026
     permissions:
       contents: read
+      id-token: write
+      attestations: write
     outputs:
       artifact_name: ${{ steps.artifacts.outputs.ARTIFACT_NAME }}
       bundle_name: ${{ steps.artifacts.outputs.BUNDLE_NAME }}
@@ -75,6 +77,8 @@ jobs:
         ./scripts/validate-localizations.ps1
         ./scripts/validate-markdown-links.ps1
         ./scripts/update-cli-reference.ps1 -Check
+        python scripts/test-sbom.py
+        if ($LASTEXITCODE -ne 0) { throw "SBOM gate tests failed." }
         python scripts/test-dependency-licenses.py
         if ($LASTEXITCODE -ne 0) { throw "Dependency license gate tests failed." }
         ./scripts/test-package-notices.ps1
@@ -311,6 +315,28 @@ jobs:
         "BUNDLE_NAME=$bundleName" >> $env:GITHUB_OUTPUT
         "DEPENDENCY_NAMES=$($dependencyNames -join ',')" >> $env:GITHUB_OUTPUT
         "DIR=$stage" >> $env:GITHUB_OUTPUT
+
+    - name: Generate and verify release-drop SBOM
+      shell: pwsh
+      env:
+        RELEASE_TAG: ${{ inputs.tag }}
+        RELEASE_DROP: ${{ steps.artifacts.outputs.DIR }}
+      run: ./scripts/release/generate-sbom.ps1 -DropPath $env:RELEASE_DROP -Tag $env:RELEASE_TAG
+
+    - name: Attest package SBOM
+      uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+      with:
+        subject-path: |
+          ${{ steps.artifacts.outputs.DIR }}/*.msixbundle
+          ${{ steps.artifacts.outputs.DIR }}/*.msixupload
+          ${{ steps.artifacts.outputs.DIR }}/Dependencies/**
+          ${{ steps.artifacts.outputs.DIR }}/*.appinstaller
+        sbom-path: ${{ steps.artifacts.outputs.DIR }}/_manifest/spdx_2.2/manifest.spdx.json
+
+    - name: Attest provenance of complete release drop
+      uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+      with:
+        subject-path: ${{ steps.artifacts.outputs.DIR }}/**
 
     - name: Upload release artifacts
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

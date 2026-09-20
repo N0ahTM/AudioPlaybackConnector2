@@ -158,7 +158,7 @@ Small documentation or single-language translation changes do not require an unr
 ## Code Style
 
 - **C++ standard:** C++26 draft mode (`/std:c++latest`, MSVC 14.51 or newer)
-- **Warnings:** `/W4 /WX` — all warnings are errors; do not introduce new warnings
+- **Warnings:** `/W4 /WX` â€” all warnings are errors; do not introduce new warnings
 - **Includes:** Every source or header file includes what it uses. `pch.h` is a build cache, not an undeclared dependency contract.
 - **Strings:** User-visible strings go through the localization resources. English is canonical; other locales may fall back to it and preserve all formatting placeholders.
 - **Ownership:** Give mutable state, asynchronous work, and cancellation one explicit owner. Do not forward unchanged global context through unrelated layers.
@@ -190,3 +190,13 @@ or license text requires review of the inventory and notices; do not blindly reg
 `python scripts/test-dependency-licenses.py` checks the rejection paths without a restore.
 This gate covers vcpkg dependencies; it does not replace NuGet notice review, vulnerability scanning,
 or the release-drop SBOM.
+
+Generate the release-drop SBOM after assembling a fresh staging directory:
+`pwsh scripts/release/generate-sbom.ps1 -DropPath <staging-directory> -Tag vX.Y.Z`.
+Both architecture restores are required by default; use `-Triplets x64-windows-static-md` only
+for an explicitly x64-only local drop. Python 3.9+ must be on PATH. The wrapper verifies the
+`config/sbom-tool.json` binary pin, bundles actual NuGet/vcpkg metadata, and generates SPDX 2.2.
+`python scripts/release/verify-sbom.py --drop <staging-directory>` checks complete file coverage,
+SHA256 hashes and bundled external SPDX references without downloading anything.
+The release build attests package SBOMs and provenance with a pinned GitHub Action. Local generation
+does not create attestations or publish artifacts; the actual Actions run remains a separate gate.

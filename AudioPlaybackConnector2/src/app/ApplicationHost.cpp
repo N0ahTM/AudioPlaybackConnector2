@@ -17,8 +17,6 @@
 #include <util/Logger.hpp>
 #include <util/Util.hpp>
 
-#include <limits>
-#include <stdexcept>
 #include <utility>
 
 using namespace winrt;

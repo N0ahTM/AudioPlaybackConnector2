@@ -27,6 +27,12 @@ namespace {
 
 using namespace apc::tests::device;
 
+bool HasConnectedSession(DeviceService& service) {
+    auto const snapshot = service.Snapshot();
+    return std::ranges::any_of(snapshot.Sessions,
+                               [](auto const& session) { return session.State == DeviceLifecycleState::Connected; });
+}
+
 void TestResumeWatcherFailureClearsRunningStateAndAllowsRetry() {
     Fixture fixture;
     Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted,
@@ -160,7 +166,7 @@ void TestPowerTransitionRecoveryTargetsIncludeIncomingAndPendingReconnectWithout
         fixture.WatcherAccess->LastWatcher->Add(L"power-incoming", L"Power incoming");
         fixture.ConnectionAccess->LastConnection->CompleteStart(DeviceConnectionResult::Success);
         Check(StateFor(fixture.Service, L"power-incoming") == DeviceLifecycleState::Idle &&
-                  fixture.Service.GetConnectedDevices().empty(),
+                  !HasConnectedSession(fixture.Service),
               "an incoming-only listener must be idle while no device is connected");
         auto const targets = fixture.Service.GetPowerTransitionRecoveryDeviceIds();
         Check(std::ranges::find(targets, L"power-incoming") != targets.end(),
@@ -180,7 +186,7 @@ void TestPowerTransitionRecoveryTargetsIncludeIncomingAndPendingReconnectWithout
         ConnectSuccessfully(fixture, L"power-pending");
         fixture.ConnectionAccess->LastConnection->Signal(DeviceConnectionState::Closed);
         Check(StateFor(fixture.Service, L"power-pending") == DeviceLifecycleState::WaitingForReconnect &&
-                  fixture.Service.GetConnectedDevices().empty(),
+                  !HasConnectedSession(fixture.Service),
               "a pending reconnect must be recoverable while zero devices are connected");
         auto const targets = fixture.Service.GetPowerTransitionRecoveryDeviceIds();
         Check(std::ranges::find(targets, L"power-pending") != targets.end(),

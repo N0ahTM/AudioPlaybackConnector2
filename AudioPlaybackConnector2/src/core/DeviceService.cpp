@@ -796,15 +796,6 @@ DeviceService::RefreshDevicesAsync() {
     co_return co_await state->Watcher->RefreshAsync();
 }
 
-std::vector<DeviceSessionSnapshot> DeviceService::GetConnectedDevices() const {
-    std::vector<DeviceSessionSnapshot> result;
-    auto const snapshot = Snapshot();
-    for (auto const& session : snapshot.Sessions) {
-        if (session.State == DeviceLifecycleState::Connected) result.push_back(session);
-    }
-    return result;
-}
-
 std::vector<std::wstring> DeviceService::GetPowerTransitionRecoveryDeviceIds() const {
     std::vector<std::wstring> result;
     auto const snapshot = Snapshot();

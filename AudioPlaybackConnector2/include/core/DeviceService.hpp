@@ -133,7 +133,6 @@ public:
     /*//////// Snapshot Queries //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    [[nodiscard]] std::vector<DeviceSessionSnapshot> GetConnectedDevices() const;
     [[nodiscard]] std::vector<std::wstring> GetPowerTransitionRecoveryDeviceIds() const;
     [[nodiscard]] bool IsDeviceConnected(std::wstring_view deviceId) const;
     [[nodiscard]] bool HasBusyOperations() const;

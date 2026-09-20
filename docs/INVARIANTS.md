@@ -76,6 +76,10 @@ CacheNow is monotonic/concurrent; SetCacheTimer runs under cache lock and must n
 
 CoreRuntime compiles the server once; tests link identical production layout without test macros.
 
+CLI endpoint discovery uses one locally owned waitable timer per attempt, with the connection and
+overall deadlines bounding every wait. A replay also waits on its retained server process handle;
+process exit returns ServerChanged. No callback or extra worker owns the timer, and destruction closes it.
+
 ## Power recovery
 
 Native callbacks retain shared state, never the facade; production/tests share the scheduling contract and CoreRuntime object with pinned WinRT. Schedule failure delivers once immediately. Otherwise tick every ten seconds, allow one delivery, stop after acknowledgement or six actual attempts per target. Skips retain budget; duplicate IDs/completions neither double-count nor unlock later work. Ordered private vector owns targets/counters; suspend cycles retain targets and reset budgets.

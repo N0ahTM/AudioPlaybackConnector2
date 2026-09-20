@@ -117,6 +117,7 @@ AttemptResult Win32CommandTransport::TrySendOnce(Request const& request,
     const auto firstInstance = static_cast<std::size_t>(request.CorrelationId.Low % apc::control::c_pipeInstanceCount);
     bool sawRejectedEndpoint = false;
     bool sawDifferentServer = false;
+    wil::unique_handle retryTimer;
 
     while (true) {
         for (std::size_t offset = 0; offset < apc::control::c_pipeInstanceCount; ++offset) {
@@ -168,7 +169,20 @@ AttemptResult Win32CommandTransport::TrySendOnce(Request const& request,
             return sawRejectedEndpoint ? apc::control::client::AttemptResult::Rejected
                                        : apc::control::client::AttemptResult::NotConnected;
         }
-        Sleep(std::min<DWORD>(c_retryIntervalMs, apc::control::RemainingWait(connectionDeadline)));
+        // Missing pipe instances have no waitable arrival notification. Schedule the
+        // next discovery attempt, but stop a replay immediately if its server exits.
+        if (!retryTimer) retryTimer.reset(CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_ALL_ACCESS));
+        if (!retryTimer) return AttemptResult::Rejected;
+        const auto delay = std::min<DWORD>(c_retryIntervalMs, apc::control::RemainingWait(connectionDeadline));
+        LARGE_INTEGER due{};
+        due.QuadPart = -static_cast<LONGLONG>(std::max<DWORD>(delay, 1)) * 10000;
+        if (!SetWaitableTimerEx(retryTimer.get(), &due, 0, nullptr, nullptr, nullptr, 0))
+            return AttemptResult::Rejected;
+        HANDLE waits[] = {retryTimer.get(), expected ? expected->Process.get() : nullptr};
+        const auto wake =
+            WaitForMultipleObjects(expected ? 2 : 1, waits, FALSE, apc::control::RemainingWait(connectionDeadline));
+        if (wake == WAIT_OBJECT_0 + 1) return AttemptResult::ServerChanged;
+        if (wake != WAIT_OBJECT_0 && wake != WAIT_TIMEOUT) return AttemptResult::Rejected;
     }
 }
 

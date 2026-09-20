@@ -33,11 +33,11 @@ constexpr auto c_mainWindowLoadedTimeout = std::chrono::seconds{15};
 
 using OperationStatus = apc::app::AppActionStatus;
 
-OperationStatus ToUiActionStatus(apc::control::ControlUiActionGate::Result result) noexcept {
+OperationStatus ToUiActionStatus(UiDispatcher::ActionResult result) noexcept {
     switch (result) {
-        case apc::control::ControlUiActionGate::Result::Succeeded: return OperationStatus::Succeeded;
-        case apc::control::ControlUiActionGate::Result::Failed: return OperationStatus::Failed;
-        case apc::control::ControlUiActionGate::Result::Indeterminate: return OperationStatus::Indeterminate;
+        case UiDispatcher::ActionResult::Succeeded: return OperationStatus::Succeeded;
+        case UiDispatcher::ActionResult::Failed: return OperationStatus::Failed;
+        case UiDispatcher::ActionResult::Indeterminate: return OperationStatus::Indeterminate;
     }
     return OperationStatus::Failed;
 }
@@ -142,6 +142,7 @@ bool ApplicationHost::PerformTeardown(SettingsShutdownMode settingsShutdownMode)
     // handler may be waiting for this UI thread to process show/settings work;
     // Stop() still drains the server after the controller has rejected new work.
     m_commandLineControlServer.RequestStop();
+    if (m_uiDispatcher) m_uiDispatcher->Stop();
     m_adaptiveResources->Stop();
     // Persist the window's final placement before closing application admission.
     auto const settingsWindowClosed = m_settingsWindowPresenter.Close();
@@ -170,7 +171,6 @@ bool ApplicationHost::PerformTeardown(SettingsShutdownMode settingsShutdownMode)
     m_controlCommandAdapter.reset();
     TeardownDeviceEvents();
     m_appController.reset();
-    if (m_uiDispatcher) m_uiDispatcher->Stop();
     if (m_hwnd) {
         try {
             KillTimer(m_hwnd, c_timerAnimation);
@@ -473,14 +473,15 @@ apc::app::AppUiActionResult ApplicationHost::PresentDevicePicker(apc::app::Devic
     auto tray = self->m_trayController;
     const auto openedGeneration = tray->DevicePickerOpenedGeneration();
     const auto wasVisible = tray->IsDevicePickerVisibleOrTransitioning();
-    const auto uiResult = self->RunControlUiAction(
+    const auto uiResult = self->m_uiDispatcher->RunAndWait(
         [weak, openMode]() {
             auto self = weak.lock();
             return self && self->m_trayController &&
                    self->m_trayController->ShowDevicePicker(openMode == apc::app::DevicePickerOpenMode::ToggleIfOpen);
         },
-        context);
-    if (uiResult != ControlUiActionResult::Succeeded) {
+        context.StopToken,
+        context.Deadline);
+    if (uiResult != UiDispatcher::ActionResult::Succeeded) {
         // The gate records whether the dispatcher crossed TryBegin. A
         // canceled or expired context alone cannot distinguish an action
         // that never ran from one that may have already mutated the UI.
@@ -517,12 +518,13 @@ apc::app::AppUiActionResult ApplicationHost::PresentSettings(apc::app::AppComman
     apc::app::AppUiActionResult result;
     auto self = weak.lock();
     if (!self) return result;
-    const auto uiResult = self->RunControlUiAction(
+    const auto uiResult = self->m_uiDispatcher->RunAndWait(
         [weak]() {
             auto self = weak.lock();
             return self && self->ShowSettingsWindow();
         },
-        context);
+        context.StopToken,
+        context.Deadline);
     // Preserve the gate's pre-dispatch versus in-flight distinction. The
     // context state is not sufficient once the UI callback may have run.
     result.Status = ToUiActionStatus(uiResult);
@@ -608,65 +610,6 @@ void ApplicationHost::HandlePowerResume() {
                 });
             if (!accepted) finish({});
         });
-}
-
-ApplicationHost::ControlUiActionResult ApplicationHost::RunControlUiAction(std::function<bool()> work,
-                                                                           apc::app::AppCommandContext const& context) {
-    if (m_exiting.load() || !m_dispatcherQueue || context.IsCancellationRequested()) {
-        return ControlUiActionResult::Failed;
-    }
-    if (m_dispatcherQueue.HasThreadAccess()) {
-        try {
-            return !m_exiting.load() && work() ? ControlUiActionResult::Succeeded : ControlUiActionResult::Failed;
-        } catch (...) {
-            return ControlUiActionResult::Failed;
-        }
-    }
-
-    struct ActionState {
-        ActionState() { Completed.create(); }
-        wil::unique_event Completed;
-        apc::control::ControlUiActionGate Gate;
-    };
-    auto state = std::make_shared<ActionState>();
-    auto weak = weak_from_this();
-    if (!m_dispatcherQueue.TryEnqueue(winrt::Microsoft::UI::Dispatching::DispatcherQueuePriority::Normal,
-                                      [weak, state, work = std::move(work)]() mutable noexcept {
-                                          if (!state->Gate.TryBegin()) {
-                                              state->Completed.SetEvent();
-                                              return;
-                                          }
-                                          bool succeeded = false;
-                                          try {
-                                              auto self = weak.lock();
-                                              if (self && !self->m_exiting.load()) {
-                                                  succeeded = work();
-                                              }
-                                          } catch (...) {
-                                          }
-                                          state->Gate.Complete(succeeded);
-                                          state->Completed.SetEvent();
-                                      })) {
-        return ControlUiActionResult::Failed;
-    }
-
-    while (true) {
-        if (context.IsCancellationRequested() || m_exiting.load()) {
-            return state->Gate.CancelOrClassify();
-        }
-        DWORD remaining = INFINITE;
-        if (context.Deadline != apc::app::AppCommandContext::TimePoint::max()) {
-            const auto duration = context.Deadline - apc::app::AppCommandContext::Clock::now();
-            if (duration <= std::chrono::steady_clock::duration::zero()) return state->Gate.CancelOrClassify();
-            const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-            remaining = static_cast<DWORD>(std::clamp<std::int64_t>(milliseconds, 1, INFINITE));
-        }
-        const auto waitResult = WaitForSingleObject(state->Completed.get(), std::min<DWORD>(remaining, 100));
-        if (waitResult == WAIT_OBJECT_0) {
-            return state->Gate.CurrentResult();
-        }
-        if (waitResult != WAIT_TIMEOUT) return state->Gate.CancelOrClassify();
-    }
 }
 
 bool ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstring_view reason) {

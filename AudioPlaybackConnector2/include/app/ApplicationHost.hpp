@@ -4,7 +4,6 @@
 
 #include <app/AppController.hpp>
 #include <app/AdaptiveResourceController.hpp>
-#include <control/ControlUiActionGate.hpp>
 #include <app/PowerTransitionCoordinator.hpp>
 #include <app/SettingsWindowPresenter.hpp>
 #include <app/SingleInstanceGuard.hpp>
@@ -57,7 +56,6 @@ public:
     void Shutdown() noexcept;
 
 private:
-    using ControlUiActionResult = apc::control::ControlUiActionGate::Result;
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Setup /////////////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
@@ -95,7 +93,6 @@ private:
     void ExitApplication() noexcept;
     [[nodiscard]] bool CloseMainWindow(std::wstring_view reason) noexcept;
     [[nodiscard]] bool PerformTeardown(SettingsShutdownMode settingsShutdownMode) noexcept;
-    ControlUiActionResult RunControlUiAction(std::function<bool()> work, apc::app::AppCommandContext const& context);
 
     void HandleAppEvent(apc::app::AppController::EventNotification const& event);
 

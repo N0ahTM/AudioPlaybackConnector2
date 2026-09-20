@@ -1,5 +1,8 @@
 #include <app/UiDispatcher.hpp>
 #include <atomic>
+#include <algorithm>
+#include <cstdint>
+#include <wil/resource.h>
 #include <condition_variable>
 #include <vector>
 #include <mutex>
@@ -19,7 +22,9 @@ struct UiDispatcher::State {
     };
     static constexpr UINT Message = WM_APP + 2;
     State(HWND window, Dispatch dispatch, util::LogSink log)
-        : Window(window), UiThread(GetCurrentThreadId()), Enqueue(std::move(dispatch)), Log(std::move(log)) {}
+        : Window(window), UiThread(GetCurrentThreadId()), Enqueue(std::move(dispatch)), Log(std::move(log)) {
+        StoppedEvent.create(wil::EventOptions::ManualReset);
+    }
 
     bool Invoke(Task& work) noexcept {
         if (Stopped.load()) return false;
@@ -78,6 +83,7 @@ struct UiDispatcher::State {
             // admitted calls finish, the host may safely destroy the HWND.
             PostsFinished.wait(lock, [&] { return Posting == 0; });
         }
+        StoppedEvent.SetEvent();
     }
 
     const HWND Window;
@@ -85,6 +91,7 @@ struct UiDispatcher::State {
     Dispatch Enqueue;
     util::LogSink Log;
     std::atomic_bool Stopped = false;
+    wil::unique_event StoppedEvent;
     // Queue membership, claims and native posts only; no callbacks/Win32 under this lock.
     std::mutex Mutex;
     std::condition_variable PostsFinished;
@@ -124,6 +131,68 @@ bool UiDispatcher::Run(Task task) noexcept {
     } catch (...) {
         state->Log.UnknownException(L"[UiDispatcher] Work could not be queued");
         return false;
+    }
+}
+
+UiDispatcher::ActionResult UiDispatcher::RunAndWait(std::function<bool()> work,
+                                                    std::stop_token stop,
+                                                    std::chrono::steady_clock::time_point deadline) {
+    using Clock = std::chrono::steady_clock;
+    auto state = m_state;
+    if (!work || state->Stopped.load() || stop.stop_requested() || Clock::now() >= deadline) {
+        return ActionResult::Failed;
+    }
+    if (GetCurrentThreadId() == state->UiThread) {
+        bool succeeded = false;
+        Task invoke = [&] { succeeded = work(); };
+        return state->Invoke(invoke) && succeeded ? ActionResult::Succeeded : ActionResult::Failed;
+    }
+
+    struct ActionState {
+        ActionState() {
+            Completed.create(wil::EventOptions::ManualReset);
+            Cancelled.create(wil::EventOptions::ManualReset);
+        }
+        apc::control::ControlUiActionGate Gate;
+        wil::unique_event Completed;
+        wil::unique_event Cancelled;
+    };
+    auto action = std::make_shared<ActionState>();
+    std::stop_callback cancel(stop, [action] {
+        static_cast<void>(action->Gate.CancelOrClassify());
+        action->Cancelled.SetEvent();
+    });
+    if (!Run([action, stop, deadline, work = std::move(work), log = state->Log] {
+            // The waiter may not yet have observed cancellation/deadline. Check at
+            // UI admission as well, before the gate permits any mutation.
+            if (stop.stop_requested() || Clock::now() >= deadline) {
+                static_cast<void>(action->Gate.CancelOrClassify());
+            }
+            if (action->Gate.TryBegin()) {
+                bool succeeded = false;
+                try {
+                    succeeded = work();
+                } catch (...) {
+                    log.UnknownException(L"[UiDispatcher] UI action failed");
+                }
+                action->Gate.Complete(succeeded);
+            }
+            action->Completed.SetEvent();
+        }))
+        return action->Gate.CancelOrClassify();
+
+    HANDLE events[]{action->Completed.get(), action->Cancelled.get(), state->StoppedEvent.get()};
+    for (;;) {
+        DWORD timeout = INFINITE;
+        if (deadline != Clock::time_point::max()) {
+            auto remaining = std::chrono::ceil<std::chrono::milliseconds>(deadline - Clock::now()).count();
+            if (remaining <= 0) return action->Gate.CancelOrClassify();
+            timeout = static_cast<DWORD>(std::min<std::int64_t>(remaining, INFINITE - 1));
+        }
+        const auto result = WaitForMultipleObjects(3, events, FALSE, timeout);
+        if (result == WAIT_OBJECT_0) return action->Gate.CurrentResult();
+        // Only a saturated long deadline or an early timer wake needs another wait.
+        if (result != WAIT_TIMEOUT) return action->Gate.CancelOrClassify();
     }
 }
 

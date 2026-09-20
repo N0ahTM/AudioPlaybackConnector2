@@ -1,6 +1,9 @@
 #pragma once
 
 #include <util/Logger.hpp>
+#include <control/ControlUiActionGate.hpp>
+#include <chrono>
+#include <stop_token>
 #include <windows.h>
 #include <functional>
 #include <memory>
@@ -14,6 +17,7 @@
 // remains valid until Stop returns. Run may be called from any thread.
 class UiDispatcher {
 public:
+    using ActionResult = apc::control::ControlUiActionGate::Result;
     using Task = std::function<void()>;
     using Dispatch = std::function<bool(Task)>;
     UiDispatcher(HWND window, Dispatch dispatch, util::LogSink log = {});
@@ -22,6 +26,8 @@ public:
     UiDispatcher& operator=(UiDispatcher const&) = delete;
 
     [[nodiscard]] bool Run(Task task) noexcept;
+    [[nodiscard]] ActionResult
+    RunAndWait(std::function<bool()> action, std::stop_token stop, std::chrono::steady_clock::time_point deadline);
     [[nodiscard]] bool HandleMessage(UINT message) noexcept;
     // Cancels queued work and drains only admitted native posts, never UI work.
     void Stop() noexcept;

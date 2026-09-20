@@ -74,17 +74,17 @@ public:
 
     void ShowTrayMenu();
     [[nodiscard]] bool ShowDevicePicker(bool toggleIfOpen = true) noexcept;
-    void UpdateTooltip(std::wstring_view text);
+    [[nodiscard]] bool RefreshVisualState(bool forceErrorWhenIdle = false);
+    void SetConnectionError(apc::app::DeviceConnectionErrorEvent::Reason reason);
+    // UI-thread only; true asks the host's coalescer to refresh after expiry or a failed frame.
+    [[nodiscard]] bool OnVisualTimer(UINT_PTR timerId) noexcept;
     [[nodiscard]] bool RefreshDevicePickerState() noexcept;
     [[nodiscard]] bool InvalidateDevicePickerInventory() noexcept;
     void OnThemeChanged();
     void ApplyLanguage();
     void OnSettingChange(LPARAM setting);
     void SetSystemBackdropEffectsEnabled(bool enabled) noexcept;
-    [[nodiscard]] bool AdvanceConnectingFrame() noexcept;
-    [[nodiscard]] bool ApplyPendingTrayUpdates() noexcept;
     void Reregister();
-    void SetState(TrayIconState state);
     [[nodiscard]] util::SettingsWindowPlacement GetSettingsWindowPlacement() const;
 
     void HandleTrayMessage(WPARAM wParam, LPARAM lParam) noexcept;
@@ -95,6 +95,8 @@ private:
     /*//////// Internal Helpers //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
+    [[nodiscard]] bool AdvanceConnectingFrame() noexcept;
+    [[nodiscard]] bool ApplyPendingTrayUpdates() noexcept;
     [[nodiscard]] bool EnsureDevicePickerViewCreated() noexcept;
     void TryHideDevicePicker() noexcept;
     void ShowSettingsAfterPickerClosed();
@@ -125,6 +127,14 @@ private:
     bool m_openSettingsAfterPickerClosed = false;
     ExitCallback m_exitCallback;
     ResourceStateChangedCallback m_resourceStateChangedCallback;
+
+    // Tray presentation and timers share the window UI thread; no separate status cache.
+    static constexpr UINT_PTR c_timerAnimation = 0x41504332;
+    static constexpr UINT_PTR c_timerTransientTrayError = 0x41504333;
+    static constexpr UINT c_transientTrayErrorMs = 3000;
+    std::chrono::steady_clock::time_point m_trayErrorUntil{};
+    std::wstring m_transientTrayErrorTooltip;
+    bool m_connectingAnimationTimerActive = false;
 
     UINT m_trayCallbackMsg = WM_APP + 1;
     Theme m_theme = Theme::Dark;

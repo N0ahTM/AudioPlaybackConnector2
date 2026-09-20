@@ -10,7 +10,6 @@
 #include <core/DeviceService.hpp>
 #include <core/SettingsStore.hpp>
 #include <core/StringResources.hpp>
-#include <core/TrayTooltipBuilder.hpp>
 #include <ui/TrayContextMenu.hpp>
 #include <ui/TrayIcon.hpp>
 #include <ui/XamlWindowInterop.hpp>
@@ -176,9 +175,6 @@ bool ApplicationHost::PerformTeardown(SettingsShutdownMode settingsShutdownMode)
     m_appController.reset();
     if (m_hwnd) {
         try {
-            KillTimer(m_hwnd, c_timerAnimation);
-            KillTimer(m_hwnd, c_timerTransientTrayError);
-            m_connectingAnimationTimerActive = false;
             if (m_windowSubclassInstalled) {
                 if (RemoveWindowSubclass(m_hwnd, SubclassProc, 1)) {
                     m_windowSubclassInstalled = false;
@@ -615,108 +611,18 @@ void ApplicationHost::HandlePowerResume() {
         });
 }
 
-bool ApplicationHost::RefreshTrayVisualState(bool forceErrorWhenIdle, std::wstring_view reason) {
-    if (m_exiting.load() || !m_trayController || !m_appController) {
-        m_log.Trace(L"[App] RefreshTrayVisualState skipped reason={0} exiting={1} hasTrayController={2} "
-                    L"hasAppController={3}",
-                    reason,
-                    m_exiting.load(),
-                    m_trayController != nullptr,
-                    m_appController != nullptr);
-        return true;
-    }
-    if (!m_hwnd || !IsWindow(m_hwnd)) {
-        m_log.Trace(L"[App] RefreshTrayVisualState skipped reason={0} invalidHwnd hwnd=0x{1:X}",
-                    reason,
-                    reinterpret_cast<uintptr_t>(m_hwnd));
-        return true;
-    }
-
-    const auto now = std::chrono::steady_clock::now();
-    if (forceErrorWhenIdle) {
-        m_trayErrorUntil = now + std::chrono::milliseconds(c_transientTrayErrorMs);
-    }
-    auto const snapshot = m_appController->Snapshot();
-    if (!snapshot.IsRunning) return false;
-    auto const& presentation = snapshot.Tray;
-    const bool hasBusyOperations = presentation.HasBusyOperations;
-    const bool hasConnections = !presentation.ConnectedDevices.empty();
-    if (hasConnections) {
-        m_trayErrorUntil = {};
-        m_transientTrayErrorTooltip.clear();
-    }
-    const bool showTransientError = !hasConnections && !hasBusyOperations && now < m_trayErrorUntil;
-
-    TrayIconState desiredState = TrayIconState::Idle;
-    bool timersReady = true;
-    if (hasBusyOperations) {
-        desiredState = TrayIconState::Connecting;
-        if (!m_connectingAnimationTimerActive) {
-            if (SetTimer(m_hwnd, c_timerAnimation, 75, nullptr)) {
-                m_connectingAnimationTimerActive = true;
-            } else {
-                timersReady = false;
-                m_log.Trace(L"[App] Connecting animation timer unavailable: {0}", GetLastError());
-            }
-        }
-        KillTimer(m_hwnd, c_timerTransientTrayError);
-    } else if (hasConnections) {
-        desiredState = TrayIconState::Connected;
-        KillTimer(m_hwnd, c_timerAnimation);
-        m_connectingAnimationTimerActive = false;
-        KillTimer(m_hwnd, c_timerTransientTrayError);
-    } else if (showTransientError) {
-        desiredState = TrayIconState::Error;
-        KillTimer(m_hwnd, c_timerAnimation);
-        m_connectingAnimationTimerActive = false;
-        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(m_trayErrorUntil - now);
-        const auto delay = static_cast<UINT>(std::clamp<std::int64_t>(remaining.count(), 1, UINT_MAX));
-        if (!SetTimer(m_hwnd, c_timerTransientTrayError, delay, nullptr)) {
-            timersReady = false;
-            m_log.Trace(L"[App] Transient tray error timer unavailable: {0}", GetLastError());
-        }
-    } else {
-        KillTimer(m_hwnd, c_timerAnimation);
-        m_connectingAnimationTimerActive = false;
-        KillTimer(m_hwnd, c_timerTransientTrayError);
-        m_trayErrorUntil = {};
-    }
-
-    m_log.Trace(L"[App] RefreshTrayVisualState reason={0} forceErrorWhenIdle={1} hasConnections={2} "
-                L"hasBusyOperations={3} transientError={4} desired={5}",
-                reason,
-                forceErrorWhenIdle,
-                hasConnections,
-                hasBusyOperations,
-                showTransientError,
-                TrayIconStateToString(desiredState));
-    if (showTransientError && !m_transientTrayErrorTooltip.empty()) {
-        m_trayController->UpdateTooltip(m_transientTrayErrorTooltip);
-    } else {
-        m_trayController->UpdateTooltip(
-            apc::tray::BuildTooltip(m_strings->Get("AppName"), m_strings->Get("Privacy_RedactedDevice"), snapshot));
-    }
-    m_trayController->SetState(desiredState);
-    auto const pickerUpdated = m_trayController->RefreshDevicePickerState();
-    auto const shellUpdated = m_trayController->ApplyPendingTrayUpdates();
-    if (!shellUpdated && m_connectingAnimationTimerActive) {
-        KillTimer(m_hwnd, c_timerAnimation);
-        m_connectingAnimationTimerActive = false;
-    }
-    return pickerUpdated && shellUpdated && timersReady;
-}
-
 void ApplicationHost::ScheduleDeviceVisualRefresh(VisualRefresh refresh) {
     if (m_visualRefresh) m_visualRefresh->Request(static_cast<UiRefreshScheduler::Flags>(refresh));
 }
 
 bool ApplicationHost::RefreshDeviceVisuals(UiRefreshScheduler::Flags flags) {
     if (m_exiting.load()) return false;
-    if ((flags & c_visualRefreshInventoryChanged) != 0 && m_trayController &&
-        !m_trayController->InvalidateDevicePickerInventory())
-        return false;
+    // Rendering may pump window messages that tear down the host's tray ownership.
+    auto tray = m_trayController;
+    if (!tray) return true;
+    if ((flags & c_visualRefreshInventoryChanged) != 0 && !tray->InvalidateDevicePickerInventory()) return false;
     return (flags & c_visualRefreshRequested) == 0 ||
-           RefreshTrayVisualState((flags & c_visualRefreshForceError) != 0, L"coalesced-device-events");
+           tray->RefreshVisualState((flags & c_visualRefreshForceError) != 0);
 }
 
 void ApplicationHost::SetupDeviceEvents() {
@@ -753,18 +659,7 @@ void ApplicationHost::HandleAppEvent(apc::app::AppController::EventNotification 
             } else if constexpr (std::is_same_v<T, DeviceDisconnectedEvent>) {
                 ScheduleDeviceVisualRefresh(VisualRefresh::Tray);
             } else if constexpr (std::is_same_v<T, DeviceConnectionErrorEvent>) {
-                using Reason = DeviceConnectionErrorEvent::Reason;
-                auto const key = [&] {
-                    switch (event.FailureReason) {
-                        case Reason::TimedOut: return "RequestTimedOut";
-                        case Reason::Denied: return "DeniedBySystem";
-                        case Reason::ReconnectExhausted: return "AutoReconnectFailed";
-                        case Reason::Unknown: return "UnknownError";
-                    }
-                    return "UnknownError";
-                }();
-                m_transientTrayErrorTooltip =
-                    std::wstring(m_strings->Get("AppName")) + L"\n" + std::wstring(m_strings->Get(key));
+                if (m_trayController) m_trayController->SetConnectionError(event.FailureReason);
                 ScheduleDeviceVisualRefresh(VisualRefresh::TrayWithError);
 
             } else if constexpr (std::is_same_v<T, DeviceStatusChangedEvent>) {
@@ -872,17 +767,7 @@ LRESULT CALLBACK ApplicationHost::SubclassProc(
         }
     }
 
-    if (msg == WM_TIMER && wParam == c_timerAnimation && host->m_trayController) {
-        if (!host->m_trayController->AdvanceConnectingFrame()) {
-            KillTimer(hwnd, c_timerAnimation);
-            host->m_connectingAnimationTimerActive = false;
-            host->ScheduleDeviceVisualRefresh(VisualRefresh::Tray);
-        }
-        return 0;
-    }
-
-    if (msg == WM_TIMER && wParam == c_timerTransientTrayError) {
-        KillTimer(hwnd, c_timerTransientTrayError);
+    if (msg == WM_TIMER && host->m_trayController && host->m_trayController->OnVisualTimer(wParam)) {
         host->ScheduleDeviceVisualRefresh(VisualRefresh::Tray);
         return 0;
     }

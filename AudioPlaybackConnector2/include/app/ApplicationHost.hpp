@@ -73,8 +73,6 @@ private:
     void SetupDeviceEvents();
     void HandlePowerSuspend();
     void HandlePowerResume();
-    [[nodiscard]] bool RefreshTrayVisualState(bool forceErrorWhenIdle = false,
-                                              std::wstring_view reason = L"unspecified");
     enum class VisualRefresh : UiRefreshScheduler::Flags {
         Tray = 1U << 0,
         TrayWithError = (1U << 0) | (1U << 1),
@@ -130,15 +128,9 @@ private:
     std::optional<bool> m_appliedBackdrop;
     SingleInstanceGuard m_singleInstanceGuard;
     UINT m_taskbarCreatedMessage = 0;
-    static constexpr UINT_PTR c_timerAnimation = 0x41504332;
-    static constexpr UINT_PTR c_timerTransientTrayError = 0x41504333;
-    static constexpr UINT c_transientTrayErrorMs = 3000;
     static constexpr UiRefreshScheduler::Flags c_visualRefreshRequested = 1U << 0;
     static constexpr UiRefreshScheduler::Flags c_visualRefreshForceError = 1U << 1;
     static constexpr UiRefreshScheduler::Flags c_visualRefreshInventoryChanged = 1U << 2;
-    std::chrono::steady_clock::time_point m_trayErrorUntil{};
-    std::wstring m_transientTrayErrorTooltip;
-    bool m_connectingAnimationTimerActive = false;
     // Assigned once before publishing the controller; retained through its final snapshots.
     const std::shared_ptr<AdaptiveResourceController> m_adaptiveResources =
         std::make_shared<AdaptiveResourceController>(m_log);

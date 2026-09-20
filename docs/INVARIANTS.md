@@ -161,6 +161,8 @@ LoggerTests cover overflow, concurrent shutdown, late calls, rotation/failure/Un
 
 ## Tray theme delivery
 
+TrayController owns the connecting animation, transient-error deadline/text and their two HWND timers on UI. It derives each refresh from one AppSnapshot and the existing tooltip builder; no device-status cache or extra worker is introduced. Host forwards timer messages and coalesces requested refreshes, retaining the tray owner across reentrant rendering. Teardown closes admission and stops both timers before hiding the flyout; late timer messages cannot restart them. Native animation/error-expiry acceptance remains open.
+
 Host forwards WM_SETTINGCHANGE directly to TrayController on UI. Tray owns initial/last theme; ImmersiveColorSet changes refresh it. Delivery/teardown share UI; no global registry, mutex, callback lease or cross-thread unsubscribe. Taskbar recreation forces refresh. GetSystemTheme is stateless. Source/build verification exists; interactive theme switching remains a runtime check.
 
 ## Localization ownership

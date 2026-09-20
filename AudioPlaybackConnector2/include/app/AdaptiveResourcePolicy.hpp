@@ -32,7 +32,6 @@ struct AdaptiveResourcePolicyInput {
 };
 
 struct AdaptiveResourcePolicyDecision {
-    ResidencyPolicy PreviousResidency = ResidencyPolicy::Warm;
     ResidencyPolicy Residency = ResidencyPolicy::Warm;
     ResidencyPolicy BackgroundResidency = ResidencyPolicy::Warm;
     AdaptiveResourceAction Action = AdaptiveResourceAction::None;
@@ -53,7 +52,6 @@ public:
 
     [[nodiscard]] AdaptiveResourcePolicyDecision Evaluate(AdaptiveResourcePolicyInput const& input,
                                                           TimePoint now) noexcept;
-    [[nodiscard]] ResidencyPolicy BackgroundResidency() const noexcept;
 
 private:
     void SetBackgroundResidency(ResidencyPolicy residency) noexcept;

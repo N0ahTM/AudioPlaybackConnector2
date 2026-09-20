@@ -79,7 +79,6 @@ AdaptiveResourcePolicyDecision AdaptiveResourcePolicy::Evaluate(AdaptiveResource
     }
 
     return {
-        .PreviousResidency = previousEffectiveResidency,
         .Residency = effectiveResidency,
         .BackgroundResidency = m_backgroundResidency,
         .Action = action,
@@ -89,10 +88,6 @@ AdaptiveResourcePolicyDecision AdaptiveResourcePolicy::Evaluate(AdaptiveResource
         .ReleaseDeferred = foregroundDemand && m_backgroundResidency != ResidencyPolicy::Hot,
         .ReevaluateAt = NextReevaluation(input, now, foregroundDemand),
     };
-}
-
-ResidencyPolicy AdaptiveResourcePolicy::BackgroundResidency() const noexcept {
-    return m_backgroundResidency;
 }
 
 /*------------------------------------------------------------------------------------------------------------*/

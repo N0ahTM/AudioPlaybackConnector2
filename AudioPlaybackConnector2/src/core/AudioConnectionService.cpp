@@ -45,13 +45,3 @@ void AudioConnectionService::Close(winrt::Windows::Media::Audio::AudioPlaybackCo
     }
     connection = nullptr;
 }
-
-void AudioConnectionService::DetachForProcessExit(
-    winrt::Windows::Media::Audio::AudioPlaybackConnection& connection) noexcept {
-    if (!connection) return;
-    try {
-        auto leaked = winrt::detach_abi(connection);
-        (void)leaked;
-    } catch (...) {
-    }
-}

@@ -31,10 +31,7 @@ struct ExecutableFileIdentity {
 // Release rejects unpackaged peers. Debug additionally requires an exact executable-file match.
 [[nodiscard]] bool IsTrustedPeerProcess(
     HANDLE process, DWORD processId, std::optional<ExecutableFileIdentity> const& expectedUnpackagedIdentity) noexcept;
-[[nodiscard]] bool IsTrustedPeerProcess(DWORD processId) noexcept;
-[[nodiscard]] bool IsTrustedNamedPipeClient(HANDLE pipe) noexcept;
 [[nodiscard]] bool
 IsTrustedNamedPipeClient(HANDLE pipe, std::optional<ExecutableFileIdentity> const& expectedUnpackagedIdentity) noexcept;
-[[nodiscard]] bool IsTrustedNamedPipeServer(HANDLE pipe) noexcept;
 
 } // namespace apc::control

@@ -244,28 +244,12 @@ bool IsTrustedPeerProcess(HANDLE process,
     }
 }
 
-bool IsTrustedPeerProcess(DWORD processId) noexcept {
-    if (processId == 0) return false;
-    wil::unique_handle peer(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId));
-    return peer && IsTrustedPeerProcess(peer.get(), processId);
-}
-
-bool IsTrustedNamedPipeClient(HANDLE pipe) noexcept {
-    ULONG processId = 0;
-    return GetNamedPipeClientProcessId(pipe, &processId) && IsTrustedPeerProcess(processId);
-}
-
 bool IsTrustedNamedPipeClient(HANDLE pipe,
                               std::optional<ExecutableFileIdentity> const& expectedUnpackagedIdentity) noexcept {
     ULONG processId = 0;
     if (!GetNamedPipeClientProcessId(pipe, &processId) || processId == 0) return false;
     wil::unique_handle peer(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, processId));
     return peer && IsTrustedPeerProcess(peer.get(), processId, expectedUnpackagedIdentity);
-}
-
-bool IsTrustedNamedPipeServer(HANDLE pipe) noexcept {
-    ULONG processId = 0;
-    return GetNamedPipeServerProcessId(pipe, &processId) && IsTrustedPeerProcess(processId);
 }
 
 } // namespace apc::control

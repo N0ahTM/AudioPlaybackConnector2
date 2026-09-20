@@ -821,10 +821,6 @@ bool DeviceService::IsDeviceConnected(std::wstring_view deviceId) const {
     return iter != snapshot.Sessions.end() && iter->State == DeviceLifecycleState::Connected;
 }
 
-bool DeviceService::HasConnections() const {
-    return !GetConnectedDevices().empty();
-}
-
 bool DeviceService::HasBusyOperations() const {
     return std::ranges::any_of(Snapshot().Sessions, [](auto const& session) {
         return session.State == DeviceLifecycleState::Connecting ||

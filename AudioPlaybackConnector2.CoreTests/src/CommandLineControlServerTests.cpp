@@ -781,7 +781,6 @@ void TestStartupSquattingAndSecurityDescriptor() {
     auto derivedPipeName = apc::control::PipeName();
     Check(derivedPipeName && derivedPipeName->starts_with(LR"(\\.\pipe\AudioPlaybackConnector2.Control.v2.)"),
           "pipe namespace derivation must succeed without fallback identity");
-    Check(apc::control::IsTrustedPeerProcess(GetCurrentProcessId()), "current process identity must trust itself");
     Check(apc::control::IsTrustedPeerProcess(GetCurrentProcess(), GetCurrentProcessId()),
           "an already-open current-process handle must trust itself without reopening the process");
     auto currentIdentity = apc::control::ProcessExecutableIdentity(GetCurrentProcess());
@@ -804,7 +803,7 @@ void TestStartupSquattingAndSecurityDescriptor() {
           "strict unpackaged trust must reject a missing executable identity");
     Check(!apc::control::ExecutableIdentityFromPath(L"C:\\definitely-not-an-existing-executable.exe"),
           "invalid executable paths must fail closed without closing an invalid handle");
-    Check(!apc::control::IsTrustedPeerProcess(0), "invalid peer identity must fail closed");
+    Check(!apc::control::IsTrustedPeerProcess(GetCurrentProcess(), 0), "invalid peer identity must fail closed");
 }
 
 void TestStartStopHandleStability() {

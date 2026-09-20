@@ -21,14 +21,14 @@ namespace apc::app {
 /*//////// Identity and Selectors ////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-// Decoded command text is bounded by the existing P01 64 KiB payload limit.
+// Decoded command text is bounded by the control protocol's 64 KiB payload limit.
 // Persistence-specific limits remain in their owning settings boundary.
 inline constexpr std::size_t c_maxAppCommandTextCharacters = 64u * 1024u / sizeof(wchar_t);
 
 enum class DeviceConnectionState { Idle, Connecting, Connected, Disconnecting, WaitingForReconnect, Failed };
 
-// A snapshot identity is bounded by the P01 command payload, not by the
-// smaller P07 persistence field.  DeviceId remains the validated persistence
+// A snapshot identity is bounded by the control command payload, not by the
+// smaller persistence field.  DeviceId remains the validated persistence
 // value; this type keeps a valid external identity lossless. Persistence
 // validates its own bounded DeviceId at the storage boundary.
 class ExternalDeviceId {
@@ -56,8 +56,8 @@ private:
 };
 
 // Selectors are either exact external ID text, a non-empty matching query, or
-// one of the two stateful selectors. IdText() preserves all valid P01 input;
-// persistence validates its own P07 identity bound.
+// one of the two stateful selectors. IdText() preserves all valid control input;
+// persistence validates its own identity bound.
 enum class DeviceSelectorKind { Id, Name, Mac, Last, Auto, Alias, Default };
 
 class DeviceSelector {
@@ -84,7 +84,7 @@ public:
     [[nodiscard]] DeviceSelectorKind Kind() const noexcept { return m_kind; }
 
     // Returns the exact external ID text, including IDs too large for the
-    // validated internal DeviceId P07 bound.
+    // validated internal DeviceId bound.
     [[nodiscard]] std::wstring_view IdText() const noexcept {
         if (m_kind != DeviceSelectorKind::Id) return {};
         return m_value;
@@ -141,9 +141,8 @@ enum class AppCommandKind {
 };
 
 // A tray primary activation toggles an already-open picker, while a control
-// command is idempotent and only ensures that the picker is open.  Keeping
-// this distinction in the typed intent preserves P09 behavior without making
-// TrayController depend on AppController or transport details.
+// command is idempotent and only ensures that the picker is open. The typed
+// mode carries this distinction to the UI without exposing transport details.
 enum class DevicePickerOpenMode { EnsureOpen, ToggleIfOpen };
 
 enum class AppResultCode {
@@ -226,7 +225,7 @@ struct DeviceSnapshot {
 };
 
 // A resolved control target may be an external identifier that is valid for
-// P01 but intentionally too large for the bounded persistence DeviceId type.
+// transport but intentionally too large for the bounded persistence DeviceId type.
 // It therefore remains a plain, transport-neutral value object.
 struct AppTargetSnapshot {
     std::wstring Id;
@@ -356,9 +355,9 @@ struct AppCommandContext {
 /*------------------------------------------------------------------------------------------------------------*/
 
 struct DeviceConnectedEvent {
-    // Device events originate at the P01 transport/device boundary. They
+    // Device events originate at the transport/device boundary. They
     // must retain a valid external identity even when it cannot be persisted
-    // in the smaller P07 DeviceId field.
+    // in the smaller persistence DeviceId field.
     ExternalDeviceId Id;
     friend bool operator==(DeviceConnectedEvent const&, DeviceConnectedEvent const&) = default;
 };
@@ -371,7 +370,6 @@ struct DeviceDisconnectedEvent {
 
 struct DeviceConnectionErrorEvent {
     ExternalDeviceId Id;
-    // The legacy free-form message is deliberately normalized away here.
     // Presentation chooses localized text from this actionable category.
     AppResultCode Code = AppResultCode::OperationFailed;
     enum class Reason { Unknown, TimedOut, Denied, ReconnectExhausted };
@@ -381,8 +379,7 @@ struct DeviceConnectionErrorEvent {
 
 struct DeviceStatusChangedEvent {
     ExternalDeviceId Id;
-    // The legacy presentation status string is deliberately normalized to
-    // this stable state; localized text is not part of a fact event.
+    // Facts carry stable states; localized text belongs to presentation.
     DeviceConnectionState State = DeviceConnectionState::Idle;
     friend bool operator==(DeviceStatusChangedEvent const&, DeviceStatusChangedEvent const&) = default;
 };

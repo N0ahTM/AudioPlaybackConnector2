@@ -1,7 +1,6 @@
 #include "TestCheck.hpp"
 
 #include <util/Logger.hpp>
-#include <core/SettingsStore.hpp>
 
 #include <array>
 #include <atomic>
@@ -126,17 +125,6 @@ int RunLoggerTests() {
         Check(logger.Shutdown(5s), "rotation drains successfully");
         Check(std::filesystem::exists(directory / L"rotation.1.log"), "one rotated backup is retained");
         Check(!std::filesystem::exists(directory / L"rotation.2.log"), "rotation does not retain extra backups");
-    }
-    {
-        auto path = directory / L"settings.log";
-        util::Logger logger(path);
-        std::ofstream(directory / L"AudioPlaybackConnector2.json") << "{invalid";
-        SettingsStore store(directory, {}, {}, logger.Sink());
-        store.Load();
-        Check(store.Shutdown(SettingsShutdownMode::Flush), "settings owner drains before logging owner");
-        Check(logger.Shutdown(5s), "injected settings diagnostics drain");
-        Check(Read(path).find("[SettingsStore] load failed") != std::string::npos,
-              "settings persistence diagnostics use their explicitly injected logger");
     }
     {
         const auto path = directory / L"emergency.log";

@@ -5,6 +5,7 @@
 #include <core/SettingsCodec.hpp>
 #include <stdexcept>
 #include <core/SettingsLimits.hpp>
+#include <util/Logger.hpp>
 #include <util/RuntimeApartment.hpp>
 
 #include <wil/resource.h>
@@ -391,6 +392,19 @@ void TestEmptyFileIsPreservedBeforeDefaultsCanBeSaved() {
     Check(store.SetLanguage(L"de").IsApplied() && store.FlushNow(1),
           "successful preservation must allow normal default-based persistence");
     static_cast<void>(store.Shutdown(SettingsShutdownMode::Flush));
+}
+
+void TestCorruptFileDiagnosticsUseInjectedLogger() {
+    ScopedTestDirectory directory;
+    auto const logPath = directory.Path() / L"settings.log";
+    util::Logger logger(logPath);
+    WriteBytes(directory.SettingsPath(), "{invalid");
+    SettingsStore store(directory.Path(), {}, {}, logger.Sink());
+    store.Load();
+    Check(store.Shutdown(SettingsShutdownMode::Flush), "settings owner drains before logging owner");
+    Check(logger.Shutdown(std::chrono::milliseconds(5000)), "injected settings diagnostics drain");
+    Check(ReadBytes(logPath).find("[SettingsStore] load failed") != std::string::npos,
+          "settings persistence diagnostics use their explicitly injected logger");
 }
 
 void TestProductionCorruptPreservationAndAtomicWrite() {
@@ -1185,6 +1199,7 @@ int RunSettingsStoreTests() {
     TestFailedPreservationBlocksMutationAndFlush();
     TestUnreadableFileIsNotTreatedAsMissing();
     TestEmptyFileIsPreservedBeforeDefaultsCanBeSaved();
+    TestCorruptFileDiagnosticsUseInjectedLogger();
     TestReplacementFailurePreservesOldBytesAndCleansTemporaryFile();
     TestOversizedInputIsPreserved();
     TestNoOpAndTypedMutationResults();

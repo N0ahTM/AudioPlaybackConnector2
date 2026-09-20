@@ -46,10 +46,6 @@
 #include <utility>
 #include <vector>
 
-#ifndef _DEBUG
-#define RESULT_DIAGNOSTICS_LEVEL 1
-#endif
-
 #include <wil/common.h>
 #include <wil/cppwinrt.h>
 #include <wil/resource.h>

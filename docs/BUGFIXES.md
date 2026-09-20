@@ -118,6 +118,19 @@ pwsh ./scripts/verify-core-runtime-boundary.ps1 -ProjectPath ./AudioPlaybackConn
 Diese Abnahme betrifft die gemeinsame Pipe-Implementierung und die deklarierte Quellzuordnung. Sie behauptet
 keine vollständige Release-Abnahme und keine Prüfung jedes früheren Test-Hooks aus Eintrag 39.
 
+## Neue Befunde
+
+| ID | Befund | Art | Status | Nachweis / nächster Schritt |
+| --- | --- | --- | --- | --- |
+| 51 | MSVC-Analyse scheitert mit PCH-spezifischem WIL-Diagnostiklevel 1 an SAL-/Template-Deklarationen. | Analyse-/Buildfehler | Abgeschlossen | PCH-Sonderdefinition entfernt (Commit dieser Dokumentationsänderung); SAL-/Template-Parserfehler im erneuten Lauf beseitigt. x64-/ARM64-Gesamtbuilds jeweils ohne Warnungen/Fehler; vollständige Analyse bleibt separat offen (siehe unten). |
+| 52 | Reentrant eingereihte Connect-/Disconnect-/Reconnect-/CancelReconnect-Aufrufe lieferten eine bereits verschobene, leere Geräte-ID zurück. | Rewrite-Regression | Abgeschlossen | `902e767`; Test `TestReentrantCommandsRetainDeviceIdentity`: vier Fehler vor dem Fix, danach erfolgreich (Seed 920001). Vollständiger CoreTests-Lauf mit Seed 920002 und gezielter Cppcheck-Lauf bestanden; x64-/ARM64-Gesamtbuilds ohne Warnungen/Fehler. |
+
+Die MSVC-Analyse mit dem neuen Concurrency-/Lifetime-Regelsatz ist **nicht bestanden**. Der Lauf mit
+MSVC 14.51 meldete nach Behebung des Parserproblems 1.913 Fehler; nach Zusammenfassung gleicher
+Datei-/Zeilen-/Regelpositionen bleiben 1.537 Fundstellen, davon 953 im Produktcode. Diese Zahlen
+enthalten noch nicht bewertete Meldungen und sind keine Anzahl bestätigter Produktfehler. Der Lauf
+fand vor dem Fix zu 52 statt. Es wurden keine pauschalen Unterdrückungen hinzugefügt.
+
 ## Offene Release-Abnahme
 
 Diese Aufgaben sind keine zusätzlich behaupteten Produktfehler:

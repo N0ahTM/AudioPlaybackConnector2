@@ -35,6 +35,16 @@ No user-wide `vcpkg integrate install` or Classic Mode installation is needed. T
 Shared C++ rules live in `Directory.Build.props`; `Directory.Build.targets` rejects MSVC older than 14.51 and
 any translation unit outside the C++26 draft mode.
 
+MSVC concurrency and lifetime analysis uses `config/Concurrency.ruleset`, with findings treated as errors.
+Run it locally with the same toolchain:
+
+```powershell
+msbuild AudioPlaybackConnector2.CoreRuntime/AudioPlaybackConnector2.CoreRuntime.vcxproj /t:Rebuild /p:Configuration=Release /p:Platform=x64 /p:RunCodeAnalysis=true
+```
+
+This checks CoreRuntime only; full application analysis and runtime race tests remain separate requirements.
+The PCH does not override WIL diagnostic settings, so analyzed and ordinary source files use WIL defaults.
+
 The native runner supports `--list`, `--suite SettingsStore`, and `--seed 42`. A seed randomizes suite order;
 the individual race scenarios still use their explicit synchronization gates. Run repeated suites with a
 per-process and global watchdog using:

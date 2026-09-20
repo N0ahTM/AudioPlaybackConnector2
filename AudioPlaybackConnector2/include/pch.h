@@ -39,10 +39,6 @@
 #include <chrono>
 #include <coroutine>
 
-#ifndef _DEBUG
-#define RESULT_DIAGNOSTICS_LEVEL 1
-#endif
-
 #include <wil/common.h>
 #include <wil/result.h>
 #include <wil/cppwinrt.h>

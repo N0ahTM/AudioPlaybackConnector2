@@ -3,6 +3,8 @@
   <PropertyGroup Condition="'$(MSBuildProjectExtension)' == '.vcxproj'">
     <PlatformToolset>v145</PlatformToolset>
     <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+    <CodeAnalysisRuleSet>$(MSBuildThisFileDirectory)config\Concurrency.ruleset</CodeAnalysisRuleSet>
+    <EnableCppCoreCheck>true</EnableCppCoreCheck>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(MSBuildProjectExtension)' == '.vcxproj'">
     <ClCompile>

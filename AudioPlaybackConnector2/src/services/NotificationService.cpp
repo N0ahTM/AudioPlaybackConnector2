@@ -6,7 +6,9 @@
 #include <variant>
 #include <core/StringResources.hpp>
 #include <services/ToastContentBuilder.hpp>
-#include <util/Util.hpp>
+#include <cstddef>
+#include <string>
+#include <string_view>
 
 #include <utility>
 
@@ -23,7 +25,19 @@ constexpr wchar_t kStatusNotificationTagPrefix[] = L"currentStatus:";
 
 std::wstring
 NotificationText(StringResources const& strings, std::string_view key, std::wstring_view replacement = {}) {
-    return util::ReplacePlaceholders(strings.Get(key), replacement);
+    const auto text = strings.Get(key);
+    std::wstring result;
+    std::size_t position = 0;
+    for (;;) {
+        const auto placeholder = text.find(L"{0}", position);
+        if (placeholder == std::wstring::npos) {
+            result.append(text, position);
+            return result;
+        }
+        result.append(text, position, placeholder - position);
+        result.append(replacement);
+        position = placeholder + 3;
+    }
 }
 
 winrt::Windows::Foundation::DateTime ExpirationFromNow(std::chrono::seconds seconds) {

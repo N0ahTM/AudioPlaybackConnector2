@@ -1,14 +1,10 @@
 #pragma once
 
-#include <chrono>
-#include <cstdint>
 #include <filesystem>
 #include <limits>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <vector>
 
 #include <windows.h>
 #include <wil/result.h>
@@ -67,34 +63,6 @@ inline std::filesystem::path GetModuleFsPath(HMODULE hModule) {
     }
     path.resize(actual);
     return std::filesystem::path(path);
-}
-
-inline std::optional<std::vector<uint8_t>> LoadResourceData(HMODULE hInst, int id, const wchar_t* type) {
-    auto hRes = FindResourceW(hInst, MAKEINTRESOURCEW(id), type);
-    if (!hRes) return std::nullopt;
-    auto size = SizeofResource(hInst, hRes);
-    if (size == 0) return std::nullopt;
-    auto hData = LoadResource(hInst, hRes);
-    if (!hData) return std::nullopt;
-    auto* ptr = static_cast<const uint8_t*>(LockResource(hData));
-    if (!ptr) return std::nullopt;
-    return std::vector<uint8_t>(ptr, ptr + size);
-}
-
-inline std::wstring ReplacePlaceholders(std::wstring_view templateStr, std::wstring_view replacement) {
-    std::wstring result;
-    size_t pos = 0;
-    while (pos < templateStr.size()) {
-        auto found = templateStr.find(L"{0}", pos);
-        if (found == std::wstring_view::npos) {
-            result.append(templateStr.substr(pos));
-            break;
-        }
-        result.append(templateStr.substr(pos, found - pos));
-        result.append(replacement);
-        pos = found + 3;
-    }
-    return result;
 }
 
 } // namespace util

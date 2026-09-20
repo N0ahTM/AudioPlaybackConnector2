@@ -1,7 +1,9 @@
 #include <pch.h>
 #include <core/StringResources.hpp>
 #include <nlohmann/json.hpp>
-#include <util/Util.hpp>
+#include <optional>
+#include <string_view>
+#include <winrt/base.h>
 #include <resource.h>
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -46,10 +48,16 @@ void StringResources::Initialize(HINSTANCE hInst, std::wstring_view language, ut
     }
 
     const auto load = [&](int resourceId) -> std::optional<decltype(m_map)> {
-        const auto data = util::LoadResourceData(hInst, resourceId, L"JSON");
+        const auto resource = FindResourceW(hInst, MAKEINTRESOURCEW(resourceId), L"JSON");
+        if (!resource) return std::nullopt;
+        const auto size = SizeofResource(hInst, resource);
+        const auto loaded = LoadResource(hInst, resource);
+        if (!loaded || size == 0) return std::nullopt;
+        const auto data = static_cast<char const*>(LockResource(loaded));
         if (!data) return std::nullopt;
         try {
-            const std::string_view jsonView(reinterpret_cast<const char*>(data->data()), data->size());
+            // Resource bytes remain owned by the loaded module throughout parsing.
+            const std::string_view jsonView(data, size);
             const auto json = nlohmann::json::parse(jsonView);
             if (!json.is_object()) return std::nullopt;
             decltype(m_map) strings;

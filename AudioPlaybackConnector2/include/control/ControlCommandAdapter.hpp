@@ -28,8 +28,9 @@ public:
     ControlCommandAdapter(ControlCommandAdapter const&) = delete;
     ControlCommandAdapter& operator=(ControlCommandAdapter const&) = delete;
 
-    [[nodiscard]] apc::control::Response
-    Handle(apc::control::Request const& request, std::stop_token stopToken, std::uint64_t deadline) const noexcept;
+    [[nodiscard]] apc::control::Response Handle(apc::control::Request const& request,
+                                                std::stop_token const& stopToken,
+                                                std::uint64_t deadline) const noexcept;
 
     // Formats a validated request's result without executing commands or reading owners.
     [[nodiscard]] static Response

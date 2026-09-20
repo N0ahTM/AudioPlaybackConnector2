@@ -135,7 +135,7 @@ bool UiDispatcher::Run(Task task) noexcept {
 }
 
 UiDispatcher::ActionResult UiDispatcher::RunAndWait(std::function<bool()> work,
-                                                    std::stop_token stop,
+                                                    std::stop_token const& stop,
                                                     std::chrono::steady_clock::time_point deadline) {
     using Clock = std::chrono::steady_clock;
     auto state = m_state;

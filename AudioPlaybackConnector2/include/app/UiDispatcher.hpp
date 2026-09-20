@@ -26,8 +26,9 @@ public:
     UiDispatcher& operator=(UiDispatcher const&) = delete;
 
     [[nodiscard]] bool Run(Task task) noexcept;
-    [[nodiscard]] ActionResult
-    RunAndWait(std::function<bool()> action, std::stop_token stop, std::chrono::steady_clock::time_point deadline);
+    [[nodiscard]] ActionResult RunAndWait(std::function<bool()> action,
+                                          std::stop_token const& stop,
+                                          std::chrono::steady_clock::time_point deadline);
     [[nodiscard]] bool HandleMessage(UINT message) noexcept;
     // Cancels queued work and drains only admitted native posts, never UI work.
     void Stop() noexcept;

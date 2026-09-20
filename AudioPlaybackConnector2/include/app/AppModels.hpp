@@ -67,7 +67,7 @@ public:
         return DeviceSelector(DeviceSelectorKind::Id, std::wstring(value));
     }
 
-    [[nodiscard]] static DeviceSelector ById(apc::core::DeviceId value) {
+    [[nodiscard]] static DeviceSelector ById(apc::core::DeviceId const& value) {
         return DeviceSelector(DeviceSelectorKind::Id, std::wstring(value.View()));
     }
 

@@ -61,7 +61,8 @@ AppController::CallLease::~CallLease() {
 }
 
 template <typename Action>
-AppResult AppController::WithAdmission(AppCommandKind kind, AppCommandContext context, Action&& action) const noexcept {
+AppResult
+AppController::WithAdmission(AppCommandKind kind, AppCommandContext const& context, Action&& action) const noexcept {
     AppResult preflight;
     preflight.Command = kind;
 
@@ -92,7 +93,8 @@ AppResult AppController::WithAdmission(AppCommandKind kind, AppCommandContext co
 }
 
 template <typename Action>
-AppResult AppController::WithSettings(AppCommandKind kind, AppCommandContext context, Action&& action) const noexcept {
+AppResult
+AppController::WithSettings(AppCommandKind kind, AppCommandContext const& context, Action&& action) const noexcept {
     return WithAdmission(kind, context, [&] {
         auto const settings = ReadCoherentSettings();
         if (!settings) return MakeFailure(kind, AppResultCode::InternalError, AppOutcomeReason::InternalError);
@@ -188,7 +190,7 @@ AppSnapshot AppController::CaptureSnapshot() const {
 /*//////// Presentation Actions //////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-AppResult AppController::ShowDevicePicker(DevicePickerOpenMode mode, AppCommandContext context) const noexcept {
+AppResult AppController::ShowDevicePicker(DevicePickerOpenMode mode, AppCommandContext const& context) const noexcept {
     constexpr auto kind = AppCommandKind::ShowDevicePicker;
     return WithSettings(kind, context, [&](SettingsSnapshot const& input) {
         auto presentation = m_presentation.lock();
@@ -199,7 +201,7 @@ AppResult AppController::ShowDevicePicker(DevicePickerOpenMode mode, AppCommandC
     });
 }
 
-AppResult AppController::ShowSettings(AppCommandContext context) const noexcept {
+AppResult AppController::ShowSettings(AppCommandContext const& context) const noexcept {
     constexpr auto kind = AppCommandKind::ShowSettings;
     return WithSettings(kind, context, [&](SettingsSnapshot const& input) {
         auto presentation = m_presentation.lock();
@@ -237,22 +239,22 @@ AppResult AppController::PresentationResult(AppCommandKind kind,
 /*//////// Device Queries ////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-AppResult AppController::ListDevices(AppCommandContext context) const noexcept {
+AppResult AppController::ListDevices(AppCommandContext const& context) const noexcept {
     return WithAdmission(AppCommandKind::ListDevices, context, [&] {
         RefreshDevices(context);
         return DeviceQueryResult(CaptureSnapshot());
     });
 }
 
-AppResult AppController::Status(AppCommandContext context) const noexcept {
+AppResult AppController::Status(AppCommandContext const& context) const noexcept {
     return WithAdmission(AppCommandKind::Status, context, [&] { return DeviceQueryResult(CaptureSnapshot()); });
 }
 
-AppResult AppController::ListAliases(AppCommandContext context) const noexcept {
+AppResult AppController::ListAliases(AppCommandContext const& context) const noexcept {
     return WithAdmission(AppCommandKind::ListAliases, context, [&] { return DeviceQueryResult(CaptureSnapshot()); });
 }
 
-AppResult AppController::ShowDefault(AppCommandContext context) const noexcept {
+AppResult AppController::ShowDefault(AppCommandContext const& context) const noexcept {
     return WithAdmission(AppCommandKind::ShowDefault, context, [&] { return DeviceQueryResult(CaptureSnapshot()); });
 }
 
@@ -260,7 +262,7 @@ AppResult AppController::ShowDefault(AppCommandContext context) const noexcept {
 /*//////// Persistent Device Settings ////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-AppResult AppController::SetDefault(DeviceSelector target, AppCommandContext context) const {
+AppResult AppController::SetDefault(DeviceSelector target, AppCommandContext const& context) const {
     constexpr auto kind = AppCommandKind::SetDefault;
     if (!IsExplicitTarget(target)) return InvalidInput(kind);
     return WithSettings(kind, context, [&](SettingsSnapshot const& input) {
@@ -311,7 +313,7 @@ AppResult AppController::SetDefault(DeviceSelector target, AppCommandContext con
     });
 }
 
-AppResult AppController::ClearDefault(AppCommandContext context) const {
+AppResult AppController::ClearDefault(AppCommandContext const& context) const {
     constexpr auto kind = AppCommandKind::ClearDefault;
 
     return WithSettings(kind, context, [&](SettingsSnapshot const& input) {
@@ -346,7 +348,7 @@ AppResult AppController::ClearDefault(AppCommandContext context) const {
 /*//////// Bulk Device Actions ///////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-AppResult AppController::DisconnectAll(AppCommandContext context) const noexcept {
+AppResult AppController::DisconnectAll(AppCommandContext const& context) const noexcept {
     constexpr auto kind = AppCommandKind::DisconnectAll;
 
     return WithSettings(kind, context, [&](SettingsSnapshot const& input) {
@@ -369,7 +371,7 @@ AppResult AppController::DisconnectAll(AppCommandContext context) const noexcept
     });
 }
 
-AppResult AppController::ReconnectAll(AppCommandContext context) const noexcept {
+AppResult AppController::ReconnectAll(AppCommandContext const& context) const noexcept {
     constexpr auto kind = AppCommandKind::ReconnectAll;
 
     return WithSettings(kind, context, [&](SettingsSnapshot const& input) {
@@ -439,7 +441,7 @@ AppResult AppController::ReconnectAll(AppCommandContext context) const noexcept 
 /*------------------------------------------------------------------------------------------------------------*/
 
 AppResult
-AppController::SetAlias(DeviceSelector const& target, std::wstring_view alias, AppCommandContext context) const {
+AppController::SetAlias(DeviceSelector const& target, std::wstring_view alias, AppCommandContext const& context) const {
     constexpr auto kind = AppCommandKind::SetAlias;
     if (!IsExplicitTarget(target) || alias.empty() || alias.size() > c_maxAppCommandTextCharacters ||
         alias.find_first_of(std::wstring_view{L"\r\n\0", 3}) != std::wstring_view::npos)
@@ -447,7 +449,7 @@ AppController::SetAlias(DeviceSelector const& target, std::wstring_view alias, A
     return WriteAlias(kind, target, alias, context);
 }
 
-AppResult AppController::ClearAlias(DeviceSelector const& target, AppCommandContext context) const {
+AppResult AppController::ClearAlias(DeviceSelector const& target, AppCommandContext const& context) const {
     constexpr auto kind = AppCommandKind::ClearAlias;
     if (!IsExplicitTarget(target)) return InvalidInput(kind);
     return WriteAlias(kind, target, {}, context);
@@ -456,7 +458,7 @@ AppResult AppController::ClearAlias(DeviceSelector const& target, AppCommandCont
 AppResult AppController::WriteAlias(AppCommandKind kind,
                                     DeviceSelector const& target,
                                     std::wstring_view alias,
-                                    AppCommandContext context) const {
+                                    AppCommandContext const& context) const {
     return WithSettings(kind, context, [&](SettingsSnapshot const& input) {
         auto const& settings = input.Data;
         auto devices = BuildDevices(IsRefreshNeeded(target.Kind()), context, settings);
@@ -520,20 +522,20 @@ AppResult AppController::WriteAlias(AppCommandKind kind,
 /*//////// Connection Actions ////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-AppResult AppController::Connect(DeviceSelector target, AppCommandContext context) const {
+AppResult AppController::Connect(DeviceSelector target, AppCommandContext const& context) const {
     return RunConnectionAction(AppCommandKind::Connect, std::move(target), context);
 }
 
-AppResult AppController::Disconnect(DeviceSelector target, AppCommandContext context) const {
+AppResult AppController::Disconnect(DeviceSelector target, AppCommandContext const& context) const {
     return RunConnectionAction(AppCommandKind::Disconnect, std::move(target), context);
 }
 
-AppResult AppController::Reconnect(DeviceSelector target, AppCommandContext context) const {
+AppResult AppController::Reconnect(DeviceSelector target, AppCommandContext const& context) const {
     return RunConnectionAction(AppCommandKind::Reconnect, std::move(target), context);
 }
 
 AppResult
-AppController::RunConnectionAction(AppCommandKind kind, DeviceSelector target, AppCommandContext context) const {
+AppController::RunConnectionAction(AppCommandKind kind, DeviceSelector target, AppCommandContext const& context) const {
     return WithSettings(kind, context, [&](SettingsSnapshot const& input) {
         auto const& settings = input.Data;
         auto devices = BuildDevices(IsRefreshNeeded(target.Kind()), context, settings);
@@ -541,7 +543,7 @@ AppController::RunConnectionAction(AppCommandKind kind, DeviceSelector target, A
     });
 }
 
-AppResult AppController::Toggle(DeviceSelector target, AppCommandContext context) const {
+AppResult AppController::Toggle(DeviceSelector target, AppCommandContext const& context) const {
     constexpr auto kind = AppCommandKind::ToggleLast;
 
     return WithSettings(kind, context, [&](SettingsSnapshot const& input) {
@@ -571,7 +573,7 @@ AppResult AppController::Toggle(DeviceSelector target, AppCommandContext context
     });
 }
 
-AppResult AppController::ToggleDefault(AppCommandContext context) const {
+AppResult AppController::ToggleDefault(AppCommandContext const& context) const {
     return Toggle(DeviceSelector::Default(), context);
 }
 
@@ -915,7 +917,7 @@ AppController::SessionRecords(apc::device::DeviceServiceSnapshot const& snapshot
 }
 
 std::vector<AppController::DeviceRecord> AppController::MergeDevices(std::vector<DeviceRecord> refreshed,
-                                                                     std::vector<DeviceRecord> connected,
+                                                                     std::vector<DeviceRecord> const& connected,
                                                                      SettingsData const& settings) const {
     std::unordered_map<std::wstring, std::size_t> indexes;
     std::vector<DeviceRecord> merged;

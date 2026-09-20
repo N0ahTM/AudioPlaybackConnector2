@@ -118,42 +118,43 @@ public:
     /*//////// UI Actions ////////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    [[nodiscard]] AppResult ShowDevicePicker(DevicePickerOpenMode mode, AppCommandContext context = {}) const noexcept;
-    [[nodiscard]] AppResult ShowSettings(AppCommandContext context = {}) const noexcept;
+    [[nodiscard]] AppResult ShowDevicePicker(DevicePickerOpenMode mode,
+                                             AppCommandContext const& context = {}) const noexcept;
+    [[nodiscard]] AppResult ShowSettings(AppCommandContext const& context = {}) const noexcept;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Device Actions ////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    [[nodiscard]] AppResult Connect(DeviceSelector target, AppCommandContext context) const;
-    [[nodiscard]] AppResult Disconnect(DeviceSelector target, AppCommandContext context) const;
-    [[nodiscard]] AppResult Reconnect(DeviceSelector target, AppCommandContext context) const;
-    [[nodiscard]] AppResult ToggleDefault(AppCommandContext context) const;
-    [[nodiscard]] AppResult Toggle(DeviceSelector target, AppCommandContext context) const;
-    [[nodiscard]] AppResult DisconnectAll(AppCommandContext context) const noexcept;
-    [[nodiscard]] AppResult ReconnectAll(AppCommandContext context) const noexcept;
+    [[nodiscard]] AppResult Connect(DeviceSelector target, AppCommandContext const& context) const;
+    [[nodiscard]] AppResult Disconnect(DeviceSelector target, AppCommandContext const& context) const;
+    [[nodiscard]] AppResult Reconnect(DeviceSelector target, AppCommandContext const& context) const;
+    [[nodiscard]] AppResult ToggleDefault(AppCommandContext const& context) const;
+    [[nodiscard]] AppResult Toggle(DeviceSelector target, AppCommandContext const& context) const;
+    [[nodiscard]] AppResult DisconnectAll(AppCommandContext const& context) const noexcept;
+    [[nodiscard]] AppResult ReconnectAll(AppCommandContext const& context) const noexcept;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Device Settings ///////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
     [[nodiscard]] AppResult SetDefault(std::wstring_view deviceId) const;
-    [[nodiscard]] AppResult ClearDefault(AppCommandContext context = {}) const;
+    [[nodiscard]] AppResult ClearDefault(AppCommandContext const& context = {}) const;
     [[nodiscard]] AppResult SetAlias(std::wstring_view deviceId, std::wstring_view alias) const;
     [[nodiscard]] AppResult ClearAlias(std::wstring_view deviceId) const;
-    [[nodiscard]] AppResult SetDefault(DeviceSelector target, AppCommandContext context) const;
+    [[nodiscard]] AppResult SetDefault(DeviceSelector target, AppCommandContext const& context) const;
     [[nodiscard]] AppResult
-    SetAlias(DeviceSelector const& target, std::wstring_view alias, AppCommandContext context) const;
-    [[nodiscard]] AppResult ClearAlias(DeviceSelector const& target, AppCommandContext context) const;
+    SetAlias(DeviceSelector const& target, std::wstring_view alias, AppCommandContext const& context) const;
+    [[nodiscard]] AppResult ClearAlias(DeviceSelector const& target, AppCommandContext const& context) const;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Queries ///////////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    [[nodiscard]] AppResult ListDevices(AppCommandContext context) const noexcept;
-    [[nodiscard]] AppResult Status(AppCommandContext context) const noexcept;
-    [[nodiscard]] AppResult ShowDefault(AppCommandContext context) const noexcept;
-    [[nodiscard]] AppResult ListAliases(AppCommandContext context) const noexcept;
+    [[nodiscard]] AppResult ListDevices(AppCommandContext const& context) const noexcept;
+    [[nodiscard]] AppResult Status(AppCommandContext const& context) const noexcept;
+    [[nodiscard]] AppResult ShowDefault(AppCommandContext const& context) const noexcept;
+    [[nodiscard]] AppResult ListAliases(AppCommandContext const& context) const noexcept;
 
     // Publications have one total revision order. Reentrant and concurrent publications queue behind the current
     // delivery; callbacks never overlap. Reset drains an admitted callback, except when called by that callback.
@@ -164,16 +165,16 @@ public:
 private:
     template <typename Action>
     [[nodiscard]] AppResult
-    WithAdmission(AppCommandKind kind, AppCommandContext context, Action&& action) const noexcept;
+    WithAdmission(AppCommandKind kind, AppCommandContext const& context, Action&& action) const noexcept;
     template <typename Action>
     [[nodiscard]] AppResult
-    WithSettings(AppCommandKind kind, AppCommandContext context, Action&& action) const noexcept;
+    WithSettings(AppCommandKind kind, AppCommandContext const& context, Action&& action) const noexcept;
     [[nodiscard]] AppResult
     PresentationResult(AppCommandKind kind, AppUiActionResult const& action, SettingsData const& settings) const;
     [[nodiscard]] AppResult WriteAlias(AppCommandKind kind,
                                        DeviceSelector const& target,
                                        std::wstring_view alias,
-                                       AppCommandContext context) const;
+                                       AppCommandContext const& context) const;
 
     template <typename Mutation> SettingsMutationResult MutateSettings(Mutation&& mutation) const noexcept;
     bool RememberKnownDevice(std::wstring const& id) const;
@@ -223,7 +224,7 @@ private:
                                                std::vector<DeviceRecord> const& devices,
                                                SettingsData const& settings) const;
     [[nodiscard]] AppResult
-    RunConnectionAction(AppCommandKind kind, DeviceSelector target, AppCommandContext context) const;
+    RunConnectionAction(AppCommandKind kind, DeviceSelector target, AppCommandContext const& context) const;
     [[nodiscard]] Resolution Resolve(DeviceSelector const& selector,
                                      std::vector<DeviceRecord> const& devices,
                                      SettingsData const& settings) const;
@@ -239,7 +240,7 @@ private:
     [[nodiscard]] AppSnapshot CaptureSnapshot() const;
     void RefreshDevices(AppCommandContext const& context) const;
     [[nodiscard]] std::vector<DeviceRecord> MergeDevices(std::vector<DeviceRecord> refreshed,
-                                                         std::vector<DeviceRecord> connected,
+                                                         std::vector<DeviceRecord> const& connected,
                                                          SettingsData const& settings) const;
     [[nodiscard]] AppSnapshot BuildSnapshot(std::vector<DeviceRecord> devices,
                                             SettingsData const& settings,

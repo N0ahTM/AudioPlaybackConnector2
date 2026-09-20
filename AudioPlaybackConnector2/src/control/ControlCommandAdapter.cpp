@@ -703,7 +703,7 @@ Response FormatOperation(Request const& request,
 
 AppCommandContext MakeContext(std::stop_token stopToken, std::uint64_t deadline) {
     AppCommandContext context;
-    context.StopToken = stopToken;
+    context.StopToken = std::move(stopToken);
     context.Completion = AppCommandContext::CompletionMode::WaitForCompletion;
     if (deadline == 0) return context;
 
@@ -728,7 +728,7 @@ ControlCommandAdapter::ControlCommandAdapter(apc::app::AppController const& cont
     : m_controller(controller), m_options(std::move(options)) {}
 
 Response ControlCommandAdapter::Handle(Request const& request,
-                                       std::stop_token stopToken,
+                                       std::stop_token const& stopToken,
                                        std::uint64_t deadline) const noexcept {
     try {
         const bool wantsJson = (request.Flags & CommandFlagJson) != 0;

@@ -7,6 +7,7 @@
 #include <app/ResourcePressureMonitor.hpp>
 #include <util/Logger.hpp>
 #include <windows.h>
+#include <wil/resource.h>
 #include <winrt/Microsoft.UI.Dispatching.h>
 #include <atomic>
 #include <cstdint>
@@ -61,7 +62,7 @@ private:
     AdaptiveResourcePolicy m_policy;
     ResourcePressureValues m_pressure;
     std::unique_ptr<ResourcePressureMonitor> m_monitor;
-    HPOWERNOTIFY m_powerNotification = nullptr;
+    wil::unique_hpowernotify m_powerNotification;
     winrt::Microsoft::UI::Dispatching::DispatcherQueueTimer m_fallbackTimer{nullptr};
     AdaptiveActionRetryBackoff m_retry;
     AdaptiveScheduleState m_schedule;

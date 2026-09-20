@@ -65,11 +65,7 @@ void AdaptiveResourceController::Stop() noexcept {
         m_monitor->Stop();
         m_monitor.reset();
     }
-    if (auto notification = std::exchange(m_powerNotification, nullptr)) {
-        if (!UnregisterPowerSettingNotification(notification)) {
-            m_log.Trace(L"[Resources] Failed to unregister battery-saver notification: {0}", GetLastError());
-        }
-    }
+    m_powerNotification.reset();
     if (m_fallbackTimer) {
         try {
             m_fallbackTimer.Stop();
@@ -139,8 +135,8 @@ void AdaptiveResourceController::Start(HWND hwnd,
             m_monitor.reset();
             m_log.Trace(L"[App] Resource-pressure monitor unavailable; speculative preloading remains disabled");
         } else if (!m_stopped.load()) {
-            m_powerNotification =
-                RegisterPowerSettingNotification(m_hwnd, &GUID_POWER_SAVING_STATUS, DEVICE_NOTIFY_WINDOW_HANDLE);
+            m_powerNotification.reset(
+                RegisterPowerSettingNotification(m_hwnd, &GUID_POWER_SAVING_STATUS, DEVICE_NOTIFY_WINDOW_HANDLE));
             if (!m_powerNotification) {
                 m_log.Trace(L"[App] Battery-saver notification registration unavailable; polling fallback remains "
                             L"active");

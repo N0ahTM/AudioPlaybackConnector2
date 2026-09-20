@@ -74,6 +74,16 @@ jobs:
         if-no-files-found: ignore
         retention-days: 7
 
+    - name: Install the pinned clang-tidy toolchain
+      if: ${{ matrix.platform == 'x64' && !matrix.disable_pch }}
+      shell: pwsh
+      run: choco install llvm --version=22.1.7 -y --no-progress
+
+    - name: Analyze CoreRuntime with clang-tidy
+      if: ${{ matrix.platform == 'x64' && !matrix.disable_pch }}
+      shell: pwsh
+      run: ./scripts/run-clang-tidy.ps1 -ToolPath 'C:/Program Files/LLVM/bin/clang-tidy.exe' -LogPath "$env:RUNNER_TEMP/clang-tidy-core.log"
+
   quality:
     runs-on: windows-2025-vs2026
     steps:

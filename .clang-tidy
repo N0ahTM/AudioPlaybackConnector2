@@ -1,0 +1,16 @@
+---
+Checks: >-
+  -*,
+  bugprone-use-after-move,
+  bugprone-dangling-handle,
+  bugprone-infinite-loop,
+  bugprone-suspicious-semicolon,
+  bugprone-suspicious-string-compare,
+  bugprone-undelegated-constructor,
+  performance-unnecessary-copy-initialization,
+  performance-unnecessary-value-param,
+  readability-redundant-smartptr-get
+WarningsAsErrors: '*'
+HeaderFilterRegex: 'AudioPlaybackConnector2[/\\](include|src)[/\\]'
+FormatStyle: file
+...

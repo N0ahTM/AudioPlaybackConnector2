@@ -202,6 +202,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Dependency license verification failed: $triplet" }
         }
 
+    - name: Analyze CoreRuntime with clang-tidy
+      if: ${{ inputs.run_static_analysis }}
+      shell: pwsh
+      run: ./scripts/run-clang-tidy.ps1 -ToolPath 'C:/Program Files/LLVM/bin/clang-tidy.exe' -LogPath "$env:RUNNER_TEMP/clang-tidy-core.log"
+
     - name: Check dependency vulnerabilities
       shell: pwsh
       run: |

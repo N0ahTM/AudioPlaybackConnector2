@@ -10,6 +10,7 @@
 #include <app/SingleInstanceGuard.hpp>
 #include <app/StartupTaskCoordinator.hpp>
 #include <app/UiRefreshScheduler.hpp>
+#include <app/UiDispatcher.hpp>
 
 #include <core/DeviceService.hpp>
 #include <core/SettingsStore.hpp>
@@ -23,9 +24,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <deque>
+#include <functional>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <stop_token>
 #include <string_view>
@@ -95,9 +95,6 @@ private:
     void ExitApplication() noexcept;
     [[nodiscard]] bool CloseMainWindow(std::wstring_view reason) noexcept;
     [[nodiscard]] bool PerformTeardown(SettingsShutdownMode settingsShutdownMode) noexcept;
-    [[nodiscard]] bool RunOnUIThread(std::function<void()> work) noexcept;
-    [[nodiscard]] bool QueueUiFallbackWork(std::function<void()> work) noexcept;
-    void DrainUiFallbackWork() noexcept;
     ControlUiActionResult RunControlUiAction(std::function<bool()> work, apc::app::AppCommandContext const& context);
 
     void HandleAppEvent(apc::app::AppController::EventNotification const& event);
@@ -131,9 +128,6 @@ private:
     std::shared_ptr<apc::app::AppController> m_appController;
     std::unique_ptr<apc::control::ControlCommandAdapter> m_controlCommandAdapter;
     CommandLineControlServer m_commandLineControlServer;
-    std::mutex m_uiFallbackWorkMutex;
-    std::deque<std::function<void()>> m_uiFallbackWork;
-    bool m_uiFallbackMessagePending = false;
     apc::app::AppController::Subscription m_appEventSubscription;
     std::uint64_t m_lastAppEventRevision = 0;
     std::wstring m_appliedLanguage;
@@ -142,7 +136,6 @@ private:
     static inline UINT s_wmTaskbarCreated = 0;
     static constexpr UINT_PTR c_timerAnimation = 0x41504332;
     static constexpr UINT_PTR c_timerTransientTrayError = 0x41504333;
-    static constexpr UINT c_messageDrainUiFallbackWork = WM_APP + 2;
     static constexpr UINT c_transientTrayErrorMs = 3000;
     static constexpr UiRefreshScheduler::Flags c_visualRefreshRequested = 1U << 0;
     static constexpr UiRefreshScheduler::Flags c_visualRefreshForceError = 1U << 1;
@@ -158,6 +151,7 @@ private:
     std::atomic<bool> m_started = false;
     std::atomic<bool> m_teardownWindowCloseSucceeded = true;
     bool m_windowSubclassInstalled = false;
+    std::shared_ptr<UiDispatcher> m_uiDispatcher;
     std::unique_ptr<UiRefreshScheduler> m_visualRefresh;
     PowerTransitionCoordinator m_powerTransitionCoordinator{m_exiting, {}, m_log};
     SettingsWindowPresenter m_settingsWindowPresenter{m_log, m_strings};

@@ -29,7 +29,7 @@ Per-user Windows Bluetooth A2DP sink tray app. WinUI is a presentation adapter; 
 - `SnapshotAndSubscribe` closes the capture/subscription gap and returns an event watermark. Consumers serialize initial state/events and reject old revisions. The controller owns its publication fence, not another device history map.
 - Native connected transitions persist name, preferences and history before notification; settings policies reach the device owner by revision. Host performs neither persistence nor policy selection. `RestoreStartupConnections` uses one snapshot, ordered by recent history.
 - Tray/picker callbacks hold weak controller references. Tray activation does not wait on its own UI dispatcher. Final settings-window placement commits before application admission closes.
-- Host requests transport cancellation before controller drain. `UiRefreshScheduler` owns coalescing, retry timer and callback lifetime; host supplies Request/Stop and rendering.
+- Host requests transport cancellation before controller drain. `UiDispatcher` owns general UI delivery and its native fallback queue; `UiRefreshScheduler` owns coalescing, retry timer and callback lifetime; host supplies Request/Stop and rendering.
 - CLI authenticates the same-user endpoint. `CliParser` is pure wide-argument parsing in CoreRuntime; CLI11 stays in its implementation. Value/escape normalization preserves opaque UTF-16, ordered validation, diagnostic text and exit codes.
 - Host owns StringResources; English is canonical with locale overlays. Read-only consumers retain text lifetime, not the application. Language publication precedes UI relocalization.
 

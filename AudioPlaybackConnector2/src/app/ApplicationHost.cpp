@@ -152,11 +152,6 @@ bool ApplicationHost::PerformTeardown(SettingsShutdownMode settingsShutdownMode)
 
     StopMainWindowLoadedWatchdog();
     if (m_visualRefresh) m_visualRefresh->Stop();
-    {
-        std::scoped_lock lock(m_uiFallbackWorkMutex);
-        m_uiFallbackWork.clear();
-        m_uiFallbackMessagePending = false;
-    }
 
     if (m_mainWindowLoadedToken.value != 0 && m_mainWindow) {
         try {
@@ -175,6 +170,7 @@ bool ApplicationHost::PerformTeardown(SettingsShutdownMode settingsShutdownMode)
     m_controlCommandAdapter.reset();
     TeardownDeviceEvents();
     m_appController.reset();
+    if (m_uiDispatcher) m_uiDispatcher->Stop();
     if (m_hwnd) {
         try {
             KillTimer(m_hwnd, c_timerAnimation);
@@ -343,6 +339,13 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept tr
         return;
     }
     m_windowSubclassInstalled = true;
+    m_uiDispatcher = std::make_shared<UiDispatcher>(
+        m_hwnd,
+        [queue = m_dispatcherQueue](UiDispatcher::Task work) {
+            return queue.TryEnqueue(winrt::Microsoft::UI::Dispatching::DispatcherQueuePriority::Normal,
+                                    [work = std::move(work)] { work(); });
+        },
+        m_log);
     m_log.Trace(L"[App] Window subclass installed");
 
     m_settingsStore = std::make_shared<SettingsStore>(std::filesystem::path{}, nullptr, nullptr, m_log);
@@ -364,11 +367,13 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept tr
     InitializeDeviceService();
     InitializeAppController();
     InitializeTray();
-    auto weak = weak_from_this();
-    m_adaptiveResources->Start(m_hwnd, m_dispatcherQueue, m_trayController, [weak](std::function<void()> work) {
-        auto self = weak.lock();
-        return self && self->RunOnUIThread(std::move(work));
-    });
+    m_adaptiveResources->Start(m_hwnd,
+                               m_dispatcherQueue,
+                               m_trayController,
+                               [weak = std::weak_ptr<UiDispatcher>(m_uiDispatcher)](std::function<void()> work) {
+                                   auto dispatcher = weak.lock();
+                                   return dispatcher && dispatcher->Run(std::move(work));
+                               });
     InitializeNotifications();
     SetupDeviceEvents();
     static_cast<void>(m_deviceService->Start());
@@ -587,122 +592,22 @@ void ApplicationHost::HandlePowerResume() {
                 finish({});
                 return;
             }
-            auto accepted = self->RunOnUIThread([weak, generation, deviceIds = std::move(deviceIds), finish]() mutable {
-                std::vector<std::wstring> attemptedIds;
-                auto completionGuard = wil::scope_exit([&]() noexcept { finish(std::move(attemptedIds)); });
-                auto self = weak.lock();
-                if (!self || !self->m_deviceService ||
-                    !self->m_powerTransitionCoordinator.IsResumeReconnectGenerationCurrent(generation)) {
-                    return;
-                }
-                self->m_deviceService->ResumeSuspendedSessions(deviceIds);
-                for (auto const& deviceId : deviceIds) {
-                    if (!deviceId.empty()) attemptedIds.push_back(deviceId);
-                }
-            });
+            auto accepted =
+                self->m_uiDispatcher->Run([weak, generation, deviceIds = std::move(deviceIds), finish]() mutable {
+                    std::vector<std::wstring> attemptedIds;
+                    auto completionGuard = wil::scope_exit([&]() noexcept { finish(std::move(attemptedIds)); });
+                    auto self = weak.lock();
+                    if (!self || !self->m_deviceService ||
+                        !self->m_powerTransitionCoordinator.IsResumeReconnectGenerationCurrent(generation)) {
+                        return;
+                    }
+                    self->m_deviceService->ResumeSuspendedSessions(deviceIds);
+                    for (auto const& deviceId : deviceIds) {
+                        if (!deviceId.empty()) attemptedIds.push_back(deviceId);
+                    }
+                });
             if (!accepted) finish({});
         });
-}
-
-bool ApplicationHost::RunOnUIThread(std::function<void()> work) noexcept {
-    if (m_exiting.load() || !work) return false;
-
-    bool hasThreadAccess = false;
-    try {
-        hasThreadAccess = m_dispatcherQueue && m_dispatcherQueue.HasThreadAccess();
-    } catch (winrt::hresult_error const& ex) {
-        m_log.Exception(L"[App] Failed to query DispatcherQueue thread access", ex);
-    } catch (std::exception const& ex) {
-        m_log.Exception(L"[App] Failed to query DispatcherQueue thread access", ex);
-    } catch (...) {
-        m_log.UnknownException(L"[App] Failed to query DispatcherQueue thread access");
-    }
-
-    if (hasThreadAccess) {
-        if (m_exiting.load()) return false;
-        try {
-            work();
-            return true;
-        } catch (winrt::hresult_error const& ex) {
-            m_log.Exception(L"[App] Inline UI work failed", ex);
-        } catch (std::exception const& ex) {
-            m_log.Exception(L"[App] Inline UI work failed", ex);
-        } catch (...) {
-            m_log.UnknownException(L"[App] Inline UI work failed");
-        }
-        return false;
-    }
-
-    try {
-        if (m_dispatcherQueue) {
-            auto weak = weak_from_this();
-            auto dispatcherWork = work;
-            if (m_dispatcherQueue.TryEnqueue(winrt::Microsoft::UI::Dispatching::DispatcherQueuePriority::Normal,
-                                             [weak, log = m_log, work = std::move(dispatcherWork)]() mutable noexcept {
-                                                 try {
-                                                     if (auto self = weak.lock(); self && !self->m_exiting.load()) {
-                                                         work();
-                                                     }
-                                                 } catch (winrt::hresult_error const& ex) {
-                                                     log.Exception(L"[App] UI-dispatched work failed", ex);
-                                                 } catch (std::exception const& ex) {
-                                                     log.Exception(L"[App] UI-dispatched work failed", ex);
-                                                 } catch (...) {
-                                                     log.UnknownException(L"[App] UI-dispatched work failed");
-                                                 }
-                                             })) {
-                return true;
-            }
-        }
-    } catch (winrt::hresult_error const& ex) {
-        m_log.Exception(L"[App] Dispatcher queue rejected UI work", ex);
-    } catch (std::exception const& ex) {
-        m_log.Exception(L"[App] Dispatcher queue rejected UI work", ex);
-    } catch (...) {
-        m_log.UnknownException(L"[App] Dispatcher queue rejected UI work");
-    }
-
-    return QueueUiFallbackWork(std::move(work));
-}
-
-bool ApplicationHost::QueueUiFallbackWork(std::function<void()> work) noexcept {
-    if (m_exiting.load() || !work) return false;
-
-    try {
-        std::scoped_lock lock(m_uiFallbackWorkMutex);
-        if (m_exiting.load()) return false;
-        m_uiFallbackWork.push_back(std::move(work));
-        if (m_uiFallbackMessagePending) return true;
-        if (m_hwnd && IsWindow(m_hwnd) && PostMessageW(m_hwnd, c_messageDrainUiFallbackWork, 0, 0)) {
-            m_uiFallbackMessagePending = true;
-            return true;
-        }
-        m_uiFallbackWork.clear();
-    } catch (...) {
-    }
-    m_log.Trace(L"[App] ERROR: both DispatcherQueue and Win32 fallback rejected UI work");
-    return false;
-}
-
-void ApplicationHost::DrainUiFallbackWork() noexcept {
-    std::deque<std::function<void()>> workItems;
-    {
-        std::scoped_lock lock(m_uiFallbackWorkMutex);
-        workItems.swap(m_uiFallbackWork);
-        m_uiFallbackMessagePending = false;
-    }
-
-    for (auto& work : workItems) {
-        try {
-            if (!m_exiting.load() && work) work();
-        } catch (winrt::hresult_error const& ex) {
-            m_log.Exception(L"[App] Win32-fallback UI work failed", ex);
-        } catch (std::exception const& ex) {
-            m_log.Exception(L"[App] Win32-fallback UI work failed", ex);
-        } catch (...) {
-            m_log.UnknownException(L"[App] Win32-fallback UI work failed");
-        }
-    }
 }
 
 ApplicationHost::ControlUiActionResult ApplicationHost::RunControlUiAction(std::function<bool()> work,
@@ -873,7 +778,7 @@ void ApplicationHost::SetupDeviceEvents() {
     auto observation =
         m_appController->SnapshotAndSubscribe([weak](apc::app::AppController::EventNotification const& event) {
             if (auto self = weak.lock()) {
-                (void)self->RunOnUIThread([weak, event] {
+                (void)self->m_uiDispatcher->Run([weak, event] {
                     if (auto current = weak.lock()) current->HandleAppEvent(event);
                 });
             }
@@ -1006,10 +911,7 @@ LRESULT CALLBACK ApplicationHost::SubclassProc(
         return 0;
     }
 
-    if (msg == c_messageDrainUiFallbackWork) {
-        host->DrainUiFallbackWork();
-        return 0;
-    }
+    if (host->m_uiDispatcher && host->m_uiDispatcher->HandleMessage(msg)) return 0;
 
     if (msg == WM_SETTINGCHANGE) {
         if (host->m_trayController) host->m_trayController->OnSettingChange(lParam);

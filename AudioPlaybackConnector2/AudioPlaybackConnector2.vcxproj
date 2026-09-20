@@ -137,6 +137,7 @@
     <ClInclude Include="include\app\StartupTaskCoordinator.hpp" />
     <ClInclude Include="include\app\StartupTaskSnapshot.hpp" />
     <ClInclude Include="include\app\UiRefreshScheduler.hpp" />
+    <ClInclude Include="include\app\UiDispatcher.hpp" />
     <ClInclude Include="include\util\RuntimeApartment.hpp" />
     <ClInclude Include="include\control\CommandProtocol.hpp" />
     <ClInclude Include="include\control\CommandPipeSecurity.hpp" />

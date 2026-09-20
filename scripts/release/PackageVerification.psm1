@@ -160,7 +160,7 @@ function Assert-AppBundleNotices {
     $archive = [IO.Compression.ZipFile]::OpenRead($bundle.Metadata.Path)
     try {
         foreach ($packageName in $bundle.Metadata.ApplicationPackages) {
-            $entries = @($archive.Entries | Where-Object { $_.FullName -ieq $packageName })
+            $entries = @($archive.Entries | Where-Object { [Uri]::UnescapeDataString($_.FullName) -ieq $packageName })
             if ($entries.Count -ne 1) { throw "Application package '$packageName' must occur exactly once in the bundle." }
             $stream = $entries[0].Open()
             try {
@@ -181,6 +181,58 @@ function Assert-AppBundleNotices {
             } finally { $stream.Dispose() }
         }
     } finally { $archive.Dispose() }
+}
+
+function Get-AppBundleBinaryHashes {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$BundlePath
+    )
+    $bundle = Read-AppBundle -Path $BundlePath
+    $hashes = @{}
+    $archive = [IO.Compression.ZipFile]::OpenRead($bundle.Metadata.Path)
+    try {
+        for ($index = 0; $index -lt $bundle.Metadata.ApplicationPackages.Count; ++$index) {
+            $architecture = $bundle.Metadata.ApplicationArchitectures[$index]
+            if ($architecture -notin @('x64', 'arm64')) { throw "Unexpected application architecture: $architecture" }
+            $name = $bundle.Metadata.ApplicationPackages[$index]
+            $entries = @($archive.Entries | Where-Object { [Uri]::UnescapeDataString($_.FullName) -ieq $name })
+            if ($entries.Count -ne 1) { throw "Application package must occur exactly once: $name" }
+            $stream = $entries[0].Open()
+            try {
+                $package = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Read, $true)
+                try {
+                    foreach ($path in @('AudioPlaybackConnector2.exe', 'AudioPlaybackConnector2.Control/AudioPlaybackConnector2.Control.exe')) {
+                        $matches = @($package.Entries | Where-Object FullName -IEQ $path)
+                        if ($matches.Count -ne 1) { throw "Expected one packaged executable: $architecture/$path" }
+                        $binary = $matches[0].Open()
+                        try { $actual = (Get-FileHash -InputStream $binary -Algorithm SHA256).Hash }
+                        finally { $binary.Dispose() }
+                        $key = "$architecture/$path"
+                        if ($hashes.ContainsKey($key)) { throw "Duplicate architecture/executable: $key" }
+                        $hashes[$key] = $actual
+                    }
+                } finally { $package.Dispose() }
+            } finally { $stream.Dispose() }
+        }
+    } finally { $archive.Dispose() }
+    return $hashes
+}
+
+function Assert-AppBundleBinaries {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$BundlePath,
+        [Parameter(Mandatory)] [string]$ReferenceBundlePath
+    )
+    $expected = Get-AppBundleBinaryHashes -BundlePath $ReferenceBundlePath
+    $actual = Get-AppBundleBinaryHashes -BundlePath $BundlePath
+    if ((($expected.Keys | Sort-Object) -join ',') -cne (($actual.Keys | Sort-Object) -join ',')) {
+        throw 'Package channels do not contain the same architecture/executable set.'
+    }
+    foreach ($key in $expected.Keys) {
+        if ($actual[$key] -ne $expected[$key]) { throw "Package channels contain different binary bytes: $key" }
+    }
 }
 
 function Get-AppPackageSigner {
@@ -290,4 +342,4 @@ function Test-AppPackageIntegrity {
     }
 }
 
-Export-ModuleMember -Function Read-AppPackage, Read-AppBundle, Test-AppPackageIntegrity, Assert-AppBundleNotices
+Export-ModuleMember -Function Read-AppPackage, Read-AppBundle, Test-AppPackageIntegrity, Assert-AppBundleNotices, Assert-AppBundleBinaries

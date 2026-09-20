@@ -189,7 +189,8 @@ jobs:
       run: |
         foreach ($architecture in @('x64', 'ARM64')) {
           & msbuild AudioPlaybackConnector2.CoreTests/AudioPlaybackConnector2.CoreTests.vcxproj `
-            /p:Configuration=Release /p:Platform=$architecture /t:Rebuild
+            /p:Configuration=Release /p:Platform=$architecture `
+            /p:ReleaseTag=${{ inputs.tag }} /p:PackageVersion=${{ inputs.package_version }} /t:Build
           if ($LASTEXITCODE -ne 0) { throw "$architecture test build failed with exit code $LASTEXITCODE." }
         }
 
@@ -225,9 +226,11 @@ jobs:
           -RequireSignature `
           -WriteGitHubOutput
 
-    - name: Build Microsoft Store upload package
+    - name: Package the shared binaries for Microsoft Store
       shell: pwsh
       run: |
+        # DesktopBridge builds references through _TargetsToBuild even when BuildProjectReferences is false.
+        # Request output paths only: the signed-bundle build already produced both architectures.
         $root = Join-Path $env:RUNNER_TEMP 'store-upload'
         & msbuild 'AudioPlaybackConnector2 (Package)\AudioPlaybackConnector2 (Package).wapproj' `
           /p:Configuration=Release `
@@ -241,7 +244,8 @@ jobs:
           /p:GenerateAppxPackageOnBuild=true `
           /p:AppxBundle=Always `
           '/p:AppxBundlePlatforms=x64|ARM64' `
-          /t:Rebuild
+          /p:_TargetsToBuild=GetTargetPath `
+          /t:Build
         if ($LASTEXITCODE -ne 0) { throw "Microsoft Store package build failed with exit code $LASTEXITCODE." }
 
     - name: Verify Microsoft Store upload package
@@ -265,6 +269,9 @@ jobs:
           -ExpectedName 12144NoahMeyer.AudioPlaybackConnector2 `
           -ExpectedPublisher 'CN=3784F101-6355-463B-A35E-41BD0A95071B' `
           -ExpectedProcessorArchitectures x64,arm64
+
+        Import-Module ./scripts/release/PackageVerification.psm1 -Force
+        Assert-AppBundleBinaries -BundlePath $bundles[0].FullName -ReferenceBundlePath '${{ steps.bundle.outputs.PATH }}'
 
         "PATH=$($uploads[0].FullName)" >> $env:GITHUB_OUTPUT
         "NAME=$($uploads[0].Name)" >> $env:GITHUB_OUTPUT

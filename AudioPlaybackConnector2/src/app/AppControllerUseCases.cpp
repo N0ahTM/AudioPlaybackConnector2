@@ -713,7 +713,7 @@ AppController::Resolution AppController::Resolve(DeviceSelector const& selector,
     const auto makeResolved = [&](DeviceRecord const& device) {
         result.HasTarget = true;
         result.Device = device;
-        result.Target = *ToTarget(device);
+        result.Target = ToTarget(device);
     };
     const auto makeUnknown = [&](std::wstring id) {
         result.HasTarget = true;
@@ -1117,7 +1117,7 @@ std::optional<DeviceSnapshot> AppController::ToSnapshot(DeviceRecord const& reco
                           record.IsBusy || IsBusyState(record.State)};
 }
 
-std::optional<AppTargetSnapshot> AppController::ToTarget(DeviceRecord const& record) const {
+AppTargetSnapshot AppController::ToTarget(DeviceRecord const& record) const {
     return AppTargetSnapshot{
         record.Id, record.Name, record.Alias, DeviceLabel(record), true, record.IsConnected, record.IsKnown};
 }

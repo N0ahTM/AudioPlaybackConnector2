@@ -265,7 +265,7 @@ private:
                                              AppResultCode code,
                                              AppOutcomeReason reason) const;
     [[nodiscard]] std::optional<DeviceSnapshot> ToSnapshot(DeviceRecord const& record) const;
-    [[nodiscard]] std::optional<AppTargetSnapshot> ToTarget(DeviceRecord const& record) const;
+    [[nodiscard]] AppTargetSnapshot ToTarget(DeviceRecord const& record) const;
     [[nodiscard]] std::optional<DeviceSnapshot> PostOperationDevice(std::wstring_view deviceId,
                                                                     std::vector<DeviceRecord> const& devices) const;
 

@@ -200,3 +200,11 @@ for an explicitly x64-only local drop. Python 3.9+ must be on PATH. The wrapper 
 SHA256 hashes and bundled external SPDX references without downloading anything.
 The release build attests package SBOMs and provenance with a pinned GitHub Action. Local generation
 does not create attestations or publish artifacts; the actual Actions run remains a separate gate.
+
+The build also creates `_manifest/AudioPlaybackConnector2_SBOM.zip` for the release assets.
+Before promotion, `scripts/release/verify-build-attestations.ps1` requires local SBOM coverage,
+provenance for every staged file and SBOM attestations for each package/feed, bound to the exact
+repository, tag commit and reusable build workflow. The archive is checked against release-asset
+hashes by the existing promotion verifier. Offline policy tests are
+`scripts/test-build-attestations.ps1` and `scripts/test-release-promotion.ps1`; these mock GitHub
+and do not establish that real signed attestations have passed verification.

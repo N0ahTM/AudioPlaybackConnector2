@@ -79,7 +79,7 @@ if (-not $ArtifactDirectory) {
 
 $publishableExtensions = @('.appx', '.msix', '.msixbundle', '.appinstaller', '.cer')
 $artifactFiles = @(Get-ChildItem -LiteralPath $ArtifactDirectory -Recurse -File |
-    Where-Object { $publishableExtensions -contains $_.Extension.ToLowerInvariant() })
+    Where-Object { $publishableExtensions -contains $_.Extension.ToLowerInvariant() -or $_.Name -ceq 'AudioPlaybackConnector2_SBOM.zip' })
 if ($artifactFiles.Count -eq 0) {
     throw "No publishable files were found in $ArtifactDirectory."
 }
@@ -109,7 +109,8 @@ if ($unexpectedNames.Count -gt 0) {
 $requiredNames = @(
     "AudioPlaybackConnector2_${PackageVersion}_x64_ARM64.msixbundle",
     'AudioPlaybackConnector2.appinstaller',
-    'AudioPlaybackConnector2.cer'
+    'AudioPlaybackConnector2.cer',
+    'AudioPlaybackConnector2_SBOM.zip'
 )
 foreach ($requiredName in $requiredNames) {
     if ($artifactNames -notcontains $requiredName) {

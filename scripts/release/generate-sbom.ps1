@@ -49,4 +49,6 @@ Copy-Item -LiteralPath (Join-Path $root 'config/dependency-licenses.json') -Dest
 if ($LASTEXITCODE -ne 0) { throw 'SBOM generation failed.' }
 & python (Join-Path $PSScriptRoot 'verify-sbom.py') --drop $drop
 if ($LASTEXITCODE -ne 0) { throw 'SBOM contents or hashes do not match the release drop.' }
+$archive = Join-Path $drop '_manifest/AudioPlaybackConnector2_SBOM.zip'
+Compress-Archive -Path (Join-Path $drop 'SBOM'), (Join-Path $drop '_manifest/spdx_2.2') -DestinationPath $archive -CompressionLevel Optimal
 Write-Output "SBOM verified: $drop/_manifest/spdx_2.2/manifest.spdx.json"

@@ -129,6 +129,7 @@ jobs:
           release-artifacts/*.msixbundle
           release-artifacts/*.appinstaller
           release-artifacts/*.cer
+          release-artifacts/_manifest/AudioPlaybackConnector2_SBOM.zip
           release-artifacts/Dependencies/**/*.appx
           release-artifacts/Dependencies/**/*.msix
         fail_on_unmatched_files: true
@@ -206,6 +207,17 @@ jobs:
         repository: ${{ github.repository }}
         run-id: ${{ steps.build.outputs.RUN_ID }}
         github-token: ${{ github.token }}
+
+    - name: Verify SBOM coverage and build attestations
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RELEASE_TAG: ${{ needs.version.outputs.tag }}
+        EXPECTED_SHA: ${{ needs.version.outputs.commit_sha }}
+      run: |
+        ./scripts/release/verify-build-attestations.ps1 `
+          -Repository $env:GITHUB_REPOSITORY -Tag $env:RELEASE_TAG `
+          -ExpectedCommit $env:EXPECTED_SHA -ArtifactDirectory release-artifacts
 
     - name: Verify release assets against immutable build
       id: release

@@ -391,7 +391,7 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept tr
             m_log.UnknownException(L"[App] startup notification failed");
         }
     }
-    ScheduleDeviceVisualRefresh(VisualRefresh::Tray);
+    ScheduleDeviceVisualRefresh(c_visualRefreshRequested);
 
     m_taskbarCreatedMessage = RegisterWindowMessageW(L"TaskbarCreated");
     util::crash::CheckAndPromptCrashReports(m_log.Path(), *m_strings);
@@ -611,8 +611,8 @@ void ApplicationHost::HandlePowerResume() {
         });
 }
 
-void ApplicationHost::ScheduleDeviceVisualRefresh(VisualRefresh refresh) {
-    if (m_visualRefresh) m_visualRefresh->Request(static_cast<UiRefreshScheduler::Flags>(refresh));
+void ApplicationHost::ScheduleDeviceVisualRefresh(UiRefreshScheduler::Flags refresh) {
+    if (m_visualRefresh) m_visualRefresh->Request(refresh);
 }
 
 bool ApplicationHost::RefreshDeviceVisuals(UiRefreshScheduler::Flags flags) {
@@ -640,7 +640,7 @@ void ApplicationHost::SetupDeviceEvents() {
     m_appliedLanguage = observation.Snapshot.Settings.Language;
     m_appliedBackdrop = observation.Snapshot.Settings.UseSystemBackdropEffects;
     m_appEventSubscription = std::move(observation.Updates);
-    ScheduleDeviceVisualRefresh(VisualRefresh::TrayAndInventory);
+    ScheduleDeviceVisualRefresh(c_visualRefreshRequested | c_visualRefreshInventoryChanged);
 }
 
 void ApplicationHost::HandleAppEvent(apc::app::AppController::EventNotification const& notification) {
@@ -654,21 +654,22 @@ void ApplicationHost::HandleAppEvent(apc::app::AppController::EventNotification 
             if constexpr (std::is_same_v<T, DeviceConnectedEvent>) {
                 if (m_deviceService->IsDeviceConnected(event.Id.View())) {
                     m_powerTransitionCoordinator.NotifyDeviceConnected(event.Id.View());
-                    ScheduleDeviceVisualRefresh(VisualRefresh::Tray);
+                    ScheduleDeviceVisualRefresh(c_visualRefreshRequested);
                 }
             } else if constexpr (std::is_same_v<T, DeviceDisconnectedEvent>) {
-                ScheduleDeviceVisualRefresh(VisualRefresh::Tray);
+                ScheduleDeviceVisualRefresh(c_visualRefreshRequested);
             } else if constexpr (std::is_same_v<T, DeviceConnectionErrorEvent>) {
                 if (m_trayController) m_trayController->SetConnectionError(event.FailureReason);
-                ScheduleDeviceVisualRefresh(VisualRefresh::TrayWithError);
+                ScheduleDeviceVisualRefresh(c_visualRefreshRequested | c_visualRefreshForceError);
 
             } else if constexpr (std::is_same_v<T, DeviceStatusChangedEvent>) {
-                ScheduleDeviceVisualRefresh(event.State == DeviceConnectionState::Failed ? VisualRefresh::TrayWithError
-                                                                                         : VisualRefresh::Tray);
+                ScheduleDeviceVisualRefresh(event.State == DeviceConnectionState::Failed
+                                                ? c_visualRefreshRequested | c_visualRefreshForceError
+                                                : c_visualRefreshRequested);
             } else if constexpr (std::is_same_v<T, DeviceInventoryChangedEvent>) {
-                ScheduleDeviceVisualRefresh(VisualRefresh::Inventory);
+                ScheduleDeviceVisualRefresh(c_visualRefreshInventoryChanged);
             } else if constexpr (std::is_same_v<T, DeviceActivityChangedEvent>) {
-                ScheduleDeviceVisualRefresh(VisualRefresh::Tray);
+                ScheduleDeviceVisualRefresh(c_visualRefreshRequested);
             } else if constexpr (std::is_same_v<T, SettingsChangedEvent>) {
                 if (m_appliedLanguage != event.Language) {
                     m_appliedLanguage = event.Language;
@@ -681,7 +682,7 @@ void ApplicationHost::HandleAppEvent(apc::app::AppController::EventNotification 
                     if (m_trayController)
                         m_trayController->SetSystemBackdropEffectsEnabled(event.UseSystemBackdropEffects);
                 }
-                ScheduleDeviceVisualRefresh(VisualRefresh::TrayAndInventory);
+                ScheduleDeviceVisualRefresh(c_visualRefreshRequested | c_visualRefreshInventoryChanged);
             }
         },
         notification.Event);
@@ -719,9 +720,6 @@ bool ApplicationHost::CloseMainWindow(std::wstring_view reason) noexcept {
     }
     return false;
 }
-
-/*//////// Device Event Handlers /////////////////////////////////////////////////////////////////////////////*/
-/*------------------------------------------------------------------------------------------------------------*/
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Window Subclass ///////////////////////////////////////////////////////////////////////////////////*/
@@ -768,7 +766,7 @@ LRESULT CALLBACK ApplicationHost::SubclassProc(
     }
 
     if (msg == WM_TIMER && host->m_trayController && host->m_trayController->OnVisualTimer(wParam)) {
-        host->ScheduleDeviceVisualRefresh(VisualRefresh::Tray);
+        host->ScheduleDeviceVisualRefresh(c_visualRefreshRequested);
         return 0;
     }
 
@@ -776,7 +774,7 @@ LRESULT CALLBACK ApplicationHost::SubclassProc(
         if (host->m_trayController) {
             host->m_trayController->Reregister();
             host->m_trayController->OnThemeChanged();
-            host->ScheduleDeviceVisualRefresh(VisualRefresh::Tray);
+            host->ScheduleDeviceVisualRefresh(c_visualRefreshRequested);
         }
         return 0;
     }

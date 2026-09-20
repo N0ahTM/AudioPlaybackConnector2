@@ -73,13 +73,7 @@ private:
     void SetupDeviceEvents();
     void HandlePowerSuspend();
     void HandlePowerResume();
-    enum class VisualRefresh : UiRefreshScheduler::Flags {
-        Tray = 1U << 0,
-        TrayWithError = (1U << 0) | (1U << 1),
-        Inventory = 1U << 2,
-        TrayAndInventory = (1U << 0) | (1U << 2)
-    };
-    void ScheduleDeviceVisualRefresh(VisualRefresh refresh);
+    void ScheduleDeviceVisualRefresh(UiRefreshScheduler::Flags refresh);
     bool RefreshDeviceVisuals(UiRefreshScheduler::Flags flags);
 
     /*------------------------------------------------------------------------------------------------------------*/

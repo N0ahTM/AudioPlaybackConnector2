@@ -265,17 +265,11 @@ private:
                                              AppResultCode code,
                                              AppOutcomeReason reason) const;
     [[nodiscard]] std::optional<DeviceSnapshot> ToSnapshot(DeviceRecord const& record) const;
-    [[nodiscard]] AppTargetSnapshot ToTarget(DeviceRecord const& record) const;
     [[nodiscard]] std::optional<DeviceSnapshot> PostOperationDevice(std::wstring_view deviceId,
                                                                     std::vector<DeviceRecord> const& devices) const;
 
-    [[nodiscard]] static std::wstring DeviceLabel(DeviceRecord const& device);
-    [[nodiscard]] static bool EqualsIgnoreCase(std::wstring_view left, std::wstring_view right);
-    [[nodiscard]] static bool ContainsIgnoreCase(std::wstring_view value, std::wstring_view query);
-    [[nodiscard]] static std::wstring NormalizeHex(std::wstring_view value);
     [[nodiscard]] static std::optional<DeviceRecord> FindById(std::vector<DeviceRecord> const& devices,
                                                               std::wstring_view id);
-    [[nodiscard]] static std::optional<apc::core::DeviceId> TryDeviceId(std::wstring_view id);
     [[nodiscard]] static AppResultCode ToResultCode(OperationStatus status) noexcept;
     [[nodiscard]] static AppOutcomeReason OperationReason(AppCommandKind command) noexcept;
     [[nodiscard]] static bool IsSuccess(OperationStatus status) noexcept;

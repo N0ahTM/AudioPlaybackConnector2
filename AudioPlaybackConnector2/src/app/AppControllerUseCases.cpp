@@ -39,6 +39,26 @@ std::wstring LowerInvariant(std::wstring_view value) {
     return lowered;
 }
 
+bool EqualsIgnoreCase(std::wstring_view left, std::wstring_view right) {
+    return LowerInvariant(left) == LowerInvariant(right);
+}
+
+bool ContainsIgnoreCase(std::wstring_view value, std::wstring_view query) {
+    return !query.empty() && LowerInvariant(value).find(LowerInvariant(query)) != std::wstring::npos;
+}
+
+std::wstring NormalizeHex(std::wstring_view value) {
+    std::wstring normalized;
+    normalized.reserve(value.size());
+    for (const auto character : value) {
+        if ((character >= L'0' && character <= L'9') || (character >= L'a' && character <= L'f') ||
+            (character >= L'A' && character <= L'F')) {
+            normalized.push_back(static_cast<wchar_t>(std::towlower(character)));
+        }
+    }
+    return normalized;
+}
+
 std::wstring DeviceName(auto const& device) {
     if (!device.Alias.empty()) return device.Alias;
     return device.Name.empty() ? device.Id : device.Name;
@@ -296,7 +316,7 @@ AppResult AppController::SetDefault(DeviceSelector target, AppCommandContext con
             // value, but the legacy control contract reports a resolved
             // live target as the selected default rather than converting
             // the transport-valid request into an operation failure.
-            if (!TryDeviceId(resolution.Target.Id)) {
+            if (!apc::core::DeviceId::TryCreate(resolution.Target.Id)) {
                 return MakeTargetResult(
                     kind, resolution, settings, AppResultCode::Success, AppOutcomeReason::DefaultSet);
             }
@@ -713,7 +733,8 @@ AppController::Resolution AppController::Resolve(DeviceSelector const& selector,
     const auto makeResolved = [&](DeviceRecord const& device) {
         result.HasTarget = true;
         result.Device = device;
-        result.Target = ToTarget(device);
+        result.Target = AppTargetSnapshot{
+            device.Id, device.Name, device.Alias, DeviceName(device), true, device.IsConnected, device.IsKnown};
     };
     const auto makeUnknown = [&](std::wstring id) {
         result.HasTarget = true;
@@ -985,8 +1006,8 @@ std::vector<AppController::DeviceRecord> AppController::MergeDevices(std::vector
 
     ApplySessionStates(merged, connected);
     std::ranges::sort(merged, [](auto const& left, auto const& right) {
-        const auto leftLabel = LowerInvariant(DeviceLabel(left));
-        const auto rightLabel = LowerInvariant(DeviceLabel(right));
+        const auto leftLabel = LowerInvariant(DeviceName(left));
+        const auto rightLabel = LowerInvariant(DeviceName(right));
         if (leftLabel != rightLabel) return leftLabel < rightLabel;
         return LowerInvariant(left.Id) < LowerInvariant(right.Id);
     });
@@ -1007,7 +1028,8 @@ AppSnapshot AppController::BuildSnapshot(std::vector<DeviceRecord> devices,
         if (auto value = ToSnapshot(device)) snapshot.Devices.push_back(std::move(*value));
     }
     for (auto const& id : settings.LastConnectedIds) {
-        if (auto value = TryDeviceId(id)) snapshot.LastConnectedDeviceIds.push_back(std::move(*value));
+        if (auto value = apc::core::DeviceId::TryCreate(id))
+            snapshot.LastConnectedDeviceIds.push_back(std::move(*value));
     }
 
     const auto resolveDefault = [&](std::wstring const& id) -> DefaultDeviceSnapshot {
@@ -1015,7 +1037,7 @@ AppSnapshot AppController::BuildSnapshot(std::vector<DeviceRecord> devices,
         value.Mode = settings.DefaultDevice == ::DefaultDeviceMode::SpecificDevice
                          ? apc::app::DefaultDeviceMode::SpecificDevice
                          : apc::app::DefaultDeviceMode::LastConnected;
-        if (auto internalId = TryDeviceId(id)) value.Id = *internalId;
+        if (auto internalId = apc::core::DeviceId::TryCreate(id)) value.Id = *internalId;
         if (auto found = FindById(devices, id)) {
             value.DisplayName = DeviceName(*found);
             value.IsResolved = true;
@@ -1110,16 +1132,11 @@ std::optional<DeviceSnapshot> AppController::ToSnapshot(DeviceRecord const& reco
     return DeviceSnapshot{std::move(*id),
                           record.Name,
                           record.Alias,
-                          DeviceLabel(record),
+                          DeviceName(record),
                           record.State,
                           record.IsKnown,
                           record.IsConnected,
                           record.IsBusy || IsBusyState(record.State)};
-}
-
-AppTargetSnapshot AppController::ToTarget(DeviceRecord const& record) const {
-    return AppTargetSnapshot{
-        record.Id, record.Name, record.Alias, DeviceLabel(record), true, record.IsConnected, record.IsKnown};
 }
 
 std::optional<DeviceSnapshot> AppController::PostOperationDevice(std::wstring_view deviceId,
@@ -1128,39 +1145,11 @@ std::optional<DeviceSnapshot> AppController::PostOperationDevice(std::wstring_vi
     return std::nullopt;
 }
 
-std::wstring AppController::DeviceLabel(DeviceRecord const& device) {
-    return DeviceName(device);
-}
-
-bool AppController::EqualsIgnoreCase(std::wstring_view left, std::wstring_view right) {
-    return LowerInvariant(left) == LowerInvariant(right);
-}
-
-bool AppController::ContainsIgnoreCase(std::wstring_view value, std::wstring_view query) {
-    return !query.empty() && LowerInvariant(value).find(LowerInvariant(query)) != std::wstring::npos;
-}
-
-std::wstring AppController::NormalizeHex(std::wstring_view value) {
-    std::wstring normalized;
-    normalized.reserve(value.size());
-    for (const auto character : value) {
-        if ((character >= L'0' && character <= L'9') || (character >= L'a' && character <= L'f') ||
-            (character >= L'A' && character <= L'F')) {
-            normalized.push_back(static_cast<wchar_t>(std::towlower(character)));
-        }
-    }
-    return normalized;
-}
-
 std::optional<AppController::DeviceRecord> AppController::FindById(std::vector<DeviceRecord> const& devices,
                                                                    std::wstring_view id) {
     auto found = std::ranges::find_if(devices, [id](auto const& device) { return EqualsIgnoreCase(device.Id, id); });
     if (found == devices.end()) return std::nullopt;
     return *found;
-}
-
-std::optional<apc::core::DeviceId> AppController::TryDeviceId(std::wstring_view id) {
-    return apc::core::DeviceId::TryCreate(id);
 }
 
 AppResultCode AppController::ToResultCode(OperationStatus status) noexcept {

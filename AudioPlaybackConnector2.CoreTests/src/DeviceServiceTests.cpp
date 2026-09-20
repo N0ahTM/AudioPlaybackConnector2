@@ -1171,6 +1171,28 @@ void TestReconnectPolicyAndUserCancellationRemainDistinct() {
           "a later manual connect from an idle session must explicitly clear user cancellation");
 }
 
+void TestReentrantCommandsRetainDeviceIdentity() {
+    Fixture fixture;
+    bool observed = false;
+    auto const subscription = fixture.Service.Subscribe([&](DeviceFact const& fact) {
+        if (fact.Kind != DeviceFactKind::InventoryChanged || observed) return;
+        observed = true;
+        std::array results{fixture.Service.Connect(L"queued-connect"),
+                           fixture.Service.Disconnect(L"queued-disconnect"),
+                           fixture.Service.Reconnect(L"queued-reconnect"),
+                           fixture.Service.CancelReconnect(L"queued-cancel")};
+        std::array expected{L"queued-connect", L"queued-disconnect", L"queued-reconnect", L"queued-cancel"};
+        for (std::size_t index = 0; index < results.size(); ++index) {
+            Check(results[index].Kind == DeviceCommandResultKind::Coalesced &&
+                      results[index].DeviceId == expected[index],
+                  "a reentrant queued command must retain its target in the immediate result");
+        }
+    });
+    (void)fixture.Service.Start();
+    Check(observed, "the command fixture must execute inside the serialized publisher");
+    fixture.Service.Unsubscribe(subscription);
+}
+
 void TestConcurrentCommandWaitsForSerializedMutation() {
     Fixture fixture;
     std::mutex gateMutex;
@@ -1529,6 +1551,7 @@ void TestUnmatchedPowerResumeRestartsWatcherWithoutResurrectingSessions() {
     Check(resumedWatcher && resumedWatcher != staleWatcher && resumedWatcher->StartCalls == 1 &&
               fixture.Service.Snapshot().IsRunning,
           "an unmatched resume must restore the intended watcher generation");
+    if (!resumedWatcher) return;
 
     staleWatcher->Add(L"stale-unmatched-resume", L"Stale unmatched resume");
     resumedWatcher->Add(L"fresh-unmatched-resume", L"Fresh unmatched resume");
@@ -1740,6 +1763,7 @@ int RunDeviceServiceTests() {
     TestRetryTimerAndManualCancellationRejectStaleTimerCallbacks();
     TestManualCommandsCancelSupersededReconnectEpochs();
     TestReconnectPolicyAndUserCancellationRemainDistinct();
+    TestReentrantCommandsRetainDeviceIdentity();
     TestConcurrentCommandWaitsForSerializedMutation();
     TestBulkSuspendResumeAndShutdownCannotResurrectSessions();
     TestStartupPolicyAndDelayedPowerResume();

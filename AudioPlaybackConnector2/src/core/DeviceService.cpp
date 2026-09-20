@@ -442,7 +442,7 @@ DeviceCommandResult DeviceService::Connect(std::wstring deviceId) {
     if (!state || deviceId.empty())
         return {.Command = DeviceCommandKind::Connect, .Kind = DeviceCommandResultKind::Rejected};
     auto result = std::make_shared<DeviceCommandResult>();
-    auto const ran = state->Post([state, deviceId = std::move(deviceId), result] {
+    auto const ran = state->Post([state, deviceId, result] {
         if (state->IsShutdown || state->IsSuspended) {
             *result = state->Result(DeviceCommandKind::Connect, DeviceCommandResultKind::Rejected, deviceId);
             return;
@@ -479,7 +479,7 @@ DeviceCommandResult DeviceService::Disconnect(std::wstring deviceId) {
     if (!state || deviceId.empty())
         return {.Command = DeviceCommandKind::Disconnect, .Kind = DeviceCommandResultKind::Rejected};
     auto result = std::make_shared<DeviceCommandResult>();
-    auto const ran = state->Post([state, deviceId = std::move(deviceId), result] {
+    auto const ran = state->Post([state, deviceId, result] {
         if (state->IsShutdown || state->IsSuspended) {
             *result = state->Result(DeviceCommandKind::Disconnect, DeviceCommandResultKind::Rejected, deviceId);
             return;
@@ -502,7 +502,7 @@ DeviceCommandResult DeviceService::Reconnect(std::wstring deviceId) {
     if (!state || deviceId.empty())
         return {.Command = DeviceCommandKind::Reconnect, .Kind = DeviceCommandResultKind::Rejected};
     auto result = std::make_shared<DeviceCommandResult>();
-    auto const ran = state->Post([state, deviceId = std::move(deviceId), result] {
+    auto const ran = state->Post([state, deviceId, result] {
         if (state->IsShutdown || state->IsSuspended) {
             *result = state->Result(DeviceCommandKind::Reconnect, DeviceCommandResultKind::Rejected, deviceId);
             return;
@@ -535,7 +535,7 @@ DeviceCommandResult DeviceService::CancelReconnect(std::wstring deviceId) {
     if (!state || deviceId.empty())
         return {.Command = DeviceCommandKind::Reconnect, .Kind = DeviceCommandResultKind::Rejected};
     auto result = std::make_shared<DeviceCommandResult>();
-    auto const ran = state->Post([state, deviceId = std::move(deviceId), result] {
+    auto const ran = state->Post([state, deviceId, result] {
         if (state->IsShutdown) {
             *result = state->Result(DeviceCommandKind::Reconnect, DeviceCommandResultKind::Rejected, deviceId);
             return;

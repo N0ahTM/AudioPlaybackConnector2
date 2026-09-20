@@ -25,8 +25,8 @@ enum class DeviceConnectionState { Idle, Connecting, Connected, Disconnecting, W
 
 // A snapshot identity is bounded by the P01 command payload, not by the
 // smaller P07 persistence field.  DeviceId remains the validated persistence
-// value; this type keeps a valid external identity lossless while offering a
-// bounded conversion for callers that need to address settings/MRU state.
+// value; this type keeps a valid external identity lossless. Persistence
+// validates its own bounded DeviceId at the storage boundary.
 class ExternalDeviceId {
 public:
     [[nodiscard]] static std::optional<ExternalDeviceId> TryCreate(std::wstring_view value) {
@@ -42,7 +42,6 @@ public:
     // This conversion deliberately owns its result; View() is the borrowing alternative.
     // cppcheck-suppress returnByReference
     [[nodiscard]] std::wstring ToString() const { return m_value; }
-    [[nodiscard]] std::optional<apc::core::DeviceId> Bounded() const { return apc::core::DeviceId::TryCreate(m_value); }
 
     friend bool operator==(ExternalDeviceId const&, ExternalDeviceId const&) = default;
 
@@ -53,9 +52,8 @@ private:
 };
 
 // Selectors are either exact external ID text, a non-empty matching query, or
-// one of the two stateful selectors. Id() yields a validated internal ID when
-// the text also satisfies the P07 identity bound; IdText() preserves all valid
-// P01 input for transport-compatible handling.
+// one of the two stateful selectors. IdText() preserves all valid P01 input;
+// persistence validates its own P07 identity bound.
 enum class DeviceSelectorKind { Id, Name, Mac, Last, Auto, Alias, Default };
 
 class DeviceSelector {
@@ -80,13 +78,6 @@ public:
     [[nodiscard]] static DeviceSelector Default() { return DeviceSelector(DeviceSelectorKind::Default, {}); }
 
     [[nodiscard]] DeviceSelectorKind Kind() const noexcept { return m_kind; }
-
-    // Returns a validated internal copy, if the external text satisfies the
-    // P07 identity bound. Use IdText() to retain longer P01 input.
-    [[nodiscard]] std::optional<apc::core::DeviceId> Id() const {
-        if (m_kind != DeviceSelectorKind::Id) return std::nullopt;
-        return apc::core::DeviceId::TryCreate(m_value);
-    }
 
     // Returns the exact external ID text, including IDs too large for the
     // validated internal DeviceId P07 bound.

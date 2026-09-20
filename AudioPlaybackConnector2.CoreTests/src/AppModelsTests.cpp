@@ -44,8 +44,6 @@ void TestSelectorNormalizationAndContracts() {
     auto exact = DeviceSelector::ById(L"device-a");
     Check(exact.has_value() && exact->Kind() == apc::app::DeviceSelectorKind::Id,
           "an exact ID selector must retain its selector kind");
-    Check(exact && exact->Id() && exact->Id()->View() == L"device-a",
-          "an exact ID selector must expose a strong ID copy");
     Check(exact && exact->IdText() == L"device-a", "an exact ID selector must preserve external ID text");
     Check(exact && exact->Query().empty(), "an exact ID selector must not expose a text query");
 
@@ -72,14 +70,14 @@ void TestSelectorNormalizationAndContracts() {
     auto longExternalId = DeviceSelector::ById(std::wstring(513, L'x'));
     Check(longExternalId && longExternalId->IdText().size() == 513,
           "an external ID selector must retain valid P01 text beyond the internal DeviceId bound");
-    Check(longExternalId && !longExternalId->Id(),
+    Check(longExternalId && !DeviceId::TryCreate(longExternalId->IdText()),
           "an external ID beyond the settings bound must not masquerade as a validated DeviceId");
 
     auto last = DeviceSelector::Last();
     auto defaultDevice = DeviceSelector::Default();
-    Check(last.Kind() == apc::app::DeviceSelectorKind::Last && !last.Id() && last.Query().empty(),
+    Check(last.Kind() == apc::app::DeviceSelectorKind::Last && last.IdText().empty() && last.Query().empty(),
           "the last selector must have no payload");
-    Check(defaultDevice.Kind() == apc::app::DeviceSelectorKind::Default && !defaultDevice.Id() &&
+    Check(defaultDevice.Kind() == apc::app::DeviceSelectorKind::Default && defaultDevice.IdText().empty() &&
               defaultDevice.Query().empty(),
           "the default selector must have no payload");
 }
@@ -90,8 +88,14 @@ void TestCommandContractsAndNormalizedResults() {
     if (!exact) return;
 
     apc::app::AppResult success{AppResultCode::Success, AppCommandKind::Connect};
-    success.Device = apc::app::DeviceSnapshot{
-        *exact->Id(), L"Headphones", {}, L"Headphones", DeviceConnectionState::Connected, true, true, false};
+    success.Device = apc::app::DeviceSnapshot{*apc::app::ExternalDeviceId::TryCreate(exact->IdText()),
+                                              L"Headphones",
+                                              {},
+                                              L"Headphones",
+                                              DeviceConnectionState::Connected,
+                                              true,
+                                              true,
+                                              false};
     apc::app::AppResult timeout{AppResultCode::TimedOut, AppCommandKind::Connect};
     Check(success.Succeeded() && !timeout.Succeeded(), "normalized result status must distinguish success and timeout");
     Check(success ==
@@ -138,7 +142,7 @@ void TestSnapshotsEventsAndCommandContextAreValueOnly() {
     const auto externalEventId = apc::app::ExternalDeviceId::TryCreate(longEventId);
     AppEvent longConnected = apc::app::DeviceConnectedEvent{*externalEventId};
     Check(externalEventId && std::get<apc::app::DeviceConnectedEvent>(longConnected).Id.View() == longEventId &&
-              !std::get<apc::app::DeviceConnectedEvent>(longConnected).Id.Bounded(),
+              !DeviceId::TryCreate(std::get<apc::app::DeviceConnectedEvent>(longConnected).Id.View()),
           "typed device events must use the P01 external identity rather than the persistence-bounded DeviceId");
     AppEvent activity = apc::app::DeviceActivityChangedEvent{};
     AppEvent inventory = apc::app::DeviceInventoryChangedEvent{};
@@ -156,10 +160,10 @@ void TestSnapshotsEventsAndCommandContextAreValueOnly() {
 void TestExternalSnapshotIdRetainsProtocolLengthWithoutWeakeningDeviceId() {
     const std::wstring longId(513, L'x');
     const auto external = apc::app::ExternalDeviceId::TryCreate(longId);
-    Check(external && external->View() == longId && !external->Bounded(),
+    Check(external && external->View() == longId && !DeviceId::TryCreate(external->View()),
           "external snapshot IDs must retain valid P01 text while exposing no invalid persistence identity");
     const auto bounded = apc::core::DeviceId::TryCreate(L"device-a");
-    Check(bounded && apc::app::ExternalDeviceId{*bounded}.Bounded() == bounded,
+    Check(bounded && DeviceId::TryCreate(apc::app::ExternalDeviceId{*bounded}.View()) == bounded,
           "external snapshot IDs must round-trip bounded DeviceId values");
 }
 

@@ -6,6 +6,8 @@ Owner contracts and verification limits. This is not a whole-application concurr
 
 DeviceService session snapshots are authoritative for connection/busy state. Delayed presentation events cannot overwrite newer sessions, recreate removed sessions or keep terminal sessions busy. Tray labels, order and privacy use one AppSnapshot without another owner read; unavailable captures retain the display and retry. Command admission may independently recheck busy state.
 
+RefreshDevicesAsync retains the shared service State across the co_await; the DeviceWatcher member is created once and destroyed only with that State, never nulled by StopAndReleaseSessions. DeviceWatcher::RefreshAsync fences post-shutdown entry through IsShutdown and a captured watcher generation, and inventory mutation publishes only through the watcher's serialized executor.
+
 After awaited discovery, reread sessions before merging inventory/saved labels. Snapshot captures settings, complete device state and optional startup publication, then rechecks owner versions: success requires an overlapping stable interval. Bounded retries yield unavailable, never a mixed usable snapshot. Presentation diagnostics are independently sampled.
 
 ## Controller event delivery
@@ -77,6 +79,8 @@ Pending/active delivery prevents TTL/pressure eviction even after another client
 CacheNow is monotonic/concurrent; SetCacheTimer runs under cache lock and must not wait, throw or invoke callbacks inline. Defaults are steady_clock/SetThreadpoolTimer. Server owns/drains the native timer. Tests freeze time across real ticks, advance both retention TTLs, require timer idle before another request/Stop, then verify the entire byte budget and reexecution after expiry. No private cache-reading hook.
 
 CoreRuntime compiles the server once; tests link identical production layout without test macros.
+
+Each handled command initializes its own util::RuntimeApartment on the arriving threadpool thread; apartments are never shared across commands. The thread_local active-server pointer is the reentrancy key for in-process handler callbacks: a handler that reenters Stop defers it, and a destructor meeting itself terminates instead of double-draining.
 
 CLI endpoint discovery uses one locally owned waitable timer per attempt, with the connection and
 overall deadlines bounding every wait. A replay also waits on its retained server process handle;

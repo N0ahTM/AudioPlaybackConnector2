@@ -16,7 +16,7 @@ Per-user Windows Bluetooth A2DP sink tray app. WinUI is a presentation adapter; 
 
 `App → ApplicationHost → AppController → DeviceService / SettingsStore`.
 
-- Host composes owners, handles lifecycle and marshals presentation to the UI context.
+- Host composes owners, handles lifecycle and marshals presentation to the UI context. AdaptiveResourceController owns pressure observation, picker residency, retry timers and the resource snapshot; its pure policies stay in CoreRuntime.
 - Controller exposes named use cases, typed results and validated immutable snapshots. It coordinates owners without duplicating their mutable state.
 - DeviceService owns discovery, sessions, connection/reconnect and operation completion. SettingsStore owns schema validation, revisioned settings and atomic persistence.
 - Tray, picker and settings render snapshots and call the controller. Picker/options projections use one AppSnapshot and explicit localized privacy text. No UI device/store access, inventory cache or busy-operation owner.

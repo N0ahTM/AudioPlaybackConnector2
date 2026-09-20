@@ -118,6 +118,7 @@
   <ItemGroup>
     <ClInclude Include="include\pch.h" />
     <ClInclude Include="include\app\ApplicationHost.hpp" />
+    <ClInclude Include="include\app\AdaptiveResourceController.hpp" />
     <ClInclude Include="include\app\AppController.hpp" />
     <ClInclude Include="include\app\AppModels.hpp" />
     <ClInclude Include="include\app\AppPresentation.hpp" />
@@ -201,6 +202,7 @@
       <PrecompiledHeader>Create</PrecompiledHeader>
     </ClCompile>
     <ClCompile Include="src\app\ApplicationHost.cpp" />
+    <ClCompile Include="src\app\AdaptiveResourceController.cpp" />
     <ClCompile Include="src\app\SettingsWindowPresenter.cpp" />
     <ClCompile Include="src\core\ThemeHelper.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="src\services\NotificationService.cpp" />

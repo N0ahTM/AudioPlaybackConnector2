@@ -2,13 +2,10 @@
 
 #include <core/StringResources.hpp>
 
-#include <app/AdaptiveResourcePolicy.hpp>
-#include <app/AdaptiveActionRetryBackoff.hpp>
-#include <app/AdaptiveScheduleState.hpp>
 #include <app/AppController.hpp>
+#include <app/AdaptiveResourceController.hpp>
 #include <control/ControlUiActionGate.hpp>
 #include <app/PowerTransitionCoordinator.hpp>
-#include <app/ResourcePressureMonitor.hpp>
 #include <app/SettingsWindowPresenter.hpp>
 #include <app/SingleInstanceGuard.hpp>
 #include <app/StartupTaskCoordinator.hpp>
@@ -75,7 +72,6 @@ private:
     void InitializeDeviceService();
     void InitializeAppController();
     void InitializeCommandLineControl();
-    void InitializeAdaptiveResources() noexcept;
     void SetupDeviceEvents();
     void TeardownDeviceEvents();
     void HandlePowerSuspend();
@@ -90,9 +86,6 @@ private:
     };
     void ScheduleDeviceVisualRefresh(VisualRefresh refresh);
     bool RefreshDeviceVisuals(UiRefreshScheduler::Flags flags);
-    void HandleResourcePressureSnapshot(ResourcePressureSnapshot snapshot);
-    void EvaluateAdaptiveResources(bool userInteraction, std::wstring_view reason) noexcept;
-    void ScheduleAdaptiveResourceEvaluation(std::optional<AdaptiveResourcePolicy::TimePoint> reevaluateAt) noexcept;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Actions ///////////////////////////////////////////////////////////////////////////////////////////*/
@@ -149,7 +142,6 @@ private:
     static inline UINT s_wmTaskbarCreated = 0;
     static constexpr UINT_PTR c_timerAnimation = 0x41504332;
     static constexpr UINT_PTR c_timerTransientTrayError = 0x41504333;
-    static constexpr UINT_PTR c_timerAdaptiveResources = 0x41504334;
     static constexpr UINT c_messageDrainUiFallbackWork = WM_APP + 2;
     static constexpr UINT c_transientTrayErrorMs = 3000;
     static constexpr UiRefreshScheduler::Flags c_visualRefreshRequested = 1U << 0;
@@ -158,18 +150,9 @@ private:
     std::chrono::steady_clock::time_point m_trayErrorUntil{};
     std::wstring m_transientTrayErrorTooltip;
     bool m_connectingAnimationTimerActive = false;
-    AdaptiveResourcePolicy m_adaptiveResourcePolicy;
-    ResourcePressureValues m_resourcePressureValues;
-    std::unique_ptr<ResourcePressureMonitor> m_resourcePressureMonitor;
-    HPOWERNOTIFY m_powerSavingStatusNotification = nullptr;
-    winrt::Microsoft::UI::Dispatching::DispatcherQueueTimer m_adaptiveResourceFallbackTimer{nullptr};
-    AdaptiveActionRetryBackoff m_adaptiveActionRetryBackoff;
-    AdaptiveScheduleState m_adaptiveScheduleState;
-    mutable std::mutex m_resourceAuthorizationMutex;
-    apc::app::AppSnapshot::ResourceStatusSnapshot m_resourceStatus;
-    std::optional<AdaptiveResourcePolicy::TimePoint> m_lastResourcePressureObservedAt;
-    std::uint64_t m_lastResourcePressureSequence = 0;
-    std::uint64_t m_latestConstrainedResourcePressureSequence = 0;
+    // Assigned once before publishing the controller; retained through its final snapshots.
+    const std::shared_ptr<AdaptiveResourceController> m_adaptiveResources =
+        std::make_shared<AdaptiveResourceController>(m_log);
     ULONG_PTR m_gdiplusToken = 0;
     std::atomic<bool> m_exiting = false;
     std::atomic<bool> m_started = false;

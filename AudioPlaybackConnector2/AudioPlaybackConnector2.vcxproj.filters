@@ -26,6 +26,9 @@
     <ClCompile Include="src\app\ApplicationHost.cpp">
       <Filter>src\app</Filter>
     </ClCompile>
+    <ClCompile Include="src\app\AdaptiveResourceController.cpp">
+      <Filter>src\app</Filter>
+    </ClCompile>
 
     <ClCompile Include="src\app\SettingsWindowPresenter.cpp">
       <Filter>src\app</Filter>
@@ -72,6 +75,9 @@
       <Filter>include</Filter>
     </ClInclude>
     <ClInclude Include="include\app\ApplicationHost.hpp">
+      <Filter>include\app</Filter>
+    </ClInclude>
+    <ClInclude Include="include\app\AdaptiveResourceController.hpp">
       <Filter>include\app</Filter>
     </ClInclude>
     <ClInclude Include="include\app\AppController.hpp">

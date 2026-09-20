@@ -29,7 +29,6 @@ using namespace winrt::Microsoft::UI::Xaml;
 namespace {
 
 constexpr int c_hiddenAnchorCoordinate = -32000;
-constexpr auto c_resourcePressureSnapshotMaximumAge = std::chrono::seconds{75};
 constexpr auto c_mainWindowLoadedTimeout = std::chrono::seconds{15};
 
 using OperationStatus = apc::app::AppActionStatus;
@@ -41,42 +40,6 @@ OperationStatus ToUiActionStatus(apc::control::ControlUiActionGate::Result resul
         case apc::control::ControlUiActionGate::Result::Indeterminate: return OperationStatus::Indeterminate;
     }
     return OperationStatus::Failed;
-}
-
-apc::app::AppSnapshot::ResourceStatusSnapshot::Residency ToAppResidency(ResidencyPolicy value) noexcept {
-    using Residency = apc::app::AppSnapshot::ResourceStatusSnapshot::Residency;
-    switch (value) {
-        case ResidencyPolicy::Cold: return Residency::Cold;
-        case ResidencyPolicy::Warm: return Residency::Warm;
-        case ResidencyPolicy::Hot: return Residency::Hot;
-    }
-    return Residency::Warm;
-}
-
-apc::app::AppSnapshot::ResourceStatusSnapshot::MemoryPressure ToAppMemoryPressure(MemoryPressureState value) noexcept {
-    using MemoryPressure = apc::app::AppSnapshot::ResourceStatusSnapshot::MemoryPressure;
-    switch (value) {
-        case MemoryPressureState::Unknown: return MemoryPressure::Unknown;
-        case MemoryPressureState::Low: return MemoryPressure::Low;
-        case MemoryPressureState::Neutral: return MemoryPressure::Neutral;
-        case MemoryPressureState::High: return MemoryPressure::High;
-    }
-    return MemoryPressure::Unknown;
-}
-
-apc::app::AppSnapshot::ResourceStatusSnapshot::UserActivity ToAppUserActivity(UserActivityState value) noexcept {
-    using UserActivity = apc::app::AppSnapshot::ResourceStatusSnapshot::UserActivity;
-    switch (value) {
-        case UserActivityState::Unknown: return UserActivity::Unknown;
-        case UserActivityState::Available: return UserActivity::Available;
-        case UserActivityState::NotPresent: return UserActivity::NotPresent;
-        case UserActivityState::Busy: return UserActivity::Busy;
-        case UserActivityState::Fullscreen: return UserActivity::Fullscreen;
-        case UserActivityState::Presentation: return UserActivity::Presentation;
-        case UserActivityState::QuietTime: return UserActivity::QuietTime;
-        case UserActivityState::ImmersiveApp: return UserActivity::ImmersiveApp;
-    }
-    return UserActivity::Unknown;
 }
 
 void LogMainWindowAnchor(util::LogSink const& log, HWND hwnd, std::wstring_view reason) noexcept {
@@ -179,6 +142,7 @@ bool ApplicationHost::PerformTeardown(SettingsShutdownMode settingsShutdownMode)
     // handler may be waiting for this UI thread to process show/settings work;
     // Stop() still drains the server after the controller has rejected new work.
     m_commandLineControlServer.RequestStop();
+    m_adaptiveResources->Stop();
     // Persist the window's final placement before closing application admission.
     auto const settingsWindowClosed = m_settingsWindowPresenter.Close();
     m_teardownWindowCloseSucceeded.store(settingsWindowClosed);
@@ -187,23 +151,6 @@ bool ApplicationHost::PerformTeardown(SettingsShutdownMode settingsShutdownMode)
     }
 
     StopMainWindowLoadedWatchdog();
-    if (auto notification = std::exchange(m_powerSavingStatusNotification, nullptr)) {
-        if (!UnregisterPowerSettingNotification(notification)) {
-            m_log.Trace(L"[App] Failed to unregister battery-saver notification: {0}", GetLastError());
-        }
-    }
-    if (m_resourcePressureMonitor) {
-        m_resourcePressureMonitor->Stop();
-        m_resourcePressureMonitor.reset();
-    }
-    if (m_adaptiveResourceFallbackTimer) {
-        try {
-            m_adaptiveResourceFallbackTimer.Stop();
-        } catch (...) {
-        }
-        m_adaptiveResourceFallbackTimer = nullptr;
-    }
-    static_cast<void>(m_adaptiveScheduleState.Supersede());
     if (m_visualRefresh) m_visualRefresh->Stop();
     {
         std::scoped_lock lock(m_uiFallbackWorkMutex);
@@ -232,7 +179,6 @@ bool ApplicationHost::PerformTeardown(SettingsShutdownMode settingsShutdownMode)
         try {
             KillTimer(m_hwnd, c_timerAnimation);
             KillTimer(m_hwnd, c_timerTransientTrayError);
-            KillTimer(m_hwnd, c_timerAdaptiveResources);
             m_connectingAnimationTimerActive = false;
             if (m_windowSubclassInstalled) {
                 if (RemoveWindowSubclass(m_hwnd, SubclassProc, 1)) {
@@ -418,7 +364,11 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept tr
     InitializeDeviceService();
     InitializeAppController();
     InitializeTray();
-    InitializeAdaptiveResources();
+    auto weak = weak_from_this();
+    m_adaptiveResources->Start(m_hwnd, m_dispatcherQueue, m_trayController, [weak](std::function<void()> work) {
+        auto self = weak.lock();
+        return self && self->RunOnUIThread(std::move(work));
+    });
     InitializeNotifications();
     SetupDeviceEvents();
     static_cast<void>(m_deviceService->Start());
@@ -575,8 +525,7 @@ apc::app::AppUiActionResult ApplicationHost::PresentSettings(apc::app::AppComman
 }
 
 apc::app::AppSnapshot::ResourceStatusSnapshot ApplicationHost::ResourceStatus() const {
-    std::scoped_lock lock(m_resourceAuthorizationMutex);
-    return m_resourceStatus;
+    return m_adaptiveResources->Snapshot();
 }
 
 std::uint64_t ApplicationHost::PickerOpenedGeneration() const {
@@ -606,211 +555,6 @@ void ApplicationHost::InitializeCommandLineControl() {
     });
     m_log.Trace(m_commandLineControlServer.IsRunning() ? L"[App] Command line control server started"
                                                        : L"[App] Command line control server retry scheduled");
-}
-
-void ApplicationHost::InitializeAdaptiveResources() noexcept {
-    if (!m_trayController) return;
-    try {
-        auto weak = weak_from_this();
-        m_trayController->SetResourceStateChangedCallback([weak](bool userInteraction) {
-            if (auto self = weak.lock(); self && !self->m_exiting.load()) {
-                self->EvaluateAdaptiveResources(userInteraction, L"tray-ui-state");
-            }
-        });
-
-        m_resourcePressureMonitor =
-            std::make_unique<ResourcePressureMonitor>([weak](ResourcePressureSnapshot const& value) {
-                if (auto self = weak.lock()) {
-                    if (value.Values.IsBackgroundConstrained()) {
-                        std::scoped_lock authorizationLock(self->m_resourceAuthorizationMutex);
-                        self->m_latestConstrainedResourcePressureSequence =
-                            std::max(self->m_latestConstrainedResourcePressureSequence, value.Sequence);
-                    }
-                    self->HandleResourcePressureSnapshot(value);
-                }
-            });
-
-        if (!m_resourcePressureMonitor->Start()) {
-            m_resourcePressureMonitor.reset();
-            m_log.Trace(L"[App] Resource-pressure monitor unavailable; speculative preloading remains disabled");
-        } else {
-            m_powerSavingStatusNotification =
-                RegisterPowerSettingNotification(m_hwnd, &GUID_POWER_SAVING_STATUS, DEVICE_NOTIFY_WINDOW_HANDLE);
-            if (!m_powerSavingStatusNotification) {
-                m_log.Trace(L"[App] Battery-saver notification registration unavailable; polling fallback remains "
-                            L"active");
-            }
-        }
-    } catch (...) {
-        m_resourcePressureMonitor.reset();
-        OutputDebugStringW(L"[AudioPlaybackConnector2] Resource-pressure monitor initialization failed\n");
-    }
-    EvaluateAdaptiveResources(false, L"adaptive-startup");
-}
-
-void ApplicationHost::HandleResourcePressureSnapshot(ResourcePressureSnapshot snapshot) {
-    auto weak = weak_from_this();
-    static_cast<void>(RunOnUIThread([weak, snapshot = std::move(snapshot)]() mutable {
-        auto self = weak.lock();
-        if (!self || self->m_exiting.load() || snapshot.Sequence <= self->m_lastResourcePressureSequence) return;
-
-        self->m_lastResourcePressureSequence = snapshot.Sequence;
-        self->m_resourcePressureValues = snapshot.Values;
-        self->m_lastResourcePressureObservedAt = snapshot.ObservedAt;
-        self->EvaluateAdaptiveResources(false, L"resource-pressure-change");
-    }));
-}
-
-void ApplicationHost::EvaluateAdaptiveResources(bool userInteraction, std::wstring_view reason) noexcept {
-    if (userInteraction) m_adaptiveActionRetryBackoff.Reset();
-
-    try {
-        if (m_exiting.load() || !m_trayController || !m_hwnd || !IsWindow(m_hwnd)) return;
-
-        auto const now = AdaptiveResourcePolicy::Clock::now();
-        const bool snapshotFresh = IsResourcePressureSnapshotFresh(
-            m_lastResourcePressureObservedAt, now, c_resourcePressureSnapshotMaximumAge);
-        auto const pressureValues = snapshotFresh ? m_resourcePressureValues : ResourcePressureValues{};
-        const bool energySaver = pressureValues.EnergySaver == true;
-        const bool backgroundConstrained = pressureValues.IsBackgroundConstrained();
-        bool positiveAuthorizationCurrent;
-        {
-            std::scoped_lock authorizationLock(m_resourceAuthorizationMutex);
-            positiveAuthorizationCurrent = IsPositiveResourceAuthorizationCurrent(
-                m_lastResourcePressureSequence, m_latestConstrainedResourcePressureSequence);
-        }
-        // This capture admits the evaluation. Later pressure observations schedule
-        // another UI evaluation; never hold the fence mutex across picker calls.
-        AdaptiveResourcePolicyInput input{
-            .MemoryPressure = pressureValues.IsMemoryPressure(),
-            .PreloadAllowed = snapshotFresh && positiveAuthorizationCurrent && pressureValues.CanPreload(),
-            .FullscreenOrPresentation = backgroundConstrained && !pressureValues.IsMemoryPressure() && !energySaver,
-            .EnergySaver = energySaver,
-            .UiVisible = m_trayController->IsDevicePickerVisibleOrTransitioning(),
-            .UiPinned = false,
-            .UserInteraction = userInteraction,
-            .UiResourcesLoaded = m_trayController->IsDevicePickerLoaded(),
-            .UiResourcesInitialized = m_trayController->IsDevicePickerPreloadInitialized(),
-        };
-
-        auto decision = m_adaptiveResourcePolicy.Evaluate(input, now);
-        if (decision.ResidencyChanged || decision.BackgroundResidencyChanged ||
-            decision.Action != AdaptiveResourceAction::None) {
-            m_log.Trace(L"[App] Adaptive resources reason={0} residency={1} background={2} action={3} memory={4} "
-                        L"activity={5} energySaver={6}",
-                        reason,
-                        static_cast<int>(decision.Residency),
-                        static_cast<int>(decision.BackgroundResidency),
-                        static_cast<int>(decision.Action),
-                        static_cast<int>(pressureValues.Memory),
-                        static_cast<int>(pressureValues.UserActivity),
-                        energySaver);
-        }
-
-        switch (decision.Action) {
-            case AdaptiveResourceAction::PreloadUi: m_trayController->PreloadDevicePicker(); break;
-            case AdaptiveResourceAction::ReleaseUi: m_trayController->ReleaseDevicePicker(); break;
-            case AdaptiveResourceAction::None: break;
-        }
-
-        auto reevaluateAt = decision.ReevaluateAt;
-        if (snapshotFresh && m_lastResourcePressureObservedAt) {
-            auto const snapshotExpiry = *m_lastResourcePressureObservedAt + c_resourcePressureSnapshotMaximumAge;
-            if (!reevaluateAt || snapshotExpiry < *reevaluateAt) reevaluateAt = snapshotExpiry;
-        }
-        const bool actionSucceeded =
-            decision.Action == AdaptiveResourceAction::None ||
-            (decision.Action == AdaptiveResourceAction::PreloadUi &&
-             m_trayController->IsDevicePickerPreloadInitialized()) ||
-            (decision.Action == AdaptiveResourceAction::ReleaseUi && !m_trayController->IsDevicePickerLoaded());
-        if (!actionSucceeded) {
-            auto const retryAt = AdaptiveResourcePolicy::Clock::now() + m_adaptiveActionRetryBackoff.RecordFailure();
-            if (!reevaluateAt || retryAt < *reevaluateAt) reevaluateAt = retryAt;
-        } else {
-            m_adaptiveActionRetryBackoff.Reset();
-        }
-        apc::app::AppSnapshot::ResourceStatusSnapshot status = {
-            .Evaluated = true,
-            .ForegroundResidency = ToAppResidency(decision.Residency),
-            .BackgroundResidency = ToAppResidency(decision.BackgroundResidency),
-            .SnapshotFresh = snapshotFresh,
-            .PositiveAuthorizationCurrent = positiveAuthorizationCurrent,
-            .PreloadAllowed = input.PreloadAllowed,
-            .UiResourcesLoaded = m_trayController->IsDevicePickerLoaded(),
-            .UiResourcesInitialized = m_trayController->IsDevicePickerPreloadInitialized(),
-            .Memory = ToAppMemoryPressure(pressureValues.Memory),
-            .Activity = ToAppUserActivity(pressureValues.UserActivity),
-            .EnergySaver = pressureValues.EnergySaver,
-        };
-        {
-            std::scoped_lock authorizationLock(m_resourceAuthorizationMutex);
-            status.PositiveAuthorizationCurrent = IsPositiveResourceAuthorizationCurrent(
-                m_lastResourcePressureSequence, m_latestConstrainedResourcePressureSequence);
-            status.PreloadAllowed = input.PreloadAllowed && status.PositiveAuthorizationCurrent;
-            m_resourceStatus = status;
-        }
-        ScheduleAdaptiveResourceEvaluation(reevaluateAt);
-    } catch (...) {
-        OutputDebugStringW(L"[AudioPlaybackConnector2] Adaptive resource evaluation failed\n");
-        auto const retryAt = AdaptiveResourcePolicy::Clock::now() + m_adaptiveActionRetryBackoff.RecordFailure();
-        ScheduleAdaptiveResourceEvaluation(retryAt);
-    }
-}
-
-void ApplicationHost::ScheduleAdaptiveResourceEvaluation(
-    std::optional<AdaptiveResourcePolicy::TimePoint> reevaluateAt) noexcept {
-    auto const scheduleGeneration = m_adaptiveScheduleState.Supersede();
-    if (m_adaptiveResourceFallbackTimer) {
-        try {
-            m_adaptiveResourceFallbackTimer.Stop();
-        } catch (...) {
-        }
-        m_adaptiveResourceFallbackTimer = nullptr;
-    }
-    if (!m_hwnd || !IsWindow(m_hwnd)) {
-        static_cast<void>(m_adaptiveScheduleState.Consume(scheduleGeneration));
-        return;
-    }
-    KillTimer(m_hwnd, c_timerAdaptiveResources);
-    if (!reevaluateAt || m_exiting.load()) {
-        static_cast<void>(m_adaptiveScheduleState.Consume(scheduleGeneration));
-        return;
-    }
-
-    const auto now = AdaptiveResourcePolicy::Clock::now();
-    auto remaining = *reevaluateAt > now ? *reevaluateAt - now : AdaptiveResourcePolicy::Clock::duration::zero();
-    auto delay = std::chrono::ceil<std::chrono::milliseconds>(remaining).count();
-    delay = std::clamp<std::int64_t>(delay, 1, std::numeric_limits<UINT>::max());
-    if (SetTimer(m_hwnd, c_timerAdaptiveResources, static_cast<UINT>(delay), nullptr)) {
-        static_cast<void>(
-            m_adaptiveScheduleState.SetWin32NotBefore(scheduleGeneration, now + std::chrono::milliseconds{delay}));
-        return;
-    }
-
-    OutputDebugStringW(L"[AudioPlaybackConnector2] Win32 adaptive timer unavailable; using dispatcher fallback\n");
-    try {
-        if (!m_dispatcherQueue) return;
-        auto timer = m_dispatcherQueue.CreateTimer();
-        timer.Interval(std::chrono::milliseconds{delay});
-        timer.IsRepeating(false);
-        auto weak = weak_from_this();
-        timer.Tick([weak, scheduleGeneration](auto const& sender, auto const&) noexcept {
-            try {
-                sender.Stop();
-            } catch (...) {
-            }
-            if (auto self = weak.lock();
-                self && !self->m_exiting.load() && self->m_adaptiveScheduleState.Consume(scheduleGeneration)) {
-                self->m_adaptiveResourceFallbackTimer = nullptr;
-                self->EvaluateAdaptiveResources(false, L"adaptive-dispatcher-deadline");
-            }
-        });
-        m_adaptiveResourceFallbackTimer = timer;
-        timer.Start();
-    } catch (...) {
-        m_adaptiveResourceFallbackTimer = nullptr;
-        OutputDebugStringW(L"[AudioPlaybackConnector2] Failed to schedule adaptive resource fallback timer\n");
-    }
 }
 
 void ApplicationHost::HandlePowerSuspend() {
@@ -1272,21 +1016,14 @@ LRESULT CALLBACK ApplicationHost::SubclassProc(
         return DefSubclassProc(hwnd, msg, wParam, lParam);
     }
 
+    if (host->m_adaptiveResources->HandleMessage(msg, wParam)) return 0;
+
     if (msg == WM_POWERBROADCAST) {
         switch (wParam) {
             case PBT_APMSUSPEND: host->HandlePowerSuspend(); return TRUE;
             case PBT_APMRESUMEAUTOMATIC:
-            case PBT_APMRESUMESUSPEND:
-                host->HandlePowerResume();
-                if (host->m_resourcePressureMonitor) {
-                    static_cast<void>(host->m_resourcePressureMonitor->RequestProbe());
-                }
-                return TRUE;
-            case PBT_POWERSETTINGCHANGE:
-                if (host->m_resourcePressureMonitor) {
-                    static_cast<void>(host->m_resourcePressureMonitor->RequestProbe());
-                }
-                return TRUE;
+            case PBT_APMRESUMESUSPEND: host->HandlePowerResume(); return TRUE;
+            case PBT_POWERSETTINGCHANGE: return TRUE;
             default: break;
         }
     }
@@ -1303,13 +1040,6 @@ LRESULT CALLBACK ApplicationHost::SubclassProc(
     if (msg == WM_TIMER && wParam == c_timerTransientTrayError) {
         KillTimer(hwnd, c_timerTransientTrayError);
         host->ScheduleDeviceVisualRefresh(VisualRefresh::Tray);
-        return 0;
-    }
-
-    if (msg == WM_TIMER && wParam == c_timerAdaptiveResources) {
-        if (!host->m_adaptiveScheduleState.ConsumeWin32IfDue(AdaptiveResourcePolicy::Clock::now())) return 0;
-        KillTimer(hwnd, c_timerAdaptiveResources);
-        host->EvaluateAdaptiveResources(false, L"adaptive-deadline");
         return 0;
     }
 

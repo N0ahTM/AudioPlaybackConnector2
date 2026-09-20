@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [switch]$Check,
-    [string]$SourcePath = 'AudioPlaybackConnector2.Control/src/main.cpp',
+    [string]$SourcePath = 'AudioPlaybackConnector2/src/control/CliParser.cpp',
     [string]$DocumentationPath = 'docs/CLI.md'
 )
 

@@ -1,43 +1,32 @@
 # Releasing
 
-This maintainer guide documents the existing GitHub, App Installer, and Microsoft Store pipeline. A release is not created by an ordinary commit to `main`: it requires a semantic-version tag followed by an explicit production promotion.
+Maintainer procedure, not authorization to publish. Ordinary commits do not release: a semantic-version tag creates a candidate; production promotion is explicit. [CONTRIBUTING](../CONTRIBUTING.md#dependency-and-supply-chain-checks) owns license, vulnerability, SBOM and attestation commands/policy.
 
 ## Version sources
 
-- Git tag: `vX.Y.Z`; authoritative for release automation
-- MSIX/file version: `X.Y.Z.0`
-- `CHANGELOG.md`: dated `## [X.Y.Z] - YYYY-MM-DD` section used for GitHub release notes
-- `store/whats-new.json`: matching `version` plus eight localized Store notes
-- Local builds: nearest reachable Git tag (`git describe --tags --abbrev=0`), or explicit `/p:ReleaseTag=vX.Y.Z`
-- `Package.appxmanifest`: `0.0.0.0` template; MSBuild writes the derived version into a generated copy
+| Source | Contract |
+| --- | --- |
+| `vX.Y.Z` Git tag | Authoritative human version decision |
+| MSIX / file version | `X.Y.Z.0`, derived by ReleaseVersion.psm1/MSBuild |
+| CHANGELOG.md | `## [X.Y.Z] - YYYY-MM-DD` provides GitHub notes |
+| store/whats-new.json | Same version; eight localized Store notes |
+| Local build | Nearest reachable tag or explicit `/p:ReleaseTag=vX.Y.Z` |
+| Package.appxmanifest | `0.0.0.0` template; build generates versioned copy |
 
-Do not add another independent version constant. Release workflows pass `ReleaseTag` to MSBuild. If
-`PackageVersion` is also supplied, it must match the version derived from that tag. Fetch tags for local
-builds; source archives without Git metadata require an explicit `ReleaseTag`.
-`scripts/release/ReleaseVersion.psm1` validates the canonical `vX.Y.Z` tag and derives `X.Y.Z.0` for release,
-dry-run, metadata and promotion checks. Components must fit 0–65535; leading zeros, prerelease/build suffixes
-and whitespace are rejected. Run `pwsh ./scripts/test-release-version.ps1` to check this contract locally.
+Fetch tags locally; source archives require ReleaseTag. If PackageVersion is also supplied it must agree. No independent version constants/parsers. Components are 0–65535; reject leading zeros, whitespace and prerelease/build suffixes. Check with `pwsh ./scripts/test-release-version.ps1`.
 
 ## Prepare
 
-- [ ] Choose a version according to Semantic Versioning.
-- [ ] Confirm the previous Microsoft Store submission is no longer being processed.
-- [ ] Move completed entries from `[Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`, then leave an empty `[Unreleased]` section for future work.
-- [ ] Update `store/whats-new.json` to `X.Y.Z` and write concise release notes for `en`, `de`, `fr`, `es`, `ja`, `ko`, `zh-Hans`, and `zh-Hant`.
-- [ ] Use `/p:ReleaseTag=vX.Y.Z` for candidate builds before the tag exists; leave the manifest template unchanged.
-- [ ] Update README, usage, CLI, installation, troubleshooting, screenshots, permissions, and privacy statements only where behavior changed.
-- [ ] Run `pwsh ./scripts/validate-localizations.ps1`.
-- [ ] Run `pwsh ./scripts/validate-markdown-links.ps1`.
-- [ ] Run `pwsh ./scripts/release/validate-release-metadata.ps1 -Version X.Y.Z`.
-- [ ] Push the preparation commit to `main` and wait for Build and CodeQL to pass.
-- [ ] Run the **Release Dry Run** workflow with `semver=X.Y.Z`; inspect its x64/ARM64 packages and summary.
-- [ ] Smoke-test important changed behavior from the dry-run package on x64 and, when architecture-sensitive, ARM64 Windows.
-
-The Store notes validator rejects missing text and notes longer than 1,500 characters. Keep Store notes user-focused; implementation details belong in the changelog.
+- [ ] Choose SemVer; ensure previous Store submission is no longer processing.
+- [ ] Move completed Unreleased entries to the dated version; leave empty Unreleased. Update Store version and notes for en/de/fr/es/ja/ko/zh-Hans/zh-Hant (nonempty, at most 1,500 characters each).
+- [ ] Update behavior-affected docs, screenshots, permissions/privacy only. Candidate builds use `/p:ReleaseTag=vX.Y.Z`; leave manifest template unchanged.
+- [ ] Run `pwsh ./scripts/validate-localizations.ps1`, `pwsh ./scripts/validate-markdown-links.ps1`, and `pwsh ./scripts/release/validate-release-metadata.ps1 -Version X.Y.Z`.
+- [ ] Push preparation to main; Build and CodeQL must pass.
+- [ ] Run **Release Dry Run**, `semver=X.Y.Z`; inspect x64/ARM64 packages/summary and smoke-test changed behavior on x64 and architecture-sensitive behavior on ARM64.
 
 ## Create the immutable release candidate
 
-From an up-to-date clean `main`:
+From clean, current main:
 
 ```powershell
 git switch main
@@ -46,54 +35,34 @@ git tag -a vX.Y.Z -m "AudioPlaybackConnector2 X.Y.Z"
 git push origin vX.Y.Z
 ```
 
-The tag-triggered **Release** workflow validates metadata, builds and verifies signed x64/ARM64 GitHub packages and an unsigned Store upload, then creates a draft GitHub release. It does not publish the draft or submit to the Store.
+Tag-triggered **Release** validates metadata, builds/verifies signed GitHub x64/ARM64 packages and unsigned Store upload, then creates a draft. It does not publish or submit to Store.
 
-Review the draft:
+Review:
 
-- [ ] Release body is the correct changelog section.
-- [ ] `.msixbundle`, `.appinstaller`, `.cer`, and dependency assets are present.
-- [ ] Artifact version is `X.Y.Z.0` and contains x64 and ARM64.
-- [ ] Each application MSIX contains `LICENSE` and `THIRD_PARTY_NOTICES.md` at its root, matching the release source.
-- [ ] The tag points to the intended `main` commit.
+- [ ] Correct changelog body, tag commit, X.Y.Z.0 and both architectures.
+- [ ] Bundle, appinstaller, certificate, exact framework dependencies and `AudioPlaybackConnector2_SBOM.zip` present.
+- [ ] Each embedded app MSIX has LICENSE and THIRD_PARTY_NOTICES.md exactly once, SHA256-identical to checkout. Both channels enforce this (`pwsh ./scripts/test-package-notices.ps1`).
+- [ ] Shared app/CLI EXE bytes across channels, separate identities; complete SBOM/hash and attestation gates pass. Offline fixtures alone do not verify signed attestations.
 
-Never move or recreate a published release tag. Fix source or metadata with a newer version.
-
-The bundle verifier checks `LICENSE` and `THIRD_PARTY_NOTICES.md` in every embedded application package.
-Each must occur exactly once and its SHA256 must match the release checkout. Both GitHub and Store bundle
-verification enforce this requirement. Run `pwsh ./scripts/test-package-notices.ps1` for its local regression tests.
+Never move/recreate a published tag; source/metadata corrections require a new version.
 
 ## Publish
 
-Run the **Release** workflow manually with:
+Manually run **Release** with existing `tag=vX.Y.Z`, `store_only=false`. The workflow verifies immutable tag artifacts, publishes GitHub, verifies public assets, deploys App Installer and submits the Store-linked package with localized notes after replacing older Partner Center packages. Promotion must use verified bytes; the ordinary two-channel build reuses native outputs for packaging.
 
-- `tag`: the existing `vX.Y.Z` tag
-- `store_only`: `false`
-
-The workflow reuses and verifies the immutable tag artifact, publishes the GitHub release, verifies public assets, deploys the App Installer feed, builds the Store-linked upload, replaces older Partner Center packages, applies localized release notes, and commits the submission to certification.
-
-If public asset or App Installer deployment fails after publication, the workflow returns the GitHub release to draft. Correct the failure before promoting again.
+A public-asset/feed deployment failure returns the GitHub release to draft; correct it before retrying. Store certification is asynchronous: successful submission is not certification success.
 
 ## Verify after publication
 
-- [ ] GitHub release is public and not marked prerelease.
-- [ ] Public assets download successfully.
-- [ ] The stable `.appinstaller` resolves to `X.Y.Z.0`.
-- [ ] Upgrade a previous GitHub App Installer installation.
-- [ ] Install or update through Microsoft Store after certification completes.
-- [ ] Check the Store listing and localized “What’s new” text.
-- [ ] Confirm diagnostics and About show the expected version.
-- [ ] Close fixed issues and optionally publish a GitHub Discussion announcement.
-
-Microsoft certification is asynchronous. A successful workflow means the submission was committed, not that certification already passed.
+- [ ] Public non-prerelease GitHub release and downloadable assets.
+- [ ] Stable appinstaller resolves X.Y.Z.0; upgrade a previous GitHub installation.
+- [ ] Store install/update after certification, listing and localized What's new.
+- [ ] Diagnostics/About version; close fixed issues. A Discussion announcement is optional.
 
 ## Store-only retry
 
-Use `store_only=true` only when the GitHub release is already public and the Store submission alone must be retried. Use the same tag. The workflow rebuilds the Store-linked package from that exact tag with current Store verification logic, reads `store/whats-new.json` from that tag, and does not republish GitHub assets or the App Installer feed.
-
-Do not use Store-only mode to change application code, package contents, or release notes that should have been part of the immutable tag. Create a new patch release instead.
+`store_only=true` requires an already-public GitHub release and the same tag. Rebuild Store-linked package from that tag with current verification logic; read store/whats-new.json from the tag. Do not republish GitHub/feed or change product code/content/notes; those require a patch release.
 
 ## Secret maintenance
 
-Production release uses `SIGNING_CERTIFICATE_PFX`, `SIGNING_CERTIFICATE_PASSWORD`, `AZURE_AD_TENANT_ID`, `SELLER_ID`, `AZURE_AD_APPLICATION_CLIENT_ID`, and `AZURE_AD_APPLICATION_SECRET`. Store credentials belong only in GitHub environment or repository secrets. Never put their values in source, logs, release artifacts, local `.env` files committed to Git, or documentation.
-
-Use the **Store Access Check** workflow after rotating Store credentials. Rotate a compromised credential immediately and review workflow logs before another release.
+Production secrets: SIGNING_CERTIFICATE_PFX, SIGNING_CERTIFICATE_PASSWORD, AZURE_AD_TENANT_ID, SELLER_ID, AZURE_AD_APPLICATION_CLIENT_ID, AZURE_AD_APPLICATION_SECRET. Keep credentials in GitHub environment/repository secrets, never source/logs/artifacts/committed .env/docs. After Store credential rotation run **Store Access Check**. Rotate compromised credentials immediately and review logs before release.

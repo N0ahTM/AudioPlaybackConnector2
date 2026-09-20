@@ -1,74 +1,56 @@
 # Architecture
 
-AudioPlaybackConnector2 is a per-user Windows tray application. WinUI 3 provides settings and picker surfaces, while Bluetooth connection state and command use cases are kept behind application and core interfaces so most behavior can be built and tested without constructing WinUI controls.
+Per-user Windows Bluetooth A2DP sink tray app. WinUI is a presentation adapter; Store/App Installer owns updates. Detailed concurrency contracts and verification limits live in [INVARIANTS](INVARIANTS.md); build commands in [CONTRIBUTING](../CONTRIBUTING.md).
 
 ## Projects
 
-- `AudioPlaybackConnector2`: packaged desktop executable, application coordination, Bluetooth services, tray UI, WinUI views, localization, settings, and diagnostics; Store or Windows App Installer owns updates outside the process
-- `AudioPlaybackConnector2.Control`: `apc2ctl.exe` parser and trusted named-pipe client
-- `AudioPlaybackConnector2.CoreRuntime`: runtime boundary used by non-UI core code
-- `AudioPlaybackConnector2.CoreTests`: native regression tests, including application coordination, command handling, settings, device behavior, and runtime boundaries
-- `AudioPlaybackConnector2 (Package)`: MSIX packaging for x64 and ARM64
+| Project | Responsibility |
+| --- | --- |
+| `AudioPlaybackConnector2` | Desktop app, composition, WinUI/tray/resources |
+| `AudioPlaybackConnector2.CoreRuntime` | Shared production application/core/platform behavior; no WinUI |
+| `AudioPlaybackConnector2.CoreTests` | Native tests linking that same runtime |
+| `AudioPlaybackConnector2.Control` | `apc2ctl.exe`: console I/O, correlation and trusted pipe transport |
+| `AudioPlaybackConnector2 (Package)` | x64/ARM64 MSIX packaging |
 
 ## Runtime flow
 
-1. `ApplicationHost` initializes settings, strings, services, command handling, and UI controllers for the current user.
-2. `DeviceService` and its device/session types own Bluetooth discovery and connection facts.
-3. `AppController` executes user-level commands and returns explicit result models.
-4. Tray and WinUI presentation code consume snapshots and results rather than owning Bluetooth behavior.
-5. `apc2ctl` validates command-line input, authenticates the same-user app endpoint, sends one typed request, and formats the typed response.
+`App → ApplicationHost → AppController → DeviceService / SettingsStore`.
+
+- Host composes owners, handles lifecycle and marshals presentation to the UI context.
+- Controller exposes named use cases, typed results and validated immutable snapshots. It coordinates owners without duplicating their mutable state.
+- DeviceService owns discovery, sessions, connection/reconnect and operation completion. SettingsStore owns schema validation, revisioned settings and atomic persistence.
+- Tray, picker and settings render snapshots and call the controller. Picker/options projections use one AppSnapshot and explicit localized privacy text. No UI device/store access, inventory cache or busy-operation owner.
+- `ControlCommandAdapter` validates wire grammar and calls named controller methods; stateless `FormatResponse` formats their result. Universal commands stay at the external protocol boundary.
 
 ## Boundaries
 
-- UI code calls named application methods and renders snapshots; it must not become a second owner of connection or settings state.
-- Device-picker rows and options are pure projections of one `AppSnapshot`, with localization passed as a value. The picker and tray do not hold a device service or settings store. Picker actions call the controller directly; the tray owns only flyout close/navigation callbacks. There is no separate UI inventory cache or refresh-generation owner.
-- Device-picker alias and default-device actions call the explicit `AppController` methods. Tray and picker retain weak controller references; each action acquires a temporary strong reference. The host owns the controller lifetime, and these actions have no separate command-wrapper or forwarding callback.
-- Primary tray activation calls the weak controller endpoint directly with detached completion. It cannot wait for a picker event on its own UI dispatcher. Tray settings and default-toggle actions use the same endpoint; the host supplies only exit/help presentation callbacks.
-- Tray connection actions and notification reconnect actions call named controller methods with detached completion. `ApplicationHost` no longer constructs general commands for these actions or passes them through a general tray command dispatcher; it retains visual rendering while `UiRefreshScheduler` owns coalescing, dispatch retries and timer lifetime.
-- Tray icon state and tooltip use one captured `AppSnapshot`. Labels are already resolved by the controller; the tooltip only applies localized privacy text. Rendering neither queries the device service nor reads settings again.
-- Core and application behavior must remain testable without WinUI construction. The CoreRuntime boundary verifier protects this constraint.
-- Settings persistence owns schema validation and atomic storage. Callers use the current typed model rather than carrying legacy-format concerns through the application.
-- Settings-window and picker settings actions use `AppController` directly. Its snapshot carries the captured settings value; the store remains the only mutable settings owner. Settings commits feed a revisioned device policy on the device context and presentation changes through the existing application event stream.
-- The controller records each native connected transition in the store before notifying presentation observers. The host does not persist connection history or reapply reconnect policy. Shutdown drains admitted connection persistence, including connections initiated outside a controller command.
-- At startup, the host calls `RestoreStartupConnections` once. The controller selects targets from one settings snapshot, prioritizes recent connections, and submits them to the device owner. The returned status also determines whether the host shows the ordinary app-started notification; no separate target probe or second settings read is needed.
-- The settings window uses the application endpoint for Windows startup actions and observes startup state in the application snapshot. The internal startup owner serializes intent, OS calls, persistence and notifications; suspended OS calls retain internal state without retaining its facade.
-- Command transport is per-user and validates its peer. Protocol changes require compatibility consideration, bounded payloads, and regression tests.
-- `CliParser` owns pure wide-argument parsing and local error formatting. It is compiled once in CoreRuntime and tested without starting the app or contacting a pipe. The control executable owns console I/O, correlation IDs and transport. Parser tests lock down requests, UTF-16 values, selector conflicts, escaping, diagnostics, exit codes and the complete help text.
-- CLI11 is confined to the parser implementation. The normalization pass preserves the CLI's explicit `--` value escapes and substitutes generated indexes for opaque UTF-16 values. CLI11 delivers option callbacks in argument order; product validation keeps the existing first-error text and exit code. No user value becomes library grammar, and parser state is local to one call.
-- `ControlCommandAdapter` validates the wire grammar and directly selects an explicit controller method. Response formatting uses the original request and application result. The application model has no universal command object or controller dispatch switch.
-- Each controller method selects its own owner calls and required inputs. Private admission handling owns the active-call lease, cancellation/deadline preflight and exception-to-result boundary. Only read-only queries may retry after a newer settings revision; actions with side effects execute once and reread committed values for their results.
-- `SnapshotAndSubscribe` returns the initial application snapshot, an event-revision watermark and the owned subscription. Capture validates the settings, device and optional startup-owner versions, then registers only if the publication revision stayed unchanged. The host serializes notification handling on its UI context and rejects older revisions. Settings, device and startup-task changes use the same event stream.
-- The adapter's stateless `FormatResponse` function owns response rendering. Golden output fixtures call that production function without constructing a controller; adapter integration tests verify delegation, localization and privacy options separately.
-- Queries return one validated application snapshot and derive their result fields from it. The adapter does not obtain a second fallback snapshot. Snapshot source versions identify the captured settings and device revisions; presentation generations also advance when device facts or delayed picker acknowledgements change the observed state.
-- Localization keys are defined by English resources. Selected locales overlay English at runtime.
-- Long-running or asynchronous device actions have an explicit owner and cancellation/lifetime boundary.
+- Each controller use case selects its dependencies; admission leases, cancellation/deadlines and exception conversion are private boundaries. Only read-only queries may retry a changed settings revision; side effects execute once.
+- Snapshots validate settings/device/startup-owner versions. Queries format the same capture without fallback reads. Resource diagnostics are independently sampled.
+- `SnapshotAndSubscribe` closes the capture/subscription gap and returns an event watermark. Consumers serialize initial state/events and reject old revisions. The controller owns its publication fence, not another device history map.
+- Native connected transitions persist name, preferences and history before notification; settings policies reach the device owner by revision. Host performs neither persistence nor policy selection. `RestoreStartupConnections` uses one snapshot, ordered by recent history.
+- Tray/picker callbacks hold weak controller references. Tray activation does not wait on its own UI dispatcher. Final settings-window placement commits before application admission closes.
+- Host requests transport cancellation before controller drain. `UiRefreshScheduler` owns coalescing, retry timer and callback lifetime; host supplies Request/Stop and rendering.
+- CLI authenticates the same-user endpoint. `CliParser` is pure wide-argument parsing in CoreRuntime; CLI11 stays in its implementation. Value/escape normalization preserves opaque UTF-16, ordered validation, diagnostic text and exit codes.
+- Host owns StringResources; English is canonical with locale overlays. Read-only consumers retain text lifetime, not the application. Language publication precedes UI relocalization.
 
 ## Thread ownership
 
-The normal app creates two dedicated background workers in addition to its UI thread: one SettingsStore
-persistence worker and one worker in the logger's private spdlog pool. This is a source-level ownership count,
-not the process's total thread count. Windows, WinUI, COM and Bluetooth may create additional runtime threads.
-
-| Work | Execution owner |
+| Work | Context |
 | --- | --- |
-| Windows, tray, picker and settings rendering | UI dispatcher |
-| Settings writes and flush | One SettingsStore `jthread` |
-| Queued log output and rotation | One private spdlog worker |
-| Pipe I/O, resource monitoring, resume/refresh timers and deferred cleanup | Shared Windows threadpool |
-| Device start/open/close, picker discovery and diagnostic collection | WinRT background scheduling |
+| Windows, tray, picker, settings, notification state | UI dispatcher |
+| Settings persistence | One SettingsStore `jthread` |
+| Logging | One worker in a private spdlog pool |
+| Pipe I/O, monitoring, recovery/refresh timers, deferred cleanup | Shared Windows threadpool |
+| Device start/open/close, discovery and diagnostics | WinRT background scheduling |
 
-DeviceService, AppController and StartupTaskCoordinator serialize their state without creating a dedicated
-thread for each owner or device. Thread-ID fields identify the current drainer and are not thread allocations.
-Timer and threadpool-I/O registrations also do not imply one permanently allocated thread per registration.
-The two dedicated I/O workers keep slow settings storage and slow log output from blocking each other or the UI.
+DeviceService, AppController and StartupTaskCoordinator serialize state without dedicated per-owner threads. Timer registrations and drainer IDs are not dedicated threads. Windows/WinUI/COM/Bluetooth may create additional threads; two workers plus UI is not a total process-thread count.
 
 ## Dependency and code rules
 
-- A source file includes the declarations it uses. `pch.h` is a compilation cache, not an undeclared dependency contract.
-- Build in MSVC's C++26 draft mode (`/std:c++latest`, v145/14.51 or newer). Prefer the standard library when it expresses the requirement clearly; use Windows, WinRT, or WIL facilities for Windows-specific ownership and APIs.
-- Introduce a helper, class, or interface only when it names a real responsibility, lifetime, invariant, or test boundary.
-- Keep one primary non-trivial type per file when that improves navigation; tiny closely related value types may remain together.
-- Avoid forwarding the same immutable context through many layers. Give stable shared state one clear owner and pass references, pointers, or focused views where lifetime is explicit.
-- Choose static state only when there can be exactly one process-wide instance and test isolation remains clear. Prefer instances for mutable state, replaceable dependencies, and independently testable behavior.
+- Use C++26 draft `/std:c++latest`, v145/14.51+; direct includes, with PCH only as cache.
+- Keep one mutable owner and explicit async cancellation/shutdown. No foreign calls or blocking work under owner locks; consult documented platform exceptions in INVARIANTS.
+- Prefer supported standard facilities and WIL/WinRT at Windows boundaries. New abstractions need a real responsibility, invariant, lifetime or test/platform boundary.
+- One primary substantial type per file; small related values may remain together. Pass focused values/references rather than unchanged context through forwarding layers.
+- Mutable state and replaceable dependencies belong to instances; process-wide constants may be static.
 
-This document describes the current high-level boundaries, not a second backlog. Planned changes belong in issues or the local untracked plan; accepted user-visible changes belong in the changelog.
+Current contracts belong here/in INVARIANTS; remaining work belongs in the local plan, user-visible history in CHANGELOG.

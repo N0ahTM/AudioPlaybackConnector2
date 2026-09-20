@@ -1,24 +1,15 @@
 # Fehlerübersicht – Unreleased
 
-Technische Arbeitsliste für den nächsten, noch nicht versionierten Release. Die Nummern 01–50 entsprechen
-der eingebrachten Sammlung. Sie behaupten weder, dass alle Probleme im veröffentlichten Release 0.9.1
-bestanden, noch dass jeder historische Fix im aktuellen Stand vollständig geprüft ist.
+Technische Arbeitsliste, keine Behauptung über Fehler in Release 0.9.1 oder vollständig verifizierte historische Fixes. IDs 01–50 entsprechen der eingebrachten Sammlung; neue Befunde bekommen fortlaufende IDs. Öffentliche Änderungen stehen im [Changelog](../CHANGELOG.md).
 
 ## Status und Pflege
 
-- **Offen:** bestätigter Fehler ohne abgeschlossene Behebung.
-- **In Arbeit:** konkrete Analyse oder Umsetzung läuft.
-- **Prüfung offen:** gemeldete Behebung; aktueller Befund, Fix oder erforderliche Verifikation noch zu prüfen.
-- **Abgeschlossen:** Behebung und passende Prüfung sind belegt; Nachweis und Fix-Commit stehen am Eintrag.
+- **Offen:** bestätigter, nicht behobener Fehler.
+- **In Arbeit:** Analyse/Umsetzung läuft.
+- **Prüfung offen:** gemeldeter Befund/Fix noch nicht am aktuellen Stand verifiziert.
+- **Abgeschlossen:** aktueller Codepfad, Fix-Commit und passender Test/Prüfbefehl mit Ergebnis belegt.
 
-Ein vorhandener Commit allein schließt keinen Eintrag. Beim Abschluss werden aktueller Codepfad,
-Regressionstest beziehungsweise reproduzierbarer Prüfbefehl und dessen Ergebnis ergänzt. Bei einer
-Regression wird derselbe Eintrag wieder geöffnet. „Vereinfachung“ bezeichnet keine nachgewiesene Fehlfunktion.
-Neue Befunde erhalten die nächste freie ID. Behobene Einträge bleiben für die Release-Zuordnung erhalten.
-
-Die folgenden historischen Zeilen sind zunächst gemeldete Befunde und Behebungsreferenzen. Noch fehlende
-Prüfnachweise sind ausdrücklich keine erfolgreichen Tests. Die öffentliche Zusammenfassung steht im
-[Changelog](../CHANGELOG.md); bekannte Einschränkungen werden vor Veröffentlichung daraus abgeleitet.
+Ein Commit allein ist kein Abschluss. Regressionen öffnen dieselbe ID wieder; behobene Einträge bleiben für Release-Zuordnung erhalten. Vereinfachungen sind keine nachgewiesenen Fehler.
 
 ## Settings, Shutdown und Persistenz
 

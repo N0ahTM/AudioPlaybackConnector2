@@ -94,7 +94,6 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandProtocol.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\ControlTargetMatcher.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\AudioConnectionService.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceConnectionInfo.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceId.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DevicePickerTypes.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\ui\DevicePickerViewState.hpp" />

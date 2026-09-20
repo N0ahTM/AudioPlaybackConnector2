@@ -159,9 +159,6 @@
     <ClInclude Include="include\core\TrayTooltipBuilder.hpp">
       <Filter>include\core</Filter>
     </ClInclude>
-    <ClInclude Include="include\core\DeviceConnectionInfo.hpp">
-      <Filter>include\core</Filter>
-    </ClInclude>
     <ClInclude Include="include\services\NotificationService.hpp">
       <Filter>include\services</Filter>
     </ClInclude>

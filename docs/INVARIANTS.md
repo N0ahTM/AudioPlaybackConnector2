@@ -32,6 +32,8 @@ Tests cover ordered/reentrant delivery, capture/reset/destruction races, capture
 | Subscription activity and in-flight admission | The same event mutex | Reset disables admission before waiting for an active callback; reset on the drainer never waits on itself |
 | Handler captures and current delivery | Shared registration and the one active drainer | Capture destruction happens outside the mutex; reentrant registration and reset are allowed |
 
+`UiRefreshCoalescer::m_mutex` and the emergency logger's `TailLock` are leaf locks: they protect only local state and are not held across callbacks. SAL marks their guarded fields; the emergency ring methods also require that the caller does not hold `TailLock`. The crash scratch buffer is separately owned by the `Dumping` gate. A focused MSVC ConcurrencyCheck probe reports C26130 for an intentionally unguarded write while the annotated production owners pass; this does not replace the full lock/callback audit.
+
 ## Settings persistence
 
 RestoreStartupConnections is an admitted controller action: one validated settings capture, each eligible saved device once, recent-history order then saved order. Global startup enables all saved devices; otherwise use per-device policy. Unknown history is not a target; Submitted means handoff, not connection success. Stop rejects later calls and drains admitted work.

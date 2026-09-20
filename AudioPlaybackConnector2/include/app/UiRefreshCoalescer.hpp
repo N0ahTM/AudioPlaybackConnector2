@@ -1,5 +1,7 @@
 #pragma once
 
+#include <sal.h>
+#include <concurrencysal.h>
 #include <cstdint>
 #include <mutex>
 
@@ -47,8 +49,9 @@ public:
     }
 
 private:
+    // Leaf lock: protects only this state; never nested and never held across callbacks.
     mutable std::mutex m_mutex;
-    Flags m_pendingFlags = 0;
-    bool m_drainScheduled = false;
-    bool m_cancelled = false;
+    _Guarded_by_(m_mutex) Flags m_pendingFlags = 0;
+    _Guarded_by_(m_mutex) bool m_drainScheduled = false;
+    _Guarded_by_(m_mutex) bool m_cancelled = false;
 };

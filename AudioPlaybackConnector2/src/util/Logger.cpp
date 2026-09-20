@@ -1,4 +1,6 @@
 #include <util/Logger.hpp>
+#include <sal.h>
+#include <concurrencysal.h>
 
 #define SPDLOG_WCHAR_FILENAMES
 #define SPDLOG_DISABLE_DEFAULT_LOGGER
@@ -160,7 +162,7 @@ struct EmergencyState {
 
     explicit EmergencyState(std::filesystem::path path) : Path(std::move(path)) {}
 
-    void Add(std::string_view text) noexcept {
+    _Requires_lock_not_held_(TailLock) void Add(std::string_view text) noexcept {
         while (!text.empty() && (text.back() == '\r' || text.back() == '\n'))
             text.remove_suffix(1);
         const bool truncated = text.size() > 1022;
@@ -184,7 +186,7 @@ struct EmergencyState {
         ReleaseSRWLockExclusive(&TailLock);
     }
 
-    bool Snapshot(std::size_t& count) noexcept {
+    _Requires_lock_not_held_(TailLock) bool Snapshot(std::size_t& count) noexcept {
         if (!TryAcquireSRWLockExclusive(&TailLock)) return false;
         count = Count;
         const auto first = Count == Lines.size() ? Next : 0;
@@ -195,11 +197,12 @@ struct EmergencyState {
     }
 
     const std::filesystem::path Path;
+    // Leaf lock: only the ring buffer; scratch output is owned by the Dumping gate.
     SRWLOCK TailLock = SRWLOCK_INIT;
-    std::array<Line, 100> Lines{};
+    _Guarded_by_(TailLock) std::array<Line, 100> Lines {};
     std::array<Line, 100> Scratch{};
-    std::size_t Next = 0;
-    std::size_t Count = 0;
+    _Guarded_by_(TailLock) std::size_t Next = 0;
+    _Guarded_by_(TailLock) std::size_t Count = 0;
     std::atomic_flag Dumping = ATOMIC_FLAG_INIT;
 };
 

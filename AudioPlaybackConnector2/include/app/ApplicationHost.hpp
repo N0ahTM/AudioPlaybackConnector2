@@ -71,7 +71,6 @@ private:
     void InitializeAppController();
     void InitializeCommandLineControl();
     void SetupDeviceEvents();
-    void TeardownDeviceEvents();
     void HandlePowerSuspend();
     void HandlePowerResume();
     [[nodiscard]] bool RefreshTrayVisualState(bool forceErrorWhenIdle = false,
@@ -130,7 +129,7 @@ private:
     std::wstring m_appliedLanguage;
     std::optional<bool> m_appliedBackdrop;
     SingleInstanceGuard m_singleInstanceGuard;
-    static inline UINT s_wmTaskbarCreated = 0;
+    UINT m_taskbarCreatedMessage = 0;
     static constexpr UINT_PTR c_timerAnimation = 0x41504332;
     static constexpr UINT_PTR c_timerTransientTrayError = 0x41504333;
     static constexpr UINT c_transientTrayErrorMs = 3000;

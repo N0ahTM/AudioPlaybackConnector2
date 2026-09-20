@@ -169,7 +169,7 @@ bool ApplicationHost::PerformTeardown(SettingsShutdownMode settingsShutdownMode)
     }
     m_commandLineControlServer.Stop();
     m_controlCommandAdapter.reset();
-    TeardownDeviceEvents();
+    m_appEventSubscription.Reset();
     m_appController.reset();
     if (m_hwnd) {
         try {
@@ -394,7 +394,7 @@ void ApplicationHost::OnMainWindowLoaded(Controls::Grid const& root) noexcept tr
     }
     ScheduleDeviceVisualRefresh(VisualRefresh::Tray);
 
-    s_wmTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
+    m_taskbarCreatedMessage = RegisterWindowMessageW(L"TaskbarCreated");
     util::crash::CheckAndPromptCrashReports(m_log.Path(), *m_strings);
     m_log.Trace(L"[App] Initialization complete");
 } catch (winrt::hresult_error const& ex) {
@@ -734,10 +734,6 @@ void ApplicationHost::SetupDeviceEvents() {
     ScheduleDeviceVisualRefresh(VisualRefresh::TrayAndInventory);
 }
 
-void ApplicationHost::TeardownDeviceEvents() {
-    m_appEventSubscription.Reset();
-}
-
 void ApplicationHost::HandleAppEvent(apc::app::AppController::EventNotification const& notification) {
     if (m_exiting.load() || !m_appController || notification.Revision <= m_lastAppEventRevision) return;
     m_lastAppEventRevision = notification.Revision;
@@ -888,7 +884,7 @@ LRESULT CALLBACK ApplicationHost::SubclassProc(
         return 0;
     }
 
-    if (s_wmTaskbarCreated && msg == s_wmTaskbarCreated) {
+    if (host->m_taskbarCreatedMessage && msg == host->m_taskbarCreatedMessage) {
         if (host->m_trayController) {
             host->m_trayController->Reregister();
             host->m_trayController->OnThemeChanged();

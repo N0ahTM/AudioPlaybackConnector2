@@ -56,8 +56,6 @@ public:
     [[nodiscard]] ResidencyPolicy BackgroundResidency() const noexcept;
 
 private:
-    void Initialize(TimePoint now, bool pressureActive) noexcept;
-    void ResetTemporalStateAfterClockRollback(TimePoint now, bool pressureActive) noexcept;
     void SetBackgroundResidency(ResidencyPolicy residency) noexcept;
     void UpdateBackgroundResidency(AdaptiveResourcePolicyInput const& input, TimePoint now) noexcept;
     [[nodiscard]] std::optional<TimePoint>

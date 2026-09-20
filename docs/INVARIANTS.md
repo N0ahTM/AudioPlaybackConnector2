@@ -188,3 +188,22 @@ Coalescer owns flags+one reservation through Request/BeginDrain/CompleteDrain/Ca
 Stop closes admission, invalidates ticket, clears flags and disarms. Drain only native admission, never UI or admitted rendering. Native callbacks retain state before disassociating, so blocked dispatch may outlive facade; late failures cannot rearm. UI callbacks hold weak scheduler. Admitted rendering may finish; host independently checks exit state.
 
 Tests use production timer/injected UI queue for merge, render-time requests, duplicates, dispatch/render retries, exceptions, reentrant Stop, Request/Stop races, queued post-destruction work and destruction during blocked native dispatch. Interactive WinUI/tray acceptance remains separate.
+
+## Adaptive resource policy transitions
+
+AdaptiveResourceController owns and serializes the pure policy, retry backoff and schedule state on UI. Policy evaluation alone seeds missing time marks; startup needs no separate initialization path. Schedule generations reject superseded callbacks, and failed platform actions use the separate bounded retry state.
+
+| Input / current state | Transition and timing |
+| --- | --- |
+| First evaluation | Keep configured initial residency; begin pressure or healthy timing from this evaluation. Apply ordinary transitions, including zero delays. |
+| Clock moves backward | Preserve residency; discard pressure, healthy, preload and interaction time marks. Evaluate current input with fresh timing. |
+| Memory pressure | Background becomes Cold immediately. |
+| Fullscreen/presentation or energy saving | Background becomes Cold after continuous BackgroundPressureToColdDelay. |
+| Cold, pressure absent | Become Warm after ColdToWarmDelay; begin preload timing at that transition if allowed. |
+| Warm, preload allowed continuously | Become Hot after WarmToHotDelay. Loss of permission restarts preload timing. |
+| Hot, preload disallowed and resources absent/uninitialized | Become Warm; otherwise retain loaded Hot resources until pressure changes residency. |
+| Visible/pinned UI or interaction hold | Effective residency is Hot; background transitions still proceed. Release is deferred until foreground demand ends. |
+| Effective Hot, resources absent/uninitialized | Request preload for foreground demand, or when background preload is allowed without pressure. |
+| Effective Cold/Warm, resources loaded | Request release. |
+
+Existing AdaptiveResourcePolicy tests exercise startup, delays, pressure, foreground holds, resource actions and backward-clock timing. Native allocation/release and timer delivery are separate controller acceptance checks.

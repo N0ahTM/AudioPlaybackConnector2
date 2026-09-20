@@ -43,10 +43,12 @@ AdaptiveResourcePolicy::AdaptiveResourcePolicy(AdaptiveResourcePolicyConfig conf
 AdaptiveResourcePolicyDecision AdaptiveResourcePolicy::Evaluate(AdaptiveResourcePolicyInput const& input,
                                                                 TimePoint now) noexcept {
     const bool pressureActive = input.MemoryPressure || input.FullscreenOrPresentation || input.EnergySaver;
-    if (!m_lastEvaluation) {
-        Initialize(now, pressureActive);
-    } else if (now < *m_lastEvaluation) {
-        ResetTemporalStateAfterClockRollback(now, pressureActive);
+    if (m_lastEvaluation && now < *m_lastEvaluation) {
+        // Preserve residency, but restart elapsed-time evidence after clock rollback.
+        m_pressureSince.reset();
+        m_healthySince.reset();
+        m_preloadAllowedSince.reset();
+        m_interactionUntil.reset();
     }
     m_lastEvaluation = now;
 
@@ -96,26 +98,6 @@ ResidencyPolicy AdaptiveResourcePolicy::BackgroundResidency() const noexcept {
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Helpers ///////////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
-
-void AdaptiveResourcePolicy::Initialize(TimePoint now, bool pressureActive) noexcept {
-    if (pressureActive) {
-        m_pressureSince = now;
-    } else {
-        m_healthySince = now;
-    }
-}
-
-void AdaptiveResourcePolicy::ResetTemporalStateAfterClockRollback(TimePoint now, bool pressureActive) noexcept {
-    m_pressureSince.reset();
-    m_healthySince.reset();
-    m_preloadAllowedSince.reset();
-    m_interactionUntil.reset();
-    if (pressureActive) {
-        m_pressureSince = now;
-    } else {
-        m_healthySince = now;
-    }
-}
 
 void AdaptiveResourcePolicy::SetBackgroundResidency(ResidencyPolicy residency) noexcept {
     if (m_backgroundResidency == residency) return;

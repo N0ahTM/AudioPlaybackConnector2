@@ -179,10 +179,6 @@ private:
     bool RememberKnownDevice(std::wstring const& id) const;
 
     static constexpr auto c_refreshTimeout = std::chrono::milliseconds{2500};
-    using OperationStatus = AppActionStatus;
-    struct OperationResult {
-        OperationStatus Status = OperationStatus::Failed;
-    };
     struct DeviceRecord {
         // External identities remain opaque even when they exceed the
         // persistence format's DeviceId bound.
@@ -271,9 +267,8 @@ private:
 
     [[nodiscard]] static std::optional<DeviceRecord> FindById(std::vector<DeviceRecord> const& devices,
                                                               std::wstring_view id);
-    [[nodiscard]] static AppResultCode ToResultCode(OperationStatus status) noexcept;
+    [[nodiscard]] static AppResultCode ToResultCode(AppActionStatus status) noexcept;
     [[nodiscard]] static AppOutcomeReason OperationReason(AppCommandKind command) noexcept;
-    [[nodiscard]] static bool IsSuccess(OperationStatus status) noexcept;
     // A refresh may use a shorter private deadline and fall back to current
     // inputs. Mutations recheck the caller's context after resolution so a
     // cancelled command cannot act on that fallback.
@@ -284,9 +279,8 @@ private:
     static void AdvanceGeneration(std::uint64_t& generation) noexcept;
     void ApplySessionStates(std::vector<DeviceRecord>& devices,
                             std::vector<DeviceRecord> const& connectedDevices) const;
-    [[nodiscard]] bool PrivacyMode(SettingsData const& settings) const noexcept;
 
-    [[nodiscard]] OperationResult
+    [[nodiscard]] AppActionStatus
     PerformDeviceOperation(AppCommandKind command, std::wstring_view id, AppCommandContext const& context) const;
     std::shared_ptr<SettingsStore> m_settings;
     std::weak_ptr<AppPresentation> m_presentation;

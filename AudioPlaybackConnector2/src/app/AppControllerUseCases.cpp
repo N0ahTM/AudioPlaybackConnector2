@@ -20,8 +20,6 @@ namespace apc::app {
 
 namespace {
 
-using OperationStatus = AppActionStatus;
-
 AppResult InvalidInput(AppCommandKind kind) {
     return {AppResultCode::InvalidInput, kind};
 }
@@ -393,7 +391,7 @@ AppResult AppController::DisconnectAll(AppCommandContext context) const noexcept
         result.Code = AppResultCode::Success;
         result.Command = kind;
         result.Reason = AppOutcomeReason::DisconnectAllSucceeded;
-        result.PrivacyModeEnabled = PrivacyMode(settings);
+        result.PrivacyModeEnabled = settings.PrivacyModeEnabled;
         return result;
     });
 }
@@ -418,7 +416,7 @@ AppResult AppController::ReconnectAll(AppCommandContext context) const noexcept 
             result.Code = AppResultCode::Success;
             result.Command = kind;
             result.Reason = AppOutcomeReason::ReconnectAllSucceeded;
-            result.PrivacyModeEnabled = PrivacyMode(settings);
+            result.PrivacyModeEnabled = settings.PrivacyModeEnabled;
             return result;
         }
 
@@ -436,11 +434,11 @@ AppResult AppController::ReconnectAll(AppCommandContext context) const noexcept 
                                                                           : AppOutcomeReason::ReconnectFailed);
             }
             const auto operation = PerformDeviceOperation(AppCommandKind::Reconnect, device.Id, context);
-            if (!IsSuccess(operation.Status)) {
-                const auto code = operation.Status == OperationStatus::Failed ? AppResultCode::Indeterminate
-                                                                              : ToResultCode(operation.Status);
-                const auto reason = operation.Status == OperationStatus::Cancelled ? AppOutcomeReason::NotReady
-                                                                                   : AppOutcomeReason::ReconnectFailed;
+            if (operation != AppActionStatus::Succeeded) {
+                const auto code =
+                    operation == AppActionStatus::Failed ? AppResultCode::Indeterminate : ToResultCode(operation);
+                const auto reason = operation == AppActionStatus::Cancelled ? AppOutcomeReason::NotReady
+                                                                            : AppOutcomeReason::ReconnectFailed;
                 return MakeTargetResult(kind, resolution, settings, code, reason);
             }
             auto after = BuildDevicesWithoutRefresh(settings);
@@ -458,7 +456,7 @@ AppResult AppController::ReconnectAll(AppCommandContext context) const noexcept 
         result.Code = AppResultCode::Success;
         result.Command = kind;
         result.Reason = AppOutcomeReason::ReconnectAllSucceeded;
-        result.PrivacyModeEnabled = PrivacyMode(settings);
+        result.PrivacyModeEnabled = settings.PrivacyModeEnabled;
         return result;
     });
 }
@@ -697,9 +695,9 @@ AppResult AppController::RunDeviceOperation(AppCommandKind kind,
         return MakeTargetResult(kind, resolution, settings, *code, AppOutcomeReason::None);
     }
     const auto operationResult = PerformDeviceOperation(kind, id, context);
-    if (!IsSuccess(operationResult.Status)) {
-        const auto code = operationResult.Status == OperationStatus::Failed ? AppResultCode::Indeterminate
-                                                                            : ToResultCode(operationResult.Status);
+    if (operationResult != AppActionStatus::Succeeded) {
+        const auto code =
+            operationResult == AppActionStatus::Failed ? AppResultCode::Indeterminate : ToResultCode(operationResult);
         return MakeTargetResult(kind, resolution, settings, code, AppOutcomeReason::None);
     }
 
@@ -1112,7 +1110,7 @@ AppResult AppController::MakeFailure(AppCommandKind command,
                                      SettingsData const& settings,
                                      std::wstring requestedTarget) const {
     auto result = MakeFailure(command, code, reason, std::move(requestedTarget));
-    result.PrivacyModeEnabled = PrivacyMode(settings);
+    result.PrivacyModeEnabled = settings.PrivacyModeEnabled;
     return result;
 }
 
@@ -1153,13 +1151,13 @@ std::optional<AppController::DeviceRecord> AppController::FindById(std::vector<D
     return *found;
 }
 
-AppResultCode AppController::ToResultCode(OperationStatus status) noexcept {
+AppResultCode AppController::ToResultCode(AppActionStatus status) noexcept {
     switch (status) {
-        case OperationStatus::Succeeded: return AppResultCode::Success;
-        case OperationStatus::Failed: return AppResultCode::OperationFailed;
-        case OperationStatus::Cancelled: return AppResultCode::Cancelled;
-        case OperationStatus::TimedOut: return AppResultCode::TimedOut;
-        case OperationStatus::Indeterminate: return AppResultCode::Indeterminate;
+        case AppActionStatus::Succeeded: return AppResultCode::Success;
+        case AppActionStatus::Failed: return AppResultCode::OperationFailed;
+        case AppActionStatus::Cancelled: return AppResultCode::Cancelled;
+        case AppActionStatus::TimedOut: return AppResultCode::TimedOut;
+        case AppActionStatus::Indeterminate: return AppResultCode::Indeterminate;
     }
     return AppResultCode::InternalError;
 }
@@ -1172,10 +1170,6 @@ AppOutcomeReason AppController::OperationReason(AppCommandKind command) noexcept
         case AppCommandKind::ReconnectAll: return AppOutcomeReason::ReconnectFailed;
         default: return AppOutcomeReason::InternalError;
     }
-}
-
-bool AppController::IsSuccess(OperationStatus status) noexcept {
-    return status == OperationStatus::Succeeded;
 }
 
 std::optional<AppResultCode> AppController::MutationAdmissionFailure(AppCommandContext const& context) noexcept {
@@ -1224,23 +1218,19 @@ void AppController::AdvanceGeneration(std::uint64_t& generation) noexcept {
     if (generation != std::numeric_limits<std::uint64_t>::max()) ++generation;
 }
 
-bool AppController::PrivacyMode(SettingsData const& settings) const noexcept {
-    return settings.PrivacyModeEnabled;
-}
-
-AppController::OperationResult AppController::PerformDeviceOperation(AppCommandKind command,
-                                                                     std::wstring_view id,
-                                                                     AppCommandContext const& context) const {
+AppActionStatus AppController::PerformDeviceOperation(AppCommandKind command,
+                                                      std::wstring_view id,
+                                                      AppCommandContext const& context) const {
     auto const admission = command == AppCommandKind::Connect ? m_devices->Connect(std::wstring(id))
                                                               : m_devices->Reconnect(std::wstring(id));
     switch (m_devices->WaitForCompletion(admission, context.StopToken, context.Deadline)) {
-        case apc::device::DeviceOperationStatus::Succeeded: return {OperationStatus::Succeeded};
-        case apc::device::DeviceOperationStatus::Cancelled: return {OperationStatus::Cancelled};
-        case apc::device::DeviceOperationStatus::TimedOut: return {OperationStatus::TimedOut};
+        case apc::device::DeviceOperationStatus::Succeeded: return AppActionStatus::Succeeded;
+        case apc::device::DeviceOperationStatus::Cancelled: return AppActionStatus::Cancelled;
+        case apc::device::DeviceOperationStatus::TimedOut: return AppActionStatus::TimedOut;
         case apc::device::DeviceOperationStatus::Failed:
-        case apc::device::DeviceOperationStatus::Rejected: return {OperationStatus::Failed};
+        case apc::device::DeviceOperationStatus::Rejected: return AppActionStatus::Failed;
     }
-    return {OperationStatus::Failed};
+    return AppActionStatus::Failed;
 }
 
 /*------------------------------------------------------------------------------------------------------------*/

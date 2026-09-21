@@ -413,11 +413,6 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
             }
         }
     }
-    void EnqueuePublicationWithLockHeld(SettingsSnapshot snapshot,
-                                        std::vector<SubscriptionStatePtr> subscriptionStates) {
-        pendingPublications.push_back({std::move(snapshot), std::move(subscriptionStates)});
-    }
-
     void DeactivateSubscriptionsLocked() noexcept {
         for (auto const& [_, entry] : subscriptions)
             entry.State->Deactivate();
@@ -503,7 +498,7 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
                 for (auto const& [_, entry] : subscriptions) {
                     subscriptionsToNotify.push_back(entry.State);
                 }
-                EnqueuePublicationWithLockHeld(std::move(snapshot), std::move(subscriptionsToNotify));
+                pendingPublications.push_back({std::move(snapshot), std::move(subscriptionsToNotify)});
             }
 
             // The immutable data pointer can be published without allocation. From this point on the
@@ -659,7 +654,7 @@ void SettingsStore::Load() {
                 for (auto const& [_, entry] : lifetime->subscriptions) {
                     subscriptionsToNotify.push_back(entry.State);
                 }
-                lifetime->EnqueuePublicationWithLockHeld(std::move(snapshot), std::move(subscriptionsToNotify));
+                lifetime->pendingPublications.push_back({std::move(snapshot), std::move(subscriptionsToNotify)});
             }
 
             lifetime->data = std::move(loadedData);

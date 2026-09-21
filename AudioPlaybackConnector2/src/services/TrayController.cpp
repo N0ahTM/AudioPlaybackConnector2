@@ -652,7 +652,11 @@ void TrayController::HandleTrayMessage([[maybe_unused]] WPARAM wParam, LPARAM lP
             if (m_pickerFlyout && m_pickerFlyoutState.load() != PickerFlyoutState::Closed) {
                 TryHideDevicePicker();
             }
-            OnTrayIconDoubleClick();
+            if (!m_isTearingDown.load()) {
+                m_log.Trace(L"[TrayController] double click toggles the default device");
+                if (auto controller = m_appController.lock())
+                    (void)controller->ToggleDefault(apc::app::AppCommandContext::Detached());
+            }
             break;
 
         case WM_CONTEXTMENU:
@@ -1007,13 +1011,6 @@ bool TrayController::IsCursorOverTrayIcon() const {
     if (!rect) return false;
 
     return PtInRect(&*rect, cursor) != FALSE;
-}
-
-void TrayController::OnTrayIconDoubleClick() {
-    if (m_isTearingDown.load()) return;
-    m_log.Trace(L"[TrayController] OnTrayIconDoubleClick()");
-    if (auto controller = m_appController.lock())
-        (void)controller->ToggleDefault(apc::app::AppCommandContext::Detached());
 }
 
 void TrayController::LaunchBluetoothSettings() {

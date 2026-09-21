@@ -103,7 +103,6 @@ private:
     void LaunchBluetoothSettings();
     winrt::Microsoft::UI::Xaml::Controls::Flyout CreatePickerFlyout();
     [[nodiscard]] bool IsCursorOverTrayIcon() const;
-    void OnTrayIconDoubleClick();
     void NotifyResourceStateChanged(bool userInteraction) noexcept;
 
     /*------------------------------------------------------------------------------------------------------------*/

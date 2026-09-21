@@ -93,7 +93,6 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\PipeSecurityAttributes.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandProtocol.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\control\ControlTargetMatcher.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\core\AudioConnectionService.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceId.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\core\DevicePickerTypes.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\ui\DevicePickerViewState.hpp" />
@@ -141,7 +140,6 @@
     <ClCompile Include="..\AudioPlaybackConnector2\src\control\CommandPipeIo.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\control\Win32CommandTransport.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\control\CommandClient.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
-    <ClCompile Include="..\AudioPlaybackConnector2\src\core\AudioConnectionService.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\ui\DevicePickerViewState.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceService.cpp" />
     <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceSession.cpp" />

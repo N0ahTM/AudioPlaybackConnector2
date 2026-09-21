@@ -150,7 +150,6 @@
     <ClInclude Include="include\core\SettingsStore.hpp" />
     <ClInclude Include="include\core\SettingsData.hpp" />
     <ClInclude Include="include\core\SettingsLimits.hpp" />
-    <ClInclude Include="include\core\AudioConnectionService.hpp" />
     <ClInclude Include="include\core\DeviceId.hpp" />
     <ClInclude Include="include\core\DevicePickerTypes.hpp" />
     <ClInclude Include="include\core\DeviceService.hpp" />

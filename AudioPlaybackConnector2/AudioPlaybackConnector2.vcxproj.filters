@@ -153,9 +153,6 @@
     <ClInclude Include="include\core\SettingsLimits.hpp">
       <Filter>include\core</Filter>
     </ClInclude>
-    <ClInclude Include="include\core\AudioConnectionService.hpp">
-      <Filter>include\core</Filter>
-    </ClInclude>
     <ClInclude Include="include\core\DevicePickerTypes.hpp">
       <Filter>include\core</Filter>
     </ClInclude>

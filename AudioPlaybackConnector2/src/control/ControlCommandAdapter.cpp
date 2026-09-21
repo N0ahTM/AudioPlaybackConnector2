@@ -109,11 +109,24 @@ std::wstring_view RequestAlias(Request const& request) {
     return std::wstring_view(request.Payload).substr(request.Payload.find(L'\n') + 1);
 }
 
-// Handle validates the complete wire grammar before this function. Target-bearing
-// commands therefore always have a selector, and AliasSet has exactly one separator.
+// Handle validates the complete wire grammar before this function, but selector
+// construction is stricter than the wire payload rules (e.g. control characters).
+// Reject a missing selector instead of dereferencing it.
 AppResult
 Dispatch(apc::app::AppController const& controller, Request const& request, AppCommandContext const& context) {
     auto target = MakeSelector(request.Target, RequestTargetText(request));
+    switch (request.Command) {
+        case CommandType::DefaultSet:
+        case CommandType::AliasSet:
+        case CommandType::AliasClear:
+        case CommandType::Connect:
+        case CommandType::Disconnect:
+        case CommandType::Reconnect:
+        case CommandType::ToggleLast:
+            if (!target) return {AppResultCode::InvalidInput};
+            break;
+        default: break;
+    }
     switch (request.Command) {
         case CommandType::Show: return controller.ShowDevicePicker(apc::app::DevicePickerOpenMode::EnsureOpen, context);
         case CommandType::Settings: return controller.ShowSettings(context);

@@ -273,7 +273,14 @@ bool DeviceWatcher::Start() {
             return false;
         }
         state->Registration = std::move(registration);
-        state->Publish(DeviceWatcherFactKind::InventoryChanged);
+        try {
+            state->Publish(DeviceWatcherFactKind::InventoryChanged);
+        } catch (...) {
+            // Return ownership so the shared failure tail stops and revokes the
+            // started registration instead of inspecting a moved-from pointer.
+            registration = std::move(state->Registration);
+            throw;
+        }
         return true;
     } catch (winrt::hresult_error const& error) {
         state->Log.Exception(L"[DeviceWatcher] failed to create or start DeviceInformation watcher", error);

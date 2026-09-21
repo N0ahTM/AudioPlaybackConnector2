@@ -987,12 +987,12 @@ void CommandLineControlServer::DispatchRequestLocked(PipeInstance& instance) noe
     }
     try {
         std::lock_guard requestLock(m_requestMutex);
-        auto entry = m_pendingDeliveries.try_emplace(instance.Request.CorrelationId, 0).first;
-        if (entry->second == std::numeric_limits<std::size_t>::max()) {
+        auto& pending = m_pendingDeliveries[instance.Request.CorrelationId];
+        if (pending == std::numeric_limits<std::size_t>::max()) {
             FinishClientLocked(instance);
             return;
         }
-        ++entry->second;
+        ++pending;
         instance.PendingDelivery = true;
         instance.Phase = PipePhase::RunningHandler;
         SubmitThreadpoolWork(instance.HandlerWork.get());

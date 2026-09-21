@@ -23,4 +23,11 @@
     <!-- Manifest restore removes packages outside its requested triplet. Isolate architecture restores. -->
     <VcpkgInstalledDir>$(MSBuildThisFileDirectory)vcpkg_installed\$(VcpkgTriplet)\</VcpkgInstalledDir>
   </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(MSBuildProjectExtension)' == '.vcxproj'">
+    <ClCompile>
+      <!-- Code analysis checks first-party sources only; NuGet/vcpkg headers are external. -->
+      <ExternalIncludePath>$(MSBuildThisFileDirectory)packages;$(MSBuildThisFileDirectory)vcpkg_installed;%(ExternalIncludePath)</ExternalIncludePath>
+      <AdditionalOptions Condition="'$(RunCodeAnalysis)' == 'true'">/analyze:external- %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+  </ItemDefinitionGroup>
 </Project>

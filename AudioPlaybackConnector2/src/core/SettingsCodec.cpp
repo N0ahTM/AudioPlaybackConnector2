@@ -4,8 +4,8 @@
 #include <winrt/base.h>
 
 #include <algorithm>
-#include <initializer_list>
 #include <limits>
+#include <span>
 #include <stdexcept>
 #include <unordered_set>
 #include <vector>
@@ -15,6 +15,23 @@ namespace {
 using Json = nlohmann::json;
 constexpr int c_schemaVersion = 2;
 
+constexpr std::string_view c_topLevelKeys[] = {"schemaVersion",
+                                               "globalConnectOnStartup",
+                                               "globalReconnectOnConnectionLoss",
+                                               "allowIncomingConnections",
+                                               "startWithWindows",
+                                               "showNotifications",
+                                               "useSystemBackdropEffects",
+                                               "privacyModeEnabled",
+                                               "language",
+                                               "defaultDeviceMode",
+                                               "defaultDeviceId",
+                                               "settingsWindowBounds",
+                                               "devices",
+                                               "lastConnectedIds"};
+constexpr std::string_view c_windowBoundsKeys[] = {"x", "y", "width", "height", "dpi"};
+constexpr std::string_view c_deviceKeys[] = {"id", "name", "alias", "connectOnStartup", "reconnectOnConnectionLoss"};
+
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Validation ////////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
@@ -23,7 +40,7 @@ void Require(bool valid) {
     if (!valid) throw std::invalid_argument("invalid or unsupported settings format");
 }
 
-void Object(Json const& value, std::initializer_list<std::string_view> keys) {
+void Object(Json const& value, std::span<const std::string_view> keys) {
     Require(value.is_object());
     for (auto const& [key, ignored] : value.items()) {
         (void)ignored;
@@ -112,21 +129,7 @@ SettingsData Decode(std::string_view bytes) try {
         if (event == Json::parse_event_t::object_end) objectKeys.pop_back();
         return true;
     });
-    Object(json,
-           {"schemaVersion",
-            "globalConnectOnStartup",
-            "globalReconnectOnConnectionLoss",
-            "allowIncomingConnections",
-            "startWithWindows",
-            "showNotifications",
-            "useSystemBackdropEffects",
-            "privacyModeEnabled",
-            "language",
-            "defaultDeviceMode",
-            "defaultDeviceId",
-            "settingsWindowBounds",
-            "devices",
-            "lastConnectedIds"});
+    Object(json, c_topLevelKeys);
     Require(Integer(json, "schemaVersion", -1) == c_schemaVersion);
     SettingsData data;
     data.GlobalConnectOnStartup = json.value("globalConnectOnStartup", false);
@@ -143,7 +146,7 @@ SettingsData Decode(std::string_view bytes) try {
         mode == L"specificDevice" ? DefaultDeviceMode::SpecificDevice : DefaultDeviceMode::LastConnected;
     data.DefaultDeviceId = Text(json, "defaultDeviceId");
     if (auto bounds = json.find("settingsWindowBounds"); bounds != json.end()) {
-        Object(*bounds, {"x", "y", "width", "height", "dpi"});
+        Object(*bounds, c_windowBoundsKeys);
         auto const dpi = Integer(*bounds, "dpi", USER_DEFAULT_SCREEN_DPI);
         Require(dpi > 0);
         data.SettingsWindowBounds = PersistedWindowBounds{Integer(*bounds, "x", 0),
@@ -153,7 +156,7 @@ SettingsData Decode(std::string_view bytes) try {
                                                           static_cast<std::uint32_t>(dpi)};
     }
     for (auto const& row : Array(json, "devices")) {
-        Object(row, {"id", "name", "alias", "connectOnStartup", "reconnectOnConnectionLoss"});
+        Object(row, c_deviceKeys);
         data.Devices.push_back({Text(row, "id"),
                                 Text(row, "name"),
                                 Text(row, "alias"),

@@ -27,7 +27,12 @@
     <Rule Id="C26810" Action="Error" />
     <Rule Id="C26811" Action="Error" />
     <Rule Id="C26822" Action="Error" />
-    <Rule Id="C26823" Action="Error" />
+    <!-- C26823 stays off: this lifetime rule fires thousands of times inside the
+         pinned WIL result_macros.h implementation (pszDest/exception/host/functor
+         expansions), a Microsoft header whose internal guards the analyzer cannot
+         see. It produced no actionable first-party finding in triage; first-party
+         null-lifetime issues remain covered by C26800/C26830/C26846 and Cppcheck. -->
+    <Rule Id="C26823" Action="None" />
     <Rule Id="C26824" Action="Error" />
     <Rule Id="C26825" Action="Error" />
     <Rule Id="C26829" Action="Error" />

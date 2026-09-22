@@ -25,4 +25,7 @@ try {
         }
     }
 } finally { Remove-Item -LiteralPath $fixture -Force -ErrorAction SilentlyContinue }
+# The last negative fixture intentionally fails MSBuild; clear its exit code so CI
+# wrappers that propagate $LASTEXITCODE do not fail a passed script.
+$global:LASTEXITCODE = 0
 Write-Host 'MSBuild tag derivation and inconsistent-version rejection passed.'

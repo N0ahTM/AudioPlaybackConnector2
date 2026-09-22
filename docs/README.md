@@ -8,7 +8,7 @@ Read only the page/section relevant to the task.
 | Dependency adoption evidence | [Dependency acceptance](DEPENDENCIES.md) |
 | Find components and ownership | [Architecture](ARCHITECTURE.md) |
 | Change async, locks, callbacks or shutdown | [Runtime invariants](INVARIANTS.md) — affected owner only |
-| Review a reported defect | [Bugfix tracking](BUGFIXES.md) — affected IDs; German |
+| Review a reported defect | [Bugfix tracking](BUGFIXES.md) — affected IDs |
 | Package, verify or release | [Releasing](RELEASING.md) |
 | Use the app / automate it | [Usage](USAGE.md) / [CLI](CLI.md) |
 | Install / diagnose | [Installation](INSTALLATION.md) / [Troubleshooting](TROUBLESHOOTING.md) |

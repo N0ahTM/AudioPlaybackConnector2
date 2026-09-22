@@ -112,6 +112,7 @@
     <ClCompile Include="src\ProtocolBoundaryTests.cpp" />
     <ClCompile Include="src\ToastContentBuilderTests.cpp" />
     <ClCompile Include="src\ReconnectPolicyTests.cpp" />
+    <ClCompile Include="src\RatingPromptPolicyTests.cpp" />
     <ClCompile Include="src\ResourcePressureMonitorTests.cpp" />
     <ClCompile Include="src\RuntimeApartmentTests.cpp" />
     <ClCompile Include="src\SettingsLimitsTests.cpp" />
@@ -129,6 +130,7 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppPresentation.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppModels.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveResourcePolicy.hpp" />
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\RatingPromptPolicy.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveActionRetryBackoff.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveScheduleState.hpp" />
 

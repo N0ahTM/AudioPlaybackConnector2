@@ -28,9 +28,12 @@ constexpr std::string_view c_topLevelKeys[] = {"schemaVersion",
                                                "defaultDeviceId",
                                                "settingsWindowBounds",
                                                "devices",
-                                               "lastConnectedIds"};
+                                               "lastConnectedIds",
+                                               "ratingPrompt"};
 constexpr std::string_view c_windowBoundsKeys[] = {"x", "y", "width", "height", "dpi"};
 constexpr std::string_view c_deviceKeys[] = {"id", "name", "alias", "connectOnStartup", "reconnectOnConnectionLoss"};
+constexpr std::string_view c_ratingPromptKeys[] = {
+    "firstLaunchDate", "usageDays", "lastUsageDate", "state", "deferUntil", "deferCount"};
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Validation ////////////////////////////////////////////////////////////////////////////////////////*/
@@ -167,6 +170,41 @@ SettingsData Decode(std::string_view bytes) try {
         Require(id.is_string());
         data.LastConnectedIds.emplace_back(winrt::to_hstring(id.get_ref<std::string const&>()));
     }
+    if (auto rating = json.find("ratingPrompt"); rating != json.end()) {
+        Object(*rating, c_ratingPromptKeys);
+        auto& prompt = data.RatingPrompt;
+        prompt.FirstLaunchDate = Text(*rating, "firstLaunchDate");
+        prompt.LastUsageDate = Text(*rating, "lastUsageDate");
+        prompt.DeferUntil = Text(*rating, "deferUntil");
+        prompt.UsageDays = Integer(*rating, "usageDays", 0);
+        prompt.DeferCount = Integer(*rating, "deferCount", 0);
+        Require(prompt.UsageDays >= 0 && prompt.DeferCount >= 0);
+        const auto state = Text(*rating, "state", L"idle");
+        if (state == L"idle")
+            prompt.State = RatingPromptState::Idle;
+        else if (state == L"deferred")
+            prompt.State = RatingPromptState::Deferred;
+        else if (state == L"completed")
+            prompt.State = RatingPromptState::Completed;
+        else if (state == L"disabled")
+            prompt.State = RatingPromptState::Disabled;
+        else
+            Require(false);
+        for (auto const& date : {prompt.FirstLaunchDate, prompt.LastUsageDate, prompt.DeferUntil}) {
+            if (date.empty()) continue;
+            bool valid = date.size() == 10 && date[4] == L'-' && date[7] == L'-';
+            for (std::size_t i = 0; valid && i < date.size(); ++i) {
+                if (i == 4 || i == 7) continue;
+                valid = date[i] >= L'0' && date[i] <= L'9';
+            }
+            if (valid) {
+                const auto month = std::stoi(std::wstring(date.substr(5, 2)));
+                const auto day = std::stoi(std::wstring(date.substr(8, 2)));
+                valid = month >= 1 && month <= 12 && day >= 1 && day <= 31;
+            }
+            Require(valid);
+        }
+    }
     Require(IsPersistable(data));
     return data;
 } catch (Json::exception const&) {
@@ -195,6 +233,22 @@ std::string Encode(SettingsData const& data) {
                                         {"width", bounds->Width},
                                         {"height", bounds->Height},
                                         {"dpi", bounds->Dpi}};
+    }
+    if (!(data.RatingPrompt == RatingPromptData{})) {
+        const auto& prompt = data.RatingPrompt;
+        const char* state = "idle";
+        switch (prompt.State) {
+            case RatingPromptState::Deferred: state = "deferred"; break;
+            case RatingPromptState::Completed: state = "completed"; break;
+            case RatingPromptState::Disabled: state = "disabled"; break;
+            default: break;
+        }
+        json["ratingPrompt"] = {{"firstLaunchDate", winrt::to_string(prompt.FirstLaunchDate)},
+                                {"usageDays", prompt.UsageDays},
+                                {"lastUsageDate", winrt::to_string(prompt.LastUsageDate)},
+                                {"state", state},
+                                {"deferUntil", winrt::to_string(prompt.DeferUntil)},
+                                {"deferCount", prompt.DeferCount}};
     }
     for (auto const& device : data.Devices) {
         json["devices"].push_back({{"id", winrt::to_string(device.Id)},

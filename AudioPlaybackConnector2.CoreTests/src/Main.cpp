@@ -51,6 +51,7 @@ int RunDevicePickerViewStateTests();
 int RunLatestStartupTaskRequestStateTests();
 int RunAppControllerUseCasesTests();
 int RunReconnectPolicyTests();
+int RunRatingPromptPolicyTests();
 int RunResourcePressureMonitorTests();
 int RunRuntimeApartmentTests();
 int RunSettingsLimitsTests();
@@ -149,6 +150,7 @@ int main(int argc, char** argv) {
         Suite{"LatestStartupTaskRequestState", RunLatestStartupTaskRequestStateTests},
         Suite{"AppControllerUseCases", RunAppControllerUseCasesTests},
         Suite{"ReconnectPolicy", RunReconnectPolicyTests},
+        Suite{"RatingPromptPolicy", RunRatingPromptPolicyTests},
         Suite{"ResourcePressureMonitor", RunResourcePressureMonitorTests},
         Suite{"RuntimeApartment", RunRuntimeApartmentTests},
         Suite{"SettingsLimits", RunSettingsLimitsTests},

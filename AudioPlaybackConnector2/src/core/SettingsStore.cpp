@@ -708,6 +708,17 @@ SettingsMutationResult SettingsStore::SetLanguage(std::wstring_view language) {
 SettingsMutationResult SettingsStore::SetPrivacyModeEnabled(bool enabled) {
     return m_impl->Commit([=](auto& data) { return std::exchange(data.PrivacyModeEnabled, enabled) != enabled; });
 }
+SettingsMutationResult SettingsStore::RecordRatingPromptFirstLaunch(std::wstring today) {
+    return m_impl->Commit([today = std::move(today)](auto& data) {
+        if (!data.RatingPrompt.FirstLaunchDate.empty()) return false;
+        data.RatingPrompt.FirstLaunchDate = std::move(today);
+        return true;
+    });
+}
+SettingsMutationResult SettingsStore::SetRatingPrompt(RatingPromptData value) {
+    return m_impl->Commit(
+        [value = std::move(value)](auto& data) { return std::exchange(data.RatingPrompt, value) != value; });
+}
 SettingsMutationResult SettingsStore::SetSettingsWindowBounds(std::optional<PersistedWindowBounds> bounds) {
     if (bounds && (bounds->Width <= 0 || bounds->Height <= 0 || bounds->Dpi < apc::limits::c_minWindowDpi ||
                    bounds->Dpi > apc::limits::c_maxWindowDpi))
@@ -814,12 +825,15 @@ SettingsMutationResult SettingsStore::ForgetDevice(std::wstring_view deviceId) {
         return defaultWasRemoved || before != data.Devices.size() + data.LastConnectedIds.size();
     });
 }
-SettingsMutationResult SettingsStore::RecordConnectedDevice(std::wstring_view deviceId, std::wstring_view deviceName) {
+SettingsMutationResult
+SettingsStore::RecordConnectedDevice(std::wstring_view deviceId, std::wstring_view deviceName, std::wstring usageDay) {
     if (deviceId.empty() || !apc::limits::IsBoundedUtf16(deviceId, apc::limits::c_maxDeviceIdCharacters) ||
         !apc::limits::IsBoundedUtf16(deviceName, apc::limits::c_maxDeviceNameCharacters)) {
         return {SettingsMutationStatus::Rejected, Snapshot().Revision};
     }
-    return m_impl->Commit([deviceId = std::wstring(deviceId), deviceName = std::wstring(deviceName)](auto& data) {
+    return m_impl->Commit([deviceId = std::wstring(deviceId),
+                           deviceName = std::wstring(deviceName),
+                           usageDay = std::move(usageDay)](auto& data) {
         auto* device = FindDevice(data, deviceId);
         bool changed = false;
         if (!device && data.Devices.size() < apc::limits::c_maxPersistedDeviceCount) {
@@ -834,7 +848,14 @@ SettingsMutationResult SettingsStore::RecordConnectedDevice(std::wstring_view de
         std::erase(data.LastConnectedIds, deviceId);
         data.LastConnectedIds.insert(data.LastConnectedIds.begin(), deviceId);
         if (data.LastConnectedIds.size() > apc::limits::c_maxPersistedDeviceCount) data.LastConnectedIds.pop_back();
-        return changed || data.LastConnectedIds != before;
+        changed = changed || data.LastConnectedIds != before;
+        // A real connected transition counts as one rating-prompt usage day.
+        if (!usageDay.empty() && data.RatingPrompt.LastUsageDate != usageDay) {
+            data.RatingPrompt.LastUsageDate = std::move(usageDay);
+            ++data.RatingPrompt.UsageDays;
+            changed = true;
+        }
+        return changed;
     });
 }
 /*------------------------------------------------------------------------------------------------------------*/

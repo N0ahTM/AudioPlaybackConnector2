@@ -543,6 +543,7 @@ void ApplicationHost::InitializeAppController() {
         *m_appController,
         apc::control::ControlCommandAdapter::Options{[strings = std::shared_ptr<StringResources const>(m_strings)](
                                                          std::string_view key) { return strings->Get(key); }});
+    m_appController->RecordAppStart();
     m_log.Trace(L"[App] AppController and control adapter initialized");
 }
 

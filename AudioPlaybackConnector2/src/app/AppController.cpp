@@ -1,4 +1,5 @@
 #include <app/AppController.hpp>
+#include <app/RatingPromptPolicy.hpp>
 #include <app/StartupTaskCoordinator.hpp>
 #include <core/DeviceService.hpp>
 #include <core/SettingsLimits.hpp>
@@ -177,7 +178,7 @@ struct AppController::EventState {
             // The native owner serializes connection facts. Persist each real
             // connected transition before publishing it to UI/transport observers.
             auto const name = apc::limits::TruncateUtf16(session->DeviceName, apc::limits::c_maxDeviceNameCharacters);
-            (void)Settings->RecordConnectedDevice(fact.DeviceId, name);
+            (void)Settings->RecordConnectedDevice(fact.DeviceId, name, TodayLocalIsoDate());
             Publish(DeviceConnectedEvent{*id}, observed.Connection);
         } else if (observed.WasConnected && status != Status::Connected &&
                    fact.DisconnectReason != DeviceDisconnectReason::None) {

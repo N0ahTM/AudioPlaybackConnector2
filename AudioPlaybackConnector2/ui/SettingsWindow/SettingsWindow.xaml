@@ -71,6 +71,40 @@
                         HorizontalAlignment="Stretch"
                         IsClosable="True"
                         IsOpen="False" />
+                    <InfoBar
+                        x:Name="RatingPromptInfoBar"
+                        Margin="0,0,12,0"
+                        HorizontalAlignment="Stretch"
+                        IsClosable="False"
+                        IsOpen="False"
+                        Severity="Informational">
+                        <InfoBar.Content>
+                            <StackPanel Margin="0,4,0,4" Spacing="8">
+                                <TextBlock x:Name="RatingPromptBodyText" TextWrapping="Wrap" />
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button x:Name="RatingPromptRateButton" Click="RatingPromptRateButton_Click" Padding="10,4">
+                                        <TextBlock x:Name="RatingPromptRateText" />
+                                    </Button>
+                                    <Button
+                                        x:Name="RatingPromptLaterButton"
+                                        Click="RatingPromptLaterButton_Click"
+                                        Padding="10,4"
+                                        Background="Transparent"
+                                        BorderThickness="0">
+                                        <TextBlock x:Name="RatingPromptLaterText" />
+                                    </Button>
+                                    <Button
+                                        x:Name="RatingPromptNeverButton"
+                                        Click="RatingPromptNeverButton_Click"
+                                        Padding="10,4"
+                                        Background="Transparent"
+                                        BorderThickness="0">
+                                        <TextBlock x:Name="RatingPromptNeverText" />
+                                    </Button>
+                                </StackPanel>
+                            </StackPanel>
+                        </InfoBar.Content>
+                    </InfoBar>
                     <StackPanel
                         x:Name="AppSection"
                         HorizontalAlignment="Stretch"

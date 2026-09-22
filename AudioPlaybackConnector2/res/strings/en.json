@@ -154,5 +154,10 @@
   "DeviceOptions_Forget": "Remove saved device settings",
   "DeviceOptions_GlobalPolicy": "Enabled for all devices in App settings.",
   "DeviceOptions_Unavailable": "Not available",
-  "Settings_Connections": "Connections"
+  "Settings_Connections": "Connections",
+  "RatingPrompt_Title": "How would you rate AudioPlaybackConnector?",
+  "RatingPrompt_Body": "Share your experience with a review on the Microsoft Store.",
+  "RatingPrompt_Rate": "Rate app",
+  "RatingPrompt_Later": "Remind me later",
+  "RatingPrompt_Never": "Don't ask again"
 }

@@ -43,6 +43,12 @@ struct SettingsWindow : SettingsWindowT<SettingsWindow> {
                                winrt::Microsoft::UI::Xaml::RoutedEventArgs const& e);
     void SettingsHelpButton_Click(winrt::Windows::Foundation::IInspectable const&,
                                   winrt::Microsoft::UI::Xaml::RoutedEventArgs const&);
+    void RatingPromptRateButton_Click(winrt::Windows::Foundation::IInspectable const&,
+                                      winrt::Microsoft::UI::Xaml::RoutedEventArgs const&);
+    void RatingPromptLaterButton_Click(winrt::Windows::Foundation::IInspectable const&,
+                                       winrt::Microsoft::UI::Xaml::RoutedEventArgs const&);
+    void RatingPromptNeverButton_Click(winrt::Windows::Foundation::IInspectable const&,
+                                       winrt::Microsoft::UI::Xaml::RoutedEventArgs const&);
     void SettingsBackButton_Click(winrt::Windows::Foundation::IInspectable const&,
                                   winrt::Microsoft::UI::Xaml::RoutedEventArgs const&);
     void SettingsContentHost_SizeChanged(winrt::Windows::Foundation::IInspectable const& sender,
@@ -80,6 +86,8 @@ private:
     void ShowDiagnosticsInfo(winrt::Microsoft::UI::Xaml::Controls::InfoBarSeverity severity,
                              std::wstring_view title,
                              std::wstring_view message);
+    void EvaluateRatingPrompt();
+    winrt::fire_and_forget RequestStoreRating();
     winrt::fire_and_forget LaunchUri(std::wstring_view uri);
     void OpenLogFolder();
     bool CopyTextToClipboard(std::wstring_view text);

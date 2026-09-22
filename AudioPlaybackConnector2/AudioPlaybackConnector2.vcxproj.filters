@@ -95,6 +95,12 @@
     <ClInclude Include="include\app\AdaptiveResourcePolicy.hpp">
       <Filter>include\app</Filter>
     </ClInclude>
+    <ClInclude Include="include\app\RatingPromptChannel.hpp">
+      <Filter>include\app</Filter>
+    </ClInclude>
+    <ClInclude Include="include\app\RatingPromptPolicy.hpp">
+      <Filter>include\app</Filter>
+    </ClInclude>
     <ClInclude Include="include\app\AdaptiveActionRetryBackoff.hpp">
       <Filter>include\app</Filter>
     </ClInclude>

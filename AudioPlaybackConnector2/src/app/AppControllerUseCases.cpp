@@ -1228,6 +1228,21 @@ SettingsMutationResult AppController::SetPrivacyMode(bool enabled) const {
     return MutateSettings([&] { return m_settings->SetPrivacyModeEnabled(enabled); });
 }
 
+void AppController::RecordAppStart() const noexcept {
+    try {
+        // Best effort: the rating prompt must never break application startup.
+        (void)m_settings->RecordRatingPromptFirstLaunch(TodayLocalIsoDate());
+    } catch (...) {
+    }
+}
+
+SettingsMutationResult AppController::SetRatingPromptOutcome(RatingPromptOutcome outcome) const {
+    return MutateSettings([&] {
+        auto data = m_settings->Snapshot().Data.RatingPrompt;
+        return m_settings->SetRatingPrompt(ApplyRatingPromptOutcome(outcome, std::move(data), TodayLocalIsoDate()));
+    });
+}
+
 SettingsMutationResult AppController::SetLanguage(std::wstring language) const {
     if (language.empty()) language = L"system";
     return MutateSettings([&] { return m_settings->SetLanguage(language); });

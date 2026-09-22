@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Ask for a Microsoft Store review with a small card in the settings window, shown only in the Store channel at the earliest 14 days after first launch and after at least three days with a device connection. The prompt never appears in the background and can be answered, deferred once by 14 days, or permanently disabled.
 - Add versioned usage, CLI, architecture, translation, release, and security documentation with automated link, CLI-help, localization, and release-metadata validation.
 
 ### Changed

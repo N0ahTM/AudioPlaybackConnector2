@@ -154,5 +154,10 @@
   "DeviceOptions_Forget": "保存したデバイス設定を削除",
   "DeviceOptions_GlobalPolicy": "アプリ設定ですべてのデバイスに対して有効になっています。",
   "DeviceOptions_Unavailable": "利用不可",
-  "Settings_Connections": "接続"
+  "Settings_Connections": "接続",
+  "RatingPrompt_Title": "AudioPlaybackConnector の評価をお聞かせください",
+  "RatingPrompt_Body": "Microsoft Store でレビューを投稿して、ご感想をお知らせください。",
+  "RatingPrompt_Rate": "アプリを評価",
+  "RatingPrompt_Later": "後で通知する",
+  "RatingPrompt_Never": "今後表示しない"
 }

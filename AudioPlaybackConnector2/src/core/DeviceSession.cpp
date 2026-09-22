@@ -1,4 +1,6 @@
 #include <pch.h>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Media.Audio.h>
 #include <winrt/Windows.System.Threading.h>
 
 #include <core/DeviceSession.hpp>
@@ -25,7 +27,7 @@ ToConnectionResult(winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResu
 }
 
 [[nodiscard]] DeviceOpenResult
-ToOpenResult(winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResult result) noexcept {
+ToOpenResult(winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResult const& result) noexcept {
     using Status = winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResultStatus;
     auto const status = result.Status();
     return {
@@ -43,19 +45,20 @@ public:
 
     [[nodiscard]] std::uint64_t RegisterStateChanged(StateChangedHandler handler) override {
         if (!m_connection) return 0;
-        m_stateChangedToken = m_connection.StateChanged([handler = std::move(handler)](auto sender, auto const&) {
-            if (!handler) return;
-            try {
-                auto const state = sender.State();
-                if (state == winrt::Windows::Media::Audio::AudioPlaybackConnectionState::Opened) {
-                    handler(DeviceConnectionState::Opened);
-                } else if (state == winrt::Windows::Media::Audio::AudioPlaybackConnectionState::Closed) {
+        m_stateChangedToken =
+            m_connection.StateChanged([handler = std::move(handler)](auto const& sender, auto const&) {
+                if (!handler) return;
+                try {
+                    auto const state = sender.State();
+                    if (state == winrt::Windows::Media::Audio::AudioPlaybackConnectionState::Opened) {
+                        handler(DeviceConnectionState::Opened);
+                    } else if (state == winrt::Windows::Media::Audio::AudioPlaybackConnectionState::Closed) {
+                        handler(DeviceConnectionState::Closed);
+                    }
+                } catch (...) {
                     handler(DeviceConnectionState::Closed);
                 }
-            } catch (...) {
-                handler(DeviceConnectionState::Closed);
-            }
-        });
+            });
         return static_cast<std::uint64_t>(m_stateChangedToken.value);
     }
 

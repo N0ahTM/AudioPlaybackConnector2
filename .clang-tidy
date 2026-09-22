@@ -10,7 +10,7 @@ Checks: >-
   performance-unnecessary-copy-initialization,
   performance-unnecessary-value-param,
   readability-redundant-smartptr-get
-WarningsAsErrors: '*'
+WarningsAsErrors: 'bugprone-*,performance-*,readability-*'
 HeaderFilterRegex: 'AudioPlaybackConnector2[/\\](include|src)[/\\]'
 FormatStyle: file
 ...

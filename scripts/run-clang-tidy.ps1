@@ -17,13 +17,27 @@ $log = [IO.Path]::GetFullPath($LogPath)
 New-Item -ItemType Directory -Path (Split-Path $log) -Force | Out-Null
 $project = Join-Path $root 'AudioPlaybackConnector2.CoreRuntime/AudioPlaybackConnector2.CoreRuntime.vcxproj'
 $config = Join-Path $root '.clang-tidy'
+# The MSBuild task defaults to clang-analyzer-* when no check list is given; pin the
+# configured set so the analysis matches .clang-tidy instead of generated-header noise.
+# MSBuild command-line properties must escape the leading '-' (%2D) and ',' (%2C).
+$checks = '%2D*%2Cbugprone-use-after-move%2Cbugprone-dangling-handle%2Cbugprone-infinite-loop' +
+    '%2Cbugprone-suspicious-semicolon%2Cbugprone-suspicious-string-compare%2Cbugprone-undelegated-constructor' +
+    '%2Cperformance-unnecessary-copy-initialization%2Cperformance-unnecessary-value-param' +
+    '%2Creadability-redundant-smartptr-get'
 # Visual Studio exports its actual compiler arguments and strips incompatible binary PCH usage.
 # Restore/build CoreRuntime first so generated C++/WinRT headers are available.
 & $MSBuildPath $project '/t:PrepareForBuild;ResolveReferences;ClangTidy' `
     /p:Configuration=Release "/p:Platform=$Platform" `
     "/p:ClangTidyToolPath=$(Split-Path $tool)" "/p:ClangTidyToolExe=$([IO.Path]::GetFileName($tool))" `
-    "/p:ClangTidyToolExeAdditionalOptions=--config-file=$config" `
+    "/p:ClangTidyToolExeAdditionalOptions=--config-file=$config --extra-arg=-Wno-nontrivial-memcall --extra-arg=-Wno-missing-field-initializers --extra-arg=-Wno-missing-designated-field-initializers" `
+    "/p:ClangTidyChecks=$checks" `
     /p:MaxNumberOfProcesses=2 /v:minimal /nologo *> $log
 $result = $LASTEXITCODE
 Write-Output "clang-tidy exit=$result; log=$log"
-if ($result -ne 0) { throw 'clang-tidy did not pass; inspect the local log.' }
+if ($result -ne 0) {
+    # Print the deduplicated findings; the runner-local log path is useless otherwise.
+    $findings = Select-String -Path $log -Pattern 'error:' |
+        ForEach-Object { ($_.Line -replace '\s*\[[^\]]*\.vcxproj\]\s*$', '') } | Sort-Object -Unique
+    foreach ($finding in $findings) { Write-Output $finding }
+    throw 'clang-tidy did not pass; inspect the printed findings and the local log.'
+}

@@ -358,7 +358,7 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
         return revision == persistedRevision;
     }
 
-    void Worker(std::stop_token stopToken) noexcept {
+    void Worker(std::stop_token const& stopToken) noexcept {
         const auto finish = wil::scope_exit([&] {
             {
                 std::scoped_lock lock(mutex);
@@ -554,7 +554,7 @@ SettingsStore::SettingsStore(std::filesystem::path persistenceDirectory,
           std::move(persistenceDirectory), std::move(storage), std::move(wakeup), std::move(log))) {
     // Without its persistence executor the store cannot offer a bounded shutdown.
     // Fail construction instead of falling back to storage I/O on a UI or callback thread.
-    m_impl->worker = std::jthread([impl = m_impl](std::stop_token stopToken) { impl->Worker(stopToken); });
+    m_impl->worker = std::jthread([impl = m_impl](std::stop_token const& stopToken) { impl->Worker(stopToken); });
     std::unique_lock lock(m_impl->mutex);
     m_impl->changed.wait(lock, [&] { return m_impl->workerStartKnown; });
     if (!m_impl->workerReady) {

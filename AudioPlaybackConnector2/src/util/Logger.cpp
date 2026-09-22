@@ -351,7 +351,7 @@ struct Logger::Impl {
     std::unique_ptr<details::LogRelease> Release;
 };
 
-Logger::Logger(std::filesystem::path path, std::size_t queueCapacity, std::size_t rotationBytes)
+Logger::Logger(std::filesystem::path const& path, std::size_t queueCapacity, std::size_t rotationBytes)
     : m_impl(std::make_unique<Impl>(path, queueCapacity, rotationBytes)) {}
 
 Logger::~Logger() noexcept {

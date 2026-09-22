@@ -105,7 +105,7 @@ private:
     // A returned record owns one active delivery, acquired under the cache lock.
     // Every path must hand it to the pipe instance or call CompleteDelivery.
     [[nodiscard]] std::shared_ptr<RequestRecord> ExecuteOnce(apc::control::Request const& request,
-                                                             std::stop_token stopToken,
+                                                             std::stop_token const& stopToken,
                                                              std::uint64_t deadline,
                                                              apc::control::Response& uncachedResponse);
     void CompleteDelivery(apc::control::CorrelationId correlationId,

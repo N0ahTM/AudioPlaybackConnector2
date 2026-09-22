@@ -31,7 +31,8 @@ public:
 
     using Callback = std::function<void(ResourcePressureSnapshot const&)>;
 
-    explicit ResourcePressureMonitor(Callback callback, Config config = {});
+    explicit ResourcePressureMonitor(Callback callback) : ResourcePressureMonitor(std::move(callback), Config{}) {}
+    ResourcePressureMonitor(Callback callback, Config config);
     ~ResourcePressureMonitor();
 
     ResourcePressureMonitor(ResourcePressureMonitor const&) = delete;

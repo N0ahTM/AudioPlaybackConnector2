@@ -124,7 +124,7 @@ public:
 
     [[nodiscard]] DeviceOperationStatus
     WaitForCompletion(DeviceCommandResult const& command,
-                      std::stop_token stopToken = {},
+                      std::stop_token const& stopToken = {},
                       std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::time_point::max());
     winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
     RefreshDevicesAsync();

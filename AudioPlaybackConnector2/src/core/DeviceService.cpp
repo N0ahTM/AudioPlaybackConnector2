@@ -755,7 +755,7 @@ void DeviceService::ResumeSuspendedSessions(std::vector<std::wstring> deviceIds)
 }
 
 DeviceOperationStatus DeviceService::WaitForCompletion(DeviceCommandResult const& command,
-                                                       std::stop_token stopToken,
+                                                       std::stop_token const& stopToken,
                                                        std::chrono::steady_clock::time_point deadline) {
     auto const state = m_state;
     auto const completion = command.Completion;

@@ -48,7 +48,7 @@ matches are rejected as ambiguous; use an explicit selector to disambiguate.
 }
 
 ParseResult Error(uint32_t exitCode, std::wstring message) {
-    return {.Send = false, .ExitCode = exitCode, .Message = std::move(message)};
+    return {.Send = false, .Request = {}, .ExitCode = exitCode, .Message = std::move(message)};
 }
 
 void AppendJsonString(std::wstring& output, std::wstring_view value) {
@@ -264,7 +264,7 @@ ParseResult ParseWithCli(CommandSpec const& spec, int argc, wchar_t const* const
         if (!alias || alias->empty()) fail(L"A non-empty alias value is required.\n");
         request.Payload += L"\n" + *alias;
     }
-    return {.Send = true, .Request = std::move(request)};
+    return {.Send = true, .Request = std::move(request), .ExitCode = 0, .Message = {}};
 }
 
 } // namespace

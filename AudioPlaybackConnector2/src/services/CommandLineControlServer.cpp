@@ -1030,7 +1030,7 @@ void CommandLineControlServer::FinishClientLocked(PipeInstance& instance) noexce
 
 std::shared_ptr<CommandLineControlServer::RequestRecord>
 CommandLineControlServer::ExecuteOnce(apc::control::Request const& request,
-                                      std::stop_token stopToken,
+                                      std::stop_token const& stopToken,
                                       std::uint64_t deadline,
                                       apc::control::Response& uncachedResponse) {
     const auto now = m_options.CacheNow();

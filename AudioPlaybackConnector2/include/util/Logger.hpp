@@ -83,7 +83,7 @@ public:
     Logger() noexcept;
     ~Logger() noexcept;
 
-    explicit Logger(std::filesystem::path path,
+    explicit Logger(std::filesystem::path const& path,
                     std::size_t queueCapacity = 10000,
                     std::size_t rotationBytes = 2 * 1024 * 1024);
     [[nodiscard]] LogSink Sink() const noexcept;

@@ -18,8 +18,11 @@ namespace apc::app {
 
 namespace {
 apc::device::DeviceSettingsPolicy DevicePolicy(SettingsSnapshot const& snapshot) {
-    apc::device::DeviceSettingsPolicy policy{
-        snapshot.Revision, snapshot.Data.AllowIncomingConnections, snapshot.Data.GlobalReconnectOnConnectionLoss, {}};
+    apc::device::DeviceSettingsPolicy policy{snapshot.Revision,
+                                             snapshot.Data.AllowIncomingConnections,
+                                             snapshot.Data.GlobalReconnectOnConnectionLoss,
+                                             {},
+                                             {}};
     for (auto const& device : snapshot.Data.Devices) {
         if (device.ReconnectOnConnectionLoss) policy.ReconnectDeviceIds.push_back(device.Id);
     }

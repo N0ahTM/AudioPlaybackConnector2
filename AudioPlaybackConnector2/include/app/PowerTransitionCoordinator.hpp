@@ -41,9 +41,9 @@ public:
     /*------------------------------------------------------------------------------------------------------------*/
 
     void Cancel() noexcept;
-    void HandleSuspend(std::function<void()> flushSettings,
-                       std::function<std::vector<std::wstring>()> suspendDevices) noexcept;
-    void HandleResume(std::function<void()> resumeDevices, ResumeReconnectCallback reconnectAfterDelay) noexcept;
+    void HandleSuspend(std::function<void()> const& flushSettings,
+                       std::function<std::vector<std::wstring>()> const& suspendDevices) noexcept;
+    void HandleResume(std::function<void()> const& resumeDevices, ResumeReconnectCallback reconnectAfterDelay) noexcept;
     void NotifyDeviceConnected(std::wstring_view deviceId) noexcept;
     [[nodiscard]] bool IsResumeReconnectGenerationCurrent(std::uint64_t generation) const noexcept;
 

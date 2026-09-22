@@ -141,8 +141,9 @@ void PowerTransitionCoordinator::Cancel() noexcept {
     CancelResumeReconnectTimer();
 }
 
-void PowerTransitionCoordinator::HandleSuspend(std::function<void()> flushSettings,
-                                               std::function<std::vector<std::wstring>()> suspendDevices) noexcept {
+void PowerTransitionCoordinator::HandleSuspend(
+    std::function<void()> const& flushSettings,
+    std::function<std::vector<std::wstring>()> const& suspendDevices) noexcept {
     try {
         if (m_exiting.load() || m_powerSuspended) return;
         m_powerSuspended = true;
@@ -170,7 +171,7 @@ void PowerTransitionCoordinator::HandleSuspend(std::function<void()> flushSettin
     }
 }
 
-void PowerTransitionCoordinator::HandleResume(std::function<void()> resumeDevices,
+void PowerTransitionCoordinator::HandleResume(std::function<void()> const& resumeDevices,
                                               ResumeReconnectCallback reconnectAfterDelay) noexcept {
     try {
         if (m_exiting.load()) return;
@@ -256,7 +257,7 @@ bool PowerTransitionCoordinator::DeliverResumeReconnect(std::shared_ptr<ResumeSt
     if (selection.Eligible.empty()) return false;
     if (!reconnect || !*reconnect) return true;
 
-    auto completed = [state, generation, delivery](std::vector<std::wstring> attemptedIds) noexcept {
+    auto completed = [state, generation, delivery](std::vector<std::wstring> const& attemptedIds) noexcept {
         std::scoped_lock lock(state->Mutex);
         if (state->Cancelled || state->Generation != generation || state->DeliverySequence != delivery ||
             !state->DeliveryInFlight)

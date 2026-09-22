@@ -31,6 +31,25 @@ the recorded report is [source-measurements.json](source-measurements.json).
 Line counts measure physical source volume, not behavioral complexity; the adopted libraries also carry
 new validation that the old code lacked.
 
+### Attribution of the delta
+
+The total delta spans the whole branch, not just the library adoptions. Measured per commit with the same
+script (product sources only, no tests):
+
+| Change | Commit | Lines | Files |
+| --- | --- | ---: | ---: |
+| nlohmann/json codec (stricter validation included) | `a150a05` | +7 | +2 |
+| CLI11 parser (product grammar/diagnostics stay) | `a4b10da` | −55 | 0 |
+| spdlog logging (includes the new crash/emergency path) | `b176b12` | +100 | +1 |
+| In-app updater removed | `ff28e54` | −1,222 | −8 |
+| Architecture simplification (bridge, forwarding layers, dead code) | rest of branch | ≈ −2,412 | — |
+| **Total** | f5404c5 → 68a2596 | **−3,582** | −8 |
+
+The libraries are line-neutral on purpose: their value is replacing hand-rolled correctness-critical
+infrastructure (parsing edge cases, Unicode, async log queueing) with maintained upstream code, while
+product policy, validation and shutdown rules deliberately remain first-party. The size reduction comes
+from the updater removal and the architecture simplification.
+
 ## Isolated probe measurements (2026-09-19)
 
 MSVC 19.51.36248.0, CMake 4.2.3, SDK 10.0.26100.0, C++26 draft, Release, `/W4 /WX`, no PCH.

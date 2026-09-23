@@ -301,7 +301,7 @@ void NotificationService::MaybeShowRatingPrompt() noexcept {
             .SilentAudio()
             .Duration(L"short");
         if (!ShowStatusToast(xml.Build(), ExpirationFromNow(std::chrono::minutes(10)))) return;
-        // Mark as asked only once the notification was actually presented.
+        // Mark as asked after Windows accepts the notification.
         (void)controller->MarkRatingPromptShown();
     } catch (...) {
         // The rating prompt is best effort and must never break presentation.

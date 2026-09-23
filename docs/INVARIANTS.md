@@ -72,6 +72,8 @@ WIL owns each pipe instance, I/O, work and timers. Callback contexts retain the 
 
 Platform exception: Options::ConnectPipe runs under slot lock to preserve OVERLAPPED/I/O reservation. It must support concurrent slots, return immediately, never throw/reenter, and preserve ConnectNamedPipe error semantics. Tests close a client before native admission and inject eight ERROR_RETRY results through ordinary balancing/backoff/recreation.
 
+The per-slot deadline timer is cancelled and drained under `StateMutex` before a failed or completed transfer can reuse its OVERLAPPED state. Its callback only calls `CancelIoEx`; it never takes `StateMutex`, invokes a handler or waits. The slot lock prevents another transfer from rearming the timer during that drain. `Stop` cancels timers under the slot locks and drains them after releasing those locks. Silent-client deadline, malformed-request recovery and concurrent-stop tests exercise these paths.
+
 Request mutex owns request records, pending/active deliveries and byte accounting. Register pending delivery before dispatch; acquire completed response+active delivery atomically under that same mutex. Newly executed responses acquire delivery at completion commit. Handler transfers active ownership to the instance, then drops pending registration; failed dispatch releases directly, normal dispatch on ACK/disconnect. No second ownership lookup; conflicting requests never own canonical delivery.
 
 Pending/active delivery prevents TTL/pressure eviction even after another client's ACK. Real-pipe pressure test blocks a duplicate 64 KiB response behind 4 KiB buffering, ACKs the first, observes Busy for another request, then verifies intact response, single execution and restored capacity.

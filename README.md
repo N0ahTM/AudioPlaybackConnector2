@@ -48,7 +48,7 @@ The Store provides signed x64/ARM64 packages, dependencies and automatic updates
 
 ## Privacy and Crash Reports
 
-Settings stay in the current user profile. Only the current format is supported: incompatible files are backed up and preferences reset, without migration. The app sends no telemetry or update queries. Privacy mode redacts known device details; CLI `--raw` explicitly requests real identifiers. Reports and minidumps remain local unless shared; minidumps may contain sensitive memory.
+Settings stay in the current user profile. Version 0.9.1 preferences migrate on upgrade; unsupported or damaged files are preserved before defaults are used. The app sends no telemetry or update queries. Privacy mode redacts known device details; CLI `--raw` explicitly requests real identifiers. Reports and minidumps remain local unless shared; minidumps may contain sensitive memory.
 
 ## Documentation
 

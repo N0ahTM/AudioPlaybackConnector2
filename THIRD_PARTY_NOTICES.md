@@ -97,13 +97,6 @@ THE SOFTWARE.
 This software depends on the fmt lib (MIT License),
 and users must comply to its license: https://raw.githubusercontent.com/fmtlib/fmt/master/LICENSE
 
-## Dependency evaluation tools
-
-The isolated evaluation probes were removed after their evidence was captured.
-See [the dependency acceptance record](docs/DEPENDENCIES.md).
-
----
-
 ## Microsoft Windows App SDK
 
 **Version:** 2.0.1

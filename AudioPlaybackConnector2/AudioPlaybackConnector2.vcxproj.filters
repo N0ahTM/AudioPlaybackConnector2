@@ -295,6 +295,15 @@
     <Filter Include="UI\DevicePickerView">
       <UniqueIdentifier>{e5f6a7b8-c9d0-1234-efab-345678901238}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Dependencies">
+      <UniqueIdentifier>{afbf2c1d-669b-5dfb-99e8-07088d92c95a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Notices">
+      <UniqueIdentifier>{b31586c3-f8ba-5fe8-96ba-c5c3696082f0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Debugging">
+      <UniqueIdentifier>{703f4933-08df-5f35-aac2-b1fd47e552cb}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <Manifest Include="res\app.manifest">
@@ -302,11 +311,20 @@
     </Manifest>
   </ItemGroup>
   <ItemGroup>
-    <None Include="packages.config" />
+    <None Include="packages.config">
+      <Filter>Dependencies</Filter>
+    </None>
+    <Content Include="..\THIRD_PARTY_NOTICES.md">
+      <Filter>Notices</Filter>
+    </Content>
   </ItemGroup>
   <ItemGroup>
-    <Natvis Include="$(MSBuildThisFileDirectory)..\..\natvis\wil.natvis" />
-    <Natvis Include="$(MSBuildThisFileDirectory)..\..\natvis\wil.natstepfilter" />
+    <Natvis Include="$(MSBuildThisFileDirectory)..\..\natvis\wil.natvis">
+      <Filter>Debugging</Filter>
+    </Natvis>
+    <Natvis Include="$(MSBuildThisFileDirectory)..\..\natvis\wil.natstepfilter">
+      <Filter>Debugging</Filter>
+    </Natvis>
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="res\AudioPlaybackConnector2.rc">

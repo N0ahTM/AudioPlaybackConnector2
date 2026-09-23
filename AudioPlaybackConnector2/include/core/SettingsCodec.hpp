@@ -5,8 +5,14 @@
 #include <string_view>
 
 namespace apc::settings {
-// Only the current format is supported. Invalid or unsupported input throws
-// std::invalid_argument; the store preserves the original before using defaults.
+struct DecodedSettings {
+    SettingsData Data;
+    bool NeedsRewrite = false;
+};
+
+// Decode remains strict for the current format. Load also accepts the 0.9.1
+// unversioned format and marks it for an atomic rewrite as schema 2.
 [[nodiscard]] SettingsData Decode(std::string_view bytes);
+[[nodiscard]] DecodedSettings DecodePersisted(std::string_view bytes);
 [[nodiscard]] std::string Encode(SettingsData const& data);
 } // namespace apc::settings

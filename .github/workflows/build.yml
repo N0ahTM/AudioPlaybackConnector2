@@ -103,6 +103,8 @@ jobs:
         ./scripts/validate-localizations.ps1
         ./scripts/test-localizations.ps1
         ./scripts/validate-markdown-links.ps1
+        python scripts/update-vs-filters.py --check
+        if ($LASTEXITCODE -ne 0) { throw "Visual Studio filters are out of date." }
         ./scripts/update-cli-reference.ps1 -Check
         ./scripts/test-release-metadata.ps1
         ./scripts/test-store-tag-notes.ps1

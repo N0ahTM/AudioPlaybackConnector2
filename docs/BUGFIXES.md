@@ -24,15 +24,16 @@ A commit alone is not closure. Regressions reopen the same ID; fixed entries sta
 | 07 | Shutdown from a callback must not wait on itself; separate stop request from drain. | Defect | Closed | `cf4b829` |
 | 08 | Run the autostart persistence callback outside the request lock. | Defect | Closed | `22e91ac` |
 | 09 | Keep late device events away from the UI after shutdown. | Defect | Closed | `0a133c5` |
-| 10 | Only the current settings format; preserve incompatible files, never carry over old values. | Intended behavior change | Closed | `a150a05` |
+| 10 | Migrate the unversioned 0.9.1 settings format into schema 2; preserve other incompatible files. | Upgrade regression | Verification pending | 0.9.2 preparation |
 | 11 | Reject invalid device IDs and aliases before calling the backend. | Defect | Closed | `7ae26a0` |
 
-Evidence 01–11 (2026-09-21): SettingsStoreTests cover blocked I/O/subscriber budgets
+Evidence 01–11 (through 2026-09-23): SettingsStoreTests cover blocked I/O/subscriber budgets
 (TestShutdownBudgetFencesBlockedLoad/-LateWriteCompletion/-IncludesBlockedSubscriber/-RetainsBlockedWriterLifetime,
 TestFrozenPersistenceClockCannotExtendShutdownBudget, TestConcurrentShutdownCallerHasItsOwnBudget),
 wake versioning (TestManualDebounceAndIdleWait, ManualSettingsWakeup), blocked subscribers
 (TestSubscriberInitiatedShutdownDoesNotDeadlock, TestCallbackCanDestroyStoreDuringPublicationDrain,
-TestResetFencesBlockedCallback), format and validation rules (TestOnlyCurrentFormatIsAccepted,
+TestResetFencesBlockedCallback), format and validation rules (TestUnsupportedFormatsArePreserved,
+Test091SettingsMigration,
 TestDeviceIdValidationRejectsWithoutRevision, TestValidationAndLoadNormalizationMatrix) and
 policy discarding (TestSettingsPolicyRejectsOldDuplicateAndCancelledRevisions). Full CoreTests run
 and ten stress runs with seeds 920100–920109 green (%TEMP%/apc-concurrency-19b10717fba2451d874f895ca31d9236).

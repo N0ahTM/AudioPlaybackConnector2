@@ -2,6 +2,10 @@
 
 AudioPlaybackConnector2 requires Windows 10 version 2004 (build 19041) or newer. Pair the Bluetooth audio source in Windows before launching the app.
 
+**Upgrading from 0.9.1:** Version 0.9.2 migrates existing preferences, including device aliases and connection policies, to the new settings format on first launch. Unsupported or damaged files are preserved before defaults are used.
+
+If 0.9.1 was installed with a GitHub Web/Offline Setup, open the 0.9.2 App Installer feed in section 2 manually. Those setups did not register the feed, and the app no longer checks GitHub for updates. Keep the existing GitHub installation channel when upgrading; the Microsoft Store package has a separate identity.
+
 ## 1. Microsoft Store (recommended)
 
 Install [AudioPlaybackConnector2 from the Microsoft Store](https://apps.microsoft.com/detail/9n366pgkjz0k). The Store provides the Microsoft-signed package, selects x64 or ARM64, installs framework dependencies, and delivers updates automatically.

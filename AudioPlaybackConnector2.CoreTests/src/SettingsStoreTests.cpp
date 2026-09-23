@@ -254,12 +254,14 @@ void WriteBytes(std::filesystem::path const& path, std::string_view bytes) {
     return {std::istreambuf_iterator<char>(stream), {}};
 }
 
-void TestOnlyCurrentFormatIsAccepted() {
+void TestUnsupportedFormatsArePreserved() {
     const std::vector<std::string> invalid{
         "{",
         "",
         "[]",
-        R"({"language":"de","privacyModeEnabled":true})",
+        R"({"language":"de","unexpected":true})",
+        R"({"language":"de","language":"fr"})",
+        R"({"devices":[{"id":"a","autoReconnect":"yes"}]})",
         R"({"schemaVersion":1,"language":"de"})",
         R"({"schemaVersion":3,"language":"de"})",
         R"({"schemaVersion":2,"language":"de","unknown":true})",
@@ -289,6 +291,38 @@ void TestOnlyCurrentFormatIsAccepted() {
               "every replacement must use the current format and round-trip its complete state");
         static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
     }
+}
+
+void Test091SettingsMigration() {
+    auto storage = std::make_shared<ControlledStorage>();
+    storage->SetInput(
+        R"({"globalAutoReconnect":true,"globalConnectOnStartup":false,"allowIncomingConnections":true,"startWithWindows":true,"showNotifications":false,"useSystemBackdropEffects":false,"privacyModeEnabled":true,"language":"de","lastUpdateCheckUnixSeconds":123,"lastNotifiedUpdateVersion":"0.9.1","defaultDeviceMode":"specificDevice","defaultDeviceId":"phone","settingsWindowBounds":{"x":1,"y":2,"width":320,"height":240,"dpi":144},"devices":[{"id":"phone","name":"Kopfh\u00f6rer","alias":"Desk","autoReconnect":true,"connectOnStartup":false}],"lastConnectedIds":["phone"]})");
+    SettingsStore store({}, storage);
+    store.Load();
+    auto const loaded = store.Snapshot().Data;
+    Check(store.Snapshot().Revision == 1 && storage->m_corruptPreservations == 0,
+          "the 0.9.1 upgrade must load without treating the file as corrupt");
+    Check(!loaded.GlobalConnectOnStartup && loaded.GlobalReconnectOnConnectionLoss && loaded.AllowIncomingConnections &&
+              loaded.StartWithWindows && !loaded.ShowNotifications && !loaded.UseSystemBackdropEffects &&
+              loaded.PrivacyModeEnabled && loaded.Language == L"de",
+          "the 0.9.1 upgrade must preserve global preferences and reconnect fallback");
+    Check(loaded.DefaultDevice == DefaultDeviceMode::SpecificDevice && loaded.DefaultDeviceId == L"phone" &&
+              loaded.SettingsWindowBounds == PersistedWindowBounds{1, 2, 320, 240, 144} &&
+              loaded.LastConnectedIds == std::vector<std::wstring>{L"phone"},
+          "the 0.9.1 upgrade must preserve device selection, history and window placement");
+    Check(loaded.Devices.size() == 1, "the 0.9.1 upgrade must retain the saved device");
+    if (loaded.Devices.size() == 1) {
+        auto const& device = loaded.Devices.front();
+        Check(device.Id == L"phone" && device.Name == L"Kopfh\u00F6rer" && device.Alias == L"Desk",
+              "the 0.9.1 upgrade must preserve saved device identity, name and alias");
+        Check(!device.ConnectOnStartup && device.ReconnectOnConnectionLoss,
+              "the 0.9.1 upgrade must apply the per-device reconnect fallback");
+    }
+    Check(store.FlushNow(2), "migrated settings must be rewritten atomically as the current format");
+    Check(storage->Output().find("\"schemaVersion\":2") != std::string::npos &&
+              apc::settings::Decode(storage->Output()) == loaded,
+          "the migrated file must round-trip without obsolete update fields");
+    static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
 }
 
 void TestMissingEmptyAndCurrentRoundTrip() {
@@ -1217,7 +1251,8 @@ void TestConcurrentShutdownCallerHasItsOwnBudget() {
 } // namespace
 
 int RunSettingsStoreTests() {
-    TestOnlyCurrentFormatIsAccepted();
+    TestUnsupportedFormatsArePreserved();
+    Test091SettingsMigration();
     util::RuntimeApartment apartment;
     Check(apartment.Ready(), "SettingsStore tests require a usable Windows Runtime apartment");
     if (!apartment.Ready()) return g_failures;

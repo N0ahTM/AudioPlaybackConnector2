@@ -1,13 +1,13 @@
 {
-  "version": "0.9.1",
+  "version": "0.9.2",
   "locales": {
-    "en": "Maintenance update: simplified internal command handling, removed unused diagnostic code, and strengthened automated security and regression checks. No new permissions are required.",
-    "de": "Wartungsupdate: Die interne Befehlsverarbeitung wurde vereinfacht, ungenutzter Diagnosecode entfernt und automatische Sicherheits- und Regressionstests verstärkt. Es sind keine neuen Berechtigungen erforderlich.",
-    "fr": "Mise à jour de maintenance : simplification du traitement interne des commandes, suppression du code de diagnostic inutilisé et renforcement des contrôles automatisés de sécurité et de régression. Aucune nouvelle autorisation n’est requise.",
-    "es": "Actualización de mantenimiento: se simplificó el procesamiento interno de comandos, se eliminó código de diagnóstico sin usar y se reforzaron las comprobaciones automáticas de seguridad y regresión. No se requieren permisos nuevos.",
-    "ja": "メンテナンス更新です。内部のコマンド処理を簡素化し、未使用の診断コードを削除して、自動セキュリティチェックと回帰テストを強化しました。新しいアクセス許可は必要ありません。",
-    "ko": "유지 관리 업데이트입니다. 내부 명령 처리를 단순화하고 사용하지 않는 진단 코드를 제거했으며 자동 보안 및 회귀 검사를 강화했습니다. 새로운 권한은 필요하지 않습니다.",
-    "zh-Hans": "维护更新：简化了内部命令处理，移除了未使用的诊断代码，并加强了自动安全检查和回归测试。无需新增权限。",
-    "zh-Hant": "維護更新：簡化了內部命令處理，移除了未使用的診斷程式碼，並加強了自動安全檢查與迴歸測試。無需新增權限。"
+    "en": "Improved device, settings and command reliability. Microsoft Store now handles updates. Existing 0.9.1 preferences, including device aliases and connection policies, are migrated automatically.",
+    "de": "Geräte-, Einstellungs- und Befehlsfunktionen wurden zuverlässiger. Updates erfolgen nun über den Microsoft Store. Bestehende Einstellungen aus 0.9.1, einschließlich Geräte-Aliassen und Verbindungsregeln, werden automatisch übernommen.",
+    "fr": "Fiabilité améliorée des appareils, paramètres et commandes. Les mises à jour passent désormais par le Microsoft Store. Les préférences de la version 0.9.1, notamment les alias et les règles de connexion, sont migrées automatiquement.",
+    "es": "Mejoras de fiabilidad en dispositivos, ajustes y comandos. Las actualizaciones ahora se realizan mediante Microsoft Store. Las preferencias de la versión 0.9.1, incluidos los alias y las reglas de conexión, se migran automáticamente.",
+    "ja": "デバイス、設定、コマンドの信頼性を改善しました。更新は Microsoft Store から行います。0.9.1 の設定（デバイスの別名や接続ルールを含む）は自動的に移行されます。",
+    "ko": "장치, 설정 및 명령의 안정성을 개선했습니다. 업데이트는 이제 Microsoft Store에서 제공됩니다. 장치 별칭과 연결 규칙을 포함한 0.9.1 설정은 자동으로 이전됩니다.",
+    "zh-Hans": "提高了设备、设置和命令的可靠性。更新现由 Microsoft Store 提供。0.9.1 的设置（包括设备别名和连接规则）会自动迁移。",
+    "zh-Hant": "改善了裝置、設定和命令的可靠性。更新現在由 Microsoft Store 提供。0.9.1 的設定（包括裝置別名和連線規則）會自動移轉。"
   }
 }

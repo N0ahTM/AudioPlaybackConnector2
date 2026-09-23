@@ -34,6 +34,22 @@ constexpr std::string_view c_topLevelKeys[] = {"schemaVersion",
 constexpr std::string_view c_windowBoundsKeys[] = {"x", "y", "width", "height", "dpi"};
 constexpr std::string_view c_deviceKeys[] = {"id", "name", "alias", "connectOnStartup", "reconnectOnConnectionLoss"};
 constexpr std::string_view c_ratingPromptKeys[] = {"firstLaunchDate", "usageDays", "lastUsageDate", "asked"};
+constexpr std::string_view c_legacyTopLevelKeys[] = {"globalAutoReconnect",
+                                                     "globalConnectOnStartup",
+                                                     "globalReconnectOnConnectionLoss",
+                                                     "allowIncomingConnections",
+                                                     "startWithWindows",
+                                                     "showNotifications",
+                                                     "useSystemBackdropEffects",
+                                                     "privacyModeEnabled",
+                                                     "language",
+                                                     "lastUpdateCheckUnixSeconds",
+                                                     "lastNotifiedUpdateVersion",
+                                                     "defaultDeviceMode",
+                                                     "defaultDeviceId",
+                                                     "settingsWindowBounds",
+                                                     "devices",
+                                                     "lastConnectedIds"};
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Validation ////////////////////////////////////////////////////////////////////////////////////////*/
@@ -81,6 +97,18 @@ Json const& Array(Json const& object, char const* key) {
     return *found;
 }
 
+Json ParseJson(std::string_view bytes) {
+    Require(!bytes.empty() && bytes.size() <= apc::limits::c_maxSettingsFileBytes);
+    std::vector<std::unordered_set<std::string>> objectKeys;
+    return Json::parse(bytes, [&](int depth, Json::parse_event_t event, Json& value) {
+        Require(depth <= 16);
+        if (event == Json::parse_event_t::object_start) objectKeys.emplace_back();
+        if (event == Json::parse_event_t::key) Require(objectKeys.back().insert(value.get<std::string>()).second);
+        if (event == Json::parse_event_t::object_end) objectKeys.pop_back();
+        return true;
+    });
+}
+
 bool IsPersistable(SettingsData const& data) {
     if ((data.DefaultDevice != DefaultDeviceMode::LastConnected &&
          data.DefaultDevice != DefaultDeviceMode::SpecificDevice) ||
@@ -122,16 +150,8 @@ bool IsPersistable(SettingsData const& data) {
 /*------------------------------------------------------------------------------------------------------------*/
 
 SettingsData Decode(std::string_view bytes) try {
-    Require(!bytes.empty() && bytes.size() <= apc::limits::c_maxSettingsFileBytes);
     // Reject duplicate object keys rather than silently selecting the last value.
-    std::vector<std::unordered_set<std::string>> objectKeys;
-    auto const json = Json::parse(bytes, [&](int depth, Json::parse_event_t event, Json& value) {
-        Require(depth <= 16);
-        if (event == Json::parse_event_t::object_start) objectKeys.emplace_back();
-        if (event == Json::parse_event_t::key) Require(objectKeys.back().insert(value.get<std::string>()).second);
-        if (event == Json::parse_event_t::object_end) objectKeys.pop_back();
-        return true;
-    });
+    auto const json = ParseJson(bytes);
     Object(json, c_topLevelKeys);
     Require(Integer(json, "schemaVersion", -1) == c_schemaVersion);
     SettingsData data;
@@ -197,6 +217,40 @@ SettingsData Decode(std::string_view bytes) try {
     }
     Require(IsPersistable(data));
     return data;
+} catch (Json::exception const&) {
+    throw std::invalid_argument("invalid settings JSON");
+}
+
+DecodedSettings DecodePersisted(std::string_view bytes) try {
+    auto json = ParseJson(bytes);
+    Require(json.is_object());
+    if (json.contains("schemaVersion")) return {Decode(bytes), false};
+
+    // 0.9.1 wrote no schema marker. Accept only its known fields, then apply
+    // the current decoder to the normalized document before publishing state.
+    Object(json, c_legacyTopLevelKeys);
+    if (auto old = json.find("globalAutoReconnect"); old != json.end()) {
+        Require(old->is_boolean());
+        if (!json.contains("globalConnectOnStartup")) json["globalConnectOnStartup"] = *old;
+        if (!json.contains("globalReconnectOnConnectionLoss")) json["globalReconnectOnConnectionLoss"] = *old;
+        json.erase("globalAutoReconnect");
+    }
+    if (auto devices = json.find("devices"); devices != json.end()) {
+        Require(devices->is_array());
+        for (auto& device : *devices) {
+            Require(device.is_object());
+            if (auto old = device.find("autoReconnect"); old != device.end()) {
+                Require(old->is_boolean());
+                if (!device.contains("connectOnStartup")) device["connectOnStartup"] = *old;
+                if (!device.contains("reconnectOnConnectionLoss")) device["reconnectOnConnectionLoss"] = *old;
+                device.erase("autoReconnect");
+            }
+        }
+    }
+    json.erase("lastUpdateCheckUnixSeconds");
+    json.erase("lastNotifiedUpdateVersion");
+    json["schemaVersion"] = c_schemaVersion;
+    return {Decode(json.dump()), true};
 } catch (Json::exception const&) {
     throw std::invalid_argument("invalid settings JSON");
 }

@@ -6,7 +6,10 @@ $temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
 $testRoot = Join-Path $temporaryRoot ('apc-store-tag-notes-' + [guid]::NewGuid().ToString('N'))
 $tagRoot = Join-Path $testRoot 'release-tag'
 $automationRoot = Join-Path $testRoot 'store-automation'
-$packagePath = Join-Path $testRoot 'test_0.9.1.0.msixupload'
+$testVersion = [string](Get-Content -LiteralPath (Join-Path $repository 'store/whats-new.json') -Raw | ConvertFrom-Json).version
+$testPackageVersion = "$testVersion.0"
+$testPackageName = "test_$testPackageVersion.msixupload"
+$packagePath = Join-Path $testRoot $testPackageName
 $credentialNames = @('AZURE_AD_TENANT_ID', 'SELLER_ID', 'AZURE_AD_APPLICATION_CLIENT_ID', 'AZURE_AD_APPLICATION_SECRET')
 $originalCredentials = @{}
 
@@ -32,7 +35,7 @@ try {
     }
     $global:apcStoreSubmission = @{
         ApplicationPackages = @(
-            @{ FileName = 'test_0.9.1.0.msixupload'; Version = '0.9.1.0'; FileStatus = 'PendingUpload' },
+            @{ FileName = $testPackageName; Version = $testPackageVersion; FileStatus = 'PendingUpload' },
             @{ FileName = 'test_0.9.0.0.msixupload'; Version = '0.9.0.0'; FileStatus = 'Published' }
         )
         Listings = $listings
@@ -69,7 +72,7 @@ try {
         & (Join-Path $automationRoot 'scripts/release/publish-microsoft-store.ps1') `
             -ProductId 9N366PGKJZ0K `
             -PackagePath $packagePath `
-            -Version '0.9.1' `
+            -Version $testVersion `
             -WhatsNewPath './store/whats-new.json'
     } finally {
         Pop-Location

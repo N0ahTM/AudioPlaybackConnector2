@@ -608,6 +608,7 @@ void SettingsStore::Load() {
     const auto lifetime = m_impl;
     static_cast<void>(lifetime);
     SettingsData loaded;
+    bool needsRewrite = false;
     {
         std::scoped_lock lock(lifetime->mutex);
         if (lifetime->loadClaimed || lifetime->closing || lifetime->shutdownRequested) return;
@@ -625,7 +626,9 @@ void SettingsStore::Load() {
             lifetime->CompleteLoadWithoutCommit();
             return;
         }
-        loaded = apc::settings::Decode(*bytes);
+        auto decoded = apc::settings::DecodePersisted(*bytes);
+        loaded = std::move(decoded.Data);
+        needsRewrite = decoded.NeedsRewrite;
     } catch (std::exception const& exception) {
         lifetime->log.Trace(L"[SettingsStore] load failed: {0}", util::Utf8ToUtf16(exception.what()));
         lifetime->CompleteLoadWithoutCommit(lifetime->storage->PreserveCorrupt(path));
@@ -639,6 +642,8 @@ void SettingsStore::Load() {
     SettingsSnapshot snapshot;
     try {
         auto loadedData = std::make_shared<const SettingsData>(std::move(loaded));
+        std::optional<SettingsStoreWakeup::Clock::time_point> rewriteDue;
+        if (needsRewrite) rewriteDue = lifetime->wakeup->Now() + c_debounceDelay;
         {
             std::scoped_lock lock(lifetime->mutex);
             if (lifetime->shutdownRequested || lifetime->revision != 0) {
@@ -661,7 +666,11 @@ void SettingsStore::Load() {
 
             lifetime->data = std::move(loadedData);
             lifetime->revision = 1;
-            lifetime->persistedRevision = 1;
+            lifetime->persistedRevision = needsRewrite ? 0 : 1;
+            if (needsRewrite) {
+                lifetime->timerArmed = true;
+                lifetime->due = *rewriteDue;
+            }
             lifetime->loadActive = false;
         }
         lifetime->NotifyChanged();

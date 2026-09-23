@@ -6,6 +6,7 @@
 #include <core/TrayTooltipBuilder.hpp>
 #include <algorithm>
 #include <climits>
+#include <utility>
 #include <core/StringResources.hpp>
 #include <core/ThemeHelper.hpp>
 #include <ui/FlyoutPresenterStyle.hpp>
@@ -40,7 +41,7 @@ void TrayController::Initialize(HWND hwnd,
     m_showHelpCallback = std::move(showHelp);
     m_isTearingDown.store(false);
     m_hwnd = hwnd;
-    m_mainWindow = mainWindow;
+    m_mainWindow = std::move(mainWindow);
     m_pickerFlyoutState.store(PickerFlyoutState::Closed);
     m_lastLeftClickTick = 0;
     m_lastRightClickTick = 0;
@@ -774,7 +775,7 @@ bool TrayController::WaitForDevicePickerOpened(std::uint64_t previousGeneration,
                                                std::stop_token stop,
                                                std::chrono::steady_clock::time_point deadline) {
     std::unique_lock lock(m_pickerOpenedMutex);
-    m_pickerOpenedChanged.wait_until(lock, stop, deadline, [&] {
+    m_pickerOpenedChanged.wait_until(lock, std::move(stop), deadline, [&] {
         return m_isTearingDown.load() || m_pickerOpenedGeneration.load() != previousGeneration;
     });
     return m_pickerOpenedGeneration.load() != previousGeneration;

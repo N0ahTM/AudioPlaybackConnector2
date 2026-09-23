@@ -95,10 +95,6 @@ void SetItemContent(ComboBoxItem const& item, std::wstring_view text) {
     item.Content(winrt::box_value(winrt::hstring(text)));
 }
 
-void SetItemContent(NavigationViewItem const& item, std::wstring_view text) {
-    item.Content(winrt::box_value(winrt::hstring(text)));
-}
-
 std::wstring BuildVersionText(util::LogSink const& log, StringResources const& strings) {
     std::wstring label(strings.Get("About_Version"));
     try {
@@ -669,8 +665,8 @@ void SettingsWindow::InitializeSettingsContent() {
     PrivacyModeToggle().OffContent(box_value(L""));
     PrivacyModeToggle().OnContent(box_value(L""));
     auto weak = get_weak();
-    auto bindToggle = [weak](ToggleSwitch toggle, auto setter) {
-        toggle.Toggled([weak, setter](auto const& s, auto) {
+    auto bindToggle = [weak](ToggleSwitch const& toggle, auto setter) {
+        toggle.Toggled([weak, setter](auto const& s, auto const&) {
             if (auto self = weak.get()) {
                 if (auto appController = self->m_appController) {
                     ((*appController).*setter)(s.template as<ToggleSwitch>().IsOn());
@@ -718,7 +714,7 @@ void SettingsWindow::InitializeSettingsContent() {
         StartWithWindowsToggle().IsEnabled(false);
     }
 
-    StartWithWindowsToggle().Toggled([weak](auto const& sender, auto) {
+    StartWithWindowsToggle().Toggled([weak](auto const& sender, auto const&) {
         if (auto self = weak.get()) {
             if (self->m_suppressStartupToggle) return;
             auto toggle = sender.template as<ToggleSwitch>();
@@ -728,7 +724,7 @@ void SettingsWindow::InitializeSettingsContent() {
 
     bindToggle(ShowNotificationsToggle(), &apc::app::AppController::SetShowNotifications);
 
-    SystemBackdropEffectsToggle().Toggled([weak](auto const& s, auto) {
+    SystemBackdropEffectsToggle().Toggled([weak](auto const& s, auto const&) {
         if (auto self = weak.get()) {
             auto enabled = s.template as<ToggleSwitch>().IsOn();
             self->ApplySystemBackdropEffects(enabled);

@@ -556,7 +556,7 @@ void ApplicationHost::InitializeCommandLineControl() {
     m_log.Trace(L"[App] InitializeCommandLineControl()");
     auto weak = weak_from_this();
     m_commandLineControlServer.Start([weak](apc::control::Request const& request,
-                                            std::stop_token stopToken,
+                                            std::stop_token const& stopToken,
                                             std::uint64_t deadline) -> apc::control::Response {
         if (auto self = weak.lock(); self && self->m_controlCommandAdapter) {
             return self->m_controlCommandAdapter->Handle(request, stopToken, deadline);

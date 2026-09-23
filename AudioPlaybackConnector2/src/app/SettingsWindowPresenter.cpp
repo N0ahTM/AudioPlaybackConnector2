@@ -193,8 +193,9 @@ bool SettingsWindowPresenter::Close() noexcept {
 /*//////// Private Implementation ////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-bool SettingsWindowPresenter::CloseWindow(std::shared_ptr<PresenterState> const& owner,
-                                          std::shared_ptr<WindowState> state) noexcept {
+bool SettingsWindowPresenter::CloseWindow(
+    std::shared_ptr<PresenterState> const& owner,
+    std::shared_ptr<WindowState> state) noexcept { // NOLINT(performance-unnecessary-value-param)
     // Closed can synchronously reset owner->Current. Retain our own state while Close is on the stack.
     if (!state || state->Closed || !state->Window) {
         if (owner && owner->Current == state) owner->Current.reset();

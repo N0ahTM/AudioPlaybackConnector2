@@ -6,6 +6,11 @@
 #include <ui/FlyoutPresenterStyle.hpp>
 #include <util/Util.hpp>
 
+#include <functional>
+#include <memory>
+#include <string_view>
+#include <utility>
+
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
@@ -16,7 +21,7 @@ void TrayContextMenu::Initialize(winrt::Microsoft::UI::Xaml::FrameworkElement an
                                  std::function<void()> onBluetooth,
                                  std::function<void()> onExit,
                                  std::function<void()> onClosed) {
-    m_anchor = anchor;
+    m_anchor = std::move(anchor);
 
     using namespace winrt::Microsoft::UI::Xaml::Controls;
     using namespace winrt::Microsoft::UI::Xaml;
@@ -30,7 +35,7 @@ void TrayContextMenu::Initialize(winrt::Microsoft::UI::Xaml::FrameworkElement an
     };
     auto actionState = std::make_shared<MenuActionState>();
     menu.Opened([actionState](auto const&, auto const&) { actionState->Open = true; });
-    menu.Closed([actionState, onClosed](auto const&, auto const&) {
+    menu.Closed([actionState, onClosed = std::move(onClosed)](auto const&, auto const&) {
         actionState->Open = false;
         if (onClosed) onClosed();
         auto pending = std::exchange(actionState->Pending, nullptr);
@@ -48,16 +53,17 @@ void TrayContextMenu::Initialize(winrt::Microsoft::UI::Xaml::FrameworkElement an
         FontIcon icon;
         icon.Glyph(glyph);
         item.Icon(icon);
-        item.Click([action, invokeAfterClose](auto, auto) { invokeAfterClose(action); });
+        item.Click(
+            [action = std::move(action), invokeAfterClose](auto const&, auto const&) { invokeAfterClose(action); });
         return item;
     };
-    auto settingsItem = addItem("OpenSettings", L"\xE713", onSettings);
-    auto helpItem = addItem("Settings_Help", L"\xE897", onHelp);
-    auto btItem = addItem("BluetoothSettings", L"\xE702", onBluetooth);
+    auto settingsItem = addItem("OpenSettings", L"\xE713", std::move(onSettings));
+    auto helpItem = addItem("Settings_Help", L"\xE897", std::move(onHelp));
+    auto btItem = addItem("BluetoothSettings", L"\xE702", std::move(onBluetooth));
 
     MenuFlyoutSeparator sep;
 
-    auto exitItem = addItem("Exit", L"\xE8BB", onExit);
+    auto exitItem = addItem("Exit", L"\xE8BB", std::move(onExit));
 
     menu.Items().Append(settingsItem);
     menu.Items().Append(helpItem);

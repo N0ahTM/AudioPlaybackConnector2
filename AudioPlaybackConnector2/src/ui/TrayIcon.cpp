@@ -9,6 +9,9 @@
 #include <util/Util.hpp>
 #include <resource.h>
 
+#include <array>
+#include <type_traits>
+
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Helpers ///////////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
@@ -215,7 +218,7 @@ void TrayIcon::SetTooltip(std::wstring_view text) {
     std::wstring tmp(text);
     if (!m_initialized) return;
 
-    std::array<wchar_t, std::size(m_nid.szTip)> desired{};
+    std::array<wchar_t, std::extent_v<decltype(NOTIFYICONDATAW::szTip)>> desired{};
     wcsncpy_s(desired.data(), desired.size(), tmp.c_str(), _TRUNCATE);
     if (std::ranges::equal(desired, m_nid.szTip) && !m_tooltipDirty) return;
 

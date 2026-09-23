@@ -587,19 +587,21 @@ SettingsSnapshot SettingsStore::Snapshot() const {
 
 SettingsStore::Subscription SettingsStore::Subscribe(SnapshotCallback callback) {
     if (!callback) return {};
+    auto state = std::make_shared<Impl::SubscriptionState>(std::move(callback));
+    std::weak_ptr weak = m_impl;
+    std::function<void()> unsubscribe;
     std::scoped_lock lock(m_impl->mutex);
     if (m_impl->shutdownRequested || m_impl->closing) return {};
     const auto identifier = ++m_impl->nextSubscriptionId;
-    auto state = std::make_shared<Impl::SubscriptionState>(std::move(callback));
-    m_impl->subscriptions.emplace(identifier, Impl::SubscriptionEntry{state});
-    std::weak_ptr weak = m_impl;
-    return Subscription([weak, state, identifier] {
+    unsubscribe = [weak, state, identifier] {
         state->DeactivateAndWait();
         if (auto impl = weak.lock()) {
             std::scoped_lock lock(impl->mutex);
             impl->subscriptions.erase(identifier);
         }
-    });
+    };
+    m_impl->subscriptions.emplace(identifier, Impl::SubscriptionEntry{state});
+    return Subscription(std::move(unsubscribe));
 }
 
 void SettingsStore::Load() {

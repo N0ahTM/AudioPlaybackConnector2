@@ -50,7 +50,7 @@ Only schemaVersion 2 is accepted/emitted; no historical migration. Whole-input v
 
 Worker captures wake version, inspects state, unlocks then waits. Active load/writer or clean state waits for a signal; eligible dirty state waits for debounce/retry. Versioned Wait retains pre-entry notifications. SettingsStoreWakeup is always called outside store/publication locks; manual clock/barriers stay in tests. Shutdown uses real steady time even if persistence time is frozen.
 
-Required nesting order: store → publication → subscription mutex. Callbacks run without these locks. Reset releases subscription lock before erasing under store lock; shutdown retires registrations before destroying captures.
+Required nesting order: store → publication → subscription mutex. Callbacks run without these locks. Subscribe stages the callback state and unsubscribe handle before registering; allocation failure destroys external captures after the store lock unwinds. Reset releases subscription lock before erasing under store lock; shutdown retires registrations before destroying captures.
 
 Shutdown(mode, maximumAttempts, timeBudget) has one steady deadline across worker, load/write, another executor and publication drain. Attempts bound writes, not time. First caller chooses flush/discard and attempts; later callers have independent waiting budgets without changing policy. Callback shutdown never self-waits. Success means persistence and foreign callbacks drained; false means persistence failure or incomplete drain. Admission remains closed either way.
 

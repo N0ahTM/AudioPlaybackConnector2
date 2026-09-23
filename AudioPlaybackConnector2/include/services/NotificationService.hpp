@@ -67,7 +67,7 @@ private:
         winrt::hstring group,
         winrt::hstring tagToRemove,
         util::LogSink log);
-    bool ShowStatusToast(std::wstring const& xml, winrt::Windows::Foundation::DateTime const& expiration);
+    bool ShowToast(std::wstring const& xml, winrt::Windows::Foundation::DateTime const& expiration, bool isStatus);
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/

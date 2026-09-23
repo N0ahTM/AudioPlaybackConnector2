@@ -29,6 +29,7 @@ namespace {
 
 constexpr wchar_t kStatusNotificationGroup[] = L"audioPlaybackConnectorStatus";
 constexpr wchar_t kStatusNotificationTagPrefix[] = L"currentStatus:";
+constexpr wchar_t kRatingNotificationGroup[] = L"audioPlaybackConnectorRating";
 
 std::wstring
 NotificationText(StringResources const& strings, std::string_view key, std::wstring_view replacement = {}) {
@@ -209,8 +210,9 @@ NotificationService::RemoveStaleStatusToastsAsync(AppNotifications::AppNotificat
     }
 }
 
-bool NotificationService::ShowStatusToast(std::wstring const& xml,
-                                          winrt::Windows::Foundation::DateTime const& expiration) {
+bool NotificationService::ShowToast(std::wstring const& xml,
+                                    winrt::Windows::Foundation::DateTime const& expiration,
+                                    bool isStatus) {
     if (m_isTearingDown || !m_notificationManager || !m_notificationsRegistered || m_showInProgress) return false;
     auto lifetime = shared_from_this();
     m_showInProgress = true;
@@ -224,19 +226,22 @@ bool NotificationService::ShowStatusToast(std::wstring const& xml,
         winrt::check_hresult(CoCreateGuid(&identity));
         wchar_t identityText[39]{};
         StringFromGUID2(identity, identityText, static_cast<int>(std::size(identityText)));
-        auto tag = winrt::hstring(kStatusNotificationTagPrefix) + identityText;
+        auto tag = winrt::hstring(isStatus ? kStatusNotificationTagPrefix : L"ratingPrompt:") + identityText;
+        auto const group = winrt::hstring(isStatus ? kStatusNotificationGroup : kRatingNotificationGroup);
         AppNotifications::AppNotification notification{winrt::hstring(xml)};
-        notification.Group(kStatusNotificationGroup);
+        notification.Group(group);
         notification.Tag(tag);
         notification.Expiration(expiration);
         notification.ExpiresOnReboot(true);
         manager.Show(notification);
         if (m_isTearingDown || generation != m_registrationGeneration) {
-            RemoveStaleStatusToastsAsync(manager, kStatusNotificationGroup, tag, m_log);
+            RemoveStaleStatusToastsAsync(manager, group, tag, m_log);
             return false;
         }
-        auto previous = std::exchange(m_statusNotificationTag, std::move(tag));
-        RemoveStaleStatusToastsAsync(manager, kStatusNotificationGroup, std::move(previous), m_log);
+        if (isStatus) {
+            auto previous = std::exchange(m_statusNotificationTag, std::move(tag));
+            RemoveStaleStatusToastsAsync(manager, group, std::move(previous), m_log);
+        }
         return true;
     } catch (winrt::hresult_error const& ex) {
         m_log.Exception(L"[NotificationService] AppNotificationManager.Show failed", ex);
@@ -280,7 +285,7 @@ void NotificationService::ShowNotification(Content const& content,
     else
         xml.Audio(content.audio);
     xml.Duration(content.duration);
-    ShowStatusToast(xml.Build(), ExpirationFromNow(content.lifetime));
+    ShowToast(xml.Build(), ExpirationFromNow(content.lifetime), true);
 }
 
 void NotificationService::ShowAppStarted() {
@@ -310,7 +315,7 @@ void NotificationService::MaybeShowRatingPrompt() noexcept {
             .Action(NotificationText(*m_strings, "RatingPrompt_Rate"), ToastArguments{}.Action(L"rate"))
             .SilentAudio()
             .Duration(L"short");
-        if (!ShowStatusToast(xml.Build(), ExpirationFromNow(std::chrono::minutes(10)))) return;
+        if (!ShowToast(xml.Build(), ExpirationFromNow(std::chrono::minutes(10)), false)) return;
         // Mark as asked after Windows accepts the notification.
         (void)controller->MarkRatingPromptShown();
     } catch (...) {

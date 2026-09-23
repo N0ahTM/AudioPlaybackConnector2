@@ -17,8 +17,10 @@
 #include <cstdint>
 #include <functional>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <optional>
+#include <stop_token>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -637,6 +639,75 @@ void TestStopLifecycleAndRearmRetry() {
     }
 }
 
+void TestHandlerCaptureDestructionOutsideLifecycleLock() {
+    CommandLineControlServer server(TestOptions(L"handler-capture-stop", 1));
+    Event destructorEntered, allowDestruction, released, startEntered, startReturned;
+    auto capture = std::shared_ptr<int>(new int, [&](int* value) noexcept {
+        delete value;
+        server.Stop();
+        server.Start([](apc::control::Request const&, std::stop_token, std::uint64_t) {
+            return apc::control::Response{apc::control::ExitCode::Success, L"must-not-start-during-stop"};
+        });
+        destructorEntered.Signal();
+        static_cast<void>(allowDestruction.Wait(5000));
+        released.Signal();
+    });
+    server.Start([capture = std::move(capture)](apc::control::Request const&, std::stop_token, std::uint64_t) {
+        return apc::control::Response{apc::control::ExitCode::Success, L"unused"};
+    });
+    Check(server.IsRunning(), "capture-destruction fixture must start the pipe server");
+
+    std::thread stopper([&] { server.Stop(); });
+    const bool entered = destructorEntered.Wait(5000);
+    Check(entered, "handler capture destruction must reenter Stop and Start without a lifecycle self-wait");
+    if (!entered) std::terminate();
+    std::thread starter([&] {
+        startEntered.Signal();
+        server.Start([](apc::control::Request const&, std::stop_token, std::uint64_t) {
+            return apc::control::Response{apc::control::ExitCode::Success, L"after-stop"};
+        });
+        startReturned.Signal();
+    });
+    Check(startEntered.Wait(2000), "concurrent restart must enter during handler capture destruction");
+    Check(!startReturned.Wait(100), "a concurrent Start must wait for handler capture destruction");
+    allowDestruction.Signal();
+    const bool completed = released.Wait(5000);
+    Check(completed, "handler capture destruction must finish before another Start proceeds");
+    if (!completed) std::terminate();
+    stopper.join();
+    starter.join();
+    Check(server.IsRunning(), "a concurrent Start must resume after handler capture destruction");
+    server.Stop();
+}
+
+void TestStopNotificationOutsideLifecycleLock() {
+    auto options = TestOptions(L"stop-callback-reentrancy", 1);
+    auto const pipeName = options.PipeName;
+    CommandLineControlServer server(std::move(options));
+    Event registered, callbackReturned, release;
+    server.Start([&](apc::control::Request const&, std::stop_token token, std::uint64_t) {
+        std::stop_callback callback(token, [&] {
+            server.RequestStop();
+            callbackReturned.Signal();
+        });
+        registered.Signal();
+        static_cast<void>(release.Wait(5000));
+        return apc::control::Response{apc::control::ExitCode::Success, L"stopped"};
+    });
+    auto client = OpenClient(pipeName);
+    Check(client && WriteRequest(client.get(), MakeRequest(62)), "stop-callback fixture must reach the handler");
+    Check(registered.Wait(2000), "handler must register its stop callback before cancellation");
+
+    std::thread requester([&] { server.RequestStop(); });
+    const bool notified = callbackReturned.Wait(5000);
+    Check(notified, "stop callback must reenter RequestStop without holding the lifecycle lock");
+    release.Signal();
+    if (!notified) std::terminate();
+    requester.join();
+    client.reset();
+    server.Stop();
+}
+
 void TestStartupSquattingAndSlotRecovery() {
     auto options = TestOptions(L"squatting", 1);
     const auto pipeName = options.PipeName;
@@ -872,6 +943,8 @@ int RunCommandLineControlServerTests() {
     TestMalformedTimeoutOversizeAndRecovery();
     TestRequestStopCancelsControllerWorkBeforeDrain();
     TestStopLifecycleAndRearmRetry();
+    TestHandlerCaptureDestructionOutsideLifecycleLock();
+    TestStopNotificationOutsideLifecycleLock();
     TestStartupSquattingAndSlotRecovery();
     TestStartStopHandleStability();
     TestMaximumRequestAndIdleCachePruning();

@@ -72,7 +72,9 @@ ControlCommandAdapter admits one mutating command with an atomic flag and return
 
 WIL owns each pipe instance, I/O, work and timers. Callback contexts retain the instance until Stop cancels I/O and drains groups. *_nowait owners only close; Stop/recreation/destructor explicitly drain. Recreation moves old owners out under slot lock, then cancels/drains unlocked.
 
-Platform exception: Options::ConnectPipe runs under slot lock to preserve OVERLAPPED/I/O reservation. It must support concurrent slots, return immediately, never throw/reenter, and preserve ConnectNamedPipe error semantics. Tests close a client before native admission and inject eight ERROR_RETRY results through ordinary balancing/backoff/recreation.
+The lifecycle mutex protects handler admission and stop state. RequestStop and Stop copy the stop source under the mutex, then notify stop callbacks unlocked. Stop drains in-flight handlers, retires the stored handler under the mutex and destroys its captures unlocked while other starters still wait. Reentrant Stop/Start from that stopping thread returns without self-wait; other callers wait until capture destruction finishes.
+
+Platform exception: Options::ConnectPipe runs under slot lock to preserve OVERLAPPED/I/O reservation. Initial connection arms also hold the lifecycle lock so Stop cannot detach the instance vector while startup iterates it. ConnectPipe must support concurrent slots, return immediately, never throw/reenter, and preserve ConnectNamedPipe error semantics. Tests close a client before native admission and inject eight ERROR_RETRY results through ordinary balancing/backoff/recreation.
 
 The per-slot deadline timer is cancelled and drained under `StateMutex` before a failed or completed transfer can reuse its OVERLAPPED state. Its callback only calls `CancelIoEx`; it never takes `StateMutex`, invokes a handler or waits. The slot lock prevents another transfer from rearming the timer during that drain. `Stop` cancels timers under the slot locks and drains them after releasing those locks. Silent-client deadline, malformed-request recovery and concurrent-stop tests exercise these paths.
 

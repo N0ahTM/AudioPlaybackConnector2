@@ -17,6 +17,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -124,6 +125,7 @@ private:
     bool m_desiredRunning = false;
     bool m_starting = false;
     bool m_stopping = false;
+    std::thread::id m_stopThread;
     bool m_stopRequested = false;
     std::stop_source m_stopSource;
     Handler m_handler;

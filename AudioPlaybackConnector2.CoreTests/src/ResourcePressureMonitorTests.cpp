@@ -451,6 +451,27 @@ void TestConcurrentStartAndStopRemainSafe() {
     Check(!monitor.IsRunning(), "a final stop must win after concurrent lifecycle operations");
 }
 
+void TestLifecycleDoesNotCopyExternalCallback() {
+    struct ObservedCallback {
+        std::shared_ptr<std::atomic_int> Copies;
+
+        explicit ObservedCallback(std::shared_ptr<std::atomic_int> copies) : Copies(std::move(copies)) {}
+        ObservedCallback(ObservedCallback const& other) : Copies(other.Copies) { ++*Copies; }
+        void operator()(ResourcePressureSnapshot const&) const {}
+    };
+
+    auto copies = std::make_shared<std::atomic_int>(0);
+    ResourcePressureMonitor monitor(ResourcePressureMonitor::Callback{ObservedCallback{copies}},
+                                    {.PollInterval = 25ms});
+    const auto constructionCopies = copies->load();
+    for (int iteration = 0; iteration < 3; ++iteration) {
+        Check(monitor.Start(), "resource monitor must start with an observed callback");
+        monitor.Stop();
+    }
+    Check(copies->load() == constructionCopies,
+          "start and stop must not copy external callback captures under lifecycle locks");
+}
+
 void TestRepeatedLifecycleDoesNotLeakHandles() {
     ResourcePressureMonitor monitor([](ResourcePressureSnapshot const&) {}, {.PollInterval = 25ms});
     Check(monitor.Start(), "handle lifecycle warmup must start");
@@ -488,6 +509,7 @@ int RunResourcePressureMonitorTests() {
     TestExplicitProbeShortensLongPoll();
     TestExplicitProbeFromCallbackRemainsSafe();
     TestConcurrentStartAndStopRemainSafe();
+    TestLifecycleDoesNotCopyExternalCallback();
     TestRepeatedLifecycleDoesNotLeakHandles();
     return g_failures;
 }

@@ -80,7 +80,7 @@ FILETIME RelativeDueTime(std::chrono::milliseconds delay) noexcept {
 
 struct ResourcePressureMonitor::Impl {
     struct RunContext : std::enable_shared_from_this<RunContext> {
-        explicit RunContext(Callback callback,
+        explicit RunContext(std::shared_ptr<const Callback> callback,
                             Config config,
                             std::shared_ptr<std::atomic_uint64_t> sequence,
                             void const* ownerIdentity,
@@ -215,7 +215,7 @@ struct ResourcePressureMonitor::Impl {
                 const bool heartbeatDue =
                     (!LastSnapshotPublishedAt || observedAt - *LastSnapshotPublishedAt >= HeartbeatInterval);
                 if (!LastPublished || *LastPublished != values || heartbeatDue) {
-                    if (Handler) {
+                    if (Handler && *Handler) {
                         PendingSnapshots.push_back({
                             .Values = values,
                             .ObservedAt = observedAt,
@@ -254,7 +254,7 @@ struct ResourcePressureMonitor::Impl {
                     PendingSnapshots.pop_front();
                 }
                 try {
-                    Handler(*snapshot);
+                    (*Handler)(*snapshot);
                 } catch (...) {
                 }
             }
@@ -282,7 +282,7 @@ struct ResourcePressureMonitor::Impl {
             }
         }
 
-        Callback Handler;
+        std::shared_ptr<const Callback> Handler;
         DWORD NormalPeriod = 0;
         DWORD ConstrainedPeriod = 0;
         std::atomic_bool Running = false;
@@ -310,7 +310,8 @@ struct ResourcePressureMonitor::Impl {
         wil::unique_threadpool_timer_nowait PollTimer;
     };
 
-    explicit Impl(Callback callback, Config config) : Handler(std::move(callback)), MonitorConfig(config) {
+    explicit Impl(Callback callback, Config config)
+        : Handler(std::make_shared<const Callback>(std::move(callback))), MonitorConfig(config) {
         DeferredStopWork.reset(CreateThreadpoolWork(&DeferredStopCallback, this, nullptr));
     }
 
@@ -416,7 +417,9 @@ struct ResourcePressureMonitor::Impl {
         Retiring.reset();
     }
 
-    Callback Handler;
+    // Keep the callable alive while contexts are retired under LifecycleMutex.
+    // Contexts release only shared_ptr references under that lock, not user captures.
+    std::shared_ptr<const Callback> Handler;
     static constexpr std::uint32_t c_stopRequested = 0x1;
     static constexpr std::uint32_t c_stopOriginatedFromCallback = 0x2;
     Config MonitorConfig;

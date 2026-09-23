@@ -156,6 +156,6 @@ private:
     bool m_devicePickerPreloadInitialized = false;
     bool m_releaseDevicePickerPending = false;
     bool m_pickerRefreshPending = false;
-    bool m_useSystemBackdropEffects = true;
+    std::shared_ptr<std::atomic_bool> m_useSystemBackdropEffects = std::make_shared<std::atomic_bool>(true);
     std::atomic_bool m_isTearingDown = false;
 };

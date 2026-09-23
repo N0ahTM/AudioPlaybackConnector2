@@ -10,6 +10,15 @@ RefreshDevicesAsync retains the shared service State across the co_await; the De
 
 After awaited discovery, reread sessions before merging inventory/saved labels. Snapshot captures settings, complete device state and optional startup publication, then rechecks owner versions: success requires an overlapping stable interval. Bounded retries yield unavailable, never a mixed usable snapshot. Presentation diagnostics are independently sampled.
 
+| State | Execution context and callers | Synchronization | Outgoing callbacks | Cancellation and shutdown |
+| --- | --- | --- | --- | --- |
+| DeviceService task queue and drainer identity | Public commands and watcher/timer callbacks post work; the first poster drains on its own thread | `State::QueueMutex` protects only queue bookkeeping | Tasks, platform calls and fact publication run after unlocking | Shutdown is serialized as an owner task; queued work observes `IsShutdown` before changing sessions |
+| Sessions, policy, subscription and device generation | Only the serialized DeviceService drainer mutates them | Serial execution, without a second session mutex | Facts reach the subscriber from the drainer, without `QueueMutex` or `SnapshotMutex` | Shutdown stops the watcher, closes sessions, publishes the terminal fact and retires the subscriber |
+| Published device snapshot | Drainer publishes; any thread may read | `State::SnapshotMutex` protects the copy and replacement | No callback under this mutex | The terminal snapshot records shutdown; readers receive a value copy |
+| Device operation and posted-task completions | Serialized drainer resolves; callers wait or cancel | Each completion's own mutex and condition variable; waits release that mutex | Notifications occur after unlocking | First terminal result wins; shutdown resolves pending operations and stop/deadline can end a caller's wait |
+| Watcher inventory, registration and generation | DeviceService's serialized context applies watcher facts; native callbacks and awaited refreshes post back to it | Serialized executor for inventory; atomic generation and stop flags fence cross-thread entry | Fact sink runs from the owner context, not from the native callback | Stop invalidates the generation and registration; shutdown closes admission; stale refresh results cannot publish |
+| Device fact presentation fence | Controller fact normalization writes; queued UI presentation checks tokens | `DeviceFactPublicationFence::m_mutex` protects per-device connection/status generations | No callback under the mutex | Changed facts invalidate older UI tokens; exhausted generations reject presentation |
+
 ## Controller event delivery
 
 Commands/snapshots lease the concrete SettingsStore and DeviceService. RequestStop monotonically closes command/event admission, invalidates queued recipients and cancels queued policy without waiting; admitted work may finish and retain its committed result. Shutdown requests stop and drains leases, admitted device facts and foreign callbacks outside locks. Device-fact counters use the event mutex only for admission/completion, never store calls. Host cancels transport before controller drain.
@@ -28,11 +37,13 @@ Host marshals once to UI and rechecks the fence before presenting. Its weak pres
 
 Tests cover ordered/reentrant delivery, capture/reset/destruction races, capture invalidation, blocked observers, native-fact persistence without commands, saved-name handling, late callbacks and stop/drain.
 
-| State | Owner and synchronization | Lifetime boundary |
-| --- | --- | --- |
-| Next revision, recipients, pending queue and drainer identity | `AppController::EventState::Mutex` | Closing rejects registration and publication and discards queued delivery |
-| Subscription activity and in-flight admission | The same event mutex | Reset disables admission before waiting for an active callback; reset on the drainer never waits on itself |
-| Handler captures and current delivery | Shared registration and the one active drainer | Capture destruction happens outside the mutex; reentrant registration and reset are allowed |
+| State | Execution context and callers | Synchronization | Outgoing callbacks | Cancellation and shutdown |
+| --- | --- | --- | --- | --- |
+| Next revision, recipients, pending queue and drainer identity | Controller publishers and the one active drainer | `AppController::EventState::Mutex` | Recipient handlers run after unlocking | Closing rejects registration/publication and discards queued delivery |
+| Subscription activity and in-flight admission | Subscriber reset, publisher and shutdown caller | The same event mutex; callback waits release it | No handler under the mutex | Reset disables admission before waiting; reset on the drainer never waits on itself |
+| Handler captures and current delivery | Active drainer and subscription owners | Shared registration lifetime | Capture destruction runs unlocked; reentrant registration and reset are allowed | Shutdown drains foreign delivery before releasing captures |
+| Controller command admission and presentation watermarks | Public commands, owner facts and snapshot readers | `AppController::m_stateMutex`; snapshots of SettingsStore/DeviceService are captured unlocked and version-checked afterward | No owner call or subscriber callback under this mutex | RequestStop closes admission; Shutdown waits with `m_noActiveCalls` while the mutex is released |
+| ApplicationHost composition and teardown | UI thread owns windows and presentation; native callbacks enter through weak/generation gates | UI-thread confinement plus atomic start/exit/result flags, without a host owner mutex | Pipe, controller, WinUI and logger calls follow the explicit teardown order, outside host locks | Exiting closes pipe/UI admission before controller drain, then stops timer/subscription owners and releases windows |
 
 `UiRefreshCoalescer::m_mutex` and the emergency logger's `TailLock` are leaf locks: they protect only local state and are not held across callbacks. SAL marks their guarded fields; the emergency ring methods also require that the caller does not hold `TailLock`. The crash scratch buffer is separately owned by the `Dumping` gate. A focused MSVC ConcurrencyCheck probe reports C26130 for an intentionally unguarded write while the annotated production owners pass; this does not replace the full lock/callback audit.
 
@@ -87,6 +98,13 @@ Pending/active delivery prevents TTL/pressure eviction even after another client
 CacheNow is monotonic/concurrent and sampled outside request and pipe-slot locks; completion paths pass the sampled time through locked state transitions. SetCacheTimer runs under the request lock and must not wait, throw or invoke callbacks inline. Defaults are steady_clock/SetThreadpoolTimer. Server owns/drains the native timer. Tests freeze time across real ticks, advance both retention TTLs, require timer idle before another request/Stop, then verify the entire byte budget and reexecution after expiry. No private cache-reading hook.
 
 CoreRuntime compiles the server once; tests link identical production layout without test macros.
+
+| State | Execution context and callers | Synchronization | Outgoing callbacks | Cancellation and shutdown |
+| --- | --- | --- | --- | --- |
+| Start/stop admission, handler and pipe-instance collection | Public lifecycle calls and retry/deferred-stop callbacks | `m_lifecycleMutex`; native start preparation and handler capture destruction happen unlocked | No handler or log callback under this mutex | Stop closes admission, requests stop unlocked and drains all detached instances before retiring the handler |
+| Per-instance pipe, OVERLAPPED phase and deadlines | Native I/O, timer and handler-work callbacks | Each `PipeInstance::StateMutex`; slot cleanup may acquire `m_requestMutex` afterward | Handler and trust check run unlocked; the documented native connect/disconnect and deadline-timer operations stay under the slot lock | Stop disarms under slot locks, then drains callbacks and I/O unlocked before destroying instances |
+| Correlation records, pending deliveries and cache byte budget | Handler work, acknowledgement/I/O completion and prune timer | `m_requestMutex`; no path acquires a slot lock while holding it | No handler, clock or log call under the mutex; the documented nonblocking timer submission is the platform exception | Active deliveries cannot be evicted; Stop clears pending ownership after handlers drain, and the server destructor drains the prune timer |
+| Control adapter mutation admission | Concurrent validated CLI requests | `ControlCommandAdapter::m_mutationActive` atomic gate; read-only calls need no gate | Controller and localization calls run after admission, without an adapter lock | The gate is released after response formatting; server stop token/deadline reaches the controller action |
 
 Each handled command initializes its own util::RuntimeApartment on the arriving threadpool thread; apartments are never shared across commands. The thread_local active-server pointer is the reentrancy key for in-process handler callbacks: a handler that reenters Stop defers it, and a destructor meeting itself terminates instead of double-draining.
 
@@ -169,6 +187,13 @@ AdaptiveResourceController owns pressure observation, policy, retry/schedule and
 
 Capture authorization briefly, then unlock before logging, tray query, picker preload/release or UI scheduling. Later pressure queues another evaluation; publication rechecks fence so stale evaluation cannot restore positive authorization. Preload → AppController::Snapshot → ResourceStatus takes the same mutex, so holding it across preload self-deadlocks. Evidence is source/build inspection; headless tests do not instantiate this UI path.
 
+| State | Execution context and callers | Synchronization | Outgoing callbacks | Cancellation and shutdown |
+| --- | --- | --- | --- | --- |
+| Resource monitor lifecycle and active run context | Start/Stop and deferred native stop | `LifecycleMutex` serializes replacement/drain; atomic active context admits probes | Public handler runs outside the mutex; documented native drain is the exception | Stop invalidates the epoch, disarms and drains the retiring context before replacement |
+| Probe reduction, pending snapshots and native arm state | Native wait/timer callbacks | Run-context `ControlMutex`; probe tickets reject older samples | Native measurements and public handler run unlocked | Shutdown disarms under lock, then drains native callbacks after unlocking |
+| Public callback count | Admitted monitor delivery and external Stop | `PublicCallbackMutex`; the wait releases it | Handler runs without this mutex | External Stop waits for admitted delivery; self-stop defers its own drain |
+| Resource authorization and published status | Monitor callback, UI evaluation and snapshot readers | `AdaptiveResourceController::m_snapshotMutex` protects authorization sequence and snapshot copy | Logging, tray/picker and dispatch calls run unlocked | Stop closes admission and invalidates timers; stale evaluations cannot restore authorization |
+
 ## Logging ownership and native crash registration
 
 App constructs Logger → CrashHandlers → ApplicationHost; teardown reverses order. Weak LogSink owns neither worker nor app. Shutdown closes admission once, admitted calls finish, then private spdlog queue drains. Overflow replaces queued entries and counts drops; queued flush is best effort. Successful Shutdown acknowledges drain.
@@ -179,11 +204,22 @@ Only CrashHandlers and native callbacks access the process registration slot. Co
 
 LoggerTests cover overflow, concurrent shutdown, late calls, rotation/failure/Unicode, emergency output after destruction, and real exclusive-oplock blocked rotation with both retained/destroyed owners followed by cleanup. No fake product sink. CrashHandlerTests run 25 registration/restoration cycles and five fatal child paths (terminate, abort, invalid parameter, unhandled SEH, vectored) after Logger destruction; assert exit, tail, minidump signature and exception code. Corrupt-heap/exhausted-stack behavior is not simulated.
 
+| State | Execution context and callers | Synchronization | Outgoing callbacks | Cancellation and shutdown |
+| --- | --- | --- | --- | --- |
+| Logger admission, active calls and shutdown result | Application and worker log callers; owner shutdown | Logger state `Mutex` and condition variable; wait releases the mutex | spdlog/I/O runs after admission, without the mutex | Shutdown closes admission, drains active calls and retains state if the bounded wait expires |
+| Emergency log tail and dump scratch | Any emergency caller and fatal dump path | `TailLock` protects ring entries; atomic `Dumping` owns scratch | File I/O runs after the tail lock is released | Emergency state survives until the dump/cleanup work completes |
+| Process crash registration | Serialized application owner and native exception callbacks | Seq-cst slot and entry counter, without an owner mutex | Fatal processing runs after retaining the context | Owner closes the slot, restores handlers and drains observed entries before release |
+
 ## Tray theme delivery
 
 TrayController owns the connecting animation, transient-error deadline/text and their two HWND timers on UI. It derives each refresh from one AppSnapshot and the existing tooltip builder; no device-status cache or extra worker is introduced. Host forwards timer messages and coalesces requested refreshes, retaining the tray owner across reentrant rendering. Teardown closes admission and stops both timers before hiding the flyout; late timer messages cannot restart them. Native animation/error-expiry acceptance remains open.
 
 Host forwards WM_SETTINGCHANGE directly to TrayController on UI. Tray owns initial/last theme; ImmersiveColorSet changes refresh it. Delivery/teardown share UI; no global registry, mutex, callback lease or cross-thread unsubscribe. Taskbar recreation forces refresh. GetSystemTheme is stateless. Source/build verification exists; interactive theme switching remains a runtime check.
+
+| State | Execution context and callers | Synchronization | Outgoing callbacks | Cancellation and shutdown |
+| --- | --- | --- | --- | --- |
+| Tray animation, error state, theme and HWND timers | UI messages and host presentation calls | UI-thread confinement; one shared atomic backdrop preference is retained by the menu's Opened handler | Controller reads and native UI calls occur on UI | Teardown stops timers and closes presentation before the flyout is released |
+| Picker-open acknowledgement | UI Opened event publishes; control callers wait | `m_pickerOpenedMutex` and generation/teardown atomics; wait releases the mutex | No UI call under the wait mutex | Teardown wakes waiters; stop/deadline bounds each wait |
 
 ## Localization ownership
 
@@ -192,6 +228,10 @@ Host owns/publishes StringResources, loading English+overlay before localized se
 Parse/convert/build candidates outside publication lock. Invalid baseline preserves old map; missing/invalid regional data keeps English. Empty keys/non-string values reject the resource. Short swap publishes complete map; Get copies under reader lock. Guarantee is per lookup, not multiple background reads.
 
 Publish language before tray/settings relocalization on UI. Selection handler does not relocalize against old resources; unloaded windows update pending language and use current resources at Loaded. Tests embed all eight real resources and cover fallback, concurrent replacement, independence and retained lifetime. WinUI language/layout remains interactive acceptance.
+
+| State | Execution context and callers | Synchronization | Outgoing callbacks | Cancellation and shutdown |
+| --- | --- | --- | --- | --- |
+| Current localized string map | UI Initialize publishes; UI/worker consumers call Get | `StringResources::m_lock` swaps a complete candidate and protects individual lookup copies | Parsing, logging and UI relocalization run unlocked | Consumers retain the resource instance; publication replaces the map without exposing partial contents |
 
 ## Notification ownership
 
@@ -212,6 +252,13 @@ ApplicationHost owns one noncopyable SettingsWindowPresenter on UI. The facade h
 UiDispatcher owns general UI delivery. UI callers run inline; workers try the asynchronous dispatcher, then a private HWND message. Native fallback entries have a claim bit so a failed post cannot reject work already taken by UI. Queue claims and posting count are mutex-protected; PostMessage, callbacks and capture destruction run unlocked. Stop runs on UI, closes admission, drops queued work and waits only for admitted nonblocking PostMessage calls (the condition-variable wait releases the mutex), so the host can then destroy its HWND. Already queued dispatcher delegates hold weak state and do nothing after Stop/destruction. The host requests pipe cancellation and stops the dispatcher before controller draining; this wakes admitted UI-action waiters without waiting for queued UI work. Producers arriving later are rejected. Native message-window tests cover concurrent posts, post failure, stop racing producers, late dispatch and reentrant capture destruction. RunAndWait uses completion, caller-cancellation and persistent shutdown events with the remaining deadline, without periodic polling. The gate distinguishes cancellation before execution from an indeterminate running action; UI admission independently checks cancellation/deadline. Tests cover inline failure, deferred success, deadline, cancellation, reentrant shutdown during execution and multiple shutdown waiters.
 
 Host constructs UiRefreshScheduler with asynchronous serial UI dispatcher and weak render callback; then only Request/Stop. CoreRuntime implementation has one native threadpool timer, no dedicated worker/HWND fallback. Timer allocation failure fails construction. Dispatch rejection/exception keeps reservation, retrying after 100 ms; render retry backs off 100–3200 ms. Host retry mask excludes transient-error bit.
+
+| State | Execution context and callers | Synchronization | Outgoing callbacks | Cancellation and shutdown |
+| --- | --- | --- | --- | --- |
+| UiDispatcher fallback queue, claims and active PostMessage calls | Worker producers post; UI thread claims and runs work | `State::Mutex`; waits release it | Dispatcher, PostMessage, work and capture destruction run unlocked | Stop rejects producers, discards queued work and waits for admitted nonblocking posts before HWND teardown |
+| UI refresh coalescing, tickets and render retries | Any requester, timer callback and serial UI drain | `UiRefreshCoalescer::m_mutex` for pending flags; atomic tickets fence superseded dispatches; failure count belongs to UI | Enqueue and render run outside the coalescer and timer locks | Stop cancels pending flags/tickets; weak dispatched work cannot render after state release |
+| UI refresh native timer | Request/retry and timer callback | `State::TimerMutex` serializes native arm/disarm only | Timer callback retains state, disassociates and posts to UI after unlocking | Stop disarms under the mutex, then drains the timer outside it |
+| One pending UI control action | UI claimant and cancelling/deadline caller | `ControlUiActionGate` atomics; Pending-to-Running has one winner | Action executes after admission without a gate lock | Cancellation wins only before execution; a running action is reported indeterminate until completion |
 
 Coalescer owns flags+one reservation through Request/BeginDrain/CompleteDrain/Cancel. Requests merge while queued/rendering/retrying. Delivery tickets admit once; duplicate/old callbacks cannot consume newer passes. UI context owns rendering/failure count. Dispatch must enqueue asynchronously; false means nothing accepted. Native timer lock protects arm/disarm only; no dispatch/render/logging/foreign callback under timer/coalescer locks.
 

@@ -86,10 +86,6 @@ void TrayContextMenu::ApplyLanguage() {
     if (m_exitItem) m_exitItem.Text(winrt::hstring(m_strings->Get("Exit")));
 }
 
-void TrayContextMenu::SetSystemBackdropEffectsEnabled(bool enabled) noexcept {
-    m_useSystemBackdropEffects->store(enabled, std::memory_order_relaxed);
-}
-
 bool TrayContextMenu::ShowAt(winrt::Windows::Foundation::Point point) {
     if (!m_menu) {
         m_log.Trace(L"[TrayContextMenu] ERROR: m_menu is null");

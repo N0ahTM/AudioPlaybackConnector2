@@ -59,7 +59,7 @@ void TrayController::Initialize(HWND hwnd,
 
     auto root = m_mainWindow.Content().as<Controls::Grid>();
     if (root && root.XamlRoot()) {
-        m_contextMenu = std::make_unique<TrayContextMenu>(m_log, m_strings);
+        m_contextMenu = std::make_unique<TrayContextMenu>(m_log, m_strings, m_useSystemBackdropEffects);
         m_contextMenu->Initialize(
             root,
             [weak]() {
@@ -110,8 +110,7 @@ void TrayController::ApplyLanguage() {
 }
 
 void TrayController::SetSystemBackdropEffectsEnabled(bool enabled) noexcept try {
-    m_useSystemBackdropEffects = enabled;
-    if (m_contextMenu) m_contextMenu->SetSystemBackdropEffectsEnabled(enabled);
+    m_useSystemBackdropEffects->store(enabled, std::memory_order_relaxed);
     if (m_pickerFlyout) {
         if (enabled) {
             m_pickerFlyout.SystemBackdrop(winrt::Microsoft::UI::Xaml::Media::DesktopAcrylicBackdrop());
@@ -892,7 +891,7 @@ Controls::Flyout TrayController::CreatePickerFlyout() {
     }
     Controls::Flyout flyout;
     flyout.ShouldConstrainToRootBounds(false);
-    if (m_useSystemBackdropEffects) {
+    if (m_useSystemBackdropEffects->load(std::memory_order_relaxed)) {
         flyout.SystemBackdrop(winrt::Microsoft::UI::Xaml::Media::DesktopAcrylicBackdrop());
     }
     flyout.Content(m_devicePickerView);
@@ -914,7 +913,7 @@ Controls::Flyout TrayController::CreatePickerFlyout() {
                 }
                 apc::ui::ApplyFlyoutPresenterStyle(
                     self->m_pickerFlyout.Content().as<winrt::Microsoft::UI::Xaml::DependencyObject>(),
-                    self->m_useSystemBackdropEffects,
+                    self->m_useSystemBackdropEffects->load(std::memory_order_relaxed),
                     self->m_log);
             }
         } catch (winrt::hresult_error const& ex) {

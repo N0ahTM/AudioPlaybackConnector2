@@ -76,7 +76,7 @@ Request mutex owns request records, pending/active deliveries and byte accountin
 
 Pending/active delivery prevents TTL/pressure eviction even after another client's ACK. Real-pipe pressure test blocks a duplicate 64 KiB response behind 4 KiB buffering, ACKs the first, observes Busy for another request, then verifies intact response, single execution and restored capacity.
 
-CacheNow is monotonic/concurrent; SetCacheTimer runs under cache lock and must not wait, throw or invoke callbacks inline. Defaults are steady_clock/SetThreadpoolTimer. Server owns/drains the native timer. Tests freeze time across real ticks, advance both retention TTLs, require timer idle before another request/Stop, then verify the entire byte budget and reexecution after expiry. No private cache-reading hook.
+CacheNow is monotonic/concurrent and sampled outside the request lock. SetCacheTimer runs under that lock and must not wait, throw or invoke callbacks inline. Defaults are steady_clock/SetThreadpoolTimer. Server owns/drains the native timer. Tests freeze time across real ticks, advance both retention TTLs, require timer idle before another request/Stop, then verify the entire byte budget and reexecution after expiry. No private cache-reading hook.
 
 CoreRuntime compiles the server once; tests link identical production layout without test macros.
 

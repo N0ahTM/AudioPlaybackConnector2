@@ -438,6 +438,7 @@ void CommandLineControlServer::Stop() noexcept {
         }
         instances.clear();
 
+        const auto pruneTime = m_options.CacheNow();
         {
             std::lock_guard requestLock(m_requestMutex);
             m_pendingDeliveries.clear();
@@ -450,7 +451,7 @@ void CommandLineControlServer::Stop() noexcept {
                 entry->second->ActiveDeliveries = 0;
                 ++entry;
             }
-            ScheduleRequestPruneLocked(m_options.CacheNow());
+            ScheduleRequestPruneLocked(pruneTime);
         }
         {
             std::lock_guard lifecycleLock(m_lifecycleMutex);
@@ -803,8 +804,8 @@ void CALLBACK CommandLineControlServer::OnRequestPrune(PTP_CALLBACK_INSTANCE, vo
     auto* owner = static_cast<CommandLineControlServer*>(context);
     if (!owner) return;
     try {
-        std::lock_guard requestLock(owner->m_requestMutex);
         const auto now = owner->m_options.CacheNow();
+        std::lock_guard requestLock(owner->m_requestMutex);
         owner->PruneRequestRecords(now);
         owner->ScheduleRequestPruneLocked(now);
     } catch (...) {
@@ -1117,10 +1118,11 @@ CommandLineControlServer::ExecuteOnce(apc::control::Request const& request,
         response.Payload = std::wstring{};
     }
 
+    const auto completedAt = m_options.CacheNow();
     {
         std::lock_guard requestLock(m_requestMutex);
         record->Response = std::move(response);
-        record->CompletedAt = m_options.CacheNow();
+        record->CompletedAt = completedAt;
         record->IsComplete = true;
         ++record->ActiveDeliveries;
         const auto actualBytes = RequestBytes(record->Request) + ResponseBytes(record->Response);
@@ -1137,13 +1139,14 @@ void CommandLineControlServer::CompleteDelivery(apc::control::CorrelationId corr
                                                 std::shared_ptr<RequestRecord> const& record,
                                                 bool acknowledged) noexcept {
     try {
+        const auto completedAt = m_options.CacheNow();
         {
             std::lock_guard requestLock(m_requestMutex);
             const auto entry = m_requestRecords.find(correlationId);
             if (entry == m_requestRecords.end() || entry->second != record || !record->IsComplete) return;
             if (record->ActiveDeliveries > 0) --record->ActiveDeliveries;
             record->Acknowledged = record->Acknowledged || acknowledged;
-            record->LastDeliveryCompletedAt = m_options.CacheNow();
+            record->LastDeliveryCompletedAt = completedAt;
             PruneRequestRecords(record->LastDeliveryCompletedAt);
             ScheduleRequestPruneLocked(record->LastDeliveryCompletedAt);
         }
@@ -1154,6 +1157,7 @@ void CommandLineControlServer::CompleteDelivery(apc::control::CorrelationId corr
 
 void CommandLineControlServer::CompletePendingDelivery(apc::control::CorrelationId correlationId) noexcept {
     try {
+        const auto now = m_options.CacheNow();
         std::lock_guard requestLock(m_requestMutex);
         auto pending = m_pendingDeliveries.find(correlationId);
         if (pending == m_pendingDeliveries.end()) return;
@@ -1162,7 +1166,7 @@ void CommandLineControlServer::CompletePendingDelivery(apc::control::Correlation
         } else {
             m_pendingDeliveries.erase(pending);
         }
-        ScheduleRequestPruneLocked(m_options.CacheNow());
+        ScheduleRequestPruneLocked(now);
     } catch (...) {
         Trace(L"pending delivery cleanup failed");
     }

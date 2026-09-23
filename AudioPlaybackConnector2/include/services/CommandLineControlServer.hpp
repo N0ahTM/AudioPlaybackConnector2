@@ -43,8 +43,8 @@ public:
         // must return immediately, preserve Win32 error semantics and never reenter.
         std::move_only_function<BOOL(HANDLE, LPOVERLAPPED) noexcept> ConnectPipe =
             [](HANDLE pipe, LPOVERLAPPED operation) noexcept { return ConnectNamedPipe(pipe, operation); };
-        // Cache time and timer submission may run under the request lock. Like
-        // native timer submission they must not wait, throw or invoke callbacks inline.
+        // Cache time is sampled outside the request lock. Timer submission is a
+        // native nonblocking operation under that lock and must not reenter.
         std::move_only_function<std::chrono::steady_clock::time_point() noexcept> CacheNow = []() noexcept {
             return std::chrono::steady_clock::now();
         };

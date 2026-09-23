@@ -496,6 +496,36 @@ void TestRequestStopCancelsControllerWorkBeforeDrain() {
 
 void TestStopLifecycleAndRearmRetry() {
     {
+        auto options = TestOptions(L"start-stop-race", 1);
+        const auto pipeName = options.PipeName;
+        CommandLineControlServer server(std::move(options));
+        auto handler = [](apc::control::Request const&, std::stop_token, std::uint64_t) {
+            return apc::control::Response{apc::control::ExitCode::Success, L"after-race"};
+        };
+        for (int iteration = 0; iteration < 12; ++iteration) {
+            Event begin;
+            std::jthread starter([&] {
+                (void)begin.Wait(INFINITE);
+                server.Start(handler);
+            });
+            std::jthread stopper([&] {
+                (void)begin.Wait(INFINITE);
+                server.Stop();
+            });
+            begin.Signal();
+            starter.join();
+            stopper.join();
+            server.Stop();
+            Check(!server.IsRunning(), "concurrent startup and stop must leave a stoppable server");
+            server.Start(handler);
+            auto response = Exchange(pipeName, MakeRequest(490 + iteration));
+            Check(response && response->Payload == L"after-race",
+                  "concurrent startup and stop must preserve a working restart");
+            server.Stop();
+        }
+    }
+
+    {
         auto options = TestOptions(L"stop-silent", 1);
         const auto pipeName = options.PipeName;
         CommandLineControlServer server(std::move(options));

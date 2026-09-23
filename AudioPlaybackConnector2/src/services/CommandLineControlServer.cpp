@@ -282,11 +282,17 @@ void CommandLineControlServer::Start(Handler handler) noexcept {
 }
 
 bool CommandLineControlServer::TryStart() noexcept {
-    std::unique_lock lifecycleLock(m_lifecycleMutex);
-    if (!m_desiredRunning || m_running.load() || m_starting || m_stopping) return m_running.load();
-    m_starting = true;
+    {
+        std::lock_guard lifecycleLock(m_lifecycleMutex);
+        if (!m_desiredRunning || m_running.load() || m_starting || m_stopping) return m_running.load();
+        m_starting = true;
+    }
 
+    std::vector<std::unique_ptr<PipeInstance>> instances;
+    std::stop_source stopSource(std::nostopstate);
+    bool prepared = false;
     try {
+        stopSource = std::stop_source{};
         auto security = apc::control::PipeSecurityAttributes::CreateCurrentUserOnly();
         if (!security) ThrowWin32Error(GetLastError());
 
@@ -298,7 +304,6 @@ bool CommandLineControlServer::TryStart() noexcept {
         } else {
             pipeName = m_options.PipeName;
         }
-        std::vector<std::unique_ptr<PipeInstance>> instances;
         instances.reserve(m_options.PipeInstanceCount);
         std::size_t availableInstances = 0;
         DWORD instanceCreationError = ERROR_SUCCESS;
@@ -339,35 +344,49 @@ bool CommandLineControlServer::TryStart() noexcept {
             instances.push_back(std::move(instance));
         }
         if (availableInstances == 0) ThrowWin32Error(instanceCreationError);
+        prepared = true;
+    } catch (...) {
+    }
+    if (!prepared) instances.clear(); // Close partial native handles before allowing another start.
 
-        m_stopSource = std::stop_source{};
-        m_instances = std::move(instances);
-        m_accepting = true;
-        m_running = true;
+    std::unique_lock lifecycleLock(m_lifecycleMutex);
+    if (prepared && (!m_desiredRunning || m_stopRequested || m_stopping)) {
+        // Stop may have closed admission while native handles were being created.
+        lifecycleLock.unlock();
+        instances.clear();
+        lifecycleLock.lock();
         m_starting = false;
-        m_startRetryFailures = 0;
-        SetThreadpoolTimer(m_startRetryTimer.get(), nullptr, 0, 0);
-
-        bool armDeferred = false;
-        for (auto& instance : m_instances)
-            armDeferred = !ArmConnection(*instance) || armDeferred;
         lifecycleLock.unlock();
         m_lifecycleChanged.notify_all();
-        if (armDeferred) Trace(L"pipe instance arm deferred");
-        Trace(L"server started");
-        return true;
-    } catch (...) {
-        m_accepting = false;
-        m_running = false;
+        return false;
+    }
+    if (!prepared) {
         m_starting = false;
-        m_instances.clear();
-        ++m_startRetryFailures;
-        ScheduleStartRetryLocked();
+        if (m_desiredRunning && !m_stopRequested && !m_stopping) {
+            ++m_startRetryFailures;
+            ScheduleStartRetryLocked();
+        }
         lifecycleLock.unlock();
         m_lifecycleChanged.notify_all();
         Trace(L"server start failed; control endpoint remains optional");
         return false;
     }
+
+    m_stopSource = std::move(stopSource);
+    m_instances = std::move(instances);
+    m_accepting = true;
+    m_running = true;
+    m_starting = false;
+    m_startRetryFailures = 0;
+    SetThreadpoolTimer(m_startRetryTimer.get(), nullptr, 0, 0);
+    bool armDeferred = false;
+    for (auto& instance : m_instances)
+        armDeferred = !ArmConnection(*instance) || armDeferred;
+    lifecycleLock.unlock();
+    m_lifecycleChanged.notify_all();
+    if (armDeferred) Trace(L"pipe instance arm deferred");
+    Trace(L"server started");
+    return true;
 }
 
 void CommandLineControlServer::ScheduleStartRetryLocked() noexcept {
@@ -428,6 +447,7 @@ void CommandLineControlServer::Stop() noexcept {
             stopSource = m_stopSource;
             m_stopping = true;
             m_stopThread = std::this_thread::get_id();
+            m_lifecycleChanged.wait(lifecycleLock, [this] { return !m_starting; });
             instances.swap(m_instances);
         }
         stopSource.request_stop();

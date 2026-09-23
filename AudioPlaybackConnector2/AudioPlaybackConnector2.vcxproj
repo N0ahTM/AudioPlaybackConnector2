@@ -124,7 +124,6 @@
     <ClInclude Include="include\app\AppPresentation.hpp" />
     <ClInclude Include="include\app\AdaptiveActionRetryBackoff.hpp" />
     <ClInclude Include="include\app\AdaptiveResourcePolicy.hpp" />
-    <ClInclude Include="include\app\RatingPromptChannel.hpp" />
     <ClInclude Include="include\app\RatingPromptPolicy.hpp" />
     <ClInclude Include="include\app\AdaptiveScheduleState.hpp" />
     <ClInclude Include="include\control\ControlUiActionGate.hpp" />

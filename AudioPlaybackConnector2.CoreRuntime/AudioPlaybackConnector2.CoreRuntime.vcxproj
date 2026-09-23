@@ -72,7 +72,6 @@
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\UiRefreshScheduler.hpp" />
     <ClInclude Include="include\pch.h" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveResourcePolicy.hpp" />
-    <ClInclude Include="..\AudioPlaybackConnector2\include\app\RatingPromptChannel.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\RatingPromptPolicy.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppController.hpp" />
     <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppModels.hpp" />

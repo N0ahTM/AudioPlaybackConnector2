@@ -2,10 +2,10 @@
 #include <windows.h>
 #include <appmodel.h>
 #include <objbase.h>
+#include <winrt/Windows.ApplicationModel.h>
 #include <winrt/Windows.Foundation.h>
 #include <services/NotificationService.hpp>
 #include <app/AppController.hpp>
-#include <app/RatingPromptChannel.hpp>
 #include <app/RatingPromptPolicy.hpp>
 #include <algorithm>
 #include <type_traits>
@@ -55,6 +55,16 @@ bool IsPackagedProcess() {
     UINT32 length = 0;
     const auto result = GetCurrentPackageFullName(&length, nullptr);
     return result != APPMODEL_ERROR_NO_PACKAGE;
+}
+
+bool IsStorePackage() noexcept {
+    try {
+        // Store packaging rewrites the identity name; the GitHub package keeps the base name.
+        return winrt::Windows::ApplicationModel::Package::Current().Id().Name() ==
+               L"12144NoahMeyer.AudioPlaybackConnector2";
+    } catch (...) {
+        return false;
+    }
 }
 
 } // namespace
@@ -291,7 +301,7 @@ void NotificationService::MaybeShowRatingPrompt() noexcept {
         auto const snapshot = controller->Snapshot();
         if (!snapshot.IsRunning || !snapshot.Settings.ShowNotifications) return;
         if (!apc::app::IsRatingPromptEligible(
-                apc::app::IsStoreChannel(), snapshot.Settings.RatingPrompt, apc::app::TodayLocalIsoDate()))
+                IsStorePackage(), snapshot.Settings.RatingPrompt, apc::app::TodayLocalIsoDate()))
             return;
         auto xml = ToastXmlBuilder{};
         xml.Title(NotificationText(*m_strings, "RatingPrompt_Title"))

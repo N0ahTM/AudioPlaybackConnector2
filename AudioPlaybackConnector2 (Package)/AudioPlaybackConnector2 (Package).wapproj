@@ -91,6 +91,9 @@
   </Target>
   <ItemGroup>
     <None Include="AudioPlaybackConnector2 %28Package%29_TemporaryKey.pfx" />
+    <Content Include="StoreRatingPrompt.enabled" Condition="'$(StorePackage)' == 'true'">
+      <Link>StoreRatingPrompt.enabled</Link>
+    </Content>
     <Content Include="..\LICENSE">
       <Link>LICENSE</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

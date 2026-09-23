@@ -298,14 +298,6 @@ jobs:
     - name: Build Store-linked x64 and ARM64 upload package
       shell: pwsh
       run: |
-        $manifestPath = Resolve-Path 'AudioPlaybackConnector2 (Package)/Package.appxmanifest'
-        [xml]$manifest = Get-Content -LiteralPath $manifestPath -Raw
-        $identity = $manifest.SelectSingleNode("/*[local-name()='Package']/*[local-name()='Identity']")
-        if ($null -eq $identity) { throw 'Package identity is missing from the release manifest.' }
-        $identity.SetAttribute('Name', '12144NoahMeyer.AudioPlaybackConnector2')
-        $identity.SetAttribute('Publisher', 'CN=3784F101-6355-463B-A35E-41BD0A95071B')
-        $manifest.Save($manifestPath)
-
         $root = Join-Path $env:RUNNER_TEMP 'store-upload'
         & msbuild 'AudioPlaybackConnector2 (Package)\AudioPlaybackConnector2 (Package).wapproj' `
           /p:Configuration=Release `
@@ -314,6 +306,7 @@ jobs:
           /p:PackageVersion=${{ needs.version.outputs.package_version }} `
           "/p:AppxPackageDir=$root\" `
           /p:AppxPackageSigningEnabled=false `
+          /p:StorePackage=true `
           /p:UapAppxPackageBuildMode=StoreUpload `
           /p:GenerateAppxPackageOnBuild=true `
           /p:AppxBundle=Always `
@@ -341,7 +334,8 @@ jobs:
           -ExpectedPackageVersion '${{ needs.version.outputs.package_version }}' `
           -ExpectedName 12144NoahMeyer.AudioPlaybackConnector2 `
           -ExpectedPublisher 'CN=3784F101-6355-463B-A35E-41BD0A95071B' `
-          -ExpectedProcessorArchitectures x64,arm64
+          -ExpectedProcessorArchitectures x64,arm64 `
+          -ExpectedRatingPromptFeature enabled
 
         # Preserve the versioned package name. Partner Center can leave the
         # Version field empty while processing a new upload, so the filename is

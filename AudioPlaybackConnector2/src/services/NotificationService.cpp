@@ -4,6 +4,7 @@
 #include <objbase.h>
 #include <winrt/Windows.ApplicationModel.h>
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Storage.h>
 #include <services/NotificationService.hpp>
 #include <app/AppController.hpp>
 #include <app/RatingPromptPolicy.hpp>
@@ -58,11 +59,13 @@ bool IsPackagedProcess() {
     return result != APPMODEL_ERROR_NO_PACKAGE;
 }
 
-bool IsStorePackage() noexcept {
+bool RatingPromptEnabled() noexcept {
     try {
-        // Store packaging rewrites the identity name; the GitHub package keeps the base name.
-        return winrt::Windows::ApplicationModel::Package::Current().Id().Name() ==
-               L"12144NoahMeyer.AudioPlaybackConnector2";
+        // The Store package includes this feature marker; the shared executable never infers a channel.
+        auto path = std::wstring(winrt::Windows::ApplicationModel::Package::Current().InstalledLocation().Path());
+        path += L"\\StoreRatingPrompt.enabled";
+        const auto attributes = GetFileAttributesW(path.c_str());
+        return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
     } catch (...) {
         return false;
     }
@@ -305,8 +308,8 @@ void NotificationService::MaybeShowRatingPrompt() noexcept {
         if (m_isTearingDown || !controller) return;
         auto const snapshot = controller->Snapshot();
         if (!snapshot.IsRunning || !snapshot.Settings.ShowNotifications) return;
-        if (!apc::app::IsRatingPromptEligible(
-                IsStorePackage(), snapshot.Settings.RatingPrompt, apc::app::TodayLocalIsoDate()))
+        if (!RatingPromptEnabled() ||
+            !apc::app::IsRatingPromptEligible(snapshot.Settings.RatingPrompt, apc::app::TodayLocalIsoDate()))
             return;
         auto xml = ToastXmlBuilder{};
         xml.Title(NotificationText(*m_strings, "RatingPrompt_Title"))

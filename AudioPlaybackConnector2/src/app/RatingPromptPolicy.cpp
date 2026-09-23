@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <format>
+#include <optional>
 
 namespace apc::app {
 namespace {
@@ -37,8 +38,8 @@ std::wstring TodayLocalIsoDate() {
     }
 }
 
-bool IsRatingPromptEligible(bool isStoreChannel, RatingPromptData const& data, std::wstring_view today) noexcept {
-    if (!isStoreChannel || data.Asked) return false;
+bool IsRatingPromptEligible(RatingPromptData const& data, std::wstring_view today) noexcept {
+    if (data.Asked) return false;
     const auto todayDay = DayFromIsoDate(today);
     const auto firstLaunch = DayFromIsoDate(data.FirstLaunchDate);
     if (!todayDay || !firstLaunch) return false;

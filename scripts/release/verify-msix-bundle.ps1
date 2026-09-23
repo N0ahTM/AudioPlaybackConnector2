@@ -7,6 +7,8 @@ param(
     [string]$ExpectedPublisher = '',
     [ValidateSet('x64', 'arm64')]
     [string[]]$ExpectedProcessorArchitectures = @('x64', 'arm64'),
+    [ValidateSet('enabled', 'disabled')]
+    [string]$ExpectedRatingPromptFeature = '',
     [string]$ExpectedCertificatePath = '',
     [switch]$RequireSignature,
     [switch]$WriteGitHubOutput
@@ -41,6 +43,9 @@ if ($metadata.ApplicationPackages.Count -ne $expectedArchitectures.Count) {
 }
 
 Assert-AppBundleNotices -BundlePath $metadata.Path -SourceDirectory (Join-Path $PSScriptRoot '../..')
+if ($ExpectedRatingPromptFeature) {
+    Assert-AppBundleRatingPromptFeature -BundlePath $metadata.Path -ExpectedEnabled ($ExpectedRatingPromptFeature -eq 'enabled')
+}
 
 if ($RequireSignature) {
     if ([string]::IsNullOrWhiteSpace($ExpectedCertificatePath)) {

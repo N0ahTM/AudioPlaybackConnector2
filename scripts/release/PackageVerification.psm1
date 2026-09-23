@@ -235,6 +235,32 @@ function Assert-AppBundleBinaries {
     }
 }
 
+function Assert-AppBundleRatingPromptFeature {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$BundlePath,
+        [Parameter(Mandatory)] [bool]$ExpectedEnabled
+    )
+    $bundle = Read-AppBundle -Path $BundlePath
+    $archive = [IO.Compression.ZipFile]::OpenRead($bundle.Metadata.Path)
+    try {
+        foreach ($name in $bundle.Metadata.ApplicationPackages) {
+            $entries = @($archive.Entries | Where-Object { [Uri]::UnescapeDataString($_.FullName) -ieq $name })
+            if ($entries.Count -ne 1) { throw "Application package must occur exactly once: $name" }
+            $stream = $entries[0].Open()
+            try {
+                $package = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Read, $true)
+                try {
+                    $markers = @($package.Entries | Where-Object FullName -CEQ 'StoreRatingPrompt.enabled')
+                    if ($markers.Count -ne [int]$ExpectedEnabled) {
+                        throw "Rating-prompt feature marker mismatch in '$name': found $($markers.Count), expected $([int]$ExpectedEnabled)."
+                    }
+                } finally { $package.Dispose() }
+            } finally { $stream.Dispose() }
+        }
+    } finally { $archive.Dispose() }
+}
+
 function Get-AppPackageSigner {
     [CmdletBinding()]
     param(
@@ -342,4 +368,4 @@ function Test-AppPackageIntegrity {
     }
 }
 
-Export-ModuleMember -Function Read-AppPackage, Read-AppBundle, Test-AppPackageIntegrity, Assert-AppBundleNotices, Assert-AppBundleBinaries
+Export-ModuleMember -Function Read-AppPackage, Read-AppBundle, Test-AppPackageIntegrity, Assert-AppBundleNotices, Assert-AppBundleBinaries, Assert-AppBundleRatingPromptFeature

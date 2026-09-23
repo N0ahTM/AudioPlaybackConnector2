@@ -227,6 +227,7 @@ jobs:
           -ExpectedName N0ahTM.AudioPlaybackConnector2 `
           -ExpectedPublisher 'CN=AudioPlaybackConnector2' `
           -ExpectedProcessorArchitectures x64,arm64 `
+          -ExpectedRatingPromptFeature disabled `
           -ExpectedCertificatePath 'certs/AudioPlaybackConnector2.cer' `
           -RequireSignature `
           -WriteGitHubOutput
@@ -273,7 +274,8 @@ jobs:
           -ExpectedPackageVersion '${{ inputs.package_version }}' `
           -ExpectedName 12144NoahMeyer.AudioPlaybackConnector2 `
           -ExpectedPublisher 'CN=3784F101-6355-463B-A35E-41BD0A95071B' `
-          -ExpectedProcessorArchitectures x64,arm64
+          -ExpectedProcessorArchitectures x64,arm64 `
+          -ExpectedRatingPromptFeature enabled
 
         Import-Module ./scripts/release/PackageVerification.psm1 -Force
         Assert-AppBundleBinaries -BundlePath $bundles[0].FullName -ReferenceBundlePath '${{ steps.bundle.outputs.PATH }}'

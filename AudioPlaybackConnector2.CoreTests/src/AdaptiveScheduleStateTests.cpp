@@ -21,8 +21,7 @@ void TestSupersededAndEarlyCallbacks() {
 
     auto const superseded = schedule.Supersede();
     auto const current = schedule.Supersede();
-    Check(current != superseded && schedule.Generation() == current,
-          "each reschedule must receive a distinct current generation");
+    Check(current != superseded, "each reschedule must receive a distinct current generation");
     Check(!schedule.Consume(superseded), "a queued dispatcher tick from an older schedule must be ignored");
     Check(schedule.Consume(current), "the current dispatcher tick must remain live");
     Check(!schedule.Consume(current), "a duplicate dispatcher tick must be rejected after consumption");

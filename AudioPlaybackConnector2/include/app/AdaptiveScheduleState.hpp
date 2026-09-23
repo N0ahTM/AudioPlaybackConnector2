@@ -21,7 +21,6 @@ public:
     [[nodiscard]] bool SetWin32NotBefore(std::uint64_t generation, TimePoint notBefore) noexcept;
     [[nodiscard]] bool Consume(std::uint64_t generation) noexcept;
     [[nodiscard]] bool ConsumeWin32IfDue(TimePoint now) noexcept;
-    [[nodiscard]] std::uint64_t Generation() const noexcept;
 
 private:
     /*------------------------------------------------------------------------------------------------------------*/

@@ -31,7 +31,3 @@ bool AdaptiveScheduleState::ConsumeWin32IfDue(TimePoint now) noexcept {
     m_active = false;
     return true;
 }
-
-std::uint64_t AdaptiveScheduleState::Generation() const noexcept {
-    return m_generation;
-}

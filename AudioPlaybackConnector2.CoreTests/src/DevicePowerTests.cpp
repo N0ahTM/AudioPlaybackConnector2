@@ -168,12 +168,11 @@ void TestPowerTransitionRecoveryTargetsIncludeIncomingAndPendingReconnectWithout
         Check(StateFor(fixture.Service, L"power-incoming") == DeviceLifecycleState::Idle &&
                   !HasConnectedSession(fixture.Service),
               "an incoming-only listener must be idle while no device is connected");
-        auto const targets = fixture.Service.GetPowerTransitionRecoveryDeviceIds();
+        auto* const listener = fixture.ConnectionAccess->LastConnection;
+        auto const targets = fixture.Service.SuspendForPowerTransition();
         Check(std::ranges::find(targets, L"power-incoming") != targets.end(),
               "power recovery target capture must retain an incoming-only listener with zero connected devices");
 
-        auto* const listener = fixture.ConnectionAccess->LastConnection;
-        fixture.Service.SuspendForPowerTransition();
         fixture.Service.ResumeAfterPowerTransition();
         fixture.Service.ResumeSuspendedSessions(targets);
         CompleteCloseAndCooldown(fixture, listener);
@@ -188,11 +187,10 @@ void TestPowerTransitionRecoveryTargetsIncludeIncomingAndPendingReconnectWithout
         Check(StateFor(fixture.Service, L"power-pending") == DeviceLifecycleState::WaitingForReconnect &&
                   !HasConnectedSession(fixture.Service),
               "a pending reconnect must be recoverable while zero devices are connected");
-        auto const targets = fixture.Service.GetPowerTransitionRecoveryDeviceIds();
+        auto const targets = fixture.Service.SuspendForPowerTransition();
         Check(std::ranges::find(targets, L"power-pending") != targets.end(),
               "power recovery target capture must retain a pending reconnect with zero connected devices");
 
-        fixture.Service.SuspendForPowerTransition();
         fixture.Service.ResumeAfterPowerTransition();
         fixture.Service.ResumeSuspendedSessions(targets);
         Check(fixture.ConnectionAccess->Connections.size() == 2,
@@ -203,7 +201,7 @@ void TestPowerTransitionRecoveryTargetsIncludeIncomingAndPendingReconnectWithout
         Fixture fixture;
         Check(fixture.Service.Start().Kind == DeviceCommandResultKind::Accepted, "watcher start must be accepted");
         fixture.WatcherAccess->LastWatcher->Add(L"power-idle", L"Power idle");
-        auto const targets = fixture.Service.GetPowerTransitionRecoveryDeviceIds();
+        auto const targets = fixture.Service.SuspendForPowerTransition();
         Check(std::ranges::find(targets, L"power-idle") == targets.end(),
               "ordinary idle discovery must not become a power recovery target");
     }

@@ -120,11 +120,11 @@ Cancellation fences later mutations; admitted delivery may finish unlocked. Host
 
 PowerTransitionCoordinatorTests cover schedule failure, single-flight, attempt/skip/ACK accounting, duplicates, stale completion, cancellation, suspend retention, capture reentrancy and post-destruction callbacks. A real-timer semaphore test cancels blocked delivery and releases late completion under watchdog. Coalescer tests cover merge/cancel/scheduling/lost-wakeup.
 
-| State | Execution context and callers | Synchronization | Cancellation and shutdown |
-| --- | --- | --- | --- |
-| Suspend flag, duplicate-resume time and owned timer cancellation handle | Host UI context, including destruction | No cross-thread access | Cancel invalidates recovery before disarming the schedule |
-| Pending recovery targets, attempts, generation and active delivery sequence | Host lifecycle methods, timer callbacks and reconnect completions | `ResumeState::Mutex`, never nested | Only the current generation and its one outstanding delivery may record attempts |
-| Native periodic timer and immutable delivery callback | Cancellation handle and admitted threadpool callbacks | Shared context lifetime; Windows drains callbacks before cancellation returns | Callback retains its context before disassociating; timer closes after the final reference is released |
+| State | Execution context and callers | Synchronization | Outgoing callbacks | Cancellation and shutdown |
+| --- | --- | --- | --- | --- |
+| Suspend flag, duplicate-resume time and owned timer cancellation handle | Host UI context, including destruction | UI-thread confinement, without a coordinator lock | Resume-device callback and scheduling run outside `ResumeState::Mutex` | Cancel invalidates recovery before disarming the schedule |
+| Pending recovery targets, attempts, generation and active delivery sequence | Host lifecycle methods, timer callbacks and reconnect completions | `ResumeState::Mutex`, never nested | Reconnect callback and logging run after unlocking | Only the current generation and its one outstanding delivery may record attempts |
+| Native periodic timer and immutable delivery callback | Cancellation handle and admitted threadpool callbacks | Shared context lifetime; Windows drains callbacks before cancellation returns | Callback retains context and disassociates before delivering | Timer closes after the final reference is released; stale delivery cannot mutate recovery |
 
 ## Device operation completion
 
@@ -142,12 +142,12 @@ UI reads AppSnapshot::StartupTask and sends RefreshStartupTask/SetStartWithWindo
 
 Only the latest completed request persists known OS state. Superseded completion starts latest intent without obsolete publication. Commit may reenter/stop; foreign shutdown drains admitted commits. An already-started OS operation cannot be undone; late completion only releases lifetime. Tests cover supersession/coalescing, query failures, reentrant commit/shutdown, foreign drain, destruction during set and application events.
 
-| State | Owner and synchronization | Lifetime boundary |
-| --- | --- | --- |
-| Latest request, active operation and confirmed OS state | `StartupTaskCoordinator::State` serial drainer; the request policy has no separate mutex or shutdown API | Only queued owner work may start a set/query or accept a completion |
-| Published snapshot, queue admission, registrations and active delivery | `State::Mutex`; short capture/update only | Shutdown closes admission and discards queued work; foreign draining is awaited without holding the mutex |
-| WinRT operations | Shared internal State across coroutine suspension; no facade capture | Continuations post to the owner; after shutdown they cannot launch the next query, persist or notify |
-| Persistence and observer callbacks | Serial drainer, outside all owner locks | Reentrant requests enqueue; reentrant shutdown invalidates remaining work without waiting on itself; foreign unsubscribe drains its active callback |
+| State | Execution context and callers | Synchronization | Outgoing callbacks | Cancellation and shutdown |
+| --- | --- | --- | --- | --- |
+| Latest request, active operation and confirmed OS state | `StartupTaskCoordinator::State` serial drainer | Serial execution, without a second policy mutex | Query, set and persistence callbacks run from the drainer | Only queued owner work may start an OS operation or accept completion; stop rejects the next step |
+| Published snapshot, queue admission, registrations and active delivery | Request posters, subscribers and the drainer | `State::Mutex`; short capture/update only | Observer callbacks and capture destruction run unlocked | Shutdown closes admission, discards queued work and waits for foreign delivery without holding the mutex |
+| WinRT operations | Coroutine continuations post to the owner | Shared internal State across suspension; no facade capture | Native completion only submits owner work | After shutdown, late completion cannot launch the next query, persist or notify |
+| Persistence and observer delivery | Serial drainer and admitted handlers | Owner ordering; no lock held across foreign calls | Commit may reenter and observers may unsubscribe themselves | Reentrant shutdown invalidates remaining work without self-wait; foreign unsubscribe drains its active callback |
 
 ## Device picker presentation
 
@@ -158,6 +158,11 @@ Picker owns only presentation/UI state. Threadpool discovery holds application+s
 Commands return after device admission; bulk actions immediately render snapshot. Native failure stays busy through close/cooldown, then clears with new generation. Language/navigation/saved-device expansion rerender even at unchanged generation. Real controller/projection tests cover admission and cooldown.
 
 Picker-open control callers use generation condition-variable predicates, mutated under wait mutex and notified afterward. Stop/deadline wake timed wait; teardown before acknowledgement yields indeterminate. UI callers never wait for their own Opened dispatcher event; detached tray activation stays nonblocking. Actual WinUI rendering/dispatch/flyout lifecycle still requires platform acceptance; headless tests do not prove it.
+
+| State | Execution context and callers | Synchronization | Outgoing callbacks | Cancellation and shutdown |
+| --- | --- | --- | --- | --- |
+| Picker presentation, expansion and busy rendering | UI event handlers consume one AppSnapshot | UI-thread confinement; no copied device owner state | Controller actions and WinUI rendering run on UI | Close cancels discovery; generation/weak-view checks discard old completion |
+| In-flight picker discovery | Threadpool query and UI completion | Application/stop token retained across query; UI endpoint held weakly | Completed discovery posts once to UI without owning the view | Cancellation/deadline bounds the query; late result cannot mutate a closed or newer picker |
 
 ## Distribution
 
@@ -243,9 +248,18 @@ Teardown invalidates generation and detaches manager before native revoke. Initi
 
 ToastContentBuilderTests link the production CoreRuntime builder. They cover Unicode/delimiter round trips, a fixed 1,000-case generated corpus (seed 920040), exactly-once percent decoding, malformed percent input, missing targets and the existing XML sanitizer cases. Windows XmlDocument independently parses generated toasts to verify element counts, attribute/text recovery, action argument round trips and optional/audio replacement behavior. These checks do not instantiate AppNotificationManager. Packaged/unpackaged activation, shutdown during delivery and interactive notification behavior remain runtime checks.
 
+| State | Execution context and callers | Synchronization | Outgoing callbacks | Cancellation and shutdown |
+| --- | --- | --- | --- | --- |
+| Notification manager, status tags and presentation admission | Host and queued activation handling on UI | UI-thread confinement and generation checks; no service mutex | Controller snapshot/actions and native toast APIs run on UI | Teardown invalidates generation, detaches manager and revokes native registration |
+| Native activation payload | Windows callback copies arguments before UI dispatch | Weak service and generation token, without a service lock | One queued UI delivery performs the controller action | Late activation loses its weak owner or fails the generation fence |
+
 ## Settings window ownership
 
 ApplicationHost owns one noncopyable SettingsWindowPresenter on UI. The facade has one shared PresenterState solely to retain the current window across synchronous Close/Closed reentrancy. Show and Close retain their WindowState while Windows may invoke Closed; the event callback holds weak owner/window references, so it cannot keep either alive. Closed clears only the matching current window and revokes its handler. Destruction tries Close, then revokes and abandons a window that cannot close. ShowHelp and language updates use the same UI context. Standalone header compilation verifies that neither copying nor moving the facade is allowed; actual WinUI close/reentrancy remains a native acceptance check.
+
+| State | Execution context and callers | Synchronization | Outgoing callbacks | Cancellation and shutdown |
+| --- | --- | --- | --- | --- |
+| Current settings window and close registration | Host and WinUI Closed callback on UI | UI-thread confinement; PresenterState retains WindowState across reentrant close | WinUI close/help/language calls occur with a retained window, without an owner mutex | Closed clears only the matching window; destruction revokes and abandons one that cannot close |
 
 ## UI refresh scheduling
 

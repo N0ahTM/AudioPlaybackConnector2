@@ -5,7 +5,6 @@ Read only the page/section relevant to the task.
 | Task | Reference |
 | --- | --- |
 | Build, test, dependencies, contribution | [CONTRIBUTING](../CONTRIBUTING.md) |
-| Dependency adoption evidence | [Dependency acceptance](DEPENDENCIES.md) |
 | Find components and ownership | [Architecture](ARCHITECTURE.md) |
 | Change async, locks, callbacks or shutdown | [Runtime invariants](INVARIANTS.md) — affected owner only |
 | Review a reported defect | [Bugfix tracking](BUGFIXES.md) — affected IDs |

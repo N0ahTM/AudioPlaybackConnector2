@@ -101,14 +101,16 @@ int main(int argc, char** argv) {
     std::string_view selectedSuite;
     bool shuffle = false;
     bool list = false;
-    for (int index = 1; index < argc; ++index) {
-        const std::string_view option = argv[index];
+    // Consume each option and its value together so the next iteration starts at a new option.
+    int index = 1;
+    while (index < argc) {
+        const std::string_view option = argv[index++];
         if (option == "--list") {
             list = true;
-        } else if (option == "--suite" && index + 1 < argc) {
-            selectedSuite = argv[++index];
-        } else if (option == "--seed" && index + 1 < argc) {
-            const std::string_view value = argv[++index];
+        } else if (option == "--suite" && index < argc) {
+            selectedSuite = argv[index++];
+        } else if (option == "--seed" && index < argc) {
+            const std::string_view value = argv[index++];
             const auto parsed = std::from_chars(value.data(), value.data() + value.size(), seed);
             if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) {
                 std::cerr << "Seed must be an unsigned 32-bit integer.\n";

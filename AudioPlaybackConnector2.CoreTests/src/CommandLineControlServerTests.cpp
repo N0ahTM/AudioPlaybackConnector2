@@ -11,10 +11,12 @@
 #include <wil/resource.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -186,21 +188,24 @@ void TestProductionRoundTripFragmentationAndRearm() {
         header.Command = static_cast<std::uint32_t>(request.Command);
         header.Target = static_cast<std::uint32_t>(request.Target);
         header.PayloadBytes = *apc::control::PayloadByteCount(request.Payload);
-        auto* headerBytes = reinterpret_cast<std::byte*>(&header);
+        std::array<std::byte, sizeof(header)> headerBytes;
+        std::memcpy(headerBytes.data(), &header, headerBytes.size());
         const auto deadline = apc::control::DeadlineAfter(1000);
-        Check(apc::control::WriteExact(pipe.get(), headerBytes, 7, nullptr, deadline) ==
+        Check(apc::control::WriteExact(pipe.get(), headerBytes.data(), 7, nullptr, deadline) ==
                   apc::control::IoStatus::Success,
               "fragmented header prefix must be accepted");
-        Check(apc::control::WriteExact(pipe.get(), headerBytes + 7, sizeof(header) - 7, nullptr, deadline) ==
+        Check(apc::control::WriteExact(pipe.get(), headerBytes.data() + 7, sizeof(header) - 7, nullptr, deadline) ==
                   apc::control::IoStatus::Success,
               "fragmented header suffix must be accepted");
-        auto* payloadBytes = reinterpret_cast<std::byte*>(request.Payload.data());
-        Check(apc::control::WriteExact(pipe.get(), payloadBytes, 3, nullptr, deadline) ==
+        std::vector<std::byte> payloadBytes(header.PayloadBytes);
+        std::memcpy(payloadBytes.data(), request.Payload.data(), payloadBytes.size());
+        Check(apc::control::WriteExact(pipe.get(), payloadBytes.data(), 3, nullptr, deadline) ==
                   apc::control::IoStatus::Success,
               "fragmented payload prefix must be accepted");
-        Check(apc::control::WriteExact(pipe.get(), payloadBytes + 3, header.PayloadBytes - 3, nullptr, deadline) ==
-                  apc::control::IoStatus::Success,
-              "fragmented payload suffix must be accepted");
+        Check(
+            apc::control::WriteExact(pipe.get(), payloadBytes.data() + 3, header.PayloadBytes - 3, nullptr, deadline) ==
+                apc::control::IoStatus::Success,
+            "fragmented payload suffix must be accepted");
         auto response = ReadResponse(pipe.get(), request.CorrelationId);
         Check(response && response->Payload == L"echo:device-id", "fragmented request must reach the real handler");
     }

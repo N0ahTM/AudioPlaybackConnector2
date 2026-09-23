@@ -186,20 +186,25 @@ struct ResourcePressureMonitor::Impl {
         }
 
         void ProbeAndPublish(PTP_CALLBACK_INSTANCE instance) {
+            if (!Running.load() || !IsOwnerEpochCurrent()) return;
+            const auto probeTicket = NextProbeTicket.fetch_add(1) + 1;
+            ResourcePressureProbe probe{
+                .LowMemorySignaled = QueryMemoryState(LowMemory.get()),
+                .HighMemorySignaled = QueryMemoryState(HighMemory.get()),
+                .MemoryProbeAttempted = true,
+            };
+            probe.UserActivity = QueryUserActivity();
+            probe.EnergySaver = QueryEnergySaver();
+            probe.UserActivityProbeAttempted = true;
+            probe.EnergySaverProbeAttempted = true;
+            const auto observedAt = std::chrono::steady_clock::now();
+
             bool deliverSnapshots = false;
             {
                 std::scoped_lock lock(ControlMutex);
-                if (!Running.load() || !IsOwnerEpochCurrent()) return;
-
-                ResourcePressureProbe probe{
-                    .LowMemorySignaled = QueryMemoryState(LowMemory.get()),
-                    .HighMemorySignaled = QueryMemoryState(HighMemory.get()),
-                    .MemoryProbeAttempted = true,
-                };
-                probe.UserActivity = QueryUserActivity();
-                probe.EnergySaver = QueryEnergySaver();
-                probe.UserActivityProbeAttempted = true;
-                probe.EnergySaverProbeAttempted = true;
+                // A later-started probe may finish first; never restore an older sensor state or timer plan.
+                if (!Running.load() || !IsOwnerEpochCurrent() || probeTicket <= LastAppliedProbeTicket) return;
+                LastAppliedProbeTicket = probeTicket;
                 const auto values = Reducer.Apply(probe);
                 ArmMemoryWaits(probe.LowMemorySignaled, probe.HighMemorySignaled);
                 const bool probesComplete = probe.LowMemorySignaled.has_value() &&
@@ -207,7 +212,6 @@ struct ResourcePressureMonitor::Impl {
                                             probe.EnergySaver.has_value();
                 ScheduleNextPoll(ShouldUseConstrainedPollInterval(values, probesComplete));
 
-                auto const observedAt = std::chrono::steady_clock::now();
                 const bool heartbeatDue =
                     (!LastSnapshotPublishedAt || observedAt - *LastSnapshotPublishedAt >= HeartbeatInterval);
                 if (!LastPublished || *LastPublished != values || heartbeatDue) {
@@ -284,6 +288,8 @@ struct ResourcePressureMonitor::Impl {
         std::atomic_bool Running = false;
         std::atomic_bool ShutdownStarted = false;
         std::mutex ControlMutex;
+        std::atomic_uint64_t NextProbeTicket = 0;
+        std::uint64_t LastAppliedProbeTicket = 0;
         std::mutex PublicCallbackMutex;
         std::condition_variable PublicCallbackFinished;
         std::size_t PublicCallbacks = 0;
@@ -333,7 +339,7 @@ struct ResourcePressureMonitor::Impl {
             auto const epoch = Epoch->fetch_add(1) + 1;
             auto context = std::make_shared<RunContext>(Handler, MonitorConfig, Sequence, this, Epoch, epoch);
             if (!context->Initialize()) return false;
-            Active = context;
+            Active.store(context);
             Running.store(true);
             context->Arm();
             auto const stopAfterArm = StopRequestFlags.exchange(0);
@@ -372,13 +378,9 @@ struct ResourcePressureMonitor::Impl {
 
     [[nodiscard]] bool RequestProbe() noexcept {
         try {
-            std::shared_ptr<RunContext> context;
-            {
-                std::scoped_lock lock(LifecycleMutex);
-                if (!Running.load() || !Active) return false;
-                context = Active;
-            }
-            return context->RequestProbe();
+            if (!Running.load()) return false;
+            auto context = Active.load();
+            return context && context->RequestProbe();
         } catch (...) {
             return false;
         }
@@ -394,8 +396,10 @@ struct ResourcePressureMonitor::Impl {
 
     void StopWhileLocked(bool calledFromCallback) noexcept {
         Running.store(false);
-        auto context = std::exchange(Active, nullptr);
+        auto context = Active.exchange(nullptr);
         if (context) {
+            // Platform drain stays serialized with Start; native callbacks never take LifecycleMutex.
+            // Public callbacks can reenter RequestProbe through the atomic Active gate.
             context->Shutdown(!calledFromCallback);
             if (calledFromCallback && context->HasPublicCallbacks()) {
                 Retiring = std::move(context);
@@ -421,7 +425,7 @@ struct ResourcePressureMonitor::Impl {
     std::atomic_bool Running = false;
     std::atomic_uint32_t StopRequestFlags = 0;
     mutable std::mutex LifecycleMutex;
-    std::shared_ptr<RunContext> Active;
+    std::atomic<std::shared_ptr<RunContext>> Active;
     std::shared_ptr<RunContext> Retiring;
     wil::unique_threadpool_work_nowait DeferredStopWork;
 };

@@ -83,6 +83,8 @@
     <ClCompile Include="src\StringResourcesTests.cpp" />
     <ClCompile Include="src\CrashHandlerTests.cpp" />
     <ClCompile Include="src\AdaptiveResourcePolicyTests.cpp" />
+    <ClCompile Include="src\AdaptiveActionRetryBackoffTests.cpp" />
+    <ClCompile Include="src\AdaptiveScheduleStateTests.cpp" />
     <ClCompile Include="src\AppControllerTests.cpp" />
     <ClCompile Include="src\ControlCommandAdapterTests.cpp" />
     <ClCompile Include="src\AppModelsTests.cpp" />
@@ -106,6 +108,7 @@
     <ClCompile Include="src\DiagnosticsLogCollectorTests.cpp" />
     <ClCompile Include="src\SettingsDiagnosticsReportBuilderTests.cpp" />
     <ClCompile Include="src\SettingsStoreTests.cpp" />
+    <ClCompile Include="src\SettingsCodecTests.cpp" />
     <ClCompile Include="src\DevicePickerViewStateTests.cpp" />
     <ClCompile Include="src\LatestStartupTaskRequestStateTests.cpp" />
     <ClCompile Include="src\AppControllerUseCasesTests.cpp" />

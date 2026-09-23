@@ -21,6 +21,8 @@
 int RunProtocolBoundaryTests();
 int RunToastContentBuilderTests();
 int RunAdaptiveResourcePolicyTests();
+int RunAdaptiveActionRetryBackoffTests();
+int RunAdaptiveScheduleStateTests();
 int RunAppControllerTests();
 int RunAppModelsTests();
 int RunControlCommandAdapterTests();
@@ -47,6 +49,7 @@ int RunDeviceWatcherTests();
 int RunDiagnosticsLogCollectorTests();
 int RunSettingsDiagnosticsReportBuilderTests();
 int RunSettingsStoreTests();
+int RunSettingsCodecTests();
 int RunDevicePickerViewStateTests();
 int RunLatestStartupTaskRequestStateTests();
 int RunAppControllerUseCasesTests();
@@ -121,6 +124,8 @@ int main(int argc, char** argv) {
         Suite{"ProtocolBoundary", RunProtocolBoundaryTests},
         Suite{"ToastContentBuilder", RunToastContentBuilderTests},
         Suite{"AdaptiveResourcePolicy", RunAdaptiveResourcePolicyTests},
+        Suite{"AdaptiveActionRetryBackoff", RunAdaptiveActionRetryBackoffTests},
+        Suite{"AdaptiveScheduleState", RunAdaptiveScheduleStateTests},
         Suite{"AppController", RunAppControllerTests},
         Suite{"AppModels", RunAppModelsTests},
         Suite{"ControlCommandAdapter", RunControlCommandAdapterTests},
@@ -146,6 +151,7 @@ int main(int argc, char** argv) {
         Suite{"DiagnosticsLogCollector", RunDiagnosticsLogCollectorTests},
         Suite{"SettingsDiagnosticsReportBuilder", RunSettingsDiagnosticsReportBuilderTests},
         Suite{"SettingsStore", RunSettingsStoreTests},
+        Suite{"SettingsCodec", RunSettingsCodecTests},
         Suite{"DevicePickerViewState", RunDevicePickerViewStateTests},
         Suite{"LatestStartupTaskRequestState", RunLatestStartupTaskRequestStateTests},
         Suite{"AppControllerUseCases", RunAppControllerUseCasesTests},

@@ -140,7 +140,8 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && !inputs.store_only }}
     permissions:
       actions: read
-      contents: read
+      # Draft releases require push access for verification.
+      contents: write
     outputs:
       build_run_id: ${{ steps.build.outputs.RUN_ID }}
       artifact_digest: ${{ steps.build.outputs.ARTIFACT_DIGEST }}

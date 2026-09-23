@@ -68,6 +68,8 @@ SettingsStoreTests cover staging/versions, backup failure and real sharing viola
 
 ## Named-pipe response retention
 
+ControlCommandAdapter admits one mutating command with an atomic flag and returns Busy to concurrent mutations. The flag spans dispatch and response formatting; no adapter lock is held while the controller or localization callbacks run. Read-only commands remain concurrent.
+
 WIL owns each pipe instance, I/O, work and timers. Callback contexts retain the instance until Stop cancels I/O and drains groups. *_nowait owners only close; Stop/recreation/destructor explicitly drain. Recreation moves old owners out under slot lock, then cancels/drains unlocked.
 
 Platform exception: Options::ConnectPipe runs under slot lock to preserve OVERLAPPED/I/O reservation. It must support concurrent slots, return immediately, never throw/reenter, and preserve ConnectNamedPipe error semantics. Tests close a client before native admission and inject eight ERROR_RETRY results through ordinary balancing/backoff/recreation.

@@ -6,6 +6,7 @@
 #include <windows.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Data.Json.h>
+#include <wil/resource.h>
 
 #include <algorithm>
 #include <chrono>
@@ -765,11 +766,14 @@ Response ControlCommandAdapter::Handle(Request const& request,
                                    wantsJson);
         }
 
-        std::unique_lock mutationLock(m_mutationMutex, std::defer_lock);
-        if (!preDispatchTermination && IsMutating(request.Command) && !mutationLock.try_lock()) {
+        const bool mutation = !preDispatchTermination && IsMutating(request.Command);
+        if (mutation && m_mutationActive.exchange(true)) {
             return MessageResponse(
                 request, ExitCode::Busy, Resource(m_options.LocalizeResource, "Command_Busy"), wantsJson);
         }
+        auto releaseMutation = wil::scope_exit([&] {
+            if (mutation) m_mutationActive.store(false);
+        });
 
         auto context = MakeContext(stopToken, deadline);
         auto result = Dispatch(m_controller, request, context);

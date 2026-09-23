@@ -3,9 +3,9 @@
 #include <app/AppController.hpp>
 #include <control/CommandProtocol.hpp>
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
-#include <mutex>
 #include <optional>
 #include <stop_token>
 #include <string>
@@ -39,7 +39,7 @@ public:
 private:
     apc::app::AppController const& m_controller;
     Options m_options;
-    mutable std::mutex m_mutationMutex;
+    mutable std::atomic_bool m_mutationActive = false;
 };
 
 } // namespace apc::control

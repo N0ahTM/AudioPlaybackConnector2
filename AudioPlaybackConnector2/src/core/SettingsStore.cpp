@@ -710,14 +710,13 @@ SettingsMutationResult SettingsStore::SetPrivacyModeEnabled(bool enabled) {
 }
 SettingsMutationResult SettingsStore::RecordRatingPromptFirstLaunch(std::wstring today) {
     return m_impl->Commit([today = std::move(today)](auto& data) {
-        if (!data.RatingPrompt.FirstLaunchDate.empty()) return false;
+        if (today.empty() || !data.RatingPrompt.FirstLaunchDate.empty()) return false;
         data.RatingPrompt.FirstLaunchDate = std::move(today);
         return true;
     });
 }
-SettingsMutationResult SettingsStore::SetRatingPrompt(RatingPromptData value) {
-    return m_impl->Commit(
-        [value = std::move(value)](auto& data) { return std::exchange(data.RatingPrompt, value) != value; });
+SettingsMutationResult SettingsStore::MarkRatingPromptAsked() {
+    return m_impl->Commit([](auto& data) { return !std::exchange(data.RatingPrompt.Asked, true); });
 }
 SettingsMutationResult SettingsStore::SetSettingsWindowBounds(std::optional<PersistedWindowBounds> bounds) {
     if (bounds && (bounds->Width <= 0 || bounds->Height <= 0 || bounds->Dpi < apc::limits::c_minWindowDpi ||
@@ -850,7 +849,8 @@ SettingsStore::RecordConnectedDevice(std::wstring_view deviceId, std::wstring_vi
         if (data.LastConnectedIds.size() > apc::limits::c_maxPersistedDeviceCount) data.LastConnectedIds.pop_back();
         changed = changed || data.LastConnectedIds != before;
         // A real connected transition counts as one rating-prompt usage day.
-        if (!usageDay.empty() && data.RatingPrompt.LastUsageDate != usageDay) {
+        if (!data.RatingPrompt.Asked && !usageDay.empty() && data.RatingPrompt.LastUsageDate != usageDay &&
+            data.RatingPrompt.UsageDays < std::numeric_limits<int>::max()) {
             data.RatingPrompt.LastUsageDate = std::move(usageDay);
             ++data.RatingPrompt.UsageDays;
             changed = true;

@@ -40,6 +40,10 @@ void TestEligibilityRequiresChannelAgeAndUsage() {
           "a missing first-launch date must fail closed");
     unknown.FirstLaunchDate = L"2026-13-40";
     Check(!apc::app::IsRatingPromptEligible(true, unknown, L"2026-09-22"), "a malformed date must fail closed");
+    unknown.FirstLaunchDate = L"2026-02-31";
+    Check(!apc::app::IsRatingPromptEligible(true, unknown, L"2026-09-22"),
+          "an impossible calendar day must fail closed");
+    Check(!apc::app::IsRatingPromptEligible(true, MatureData(), L"2026-09-2x"), "today must contain only date digits");
 }
 
 void TestAskedStaysSilent() {

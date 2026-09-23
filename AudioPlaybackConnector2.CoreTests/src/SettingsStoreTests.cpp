@@ -314,6 +314,8 @@ void TestOnlyCurrentFormatIsAccepted() {
     };
     expectRejected(R"({"schemaVersion":2,"ratingPrompt":{"firstLaunchDate":"2026-99-99"}})",
                    "malformed rating prompt dates must be rejected");
+    expectRejected(R"({"schemaVersion":2,"ratingPrompt":{"firstLaunchDate":"2026-02-31"}})",
+                   "impossible rating prompt calendar days must be rejected");
     expectRejected(R"({"schemaVersion":2,"ratingPrompt":{"usageDays":-3}})",
                    "negative rating prompt counters must be rejected");
     expectRejected(R"({"schemaVersion":2,"ratingPrompt":{"unexpected":1}})",
@@ -574,6 +576,41 @@ void TestDeviceSettingsBeforeFirstConnection() {
               restored.LastConnectedIds == std::vector<std::wstring>{L"new"},
           "the first connection must preserve settings and record real connection history exactly once");
     static_cast<void>(reader.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+}
+
+void TestRatingPromptMutations() {
+    auto storage = std::make_shared<ControlledStorage>();
+    SettingsStore store({}, storage);
+    Check(store.RecordRatingPromptFirstLaunch({}).Status == SettingsMutationStatus::Unchanged,
+          "an unavailable local date must not create an empty first-launch record");
+    Check(store.RecordRatingPromptFirstLaunch(L"2026-09-01").IsApplied(), "the first launch must be recorded once");
+    Check(store.RecordRatingPromptFirstLaunch(L"2026-09-02").Status == SettingsMutationStatus::Unchanged,
+          "later launches must retain the original first-launch day");
+    Check(store.RecordConnectedDevice(L"phone", L"Phone", L"2026-09-01").IsApplied(),
+          "a real connection must count the first usage day");
+    Check(store.RecordConnectedDevice(L"phone", L"Phone", L"2026-09-01").Status == SettingsMutationStatus::Unchanged,
+          "another connection on the same day must not count twice");
+    Check(store.RecordConnectedDevice(L"phone", L"Phone", L"2026-09-02").IsApplied(),
+          "a connection on another day must advance usage");
+    Check(store.MarkRatingPromptAsked().IsApplied(), "the displayed prompt must be marked once");
+    Check(store.MarkRatingPromptAsked().Status == SettingsMutationStatus::Unchanged,
+          "repeated prompt completion must not mutate settings");
+    Check(store.RecordConnectedDevice(L"phone", L"Phone", L"2026-09-03").Status == SettingsMutationStatus::Unchanged,
+          "the one-shot prompt must stop tracking usage after it was shown");
+    auto const rating = store.Snapshot().Data.RatingPrompt;
+    Check(rating.FirstLaunchDate == L"2026-09-01" && rating.UsageDays == 2 && rating.LastUsageDate == L"2026-09-02" &&
+              rating.Asked,
+          "marking the prompt must preserve all concurrent usage fields");
+    static_cast<void>(store.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
+
+    storage->SetInput(R"({"schemaVersion":2,"ratingPrompt":{"usageDays":2147483647}})");
+    SettingsStore saturated({}, storage);
+    saturated.Load();
+    Check(saturated.RecordConnectedDevice(L"phone", L"Phone", L"2026-09-03").IsApplied(),
+          "device history must still update when the usage counter is saturated");
+    Check(saturated.Snapshot().Data.RatingPrompt.UsageDays == 2147483647,
+          "a saturated usage counter must not overflow on connection");
+    static_cast<void>(saturated.Shutdown(SettingsShutdownMode::DiscardStartupFailure));
 }
 
 void TestRecordedPreferencesAndNames() {
@@ -1227,6 +1264,7 @@ int RunSettingsStoreTests() {
     TestNoOpAndTypedMutationResults();
     TestDeviceIdValidationRejectsWithoutRevision();
     TestDeviceSettingsBeforeFirstConnection();
+    TestRatingPromptMutations();
     TestRecordedPreferencesAndNames();
     TestMutationDuringBlockedWriteAndFinalFlush();
     TestDebouncedWorkerWaitsForSynchronousWriter();

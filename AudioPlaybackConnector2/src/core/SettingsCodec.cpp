@@ -4,6 +4,7 @@
 #include <winrt/base.h>
 
 #include <algorithm>
+#include <chrono>
 #include <limits>
 #include <span>
 #include <stdexcept>
@@ -185,9 +186,11 @@ SettingsData Decode(std::string_view bytes) try {
                 valid = date[i] >= L'0' && date[i] <= L'9';
             }
             if (valid) {
-                const auto month = std::stoi(std::wstring(date.substr(5, 2)));
-                const auto day = std::stoi(std::wstring(date.substr(8, 2)));
-                valid = month >= 1 && month <= 12 && day >= 1 && day <= 31;
+                const auto digit = [&](std::size_t i) { return date[i] - L'0'; };
+                const int year = digit(0) * 1000 + digit(1) * 100 + digit(2) * 10 + digit(3);
+                const unsigned month = digit(5) * 10 + digit(6);
+                const unsigned day = digit(8) * 10 + digit(9);
+                valid = (std::chrono::year{year} / std::chrono::month{month} / std::chrono::day{day}).ok();
             }
             Require(valid);
         }

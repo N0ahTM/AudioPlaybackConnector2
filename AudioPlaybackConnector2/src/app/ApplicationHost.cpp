@@ -473,8 +473,11 @@ apc::app::AppUiActionResult ApplicationHost::PresentDevicePicker(apc::app::Devic
     const auto uiResult = self->m_uiDispatcher->RunAndWait(
         [weak, openMode]() {
             auto self = weak.lock();
-            return self && self->m_trayController &&
-                   self->m_trayController->ShowDevicePicker(openMode == apc::app::DevicePickerOpenMode::ToggleIfOpen);
+            if (!self || !self->m_trayController ||
+                !self->m_trayController->ShowDevicePicker(openMode == apc::app::DevicePickerOpenMode::ToggleIfOpen))
+                return false;
+            if (self->m_notificationService) self->m_notificationService->MaybeShowRatingPrompt();
+            return true;
         },
         context.StopToken,
         context.Deadline);
@@ -485,8 +488,6 @@ apc::app::AppUiActionResult ApplicationHost::PresentDevicePicker(apc::app::Devic
         result.Status = ToUiActionStatus(uiResult);
         return result;
     }
-
-    if (self->m_notificationService) self->m_notificationService->MaybeShowRatingPrompt();
 
     // Tray activation is dispatched detached from the UI callback.  The
     // flyout's Opened event is posted back to this same dispatcher, so a
@@ -520,15 +521,15 @@ apc::app::AppUiActionResult ApplicationHost::PresentSettings(apc::app::AppComman
     const auto uiResult = self->m_uiDispatcher->RunAndWait(
         [weak]() {
             auto self = weak.lock();
-            return self && self->ShowSettingsWindow();
+            if (!self || !self->ShowSettingsWindow()) return false;
+            if (self->m_notificationService) self->m_notificationService->MaybeShowRatingPrompt();
+            return true;
         },
         context.StopToken,
         context.Deadline);
     // Preserve the gate's pre-dispatch versus in-flight distinction. The
     // context state is not sufficient once the UI callback may have run.
     result.Status = ToUiActionStatus(uiResult);
-    if (uiResult == UiDispatcher::ActionResult::Succeeded && self->m_notificationService)
-        self->m_notificationService->MaybeShowRatingPrompt();
     return result;
 }
 

@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <chrono>
 #include <format>
 
 namespace apc::app {
@@ -10,23 +11,18 @@ namespace {
 constexpr int c_minDaysSinceFirstLaunch = 14;
 constexpr int c_minUsageDays = 3;
 
-// Howard Hinnant's civil-date conversion, public domain.
-std::optional<std::int64_t> DaysFromIsoDate(std::wstring_view isoDate) noexcept {
+std::optional<std::chrono::sys_days> DayFromIsoDate(std::wstring_view isoDate) noexcept {
     if (isoDate.size() != 10 || isoDate[4] != L'-' || isoDate[7] != L'-') return std::nullopt;
-    try {
-        const auto year = std::stoi(std::wstring(isoDate.substr(0, 4)));
-        const auto month = std::stoi(std::wstring(isoDate.substr(5, 2)));
-        const auto day = std::stoi(std::wstring(isoDate.substr(8, 2)));
-        if (month < 1 || month > 12 || day < 1 || day > 31) return std::nullopt;
-        const std::int64_t adjustedYear = year - (month <= 2);
-        const std::int64_t era = (adjustedYear >= 0 ? adjustedYear : adjustedYear - 399) / 400;
-        const auto yearOfEra = adjustedYear - era * 400;
-        const auto monthPrime = month + (month > 2 ? -3 : 9);
-        const std::int64_t dayOfYear = (153 * monthPrime + 2) / 5 + day - 1;
-        return era * 146097 + yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear - 719468;
-    } catch (...) {
-        return std::nullopt;
+    for (std::size_t i = 0; i < isoDate.size(); ++i) {
+        if (i != 4 && i != 7 && (isoDate[i] < L'0' || isoDate[i] > L'9')) return std::nullopt;
     }
+    const auto digit = [&](std::size_t i) { return isoDate[i] - L'0'; };
+    const int year = digit(0) * 1000 + digit(1) * 100 + digit(2) * 10 + digit(3);
+    const unsigned month = digit(5) * 10 + digit(6);
+    const unsigned day = digit(8) * 10 + digit(9);
+    const auto date = std::chrono::year{year} / std::chrono::month{month} / std::chrono::day{day};
+    if (!date.ok()) return std::nullopt;
+    return std::chrono::sys_days{date};
 }
 
 } // namespace
@@ -43,10 +39,10 @@ std::wstring TodayLocalIsoDate() {
 
 bool IsRatingPromptEligible(bool isStoreChannel, RatingPromptData const& data, std::wstring_view today) noexcept {
     if (!isStoreChannel || data.Asked) return false;
-    const auto todaySerial = DaysFromIsoDate(today);
-    const auto firstLaunch = DaysFromIsoDate(data.FirstLaunchDate);
-    if (!todaySerial || !firstLaunch) return false;
-    if (*todaySerial - *firstLaunch < c_minDaysSinceFirstLaunch) return false;
+    const auto todayDay = DayFromIsoDate(today);
+    const auto firstLaunch = DayFromIsoDate(data.FirstLaunchDate);
+    if (!todayDay || !firstLaunch) return false;
+    if (*todayDay - *firstLaunch < std::chrono::days{c_minDaysSinceFirstLaunch}) return false;
     return data.UsageDays >= c_minUsageDays;
 }
 

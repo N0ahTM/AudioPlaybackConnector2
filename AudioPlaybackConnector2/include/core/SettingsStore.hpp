@@ -130,7 +130,7 @@ public:
     RecordConnectedDevice(std::wstring_view deviceId, std::wstring_view deviceName, std::wstring usageDay = {});
     // Rating-prompt usage state; dates are local ISO YYYY-MM-DD days.
     [[nodiscard]] SettingsMutationResult RecordRatingPromptFirstLaunch(std::wstring today);
-    [[nodiscard]] SettingsMutationResult SetRatingPrompt(RatingPromptData value);
+    [[nodiscard]] SettingsMutationResult MarkRatingPromptAsked();
     // A synchronous boundary for suspend and normal shutdown. It waits for the active attempt,
     // then writes the newest captured revision without ever overlapping the background worker.
     // Shutdown has one executor; concurrent callers receive its stored core result and wait for publication

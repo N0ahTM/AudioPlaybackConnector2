@@ -1237,11 +1237,7 @@ void AppController::RecordAppStart() const noexcept {
 }
 
 SettingsMutationResult AppController::MarkRatingPromptShown() const {
-    return MutateSettings([&] {
-        auto data = m_settings->Snapshot().Data.RatingPrompt;
-        data.Asked = true;
-        return m_settings->SetRatingPrompt(std::move(data));
-    });
+    return MutateSettings([&] { return m_settings->MarkRatingPromptAsked(); });
 }
 
 SettingsMutationResult AppController::SetLanguage(std::wstring language) const {

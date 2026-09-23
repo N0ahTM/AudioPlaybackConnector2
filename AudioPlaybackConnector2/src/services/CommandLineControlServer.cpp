@@ -755,7 +755,7 @@ void CALLBACK CommandLineControlServer::OnHandlerReady(PTP_CALLBACK_INSTANCE cal
             g_activeHandlerServer = nullptr;
             owner->Trace(L"handler execution failed");
             if (pendingDelivery) {
-                owner->CompletePendingDelivery(pendingCorrelation);
+                owner->CompletePendingDelivery(pendingCorrelation, owner->m_options.CacheNow());
                 pendingDelivery = false;
             }
             owner->FinishClient(*instance);
@@ -766,10 +766,11 @@ void CALLBACK CommandLineControlServer::OnHandlerReady(PTP_CALLBACK_INSTANCE cal
     auto const& responseToSend = executionRecord ? executionRecord->Response : response;
 
     if (pendingDelivery) {
-        owner->CompletePendingDelivery(pendingCorrelation);
+        owner->CompletePendingDelivery(pendingCorrelation, owner->m_options.CacheNow());
         pendingDelivery = false;
     }
 
+    const auto now = owner->m_options.CacheNow();
     try {
         std::scoped_lock stateLock(instance->StateMutex);
         if (owner->m_running.load() && instance->Phase == PipePhase::RunningHandler) {
@@ -778,7 +779,7 @@ void CALLBACK CommandLineControlServer::OnHandlerReady(PTP_CALLBACK_INSTANCE cal
             acknowledgementRecord.reset();
             auto const responseHeader = apc::control::MakeResponseHeader(instance->Response);
             if (!responseHeader) {
-                owner->FinishClientLocked(*instance);
+                owner->FinishClientLocked(*instance, now);
                 return;
             }
             instance->ResponseHeader = *responseHeader;
@@ -789,7 +790,7 @@ void CALLBACK CommandLineControlServer::OnHandlerReady(PTP_CALLBACK_INSTANCE cal
                                             sizeof(instance->ResponseHeader),
                                             true,
                                             instance->ResponseDeadline)) {
-                owner->FinishClientLocked(*instance);
+                owner->FinishClientLocked(*instance, now);
             }
         }
     } catch (...) {
@@ -797,7 +798,7 @@ void CALLBACK CommandLineControlServer::OnHandlerReady(PTP_CALLBACK_INSTANCE cal
         owner->FinishClient(*instance);
     }
     if (acknowledgementRecord) {
-        owner->CompleteDelivery(request.CorrelationId, acknowledgementRecord, false);
+        owner->CompleteDelivery(request.CorrelationId, acknowledgementRecord, false, owner->m_options.CacheNow());
     }
 }
 
@@ -873,16 +874,17 @@ void CommandLineControlServer::HandleIoCompletion(PipeInstance& instance,
                                                   ULONG ioResult,
                                                   ULONG_PTR bytes) noexcept {
     try {
+        const auto now = m_options.CacheNow();
         std::unique_lock stateLock(instance.StateMutex);
         SetThreadpoolTimer(instance.DeadlineTimer.get(), nullptr, 0, 0);
         WaitForThreadpoolTimerCallbacks(instance.DeadlineTimer.get(), TRUE);
         if (overlapped != &instance.Overlapped) {
-            FinishClientLocked(instance);
+            FinishClientLocked(instance, now);
             return;
         }
         if (!m_running.load()) return;
         if (ioResult != ERROR_SUCCESS) {
-            FinishClientLocked(instance);
+            FinishClientLocked(instance, now);
             return;
         }
         if (instance.Phase == PipePhase::Connecting) {
@@ -891,20 +893,20 @@ void CommandLineControlServer::HandleIoCompletion(PipeInstance& instance,
             return;
         }
         if (apc::control::RemainingWait(instance.TransferDeadline) == 0) {
-            FinishClientLocked(instance);
+            FinishClientLocked(instance, now);
             return;
         }
         if (bytes == 0 || bytes > instance.TotalBytes - instance.TransferredBytes) {
-            FinishClientLocked(instance);
+            FinishClientLocked(instance, now);
             return;
         }
 
         instance.TransferredBytes += static_cast<std::uint32_t>(bytes);
         if (instance.TransferredBytes < instance.TotalBytes) {
-            if (!StartCurrentTransferLocked(instance)) FinishClientLocked(instance);
+            if (!StartCurrentTransferLocked(instance)) FinishClientLocked(instance, now);
             return;
         }
-        HandleCompletedTransferLocked(instance);
+        HandleCompletedTransferLocked(instance, now);
     } catch (...) {
         Trace(L"I/O completion failed");
         FinishClient(instance);
@@ -919,22 +921,25 @@ void CommandLineControlServer::HandleConnectedInstance(PipeInstance& instance) n
         trusted = false;
     }
 
+    const auto now = m_options.CacheNow();
     try {
         std::scoped_lock stateLock(instance.StateMutex);
-        HandleConnectedInstanceLocked(instance, trusted);
+        HandleConnectedInstanceLocked(instance, trusted, now);
     } catch (...) {
         Trace(L"connected-client setup failed");
         FinishClient(instance);
     }
 }
 
-void CommandLineControlServer::HandleConnectedInstanceLocked(PipeInstance& instance, bool trusted) {
+void CommandLineControlServer::HandleConnectedInstanceLocked(PipeInstance& instance,
+                                                             bool trusted,
+                                                             std::chrono::steady_clock::time_point now) {
     if (!m_running.load() || !m_accepting.load()) {
-        FinishClientLocked(instance);
+        FinishClientLocked(instance, now);
         return;
     }
     if (!trusted) {
-        FinishClientLocked(instance);
+        FinishClientLocked(instance, now);
         return;
     }
 
@@ -947,16 +952,17 @@ void CommandLineControlServer::HandleConnectedInstanceLocked(PipeInstance& insta
     instance.Phase = PipePhase::ReadingRequestHeader;
     if (!StartTransferLocked(
             instance, &instance.RequestHeader, sizeof(instance.RequestHeader), false, instance.RequestDeadline)) {
-        FinishClientLocked(instance);
+        FinishClientLocked(instance, now);
     }
 }
 
-void CommandLineControlServer::HandleCompletedTransferLocked(PipeInstance& instance) {
+void CommandLineControlServer::HandleCompletedTransferLocked(PipeInstance& instance,
+                                                             std::chrono::steady_clock::time_point now) {
     switch (instance.Phase) {
         case PipePhase::ReadingRequestHeader: {
             const auto& header = instance.RequestHeader;
             if (!apc::control::IsRequestHeaderValid(header)) {
-                FinishClientLocked(instance);
+                FinishClientLocked(instance, now);
                 return;
             }
 
@@ -966,18 +972,18 @@ void CommandLineControlServer::HandleCompletedTransferLocked(PipeInstance& insta
             instance.Request.CorrelationId = {header.CorrelationHigh, header.CorrelationLow};
             instance.Request.Payload.assign(header.PayloadBytes / sizeof(wchar_t), L'\0');
             if (header.PayloadBytes == 0) {
-                DispatchRequestLocked(instance);
+                DispatchRequestLocked(instance, now);
                 return;
             }
 
             instance.Phase = PipePhase::ReadingRequestPayload;
             if (!StartTransferLocked(
                     instance, instance.Request.Payload.data(), header.PayloadBytes, false, instance.RequestDeadline)) {
-                FinishClientLocked(instance);
+                FinishClientLocked(instance, now);
             }
             return;
         }
-        case PipePhase::ReadingRequestPayload: DispatchRequestLocked(instance); return;
+        case PipePhase::ReadingRequestPayload: DispatchRequestLocked(instance, now); return;
         case PipePhase::WritingResponseHeader: {
             if (instance.ResponseHeader.PayloadBytes != 0) {
                 instance.Phase = PipePhase::WritingResponsePayload;
@@ -986,7 +992,7 @@ void CommandLineControlServer::HandleCompletedTransferLocked(PipeInstance& insta
                                          instance.ResponseHeader.PayloadBytes,
                                          true,
                                          instance.ResponseDeadline)) {
-                    FinishClientLocked(instance);
+                    FinishClientLocked(instance, now);
                 }
                 return;
             }
@@ -997,7 +1003,7 @@ void CommandLineControlServer::HandleCompletedTransferLocked(PipeInstance& insta
                                      sizeof(instance.Acknowledgement),
                                      false,
                                      apc::control::DeadlineAfter(m_options.AcknowledgementTimeoutMs))) {
-                FinishClientLocked(instance);
+                FinishClientLocked(instance, now);
             }
             return;
         }
@@ -1009,7 +1015,7 @@ void CommandLineControlServer::HandleCompletedTransferLocked(PipeInstance& insta
                                      sizeof(instance.Acknowledgement),
                                      false,
                                      apc::control::DeadlineAfter(m_options.AcknowledgementTimeoutMs))) {
-                FinishClientLocked(instance);
+                FinishClientLocked(instance, now);
             }
             return;
         case PipePhase::ReadingAcknowledgement: {
@@ -1017,54 +1023,60 @@ void CommandLineControlServer::HandleCompletedTransferLocked(PipeInstance& insta
             if (apc::control::IsAcknowledgementValid(acknowledgement, instance.Request.CorrelationId) &&
                 instance.AcknowledgementRecord) {
                 auto record = std::move(instance.AcknowledgementRecord);
-                CompleteDelivery(instance.Request.CorrelationId, record, true);
+                CompleteDelivery(instance.Request.CorrelationId, record, true, now);
             }
-            FinishClientLocked(instance);
+            FinishClientLocked(instance, now);
             return;
         }
-        default: FinishClientLocked(instance); return;
+        default: FinishClientLocked(instance, now); return;
     }
 }
 
-void CommandLineControlServer::DispatchRequestLocked(PipeInstance& instance) noexcept {
+void CommandLineControlServer::DispatchRequestLocked(PipeInstance& instance,
+                                                     std::chrono::steady_clock::time_point now) noexcept {
     if (!apc::control::IsRequestValid(instance.Request)) {
-        FinishClientLocked(instance);
+        FinishClientLocked(instance, now);
         return;
     }
     try {
-        std::lock_guard requestLock(m_requestMutex);
-        auto& pending = m_pendingDeliveries[instance.Request.CorrelationId];
-        if (pending == std::numeric_limits<std::size_t>::max()) {
-            FinishClientLocked(instance);
-            return;
+        bool saturated = false;
+        {
+            std::lock_guard requestLock(m_requestMutex);
+            auto& pending = m_pendingDeliveries[instance.Request.CorrelationId];
+            saturated = pending == std::numeric_limits<std::size_t>::max();
+            if (!saturated) {
+                ++pending;
+                instance.PendingDelivery = true;
+                instance.Phase = PipePhase::RunningHandler;
+                SubmitThreadpoolWork(instance.HandlerWork.get());
+            }
         }
-        ++pending;
-        instance.PendingDelivery = true;
-        instance.Phase = PipePhase::RunningHandler;
-        SubmitThreadpoolWork(instance.HandlerWork.get());
+        if (saturated) FinishClientLocked(instance, now);
     } catch (...) {
-        FinishClientLocked(instance);
+        FinishClientLocked(instance, now);
     }
 }
 
 void CommandLineControlServer::FinishClient(PipeInstance& instance) noexcept {
     try {
+        const auto now = m_options.CacheNow();
         std::scoped_lock stateLock(instance.StateMutex);
-        FinishClientLocked(instance);
+        FinishClientLocked(instance, now);
     } catch (...) {
         Trace(L"client cleanup failed");
     }
 }
 
-void CommandLineControlServer::FinishClientLocked(PipeInstance& instance) noexcept {
+void CommandLineControlServer::FinishClientLocked(PipeInstance& instance,
+                                                  std::chrono::steady_clock::time_point now) noexcept {
     instance.Phase = PipePhase::Disconnected;
     if (instance.PendingDelivery) {
         instance.PendingDelivery = false;
-        CompletePendingDelivery(instance.Request.CorrelationId);
+        CompletePendingDelivery(instance.Request.CorrelationId, now);
     }
     if (instance.AcknowledgementRecord) {
         auto record = std::move(instance.AcknowledgementRecord);
-        CompleteDelivery(instance.Request.CorrelationId, record, false);
+        CompleteDelivery(instance.Request.CorrelationId, record, false, now);
     }
     DisconnectNamedPipe(instance.Pipe.get());
     if (m_running.load()) (void)ArmConnectionLocked(instance);
@@ -1182,39 +1194,29 @@ CommandLineControlServer::ExecuteOnce(apc::control::Request const& request,
 
 void CommandLineControlServer::CompleteDelivery(apc::control::CorrelationId correlationId,
                                                 std::shared_ptr<RequestRecord> const& record,
-                                                bool acknowledged) noexcept {
-    try {
-        const auto completedAt = m_options.CacheNow();
-        {
-            std::lock_guard requestLock(m_requestMutex);
-            const auto entry = m_requestRecords.find(correlationId);
-            if (entry == m_requestRecords.end() || entry->second != record || !record->IsComplete) return;
-            if (record->ActiveDeliveries > 0) --record->ActiveDeliveries;
-            record->Acknowledged = record->Acknowledged || acknowledged;
-            record->LastDeliveryCompletedAt = completedAt;
-            PruneRequestRecords(record->LastDeliveryCompletedAt);
-            ScheduleRequestPruneLocked(record->LastDeliveryCompletedAt);
-        }
-    } catch (...) {
-        Trace(L"request acknowledgement cleanup failed");
-    }
+                                                bool acknowledged,
+                                                std::chrono::steady_clock::time_point now) noexcept {
+    std::lock_guard requestLock(m_requestMutex);
+    const auto entry = m_requestRecords.find(correlationId);
+    if (entry == m_requestRecords.end() || entry->second != record || !record->IsComplete) return;
+    if (record->ActiveDeliveries > 0) --record->ActiveDeliveries;
+    record->Acknowledged = record->Acknowledged || acknowledged;
+    record->LastDeliveryCompletedAt = now;
+    PruneRequestRecords(now);
+    ScheduleRequestPruneLocked(now);
 }
 
-void CommandLineControlServer::CompletePendingDelivery(apc::control::CorrelationId correlationId) noexcept {
-    try {
-        const auto now = m_options.CacheNow();
-        std::lock_guard requestLock(m_requestMutex);
-        auto pending = m_pendingDeliveries.find(correlationId);
-        if (pending == m_pendingDeliveries.end()) return;
-        if (pending->second > 1) {
-            --pending->second;
-        } else {
-            m_pendingDeliveries.erase(pending);
-        }
-        ScheduleRequestPruneLocked(now);
-    } catch (...) {
-        Trace(L"pending delivery cleanup failed");
+void CommandLineControlServer::CompletePendingDelivery(apc::control::CorrelationId correlationId,
+                                                       std::chrono::steady_clock::time_point now) noexcept {
+    std::lock_guard requestLock(m_requestMutex);
+    auto pending = m_pendingDeliveries.find(correlationId);
+    if (pending == m_pendingDeliveries.end()) return;
+    if (pending->second > 1) {
+        --pending->second;
+    } else {
+        m_pendingDeliveries.erase(pending);
     }
+    ScheduleRequestPruneLocked(now);
 }
 
 void CommandLineControlServer::PruneRequestRecords(std::chrono::steady_clock::time_point now) noexcept {

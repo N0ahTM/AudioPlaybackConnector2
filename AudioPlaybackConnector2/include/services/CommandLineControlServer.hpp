@@ -44,8 +44,8 @@ public:
         // must return immediately, preserve Win32 error semantics and never reenter.
         std::move_only_function<BOOL(HANDLE, LPOVERLAPPED) noexcept> ConnectPipe =
             [](HANDLE pipe, LPOVERLAPPED operation) noexcept { return ConnectNamedPipe(pipe, operation); };
-        // Cache time is sampled outside the request lock. Timer submission is a
-        // native nonblocking operation under that lock and must not reenter.
+        // Cache time is sampled outside both request and pipe-slot locks. Timer
+        // submission is native and nonblocking under the request lock; it must not reenter.
         std::move_only_function<std::chrono::steady_clock::time_point() noexcept> CacheNow = []() noexcept {
             return std::chrono::steady_clock::now();
         };
@@ -98,11 +98,11 @@ private:
     bool StartCurrentTransferLocked(PipeInstance& instance) noexcept;
     void HandleIoCompletion(PipeInstance& instance, void* overlapped, ULONG ioResult, ULONG_PTR bytes) noexcept;
     void HandleConnectedInstance(PipeInstance& instance) noexcept;
-    void HandleConnectedInstanceLocked(PipeInstance& instance, bool trusted);
-    void HandleCompletedTransferLocked(PipeInstance& instance);
-    void DispatchRequestLocked(PipeInstance& instance) noexcept;
+    void HandleConnectedInstanceLocked(PipeInstance& instance, bool trusted, std::chrono::steady_clock::time_point now);
+    void HandleCompletedTransferLocked(PipeInstance& instance, std::chrono::steady_clock::time_point now);
+    void DispatchRequestLocked(PipeInstance& instance, std::chrono::steady_clock::time_point now) noexcept;
     void FinishClient(PipeInstance& instance) noexcept;
-    void FinishClientLocked(PipeInstance& instance) noexcept;
+    void FinishClientLocked(PipeInstance& instance, std::chrono::steady_clock::time_point now) noexcept;
     // A returned record owns one active delivery, acquired under the cache lock.
     // Every path must hand it to the pipe instance or call CompleteDelivery.
     [[nodiscard]] std::shared_ptr<RequestRecord> ExecuteOnce(apc::control::Request const& request,
@@ -111,8 +111,10 @@ private:
                                                              apc::control::Response& uncachedResponse);
     void CompleteDelivery(apc::control::CorrelationId correlationId,
                           std::shared_ptr<RequestRecord> const& record,
-                          bool acknowledged) noexcept;
-    void CompletePendingDelivery(apc::control::CorrelationId correlationId) noexcept;
+                          bool acknowledged,
+                          std::chrono::steady_clock::time_point now) noexcept;
+    void CompletePendingDelivery(apc::control::CorrelationId correlationId,
+                                 std::chrono::steady_clock::time_point now) noexcept;
     void PruneRequestRecords(std::chrono::steady_clock::time_point now) noexcept;
     void ScheduleRequestPruneLocked(std::chrono::steady_clock::time_point now) noexcept;
 

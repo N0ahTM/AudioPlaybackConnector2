@@ -80,9 +80,11 @@ The per-slot deadline timer is cancelled and drained under `StateMutex` before a
 
 Request mutex owns request records, pending/active deliveries and byte accounting. Register pending delivery before dispatch; acquire completed response+active delivery atomically under that same mutex. Newly executed responses acquire delivery at completion commit. Handler transfers active ownership to the instance, then drops pending registration; failed dispatch releases directly, normal dispatch on ACK/disconnect. No second ownership lookup; conflicting requests never own canonical delivery.
 
+The pipe slot may acquire the request mutex during cleanup; request admission releases the request mutex before any slot cleanup, including counter saturation. This keeps the slot → request lock order consistent.
+
 Pending/active delivery prevents TTL/pressure eviction even after another client's ACK. Real-pipe pressure test blocks a duplicate 64 KiB response behind 4 KiB buffering, ACKs the first, observes Busy for another request, then verifies intact response, single execution and restored capacity.
 
-CacheNow is monotonic/concurrent and sampled outside the request lock. SetCacheTimer runs under that lock and must not wait, throw or invoke callbacks inline. Defaults are steady_clock/SetThreadpoolTimer. Server owns/drains the native timer. Tests freeze time across real ticks, advance both retention TTLs, require timer idle before another request/Stop, then verify the entire byte budget and reexecution after expiry. No private cache-reading hook.
+CacheNow is monotonic/concurrent and sampled outside request and pipe-slot locks; completion paths pass the sampled time through locked state transitions. SetCacheTimer runs under the request lock and must not wait, throw or invoke callbacks inline. Defaults are steady_clock/SetThreadpoolTimer. Server owns/drains the native timer. Tests freeze time across real ticks, advance both retention TTLs, require timer idle before another request/Stop, then verify the entire byte budget and reexecution after expiry. No private cache-reading hook.
 
 CoreRuntime compiles the server once; tests link identical production layout without test macros.
 

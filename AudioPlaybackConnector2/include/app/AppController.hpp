@@ -103,9 +103,10 @@ public:
     SettingsMutationResult SetSystemBackdropEffects(bool enabled) const;
     SettingsMutationResult SetPrivacyMode(bool enabled) const;
     SettingsMutationResult SetLanguage(std::wstring language) const;
-    // Store rating prompt: records the first launch once and applies a UI outcome.
+    // Store rating prompt: records the first launch once and marks the one-shot
+    // notification as shown after it was presented.
     void RecordAppStart() const noexcept;
-    SettingsMutationResult SetRatingPromptOutcome(RatingPromptOutcome outcome) const;
+    SettingsMutationResult MarkRatingPromptShown() const;
     SettingsMutationResult SetSettingsWindowBounds(PersistedWindowBounds bounds) const;
     SettingsMutationResult ClearSettingsWindowBounds() const;
     SettingsMutationResult SetDeviceConnectOnStartup(std::wstring const& id, bool enabled) const;

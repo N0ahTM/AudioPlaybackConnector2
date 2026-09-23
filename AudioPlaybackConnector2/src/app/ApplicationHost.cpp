@@ -486,6 +486,8 @@ apc::app::AppUiActionResult ApplicationHost::PresentDevicePicker(apc::app::Devic
         return result;
     }
 
+    if (self->m_notificationService) self->m_notificationService->MaybeShowRatingPrompt();
+
     // Tray activation is dispatched detached from the UI callback.  The
     // flyout's Opened event is posted back to this same dispatcher, so a
     // detached UI-thread command must not wait for its generation here.
@@ -525,6 +527,8 @@ apc::app::AppUiActionResult ApplicationHost::PresentSettings(apc::app::AppComman
     // Preserve the gate's pre-dispatch versus in-flight distinction. The
     // context state is not sufficient once the UI callback may have run.
     result.Status = ToUiActionStatus(uiResult);
+    if (uiResult == UiDispatcher::ActionResult::Succeeded && self->m_notificationService)
+        self->m_notificationService->MaybeShowRatingPrompt();
     return result;
 }
 

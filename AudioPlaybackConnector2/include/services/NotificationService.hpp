@@ -49,6 +49,9 @@ public:
 
     void ShowAppStarted();
     void HandleEvent(apc::app::AppEvent const& event) noexcept;
+    // One-shot store rating notification; evaluates channel/age/usage eligibility and
+    // marks the prompt as shown only when the notification was actually presented.
+    void MaybeShowRatingPrompt() noexcept;
 
 private:
     /*------------------------------------------------------------------------------------------------------------*/
@@ -58,6 +61,7 @@ private:
     struct Content;
     void ShowNotification(Content const& content, winrt::hstring const& id = {}, winrt::hstring const& deviceName = {});
     void OnNotificationInvoked(winrt::hstring const& argument);
+    static winrt::fire_and_forget OpenStoreReviewPage();
     static winrt::fire_and_forget RemoveStaleStatusToastsAsync(
         winrt::Microsoft::Windows::AppNotifications::AppNotificationManager notificationManager,
         winrt::hstring group,

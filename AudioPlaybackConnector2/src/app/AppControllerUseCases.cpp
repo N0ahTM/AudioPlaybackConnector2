@@ -1236,10 +1236,11 @@ void AppController::RecordAppStart() const noexcept {
     }
 }
 
-SettingsMutationResult AppController::SetRatingPromptOutcome(RatingPromptOutcome outcome) const {
+SettingsMutationResult AppController::MarkRatingPromptShown() const {
     return MutateSettings([&] {
         auto data = m_settings->Snapshot().Data.RatingPrompt;
-        return m_settings->SetRatingPrompt(ApplyRatingPromptOutcome(outcome, std::move(data), TodayLocalIsoDate()));
+        data.Asked = true;
+        return m_settings->SetRatingPrompt(std::move(data));
     });
 }
 

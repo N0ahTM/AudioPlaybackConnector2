@@ -18,8 +18,6 @@
 #include <core/SettingsData.hpp>
 #include <core/SettingsLimits.hpp>
 #include <core/StringResources.hpp>
-#include <app/RatingPromptChannel.hpp>
-#include <app/RatingPromptPolicy.hpp>
 #include <ui/ButtonHelpers.hpp>
 #include <ui/DiagnosticsLogCollector.hpp>
 #include <ui/SettingsDiagnosticsReport.hpp>
@@ -27,9 +25,7 @@
 #include <util/Util.hpp>
 #include <ui/XamlWindowInterop.hpp>
 
-#include <winrt/Windows.ApplicationModel.h>
 #include <winrt/Windows.ApplicationModel.DataTransfer.h>
-#include <winrt/Windows.Services.Store.h>
 #include <winrt/Microsoft.UI.Xaml.Automation.h>
 #include <winrt/Microsoft.UI.Xaml.Input.h>
 #include <winrt/Windows.System.h>
@@ -698,7 +694,6 @@ void SettingsWindow::InitializeSettingsContent() {
     ShowNotificationsToggle().OnContent(box_value(L""));
     SystemBackdropEffectsToggle().OffContent(box_value(L""));
     SystemBackdropEffectsToggle().OnContent(box_value(L""));
-    EvaluateRatingPrompt();
     auto weakWindow = get_weak();
     auto dispatcher = DispatcherQueue();
     auto observation = controller->SnapshotAndSubscribe(
@@ -749,60 +744,6 @@ void SettingsWindow::ShowDiagnosticsInfo(InfoBarSeverity severity, std::wstring_
     DiagnosticsInfoBar().Title(winrt::hstring(title));
     DiagnosticsInfoBar().Message(winrt::hstring(message));
     DiagnosticsInfoBar().IsOpen(true);
-}
-
-void SettingsWindow::EvaluateRatingPrompt() {
-    auto controller = m_appController;
-    if (!controller || !m_strings) {
-        RatingPromptInfoBar().IsOpen(false);
-        return;
-    }
-    const bool eligible = apc::app::IsRatingPromptEligible(
-        apc::app::IsStoreChannel(), controller->Snapshot().Settings.RatingPrompt, apc::app::TodayLocalIsoDate());
-    RatingPromptInfoBar().IsOpen(eligible);
-    if (!eligible) return;
-    RatingPromptInfoBar().Title(m_strings->Get("RatingPrompt_Title"));
-    RatingPromptBodyText().Text(m_strings->Get("RatingPrompt_Body"));
-    RatingPromptRateText().Text(m_strings->Get("RatingPrompt_Rate"));
-    RatingPromptLaterText().Text(m_strings->Get("RatingPrompt_Later"));
-    RatingPromptNeverText().Text(m_strings->Get("RatingPrompt_Never"));
-}
-
-void SettingsWindow::RatingPromptRateButton_Click(IInspectable const&, RoutedEventArgs const&) {
-    RatingPromptInfoBar().IsOpen(false);
-    if (auto controller = m_appController)
-        (void)controller->SetRatingPromptOutcome(apc::app::RatingPromptOutcome::Rated);
-    RequestStoreRating();
-}
-
-void SettingsWindow::RatingPromptLaterButton_Click(IInspectable const&, RoutedEventArgs const&) {
-    RatingPromptInfoBar().IsOpen(false);
-    if (auto controller = m_appController)
-        (void)controller->SetRatingPromptOutcome(apc::app::RatingPromptOutcome::Deferred);
-}
-
-void SettingsWindow::RatingPromptNeverButton_Click(IInspectable const&, RoutedEventArgs const&) {
-    RatingPromptInfoBar().IsOpen(false);
-    if (auto controller = m_appController)
-        (void)controller->SetRatingPromptOutcome(apc::app::RatingPromptOutcome::Dismissed);
-}
-
-winrt::fire_and_forget SettingsWindow::RequestStoreRating() {
-    using StoreStatus = winrt::Windows::Services::Store::StoreRateAndReviewStatus;
-    try {
-        auto const context = winrt::Windows::Services::Store::StoreContext::GetDefault();
-        auto const result = co_await context.RequestRateAndReviewAppAsync();
-        if (result.Status() != StoreStatus::Error && result.Status() != StoreStatus::NetworkError) co_return;
-    } catch (...) {
-    }
-    try {
-        // The in-app dialog is unavailable (e.g. offline or no Store service): open
-        // the review page for this package family instead.
-        const auto familyName = winrt::Windows::ApplicationModel::Package::Current().Id().FamilyName();
-        co_await winrt::Windows::System::Launcher::LaunchUriAsync(
-            winrt::Windows::Foundation::Uri(L"ms-windows-store://review/?PFN=" + familyName));
-    } catch (...) {
-    }
 }
 
 winrt::fire_and_forget SettingsWindow::LaunchUri(std::wstring_view uri) {

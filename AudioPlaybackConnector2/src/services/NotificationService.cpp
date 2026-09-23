@@ -5,6 +5,8 @@
 #include <winrt/Windows.Foundation.h>
 #include <services/NotificationService.hpp>
 #include <app/AppController.hpp>
+#include <app/RatingPromptChannel.hpp>
+#include <app/RatingPromptPolicy.hpp>
 #include <algorithm>
 #include <type_traits>
 #include <variant>
@@ -15,6 +17,8 @@
 #include <string_view>
 
 #include <utility>
+#include <winrt/Windows.ApplicationModel.h>
+#include <winrt/Windows.System.h>
 
 namespace AppNotifications = winrt::Microsoft::Windows::AppNotifications;
 
@@ -281,6 +285,30 @@ void NotificationService::ShowAppStarted() {
                       .lifetime = std::chrono::seconds(7)});
 }
 
+void NotificationService::MaybeShowRatingPrompt() noexcept {
+    try {
+        auto controller = m_controller.lock();
+        if (m_isTearingDown || !controller) return;
+        auto const snapshot = controller->Snapshot();
+        if (!snapshot.IsRunning || !snapshot.Settings.ShowNotifications) return;
+        if (!apc::app::IsRatingPromptEligible(
+                apc::app::IsStoreChannel(), snapshot.Settings.RatingPrompt, apc::app::TodayLocalIsoDate()))
+            return;
+        auto xml = ToastXmlBuilder{};
+        xml.Title(NotificationText(*m_strings, "RatingPrompt_Title"))
+            .AppLogoOverride(L"ms-appx:///Images/ToastInfo.png")
+            .Body(NotificationText(*m_strings, "RatingPrompt_Body"))
+            .Action(NotificationText(*m_strings, "RatingPrompt_Rate"), ToastArguments{}.Action(L"rate"))
+            .SilentAudio()
+            .Duration(L"short");
+        if (!ShowStatusToast(xml.Build(), ExpirationFromNow(std::chrono::minutes(10)))) return;
+        // Mark as asked only once the notification was actually presented.
+        (void)controller->MarkRatingPromptShown();
+    } catch (...) {
+        // The rating prompt is best effort and must never break presentation.
+    }
+}
+
 void NotificationService::HandleEvent(apc::app::AppEvent const& notification) noexcept try {
     auto controller = m_controller.lock();
     if (m_isTearingDown || !controller) return;
@@ -356,11 +384,26 @@ void NotificationService::HandleEvent(apc::app::AppEvent const& notification) no
 /*//////// Event Handler /////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
+winrt::fire_and_forget NotificationService::OpenStoreReviewPage() {
+    try {
+        const auto familyName = winrt::Windows::ApplicationModel::Package::Current().Id().FamilyName();
+        co_await winrt::Windows::System::Launcher::LaunchUriAsync(
+            winrt::Windows::Foundation::Uri(L"ms-windows-store://review/?PFN=" + familyName));
+    } catch (...) {
+        // Opening the review page is best effort; a failed launch needs no surface.
+    }
+}
+
 void NotificationService::OnNotificationInvoked(winrt::hstring const& argument) {
     try {
         auto parsedArguments = ToastArguments::Parse(argument);
         auto action = ToastArguments::Find(parsedArguments, L"action");
         auto deviceId = ToastArguments::Find(parsedArguments, L"deviceId");
+
+        if (action && *action == L"rate") {
+            OpenStoreReviewPage();
+            return;
+        }
 
         if (!deviceId) {
             m_log.Trace(L"[NotificationService] App notification invoked without deviceId: {0}",

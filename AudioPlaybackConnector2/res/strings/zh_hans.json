@@ -157,7 +157,5 @@
   "Settings_Connections": "连接",
   "RatingPrompt_Title": "您会给 AudioPlaybackConnector 打几分？",
   "RatingPrompt_Body": "请在 Microsoft Store 中留下评论，分享您的使用体验。",
-  "RatingPrompt_Rate": "评价应用",
-  "RatingPrompt_Later": "稍后提醒我",
-  "RatingPrompt_Never": "不再询问"
+  "RatingPrompt_Rate": "评价应用"
 }

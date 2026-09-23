@@ -157,7 +157,5 @@
   "Settings_Connections": "연결",
   "RatingPrompt_Title": "AudioPlaybackConnector를 어떻게 평가하시겠습니까?",
   "RatingPrompt_Body": "Microsoft Store에 리뷰를 남겨 사용 경험을 공유해 주세요.",
-  "RatingPrompt_Rate": "앱 평가",
-  "RatingPrompt_Later": "나중에 다시 알림",
-  "RatingPrompt_Never": "다시 묻지 않음"
+  "RatingPrompt_Rate": "앱 평가"
 }

@@ -157,7 +157,5 @@
   "Settings_Connections": "Connexions",
   "RatingPrompt_Title": "Comment évalueriez-vous AudioPlaybackConnector ?",
   "RatingPrompt_Body": "Partagez votre expérience avec un avis sur le Microsoft Store.",
-  "RatingPrompt_Rate": "Évaluer l'application",
-  "RatingPrompt_Later": "Me le rappeler plus tard",
-  "RatingPrompt_Never": "Ne plus me demander"
+  "RatingPrompt_Rate": "Évaluer l'application"
 }

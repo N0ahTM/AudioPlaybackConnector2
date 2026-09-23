@@ -301,9 +301,7 @@ void TestOnlyCurrentFormatIsAccepted() {
     prompted.RatingPrompt.FirstLaunchDate = L"2026-09-08";
     prompted.RatingPrompt.UsageDays = 4;
     prompted.RatingPrompt.LastUsageDate = L"2026-09-20";
-    prompted.RatingPrompt.State = RatingPromptState::Deferred;
-    prompted.RatingPrompt.DeferUntil = L"2026-10-06";
-    prompted.RatingPrompt.DeferCount = 1;
+    prompted.RatingPrompt.Asked = true;
     Check(apc::settings::Decode(apc::settings::Encode(prompted)) == prompted,
           "the rating prompt state must round-trip through the current format");
     const auto expectRejected = [](std::string_view bytes, std::string_view message) {
@@ -316,8 +314,6 @@ void TestOnlyCurrentFormatIsAccepted() {
     };
     expectRejected(R"({"schemaVersion":2,"ratingPrompt":{"firstLaunchDate":"2026-99-99"}})",
                    "malformed rating prompt dates must be rejected");
-    expectRejected(R"({"schemaVersion":2,"ratingPrompt":{"state":"suspicious"}})",
-                   "unknown rating prompt states must be rejected");
     expectRejected(R"({"schemaVersion":2,"ratingPrompt":{"usageDays":-3}})",
                    "negative rating prompt counters must be rejected");
     expectRejected(R"({"schemaVersion":2,"ratingPrompt":{"unexpected":1}})",

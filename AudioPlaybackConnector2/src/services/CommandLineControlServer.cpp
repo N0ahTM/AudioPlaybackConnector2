@@ -262,6 +262,7 @@ void CommandLineControlServer::Start(Handler handler) noexcept {
                 lifecycleLock, [this] { return !m_stopping && !m_deferredStopRequested.load() && !m_stopRequested; });
             if (m_running.load() || m_desiredRunning) return;
             if (!EnsureControlCallbacksLocked()) {
+                lifecycleLock.unlock();
                 Trace(L"thread-pool control objects unavailable");
                 return;
             }
@@ -347,12 +348,13 @@ bool CommandLineControlServer::TryStart() noexcept {
         m_startRetryFailures = 0;
         SetThreadpoolTimer(m_startRetryTimer.get(), nullptr, 0, 0);
 
-        for (auto& instance : m_instances) {
-            if (!ArmConnection(*instance)) Trace(L"pipe instance arm deferred");
-        }
-        Trace(L"server started");
+        bool armDeferred = false;
+        for (auto& instance : m_instances)
+            armDeferred = !ArmConnection(*instance) || armDeferred;
         lifecycleLock.unlock();
         m_lifecycleChanged.notify_all();
+        if (armDeferred) Trace(L"pipe instance arm deferred");
+        Trace(L"server started");
         return true;
     } catch (...) {
         m_accepting = false;
@@ -360,10 +362,10 @@ bool CommandLineControlServer::TryStart() noexcept {
         m_starting = false;
         m_instances.clear();
         ++m_startRetryFailures;
-        Trace(L"server start failed; control endpoint remains optional");
         ScheduleStartRetryLocked();
         lifecycleLock.unlock();
         m_lifecycleChanged.notify_all();
+        Trace(L"server start failed; control endpoint remains optional");
         return false;
     }
 }
@@ -510,7 +512,6 @@ bool CommandLineControlServer::ArmConnection(PipeInstance& instance) noexcept {
         std::scoped_lock stateLock(instance.StateMutex);
         return ArmConnectionLocked(instance);
     } catch (...) {
-        Trace(L"pipe arm failed");
         return false;
     }
 }
@@ -580,6 +581,7 @@ void CommandLineControlServer::RecreatePipeInstance(PipeInstance& instance) noex
 
         wil::unique_handle oldPipe;
         wil::unique_threadpool_io_nowait oldIo;
+        bool armDeferred = false;
         {
             std::scoped_lock stateLock(instance.StateMutex);
             if (!m_running.load() || !instance.RecreateRequired) {
@@ -626,8 +628,9 @@ void CommandLineControlServer::RecreatePipeInstance(PipeInstance& instance) noex
             instance.RecreateRequired = false;
             instance.RecreateScheduled = false;
             instance.RearmFailures = 0;
-            if (!ArmConnectionLocked(instance)) Trace(L"recreated pipe instance arm deferred");
+            armDeferred = !ArmConnectionLocked(instance);
         }
+        if (armDeferred) Trace(L"recreated pipe instance arm deferred");
     } catch (...) {
         failAndRetry();
     }
@@ -808,7 +811,7 @@ void CALLBACK CommandLineControlServer::OnRearmReady(PTP_CALLBACK_INSTANCE, void
     if (recreate) {
         SubmitThreadpoolWork(instance->RecreateWork.get());
     } else if (arm) {
-        (void)instance->Owner->ArmConnection(*instance);
+        if (!instance->Owner->ArmConnection(*instance)) instance->Owner->Trace(L"pipe arm failed");
     }
 }
 
@@ -1044,7 +1047,7 @@ void CommandLineControlServer::FinishClientLocked(PipeInstance& instance) noexce
         CompleteDelivery(instance.Request.CorrelationId, record, false);
     }
     DisconnectNamedPipe(instance.Pipe.get());
-    if (m_running.load() && !ArmConnectionLocked(instance)) Trace(L"pipe rearm deferred");
+    if (m_running.load()) (void)ArmConnectionLocked(instance);
 }
 
 /*------------------------------------------------------------------------------------------------------------*/

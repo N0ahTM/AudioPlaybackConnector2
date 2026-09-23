@@ -1,3 +1,5 @@
+#include "TestCheck.hpp"
+
 #include <core/ReconnectPolicy.hpp>
 
 #include <array>
@@ -6,14 +8,6 @@
 #include <string_view>
 
 namespace {
-
-int g_failures = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 void TestFullBackoffSequence() {
     constexpr std::array expectedDelays{5, 10, 20, 40, 60, 60, 60, 60, 60, 60};
@@ -108,9 +102,3 @@ int RunReconnectPolicyTests() {
     TestTerminalFailureDecision();
     return g_failures;
 }
-
-#ifdef APC_RECONNECT_POLICY_TEST_MAIN
-int main() {
-    return RunReconnectPolicyTests();
-}
-#endif

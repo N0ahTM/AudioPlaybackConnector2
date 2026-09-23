@@ -1,8 +1,6 @@
-#ifndef APC_COMMAND_PIPE_SERVER_STANDALONE
-#include <pch.h>
-#endif
-
 #include <control/CommandPipeSecurity.hpp>
+#include <control/PipeSecurityAttributes.hpp>
+#include <control/CommandPipeIo.hpp>
 #include <services/CommandLineControlServer.hpp>
 #include <util/RuntimeApartment.hpp>
 
@@ -17,6 +15,10 @@
 #include <system_error>
 #include <type_traits>
 #include <utility>
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Platform Helpers //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 namespace {
 enum class PipePhase {
@@ -108,6 +110,10 @@ FILETIME AbsoluteDeadline(std::uint64_t deadline) noexcept {
 
 } // namespace
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Request Records ///////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 struct CommandLineControlServer::RequestRecord {
     apc::control::Request Request;
     apc::control::Response Response;
@@ -120,29 +126,27 @@ struct CommandLineControlServer::RequestRecord {
     bool Acknowledged = false;
 };
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Pipe Instance State ///////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 struct CommandLineControlServer::PipeInstance {
     PipeInstance(CommandLineControlServer* owner, std::size_t index, std::wstring name)
         : Owner(owner), Index(index), Name(std::move(name)) {}
-    ~PipeInstance() {
-        if (DeadlineTimer) CloseThreadpoolTimer(DeadlineTimer);
-        if (RearmTimer) CloseThreadpoolTimer(RearmTimer);
-        if (HandlerWork) CloseThreadpoolWork(HandlerWork);
-        if (AlreadyConnectedWork) CloseThreadpoolWork(AlreadyConnectedWork);
-        if (RecreateWork) CloseThreadpoolWork(RecreateWork);
-        if (Pipe && Pipe != INVALID_HANDLE_VALUE) CloseHandle(Pipe);
-        if (Io) CloseThreadpoolIo(Io);
-    }
 
+    // Stop drains callbacks before destroying the instance. The non-waiting
+    // owners only release resources; no destructor can introduce a hidden wait
+    // while a callback still needs StateMutex or another server resource.
     CommandLineControlServer* Owner = nullptr;
     std::size_t Index = 0;
     std::wstring Name;
-    HANDLE Pipe = INVALID_HANDLE_VALUE;
-    PTP_IO Io = nullptr;
-    PTP_WORK AlreadyConnectedWork = nullptr;
-    PTP_WORK HandlerWork = nullptr;
-    PTP_WORK RecreateWork = nullptr;
-    PTP_TIMER DeadlineTimer = nullptr;
-    PTP_TIMER RearmTimer = nullptr;
+    wil::unique_handle Pipe;
+    wil::unique_threadpool_io_nowait Io;
+    wil::unique_threadpool_work_nowait AlreadyConnectedWork;
+    wil::unique_threadpool_work_nowait HandlerWork;
+    wil::unique_threadpool_work_nowait RecreateWork;
+    wil::unique_threadpool_timer_nowait DeadlineTimer;
+    wil::unique_threadpool_timer_nowait RearmTimer;
     OVERLAPPED Overlapped{};
     std::mutex StateMutex;
 
@@ -168,6 +172,10 @@ struct CommandLineControlServer::PipeInstance {
 };
 
 static_assert(std::is_nothrow_move_assignable_v<apc::control::Response>);
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Server Lifecycle //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 CommandLineControlServer::CommandLineControlServer() {
     const auto expectedIdentity = [] {
@@ -199,21 +207,18 @@ CommandLineControlServer::~CommandLineControlServer() {
     if (g_activeHandlerServer == this) std::terminate();
     Stop();
     if (m_startRetryTimer) {
-        SetThreadpoolTimer(m_startRetryTimer, nullptr, 0, 0);
-        WaitForThreadpoolTimerCallbacks(m_startRetryTimer, TRUE);
-        CloseThreadpoolTimer(m_startRetryTimer);
-        m_startRetryTimer = nullptr;
+        SetThreadpoolTimer(m_startRetryTimer.get(), nullptr, 0, 0);
+        WaitForThreadpoolTimerCallbacks(m_startRetryTimer.get(), TRUE);
+        m_startRetryTimer.reset();
     }
     if (m_requestPruneTimer) {
-        SetThreadpoolTimer(m_requestPruneTimer, nullptr, 0, 0);
-        WaitForThreadpoolTimerCallbacks(m_requestPruneTimer, TRUE);
-        CloseThreadpoolTimer(m_requestPruneTimer);
-        m_requestPruneTimer = nullptr;
+        m_options.SetCacheTimer(m_requestPruneTimer.get(), nullptr);
+        WaitForThreadpoolTimerCallbacks(m_requestPruneTimer.get(), TRUE);
+        m_requestPruneTimer.reset();
     }
     if (m_deferredStopWork) {
-        WaitForThreadpoolWorkCallbacks(m_deferredStopWork, FALSE);
-        CloseThreadpoolWork(m_deferredStopWork);
-        m_deferredStopWork = nullptr;
+        WaitForThreadpoolWorkCallbacks(m_deferredStopWork.get(), FALSE);
+        m_deferredStopWork.reset();
     }
 }
 
@@ -230,15 +235,15 @@ void CommandLineControlServer::Trace(std::wstring_view message) const noexcept {
 
 bool CommandLineControlServer::EnsureControlCallbacksLocked() noexcept {
     if (!m_startRetryTimer) {
-        m_startRetryTimer = CreateThreadpoolTimer(OnStartRetry, this, nullptr);
+        m_startRetryTimer.reset(CreateThreadpoolTimer(OnStartRetry, this, nullptr));
         if (!m_startRetryTimer) return false;
     }
     if (!m_requestPruneTimer) {
-        m_requestPruneTimer = CreateThreadpoolTimer(OnRequestPrune, this, nullptr);
+        m_requestPruneTimer.reset(CreateThreadpoolTimer(OnRequestPrune, this, nullptr));
         if (!m_requestPruneTimer) return false;
     }
     if (!m_deferredStopWork) {
-        m_deferredStopWork = CreateThreadpoolWork(OnDeferredStop, this, nullptr);
+        m_deferredStopWork.reset(CreateThreadpoolWork(OnDeferredStop, this, nullptr));
         if (!m_deferredStopWork) return false;
     }
     return true;
@@ -252,31 +257,42 @@ void CommandLineControlServer::Start(Handler handler) noexcept {
     try {
         {
             std::unique_lock lifecycleLock(m_lifecycleMutex);
+            if (m_stopping && m_stopThread == std::this_thread::get_id()) return;
             m_lifecycleChanged.wait(
                 lifecycleLock, [this] { return !m_stopping && !m_deferredStopRequested.load() && !m_stopRequested; });
             if (m_running.load() || m_desiredRunning) return;
             if (!EnsureControlCallbacksLocked()) {
+                lifecycleLock.unlock();
                 Trace(L"thread-pool control objects unavailable");
                 return;
             }
-            m_handler = std::move(handler);
+            m_handler.swap(handler);
             m_desiredRunning = true;
         }
         (void)TryStart();
     } catch (...) {
-        std::lock_guard lifecycleLock(m_lifecycleMutex);
-        m_desiredRunning = false;
-        m_handler = nullptr;
+        Handler retiredHandler;
+        {
+            std::lock_guard lifecycleLock(m_lifecycleMutex);
+            m_desiredRunning = false;
+            m_handler.swap(retiredHandler);
+        }
         Trace(L"server start request failed");
     }
 }
 
 bool CommandLineControlServer::TryStart() noexcept {
-    std::unique_lock lifecycleLock(m_lifecycleMutex);
-    if (!m_desiredRunning || m_running.load() || m_starting || m_stopping) return m_running.load();
-    m_starting = true;
+    {
+        std::lock_guard lifecycleLock(m_lifecycleMutex);
+        if (!m_desiredRunning || m_running.load() || m_starting || m_stopping) return m_running.load();
+        m_starting = true;
+    }
 
+    std::vector<std::unique_ptr<PipeInstance>> instances;
+    std::stop_source stopSource(std::nostopstate);
+    bool prepared = false;
     try {
+        stopSource = std::stop_source{};
         auto security = apc::control::PipeSecurityAttributes::CreateCurrentUserOnly();
         if (!security) ThrowWin32Error(GetLastError());
 
@@ -288,14 +304,13 @@ bool CommandLineControlServer::TryStart() noexcept {
         } else {
             pipeName = m_options.PipeName;
         }
-        std::vector<std::unique_ptr<PipeInstance>> instances;
         instances.reserve(m_options.PipeInstanceCount);
         std::size_t availableInstances = 0;
         DWORD instanceCreationError = ERROR_SUCCESS;
         for (std::size_t index = 0; index < m_options.PipeInstanceCount; ++index) {
             auto instance =
                 std::make_unique<PipeInstance>(this, index, apc::control::PipeInstanceName(pipeName, index));
-            instance->Pipe =
+            instance->Pipe.reset(
                 CreateNamedPipeW(instance->Name.c_str(),
                                  PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
                                  PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
@@ -303,66 +318,81 @@ bool CommandLineControlServer::TryStart() noexcept {
                                  apc::control::c_pipeBufferBytes,
                                  apc::control::c_pipeBufferBytes,
                                  0,
-                                 security->Get());
-            if (instance->Pipe != INVALID_HANDLE_VALUE) {
-                instance->Io = CreateThreadpoolIo(instance->Pipe, OnIoCompleted, instance.get(), nullptr);
+                                 security->Get()));
+            if (instance->Pipe) {
+                instance->Io.reset(CreateThreadpoolIo(instance->Pipe.get(), OnIoCompleted, instance.get(), nullptr));
                 if (instance->Io) {
                     ++availableInstances;
                 } else {
                     instanceCreationError = GetLastError();
-                    CloseHandle(std::exchange(instance->Pipe, INVALID_HANDLE_VALUE));
+                    instance->Pipe.reset();
                 }
             } else {
                 instanceCreationError = GetLastError();
             }
             if (!instance->Io) instance->RecreateRequired = true;
-            instance->AlreadyConnectedWork = CreateThreadpoolWork(OnAlreadyConnected, instance.get(), nullptr);
+            instance->AlreadyConnectedWork.reset(CreateThreadpoolWork(OnAlreadyConnected, instance.get(), nullptr));
             if (!instance->AlreadyConnectedWork) ThrowWin32Error(GetLastError());
-            instance->HandlerWork = CreateThreadpoolWork(OnHandlerReady, instance.get(), nullptr);
+            instance->HandlerWork.reset(CreateThreadpoolWork(OnHandlerReady, instance.get(), nullptr));
             if (!instance->HandlerWork) ThrowWin32Error(GetLastError());
-            instance->RecreateWork = CreateThreadpoolWork(OnRecreateReady, instance.get(), nullptr);
+            instance->RecreateWork.reset(CreateThreadpoolWork(OnRecreateReady, instance.get(), nullptr));
             if (!instance->RecreateWork) ThrowWin32Error(GetLastError());
-            instance->DeadlineTimer = CreateThreadpoolTimer(OnOperationDeadline, instance.get(), nullptr);
+            instance->DeadlineTimer.reset(CreateThreadpoolTimer(OnOperationDeadline, instance.get(), nullptr));
             if (!instance->DeadlineTimer) ThrowWin32Error(GetLastError());
-            instance->RearmTimer = CreateThreadpoolTimer(OnRearmReady, instance.get(), nullptr);
+            instance->RearmTimer.reset(CreateThreadpoolTimer(OnRearmReady, instance.get(), nullptr));
             if (!instance->RearmTimer) ThrowWin32Error(GetLastError());
             instances.push_back(std::move(instance));
         }
         if (availableInstances == 0) ThrowWin32Error(instanceCreationError);
-
-        m_stopSource = std::stop_source{};
-        m_instances = std::move(instances);
-        m_accepting = true;
-        m_running = true;
-        m_starting = false;
-        m_startRetryFailures = 0;
-        SetThreadpoolTimer(m_startRetryTimer, nullptr, 0, 0);
-
-        for (auto& instance : m_instances) {
-            if (!ArmConnection(*instance)) Trace(L"pipe instance arm deferred");
-        }
-        Trace(L"server started");
-        lifecycleLock.unlock();
-        m_lifecycleChanged.notify_all();
-        return true;
+        prepared = true;
     } catch (...) {
-        m_accepting = false;
-        m_running = false;
+    }
+    if (!prepared) instances.clear(); // Close partial native handles before allowing another start.
+
+    std::unique_lock lifecycleLock(m_lifecycleMutex);
+    if (prepared && (!m_desiredRunning || m_stopRequested || m_stopping)) {
+        // Stop may have closed admission while native handles were being created.
+        lifecycleLock.unlock();
+        instances.clear();
+        lifecycleLock.lock();
         m_starting = false;
-        m_instances.clear();
-        ++m_startRetryFailures;
-        Trace(L"server start failed; control endpoint remains optional");
-        ScheduleStartRetryLocked();
         lifecycleLock.unlock();
         m_lifecycleChanged.notify_all();
         return false;
     }
+    if (!prepared) {
+        m_starting = false;
+        if (m_desiredRunning && !m_stopRequested && !m_stopping) {
+            ++m_startRetryFailures;
+            ScheduleStartRetryLocked();
+        }
+        lifecycleLock.unlock();
+        m_lifecycleChanged.notify_all();
+        Trace(L"server start failed; control endpoint remains optional");
+        return false;
+    }
+
+    m_stopSource = std::move(stopSource);
+    m_instances = std::move(instances);
+    m_accepting = true;
+    m_running = true;
+    m_starting = false;
+    m_startRetryFailures = 0;
+    SetThreadpoolTimer(m_startRetryTimer.get(), nullptr, 0, 0);
+    bool armDeferred = false;
+    for (auto& instance : m_instances)
+        armDeferred = !ArmConnection(*instance) || armDeferred;
+    lifecycleLock.unlock();
+    m_lifecycleChanged.notify_all();
+    if (armDeferred) Trace(L"pipe instance arm deferred");
+    Trace(L"server started");
+    return true;
 }
 
 void CommandLineControlServer::ScheduleStartRetryLocked() noexcept {
     if (!m_desiredRunning || !m_options.RetryStartupFailures || !m_startRetryTimer) return;
     auto due = RelativeDelay(RetryDelay(m_options.RetryDelayMs, m_startRetryFailures, GetCurrentProcessId()));
-    SetThreadpoolTimer(m_startRetryTimer, &due, 0, 0);
+    SetThreadpoolTimer(m_startRetryTimer.get(), &due, 0, 0);
 }
 
 void CommandLineControlServer::RequestStopLocked() noexcept {
@@ -370,15 +400,19 @@ void CommandLineControlServer::RequestStopLocked() noexcept {
     m_accepting = false;
     m_running = false;
     m_stopRequested = true;
-    m_stopSource.request_stop();
-    if (m_startRetryTimer) SetThreadpoolTimer(m_startRetryTimer, nullptr, 0, 0);
+    if (m_startRetryTimer) SetThreadpoolTimer(m_startRetryTimer.get(), nullptr, 0, 0);
 }
 
 void CommandLineControlServer::RequestStop() noexcept {
     try {
-        std::lock_guard lifecycleLock(m_lifecycleMutex);
-        if (!m_stopRequested && !m_desiredRunning && !m_running.load() && !m_starting) return;
-        RequestStopLocked();
+        std::stop_source stopSource(std::nostopstate);
+        {
+            std::lock_guard lifecycleLock(m_lifecycleMutex);
+            if (!m_stopRequested && !m_desiredRunning && !m_running.load() && !m_starting) return;
+            RequestStopLocked();
+            stopSource = m_stopSource;
+        }
+        stopSource.request_stop();
     } catch (...) {
         // stop_source remains independently safe to signal even if a platform
         // synchronization failure prevents the lifecycle state update.
@@ -392,47 +426,54 @@ void CommandLineControlServer::Stop() noexcept {
     if (g_activeHandlerServer == this) {
         RequestStop();
         if (!m_deferredStopRequested.exchange(true) && m_deferredStopWork) {
-            SubmitThreadpoolWork(m_deferredStopWork);
+            SubmitThreadpoolWork(m_deferredStopWork.get());
         }
         return;
     }
 
     try {
         std::vector<std::unique_ptr<PipeInstance>> instances;
+        std::stop_source stopSource(std::nostopstate);
         {
             std::unique_lock lifecycleLock(m_lifecycleMutex);
             if (m_stopping) {
+                if (m_stopThread == std::this_thread::get_id()) return;
                 m_lifecycleChanged.wait(lifecycleLock, [this] { return !m_stopping; });
                 return;
             }
             if (!m_stopRequested && !m_desiredRunning && !m_running.load() && !m_starting) return;
 
             RequestStopLocked();
+            stopSource = m_stopSource;
             m_stopping = true;
+            m_stopThread = std::this_thread::get_id();
+            m_lifecycleChanged.wait(lifecycleLock, [this] { return !m_starting; });
             instances.swap(m_instances);
         }
+        stopSource.request_stop();
 
-        if (m_startRetryTimer) WaitForThreadpoolTimerCallbacks(m_startRetryTimer, TRUE);
+        if (m_startRetryTimer) WaitForThreadpoolTimerCallbacks(m_startRetryTimer.get(), TRUE);
 
         for (auto& instance : instances) {
             std::scoped_lock stateLock(instance->StateMutex);
-            SetThreadpoolTimer(instance->DeadlineTimer, nullptr, 0, 0);
-            SetThreadpoolTimer(instance->RearmTimer, nullptr, 0, 0);
-            if (instance->Pipe && instance->Pipe != INVALID_HANDLE_VALUE) {
-                CancelIoEx(instance->Pipe, &instance->Overlapped);
+            SetThreadpoolTimer(instance->DeadlineTimer.get(), nullptr, 0, 0);
+            SetThreadpoolTimer(instance->RearmTimer.get(), nullptr, 0, 0);
+            if (instance->Pipe) {
+                CancelIoEx(instance->Pipe.get(), &instance->Overlapped);
             }
         }
         for (auto& instance : instances) {
-            WaitForThreadpoolTimerCallbacks(instance->DeadlineTimer, TRUE);
-            WaitForThreadpoolTimerCallbacks(instance->RearmTimer, TRUE);
-            WaitForThreadpoolWorkCallbacks(instance->RecreateWork, TRUE);
-            if (instance->Io) WaitForThreadpoolIoCallbacks(instance->Io, FALSE);
-            WaitForThreadpoolWorkCallbacks(instance->HandlerWork, TRUE);
-            WaitForThreadpoolWorkCallbacks(instance->AlreadyConnectedWork, TRUE);
-            if (instance->Pipe && instance->Pipe != INVALID_HANDLE_VALUE) DisconnectNamedPipe(instance->Pipe);
+            WaitForThreadpoolTimerCallbacks(instance->DeadlineTimer.get(), TRUE);
+            WaitForThreadpoolTimerCallbacks(instance->RearmTimer.get(), TRUE);
+            WaitForThreadpoolWorkCallbacks(instance->RecreateWork.get(), TRUE);
+            if (instance->Io) WaitForThreadpoolIoCallbacks(instance->Io.get(), FALSE);
+            WaitForThreadpoolWorkCallbacks(instance->HandlerWork.get(), TRUE);
+            WaitForThreadpoolWorkCallbacks(instance->AlreadyConnectedWork.get(), TRUE);
+            if (instance->Pipe) DisconnectNamedPipe(instance->Pipe.get());
         }
         instances.clear();
 
+        const auto pruneTime = m_options.CacheNow();
         {
             std::lock_guard requestLock(m_requestMutex);
             m_pendingDeliveries.clear();
@@ -445,15 +486,23 @@ void CommandLineControlServer::Stop() noexcept {
                 entry->second->ActiveDeliveries = 0;
                 ++entry;
             }
-            ScheduleRequestPruneLocked(std::chrono::steady_clock::now());
+            ScheduleRequestPruneLocked(pruneTime);
+        }
+        {
+            Handler retiredHandler;
+            {
+                std::lock_guard lifecycleLock(m_lifecycleMutex);
+                m_handler.swap(retiredHandler);
+                m_starting = false;
+                m_stopRequested = false;
+                m_deferredStopRequested = false;
+            }
+            // Capture destruction can reenter Stop; keep other starters waiting until it finishes.
         }
         {
             std::lock_guard lifecycleLock(m_lifecycleMutex);
-            m_handler = nullptr;
-            m_starting = false;
             m_stopping = false;
-            m_stopRequested = false;
-            m_deferredStopRequested = false;
+            m_stopThread = {};
         }
         Trace(L"server stopped");
         m_lifecycleChanged.notify_all();
@@ -465,6 +514,7 @@ void CommandLineControlServer::Stop() noexcept {
             m_running = false;
             m_starting = false;
             m_stopping = false;
+            m_stopThread = {};
             m_stopRequested = false;
             m_deferredStopRequested = false;
         }
@@ -473,35 +523,22 @@ void CommandLineControlServer::Stop() noexcept {
     }
 }
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Connection and Recovery ///////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 bool CommandLineControlServer::ArmConnection(PipeInstance& instance) noexcept {
     try {
-#ifdef APC_COMMAND_PIPE_SERVER_TESTING
-        bool allowArm = true;
-        try {
-            allowArm = !m_options.BeforeArmConnection || m_options.BeforeArmConnection(instance.Index);
-        } catch (...) {
-            allowArm = false;
-        }
-#endif
         std::scoped_lock stateLock(instance.StateMutex);
-#ifdef APC_COMMAND_PIPE_SERVER_TESTING
-        if (!allowArm) {
-            SetLastError(ERROR_RETRY);
-            if (instance.RearmFailures >= 7) instance.RecreateRequired = true;
-            ScheduleRearmLocked(instance);
-            return false;
-        }
-#endif
         return ArmConnectionLocked(instance);
     } catch (...) {
-        Trace(L"pipe arm failed");
         return false;
     }
 }
 
 bool CommandLineControlServer::ArmConnectionLocked(PipeInstance& instance) noexcept {
     if (!m_running.load()) return false;
-    if (!instance.Io || !instance.Pipe || instance.Pipe == INVALID_HANDLE_VALUE) {
+    if (!instance.Io || !instance.Pipe) {
         instance.RecreateRequired = true;
         ScheduleRearmLocked(instance);
         return false;
@@ -509,19 +546,19 @@ bool CommandLineControlServer::ArmConnectionLocked(PipeInstance& instance) noexc
 
     instance.Phase = PipePhase::Connecting;
     instance.Overlapped = {};
-    StartThreadpoolIo(instance.Io);
-    if (ConnectNamedPipe(instance.Pipe, &instance.Overlapped)) return true;
+    StartThreadpoolIo(instance.Io.get());
+    if (m_options.ConnectPipe(instance.Pipe.get(), &instance.Overlapped)) return true;
 
     const auto error = GetLastError();
     if (error == ERROR_IO_PENDING) return true;
 
-    CancelThreadpoolIo(instance.Io);
+    CancelThreadpoolIo(instance.Io.get());
     if (error == ERROR_PIPE_CONNECTED) {
-        SubmitThreadpoolWork(instance.AlreadyConnectedWork);
+        SubmitThreadpoolWork(instance.AlreadyConnectedWork.get());
         return true;
     }
     if (error == ERROR_NO_DATA) {
-        DisconnectNamedPipe(instance.Pipe);
+        DisconnectNamedPipe(instance.Pipe.get());
         instance.RearmFailures = 0;
     }
 
@@ -538,7 +575,7 @@ void CommandLineControlServer::ScheduleRearmLocked(PipeInstance& instance) noexc
     if (!m_running.load()) return;
     ++instance.RearmFailures;
     auto due = RelativeDelay(RetryDelay(m_options.RetryDelayMs, instance.RearmFailures, instance.Index));
-    SetThreadpoolTimer(instance.RearmTimer, &due, 0, 0);
+    SetThreadpoolTimer(instance.RearmTimer.get(), &due, 0, 0);
 }
 
 void CommandLineControlServer::RecreatePipeInstance(PipeInstance& instance) noexcept {
@@ -562,38 +599,40 @@ void CommandLineControlServer::RecreatePipeInstance(PipeInstance& instance) noex
             return;
         }
 
-        HANDLE oldPipe = INVALID_HANDLE_VALUE;
-        PTP_IO oldIo = nullptr;
+        wil::unique_handle oldPipe;
+        wil::unique_threadpool_io_nowait oldIo;
+        bool armDeferred = false;
         {
             std::scoped_lock stateLock(instance.StateMutex);
             if (!m_running.load() || !instance.RecreateRequired) {
                 instance.RecreateScheduled = false;
                 return;
             }
-            oldPipe = std::exchange(instance.Pipe, INVALID_HANDLE_VALUE);
-            oldIo = std::exchange(instance.Io, nullptr);
+            oldPipe = std::move(instance.Pipe);
+            oldIo = std::move(instance.Io);
         }
 
-        if (oldPipe && oldPipe != INVALID_HANDLE_VALUE) CancelIoEx(oldPipe, nullptr);
-        if (oldIo) WaitForThreadpoolIoCallbacks(oldIo, FALSE);
-        if (oldPipe && oldPipe != INVALID_HANDLE_VALUE) CloseHandle(oldPipe);
-        if (oldIo) CloseThreadpoolIo(oldIo);
+        if (oldPipe) CancelIoEx(oldPipe.get(), nullptr);
+        if (oldIo) WaitForThreadpoolIoCallbacks(oldIo.get(), FALSE);
+        oldPipe.reset();
+        oldIo.reset();
 
-        HANDLE newPipe = CreateNamedPipeW(instance.Name.c_str(),
-                                          PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
-                                          PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-                                          1,
-                                          apc::control::c_pipeBufferBytes,
-                                          apc::control::c_pipeBufferBytes,
-                                          0,
-                                          security->Get());
-        if (newPipe == INVALID_HANDLE_VALUE) {
+        wil::unique_handle newPipe(
+            CreateNamedPipeW(instance.Name.c_str(),
+                             PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                             PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                             1,
+                             apc::control::c_pipeBufferBytes,
+                             apc::control::c_pipeBufferBytes,
+                             0,
+                             security->Get()));
+        if (!newPipe) {
             failAndRetry();
             return;
         }
-        auto newIo = CreateThreadpoolIo(newPipe, OnIoCompleted, &instance, nullptr);
+        wil::unique_threadpool_io_nowait newIo(CreateThreadpoolIo(newPipe.get(), OnIoCompleted, &instance, nullptr));
         if (!newIo) {
-            CloseHandle(newPipe);
+            newPipe.reset();
             failAndRetry();
             return;
         }
@@ -601,28 +640,25 @@ void CommandLineControlServer::RecreatePipeInstance(PipeInstance& instance) noex
         {
             std::scoped_lock stateLock(instance.StateMutex);
             if (!m_running.load()) {
-                CloseHandle(newPipe);
-                CloseThreadpoolIo(newIo);
                 instance.RecreateScheduled = false;
                 return;
             }
-            instance.Pipe = newPipe;
-            instance.Io = newIo;
+            instance.Pipe = std::move(newPipe);
+            instance.Io = std::move(newIo);
             instance.RecreateRequired = false;
             instance.RecreateScheduled = false;
             instance.RearmFailures = 0;
-            if (!ArmConnectionLocked(instance)) Trace(L"recreated pipe instance arm deferred");
+            armDeferred = !ArmConnectionLocked(instance);
         }
-#ifdef APC_COMMAND_PIPE_SERVER_TESTING
-        try {
-            if (m_options.AfterPipeRecreated) m_options.AfterPipeRecreated(instance.Index);
-        } catch (...) {
-        }
-#endif
+        if (armDeferred) Trace(L"recreated pipe instance arm deferred");
     } catch (...) {
         failAndRetry();
     }
 }
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Overlapped Transfers //////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 bool CommandLineControlServer::StartTransferLocked(
     PipeInstance& instance, void* buffer, std::uint32_t byteCount, bool write, std::uint64_t deadline) noexcept {
@@ -643,22 +679,27 @@ bool CommandLineControlServer::StartCurrentTransferLocked(PipeInstance& instance
 
     instance.Overlapped = {};
     auto due = AbsoluteDeadline(instance.TransferDeadline);
-    SetThreadpoolTimer(instance.DeadlineTimer, &due, 0, 0);
-    StartThreadpoolIo(instance.Io);
+    SetThreadpoolTimer(instance.DeadlineTimer.get(), &due, 0, 0);
+    StartThreadpoolIo(instance.Io.get());
 
     auto* cursor = static_cast<std::byte*>(instance.Buffer) + instance.TransferredBytes;
     const DWORD remaining = instance.TotalBytes - instance.TransferredBytes;
-    const BOOL started = instance.Write ? WriteFile(instance.Pipe, cursor, remaining, nullptr, &instance.Overlapped)
-                                        : ReadFile(instance.Pipe, cursor, remaining, nullptr, &instance.Overlapped);
+    const BOOL started = instance.Write
+                             ? WriteFile(instance.Pipe.get(), cursor, remaining, nullptr, &instance.Overlapped)
+                             : ReadFile(instance.Pipe.get(), cursor, remaining, nullptr, &instance.Overlapped);
     if (started || GetLastError() == ERROR_IO_PENDING) return true;
 
     const auto error = GetLastError();
-    CancelThreadpoolIo(instance.Io);
-    SetThreadpoolTimer(instance.DeadlineTimer, nullptr, 0, 0);
-    WaitForThreadpoolTimerCallbacks(instance.DeadlineTimer, TRUE);
+    CancelThreadpoolIo(instance.Io.get());
+    SetThreadpoolTimer(instance.DeadlineTimer.get(), nullptr, 0, 0);
+    WaitForThreadpoolTimerCallbacks(instance.DeadlineTimer.get(), TRUE);
     SetLastError(error);
     return false;
 }
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Threadpool Callbacks //////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 void CALLBACK CommandLineControlServer::OnIoCompleted(
     PTP_CALLBACK_INSTANCE, void* context, void* overlapped, ULONG ioResult, ULONG_PTR bytes, PTP_IO) noexcept {
@@ -707,13 +748,14 @@ void CALLBACK CommandLineControlServer::OnHandlerReady(PTP_CALLBACK_INSTANCE cal
                                                      owner->m_stopSource.get_token(),
                                                      apc::control::DeadlineAfter(owner->m_options.HandlerTimeoutMs),
                                                      response);
+                acknowledgementRecord = executionRecord;
                 g_activeHandlerServer = nullptr;
             }
         } catch (...) {
             g_activeHandlerServer = nullptr;
             owner->Trace(L"handler execution failed");
             if (pendingDelivery) {
-                owner->CompletePendingDelivery(pendingCorrelation);
+                owner->CompletePendingDelivery(pendingCorrelation, owner->m_options.CacheNow());
                 pendingDelivery = false;
             }
             owner->FinishClient(*instance);
@@ -723,31 +765,24 @@ void CALLBACK CommandLineControlServer::OnHandlerReady(PTP_CALLBACK_INSTANCE cal
 
     auto const& responseToSend = executionRecord ? executionRecord->Response : response;
 
-#ifdef APC_COMMAND_PIPE_SERVER_TESTING
     if (pendingDelivery) {
-        try {
-            if (owner->m_options.BeforeDeliveryPromoted) owner->m_options.BeforeDeliveryPromoted(instance->Index);
-        } catch (...) {
-        }
-    }
-#endif
-    if (pendingDelivery) {
-        acknowledgementRecord = canRun ? owner->PromotePendingDelivery(request, responseToSend) : nullptr;
-        if (!canRun) owner->CompletePendingDelivery(pendingCorrelation);
+        owner->CompletePendingDelivery(pendingCorrelation, owner->m_options.CacheNow());
         pendingDelivery = false;
     }
 
+    const auto now = owner->m_options.CacheNow();
     try {
         std::scoped_lock stateLock(instance->StateMutex);
         if (owner->m_running.load() && instance->Phase == PipePhase::RunningHandler) {
             instance->Response = responseToSend;
             instance->AcknowledgementRecord = acknowledgementRecord;
             acknowledgementRecord.reset();
-            instance->ResponseHeader = {};
-            instance->ResponseHeader.CorrelationHigh = instance->Response.CorrelationId.High;
-            instance->ResponseHeader.CorrelationLow = instance->Response.CorrelationId.Low;
-            instance->ResponseHeader.ExitCode = static_cast<std::uint32_t>(instance->Response.Code);
-            instance->ResponseHeader.PayloadBytes = apc::control::PayloadByteCount(instance->Response.Payload).value();
+            auto const responseHeader = apc::control::MakeResponseHeader(instance->Response);
+            if (!responseHeader) {
+                owner->FinishClientLocked(*instance, now);
+                return;
+            }
+            instance->ResponseHeader = *responseHeader;
             instance->ResponseDeadline = apc::control::DeadlineAfter(owner->m_options.ResponseTimeoutMs);
             instance->Phase = PipePhase::WritingResponseHeader;
             if (!owner->StartTransferLocked(*instance,
@@ -755,7 +790,7 @@ void CALLBACK CommandLineControlServer::OnHandlerReady(PTP_CALLBACK_INSTANCE cal
                                             sizeof(instance->ResponseHeader),
                                             true,
                                             instance->ResponseDeadline)) {
-                owner->FinishClientLocked(*instance);
+                owner->FinishClientLocked(*instance, now);
             }
         }
     } catch (...) {
@@ -763,14 +798,14 @@ void CALLBACK CommandLineControlServer::OnHandlerReady(PTP_CALLBACK_INSTANCE cal
         owner->FinishClient(*instance);
     }
     if (acknowledgementRecord) {
-        owner->CompleteDelivery(request.CorrelationId, acknowledgementRecord, false);
+        owner->CompleteDelivery(request.CorrelationId, acknowledgementRecord, false, owner->m_options.CacheNow());
     }
 }
 
 void CALLBACK CommandLineControlServer::OnOperationDeadline(PTP_CALLBACK_INSTANCE, void* context, PTP_TIMER) noexcept {
     auto* instance = static_cast<PipeInstance*>(context);
-    if (instance && instance->Pipe != INVALID_HANDLE_VALUE) {
-        CancelIoEx(instance->Pipe, &instance->Overlapped);
+    if (instance && instance->Pipe) {
+        CancelIoEx(instance->Pipe.get(), &instance->Overlapped);
     }
 }
 
@@ -795,9 +830,9 @@ void CALLBACK CommandLineControlServer::OnRearmReady(PTP_CALLBACK_INSTANCE, void
         return;
     }
     if (recreate) {
-        SubmitThreadpoolWork(instance->RecreateWork);
+        SubmitThreadpoolWork(instance->RecreateWork.get());
     } else if (arm) {
-        (void)instance->Owner->ArmConnection(*instance);
+        if (!instance->Owner->ArmConnection(*instance)) instance->Owner->Trace(L"pipe arm failed");
     }
 }
 
@@ -814,29 +849,15 @@ void CALLBACK CommandLineControlServer::OnStartRetry(PTP_CALLBACK_INSTANCE, void
 void CALLBACK CommandLineControlServer::OnRequestPrune(PTP_CALLBACK_INSTANCE, void* context, PTP_TIMER) noexcept {
     auto* owner = static_cast<CommandLineControlServer*>(context);
     if (!owner) return;
-    std::size_t recordCount = 0;
-    std::size_t cacheBytes = 0;
     try {
+        const auto now = owner->m_options.CacheNow();
         std::lock_guard requestLock(owner->m_requestMutex);
-        const auto now = std::chrono::steady_clock::now();
         owner->PruneRequestRecords(now);
         owner->ScheduleRequestPruneLocked(now);
-        recordCount = owner->m_requestRecords.size();
-        cacheBytes = owner->m_requestCacheBytes;
     } catch (...) {
         owner->Trace(L"request-cache timer failed");
         return;
     }
-#ifdef APC_COMMAND_PIPE_SERVER_TESTING
-    try {
-        if (owner->m_options.AfterRequestCachePruned) {
-            owner->m_options.AfterRequestCachePruned(recordCount, cacheBytes);
-        }
-    } catch (...) {
-    }
-#endif
-    (void)recordCount;
-    (void)cacheBytes;
 }
 
 void CALLBACK CommandLineControlServer::OnDeferredStop(PTP_CALLBACK_INSTANCE, void* context, PTP_WORK) noexcept {
@@ -844,21 +865,26 @@ void CALLBACK CommandLineControlServer::OnDeferredStop(PTP_CALLBACK_INSTANCE, vo
     if (owner) owner->Stop();
 }
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Protocol State Machine ////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 void CommandLineControlServer::HandleIoCompletion(PipeInstance& instance,
                                                   void* overlapped,
                                                   ULONG ioResult,
                                                   ULONG_PTR bytes) noexcept {
     try {
+        const auto now = m_options.CacheNow();
         std::unique_lock stateLock(instance.StateMutex);
-        SetThreadpoolTimer(instance.DeadlineTimer, nullptr, 0, 0);
-        WaitForThreadpoolTimerCallbacks(instance.DeadlineTimer, TRUE);
+        SetThreadpoolTimer(instance.DeadlineTimer.get(), nullptr, 0, 0);
+        WaitForThreadpoolTimerCallbacks(instance.DeadlineTimer.get(), TRUE);
         if (overlapped != &instance.Overlapped) {
-            FinishClientLocked(instance);
+            FinishClientLocked(instance, now);
             return;
         }
         if (!m_running.load()) return;
         if (ioResult != ERROR_SUCCESS) {
-            FinishClientLocked(instance);
+            FinishClientLocked(instance, now);
             return;
         }
         if (instance.Phase == PipePhase::Connecting) {
@@ -867,20 +893,20 @@ void CommandLineControlServer::HandleIoCompletion(PipeInstance& instance,
             return;
         }
         if (apc::control::RemainingWait(instance.TransferDeadline) == 0) {
-            FinishClientLocked(instance);
+            FinishClientLocked(instance, now);
             return;
         }
         if (bytes == 0 || bytes > instance.TotalBytes - instance.TransferredBytes) {
-            FinishClientLocked(instance);
+            FinishClientLocked(instance, now);
             return;
         }
 
         instance.TransferredBytes += static_cast<std::uint32_t>(bytes);
         if (instance.TransferredBytes < instance.TotalBytes) {
-            if (!StartCurrentTransferLocked(instance)) FinishClientLocked(instance);
+            if (!StartCurrentTransferLocked(instance)) FinishClientLocked(instance, now);
             return;
         }
-        HandleCompletedTransferLocked(instance);
+        HandleCompletedTransferLocked(instance, now);
     } catch (...) {
         Trace(L"I/O completion failed");
         FinishClient(instance);
@@ -890,27 +916,30 @@ void CommandLineControlServer::HandleIoCompletion(PipeInstance& instance,
 void CommandLineControlServer::HandleConnectedInstance(PipeInstance& instance) noexcept {
     bool trusted = false;
     try {
-        trusted = m_options.IsTrustedClient && m_options.IsTrustedClient(instance.Pipe);
+        trusted = m_options.IsTrustedClient && m_options.IsTrustedClient(instance.Pipe.get());
     } catch (...) {
         trusted = false;
     }
 
+    const auto now = m_options.CacheNow();
     try {
         std::scoped_lock stateLock(instance.StateMutex);
-        HandleConnectedInstanceLocked(instance, trusted);
+        HandleConnectedInstanceLocked(instance, trusted, now);
     } catch (...) {
         Trace(L"connected-client setup failed");
         FinishClient(instance);
     }
 }
 
-void CommandLineControlServer::HandleConnectedInstanceLocked(PipeInstance& instance, bool trusted) {
+void CommandLineControlServer::HandleConnectedInstanceLocked(PipeInstance& instance,
+                                                             bool trusted,
+                                                             std::chrono::steady_clock::time_point now) {
     if (!m_running.load() || !m_accepting.load()) {
-        FinishClientLocked(instance);
+        FinishClientLocked(instance, now);
         return;
     }
     if (!trusted) {
-        FinishClientLocked(instance);
+        FinishClientLocked(instance, now);
         return;
     }
 
@@ -923,42 +952,38 @@ void CommandLineControlServer::HandleConnectedInstanceLocked(PipeInstance& insta
     instance.Phase = PipePhase::ReadingRequestHeader;
     if (!StartTransferLocked(
             instance, &instance.RequestHeader, sizeof(instance.RequestHeader), false, instance.RequestDeadline)) {
-        FinishClientLocked(instance);
+        FinishClientLocked(instance, now);
     }
 }
 
-void CommandLineControlServer::HandleCompletedTransferLocked(PipeInstance& instance) {
+void CommandLineControlServer::HandleCompletedTransferLocked(PipeInstance& instance,
+                                                             std::chrono::steady_clock::time_point now) {
     switch (instance.Phase) {
         case PipePhase::ReadingRequestHeader: {
             const auto& header = instance.RequestHeader;
-            const apc::control::CorrelationId correlation{header.CorrelationHigh, header.CorrelationLow};
-            if (header.Magic != apc::control::c_requestMagic || header.Version != apc::control::c_protocolVersion ||
-                correlation.Empty() || !apc::control::IsKnownCommand(header.Command) ||
-                !apc::control::IsKnownTarget(header.Target) ||
-                (header.Flags & ~(apc::control::CommandFlagJson | apc::control::CommandFlagRaw)) != 0 ||
-                !apc::control::IsPayloadByteCountValid(header.PayloadBytes)) {
-                FinishClientLocked(instance);
+            if (!apc::control::IsRequestHeaderValid(header)) {
+                FinishClientLocked(instance, now);
                 return;
             }
 
             instance.Request.Command = static_cast<apc::control::CommandType>(header.Command);
             instance.Request.Target = static_cast<apc::control::TargetKind>(header.Target);
             instance.Request.Flags = header.Flags;
-            instance.Request.CorrelationId = correlation;
+            instance.Request.CorrelationId = {header.CorrelationHigh, header.CorrelationLow};
             instance.Request.Payload.assign(header.PayloadBytes / sizeof(wchar_t), L'\0');
             if (header.PayloadBytes == 0) {
-                DispatchRequestLocked(instance);
+                DispatchRequestLocked(instance, now);
                 return;
             }
 
             instance.Phase = PipePhase::ReadingRequestPayload;
             if (!StartTransferLocked(
                     instance, instance.Request.Payload.data(), header.PayloadBytes, false, instance.RequestDeadline)) {
-                FinishClientLocked(instance);
+                FinishClientLocked(instance, now);
             }
             return;
         }
-        case PipePhase::ReadingRequestPayload: DispatchRequestLocked(instance); return;
+        case PipePhase::ReadingRequestPayload: DispatchRequestLocked(instance, now); return;
         case PipePhase::WritingResponseHeader: {
             if (instance.ResponseHeader.PayloadBytes != 0) {
                 instance.Phase = PipePhase::WritingResponsePayload;
@@ -967,7 +992,7 @@ void CommandLineControlServer::HandleCompletedTransferLocked(PipeInstance& insta
                                          instance.ResponseHeader.PayloadBytes,
                                          true,
                                          instance.ResponseDeadline)) {
-                    FinishClientLocked(instance);
+                    FinishClientLocked(instance, now);
                 }
                 return;
             }
@@ -978,7 +1003,7 @@ void CommandLineControlServer::HandleCompletedTransferLocked(PipeInstance& insta
                                      sizeof(instance.Acknowledgement),
                                      false,
                                      apc::control::DeadlineAfter(m_options.AcknowledgementTimeoutMs))) {
-                FinishClientLocked(instance);
+                FinishClientLocked(instance, now);
             }
             return;
         }
@@ -990,76 +1015,83 @@ void CommandLineControlServer::HandleCompletedTransferLocked(PipeInstance& insta
                                      sizeof(instance.Acknowledgement),
                                      false,
                                      apc::control::DeadlineAfter(m_options.AcknowledgementTimeoutMs))) {
-                FinishClientLocked(instance);
+                FinishClientLocked(instance, now);
             }
             return;
         case PipePhase::ReadingAcknowledgement: {
             const auto& acknowledgement = instance.Acknowledgement;
-            if (acknowledgement.Magic == apc::control::c_acknowledgementMagic &&
-                acknowledgement.Version == apc::control::c_protocolVersion &&
-                acknowledgement.CorrelationHigh == instance.Request.CorrelationId.High &&
-                acknowledgement.CorrelationLow == instance.Request.CorrelationId.Low &&
+            if (apc::control::IsAcknowledgementValid(acknowledgement, instance.Request.CorrelationId) &&
                 instance.AcknowledgementRecord) {
                 auto record = std::move(instance.AcknowledgementRecord);
-                CompleteDelivery(instance.Request.CorrelationId, record, true);
+                CompleteDelivery(instance.Request.CorrelationId, record, true, now);
             }
-            FinishClientLocked(instance);
+            FinishClientLocked(instance, now);
             return;
         }
-        default: FinishClientLocked(instance); return;
+        default: FinishClientLocked(instance, now); return;
     }
 }
 
-void CommandLineControlServer::DispatchRequestLocked(PipeInstance& instance) noexcept {
+void CommandLineControlServer::DispatchRequestLocked(PipeInstance& instance,
+                                                     std::chrono::steady_clock::time_point now) noexcept {
     if (!apc::control::IsRequestValid(instance.Request)) {
-        FinishClientLocked(instance);
+        FinishClientLocked(instance, now);
         return;
     }
     try {
-        std::lock_guard requestLock(m_requestMutex);
-        auto entry = m_pendingDeliveries.try_emplace(instance.Request.CorrelationId, 0).first;
-        if (entry->second == std::numeric_limits<std::size_t>::max()) {
-            FinishClientLocked(instance);
-            return;
+        bool saturated = false;
+        {
+            std::lock_guard requestLock(m_requestMutex);
+            auto& pending = m_pendingDeliveries[instance.Request.CorrelationId];
+            saturated = pending == std::numeric_limits<std::size_t>::max();
+            if (!saturated) {
+                ++pending;
+                instance.PendingDelivery = true;
+                instance.Phase = PipePhase::RunningHandler;
+                SubmitThreadpoolWork(instance.HandlerWork.get());
+            }
         }
-        ++entry->second;
-        instance.PendingDelivery = true;
-        instance.Phase = PipePhase::RunningHandler;
-        SubmitThreadpoolWork(instance.HandlerWork);
+        if (saturated) FinishClientLocked(instance, now);
     } catch (...) {
-        FinishClientLocked(instance);
+        FinishClientLocked(instance, now);
     }
 }
 
 void CommandLineControlServer::FinishClient(PipeInstance& instance) noexcept {
     try {
+        const auto now = m_options.CacheNow();
         std::scoped_lock stateLock(instance.StateMutex);
-        FinishClientLocked(instance);
+        FinishClientLocked(instance, now);
     } catch (...) {
         Trace(L"client cleanup failed");
     }
 }
 
-void CommandLineControlServer::FinishClientLocked(PipeInstance& instance) noexcept {
+void CommandLineControlServer::FinishClientLocked(PipeInstance& instance,
+                                                  std::chrono::steady_clock::time_point now) noexcept {
     instance.Phase = PipePhase::Disconnected;
     if (instance.PendingDelivery) {
         instance.PendingDelivery = false;
-        CompletePendingDelivery(instance.Request.CorrelationId);
+        CompletePendingDelivery(instance.Request.CorrelationId, now);
     }
     if (instance.AcknowledgementRecord) {
         auto record = std::move(instance.AcknowledgementRecord);
-        CompleteDelivery(instance.Request.CorrelationId, record, false);
+        CompleteDelivery(instance.Request.CorrelationId, record, false, now);
     }
-    DisconnectNamedPipe(instance.Pipe);
-    if (m_running.load() && !ArmConnectionLocked(instance)) Trace(L"pipe rearm deferred");
+    DisconnectNamedPipe(instance.Pipe.get());
+    if (m_running.load()) (void)ArmConnectionLocked(instance);
 }
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Request Deduplication /////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 std::shared_ptr<CommandLineControlServer::RequestRecord>
 CommandLineControlServer::ExecuteOnce(apc::control::Request const& request,
-                                      std::stop_token stopToken,
+                                      std::stop_token const& stopToken,
                                       std::uint64_t deadline,
                                       apc::control::Response& uncachedResponse) {
-    const auto now = std::chrono::steady_clock::now();
+    const auto now = m_options.CacheNow();
     const auto reservedBytes = RequestBytes(request) + sizeof(apc::control::Response) + apc::control::c_maxPayloadBytes;
     std::shared_ptr<RequestRecord> record;
 
@@ -1084,6 +1116,9 @@ CommandLineControlServer::ExecuteOnce(apc::control::Request const& request,
                 }
                 record->Completed.wait_for(requestLock, std::chrono::milliseconds(std::min<DWORD>(wait, 100)));
             }
+            // Selection and delivery ownership are one cache operation. The
+            // record cannot become evictable between returning it and writing it.
+            ++record->ActiveDeliveries;
             return record;
         }
 
@@ -1140,11 +1175,13 @@ CommandLineControlServer::ExecuteOnce(apc::control::Request const& request,
         response.Payload = std::wstring{};
     }
 
+    const auto completedAt = m_options.CacheNow();
     {
         std::lock_guard requestLock(m_requestMutex);
         record->Response = std::move(response);
-        record->CompletedAt = std::chrono::steady_clock::now();
+        record->CompletedAt = completedAt;
         record->IsComplete = true;
+        ++record->ActiveDeliveries;
         const auto actualBytes = RequestBytes(record->Request) + ResponseBytes(record->Response);
         if (record->Bytes > actualBytes) m_requestCacheBytes -= record->Bytes - actualBytes;
         record->Bytes = actualBytes;
@@ -1157,69 +1194,29 @@ CommandLineControlServer::ExecuteOnce(apc::control::Request const& request,
 
 void CommandLineControlServer::CompleteDelivery(apc::control::CorrelationId correlationId,
                                                 std::shared_ptr<RequestRecord> const& record,
-                                                bool acknowledged) noexcept {
-    try {
-        {
-            std::lock_guard requestLock(m_requestMutex);
-            const auto entry = m_requestRecords.find(correlationId);
-            if (entry == m_requestRecords.end() || entry->second != record || !record->IsComplete) return;
-            if (record->ActiveDeliveries > 0) --record->ActiveDeliveries;
-            record->Acknowledged = record->Acknowledged || acknowledged;
-            record->LastDeliveryCompletedAt = std::chrono::steady_clock::now();
-            PruneRequestRecords(record->LastDeliveryCompletedAt);
-            ScheduleRequestPruneLocked(record->LastDeliveryCompletedAt);
-        }
-#ifdef APC_COMMAND_PIPE_SERVER_TESTING
-        if (m_options.AfterDeliveryCompleted) {
-            m_options.AfterDeliveryCompleted(correlationId, acknowledged);
-        }
-#endif
-    } catch (...) {
-        Trace(L"request acknowledgement cleanup failed");
-    }
+                                                bool acknowledged,
+                                                std::chrono::steady_clock::time_point now) noexcept {
+    std::lock_guard requestLock(m_requestMutex);
+    const auto entry = m_requestRecords.find(correlationId);
+    if (entry == m_requestRecords.end() || entry->second != record || !record->IsComplete) return;
+    if (record->ActiveDeliveries > 0) --record->ActiveDeliveries;
+    record->Acknowledged = record->Acknowledged || acknowledged;
+    record->LastDeliveryCompletedAt = now;
+    PruneRequestRecords(now);
+    ScheduleRequestPruneLocked(now);
 }
 
-std::shared_ptr<CommandLineControlServer::RequestRecord>
-CommandLineControlServer::PromotePendingDelivery(apc::control::Request const& request,
-                                                 apc::control::Response const& response) noexcept {
-    try {
-        std::lock_guard requestLock(m_requestMutex);
-        auto pending = m_pendingDeliveries.find(request.CorrelationId);
-        if (pending != m_pendingDeliveries.end()) {
-            if (pending->second > 1) {
-                --pending->second;
-            } else {
-                m_pendingDeliveries.erase(pending);
-            }
-        }
-        auto entry = m_requestRecords.find(request.CorrelationId);
-        if (entry == m_requestRecords.end() || !entry->second->IsComplete ||
-            !SameRequest(entry->second->Request, request) || entry->second->Response.Code != response.Code ||
-            entry->second->Response.Payload != response.Payload) {
-            return {};
-        }
-        ++entry->second->ActiveDeliveries;
-        return entry->second;
-    } catch (...) {
-        Trace(L"pending delivery promotion failed");
-        return {};
+void CommandLineControlServer::CompletePendingDelivery(apc::control::CorrelationId correlationId,
+                                                       std::chrono::steady_clock::time_point now) noexcept {
+    std::lock_guard requestLock(m_requestMutex);
+    auto pending = m_pendingDeliveries.find(correlationId);
+    if (pending == m_pendingDeliveries.end()) return;
+    if (pending->second > 1) {
+        --pending->second;
+    } else {
+        m_pendingDeliveries.erase(pending);
     }
-}
-
-void CommandLineControlServer::CompletePendingDelivery(apc::control::CorrelationId correlationId) noexcept {
-    try {
-        std::lock_guard requestLock(m_requestMutex);
-        auto pending = m_pendingDeliveries.find(correlationId);
-        if (pending == m_pendingDeliveries.end()) return;
-        if (pending->second > 1) {
-            --pending->second;
-        } else {
-            m_pendingDeliveries.erase(pending);
-        }
-        ScheduleRequestPruneLocked(std::chrono::steady_clock::now());
-    } catch (...) {
-        Trace(L"pending delivery cleanup failed");
-    }
+    ScheduleRequestPruneLocked(now);
 }
 
 void CommandLineControlServer::PruneRequestRecords(std::chrono::steady_clock::time_point now) noexcept {
@@ -1255,11 +1252,11 @@ void CommandLineControlServer::ScheduleRequestPruneLocked(std::chrono::steady_cl
         if (!earliest || expires < *earliest) earliest = expires;
     }
     if (!earliest) {
-        SetThreadpoolTimer(m_requestPruneTimer, nullptr, 0, 0);
+        m_options.SetCacheTimer(m_requestPruneTimer.get(), nullptr);
         return;
     }
     const auto remaining =
         *earliest > now ? std::chrono::duration_cast<std::chrono::milliseconds>(*earliest - now).count() : 1;
     auto due = RelativeDelay(static_cast<DWORD>(std::clamp<std::int64_t>(remaining, 1, MAXDWORD - 1)));
-    SetThreadpoolTimer(m_requestPruneTimer, &due, 0, 0);
+    m_options.SetCacheTimer(m_requestPruneTimer.get(), &due);
 }

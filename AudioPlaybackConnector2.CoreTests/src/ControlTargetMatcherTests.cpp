@@ -1,3 +1,5 @@
+#include "TestCheck.hpp"
+
 #include <control/ControlTargetMatcher.hpp>
 
 #include <array>
@@ -5,13 +7,6 @@
 #include <string_view>
 
 namespace {
-int g_failures = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 void TestExactMatchesOutrankSubstrings() {
     const std::array candidates{

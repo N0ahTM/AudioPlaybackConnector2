@@ -43,10 +43,12 @@ AdaptiveResourcePolicy::AdaptiveResourcePolicy(AdaptiveResourcePolicyConfig conf
 AdaptiveResourcePolicyDecision AdaptiveResourcePolicy::Evaluate(AdaptiveResourcePolicyInput const& input,
                                                                 TimePoint now) noexcept {
     const bool pressureActive = input.MemoryPressure || input.FullscreenOrPresentation || input.EnergySaver;
-    if (!m_lastEvaluation) {
-        Initialize(now, pressureActive);
-    } else if (now < *m_lastEvaluation) {
-        ResetTemporalStateAfterClockRollback(now, pressureActive);
+    if (m_lastEvaluation && now < *m_lastEvaluation) {
+        // Preserve residency, but restart elapsed-time evidence after clock rollback.
+        m_pressureSince.reset();
+        m_healthySince.reset();
+        m_preloadAllowedSince.reset();
+        m_interactionUntil.reset();
     }
     m_lastEvaluation = now;
 
@@ -61,8 +63,7 @@ AdaptiveResourcePolicyDecision AdaptiveResourcePolicy::Evaluate(AdaptiveResource
         m_interactionUntil.reset();
     }
 
-    const bool pinned = input.UiVisible || input.UiPinned;
-    const bool foregroundDemand = pinned || interactionHeld;
+    const bool foregroundDemand = input.UiVisible || interactionHeld;
     const auto effectiveResidency = foregroundDemand ? ResidencyPolicy::Hot : m_backgroundResidency;
     const auto previousEffectiveResidency = m_effectiveResidency;
     m_effectiveResidency = effectiveResidency;
@@ -77,45 +78,18 @@ AdaptiveResourcePolicyDecision AdaptiveResourcePolicy::Evaluate(AdaptiveResource
     }
 
     return {
-        .PreviousResidency = previousEffectiveResidency,
         .Residency = effectiveResidency,
         .BackgroundResidency = m_backgroundResidency,
         .Action = action,
         .ResidencyChanged = effectiveResidency != previousEffectiveResidency,
         .BackgroundResidencyChanged = m_backgroundResidency != previousBackgroundResidency,
-        .Pinned = pinned,
-        .ReleaseDeferred = foregroundDemand && m_backgroundResidency != ResidencyPolicy::Hot,
         .ReevaluateAt = NextReevaluation(input, now, foregroundDemand),
     };
-}
-
-ResidencyPolicy AdaptiveResourcePolicy::BackgroundResidency() const noexcept {
-    return m_backgroundResidency;
 }
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Helpers ///////////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
-
-void AdaptiveResourcePolicy::Initialize(TimePoint now, bool pressureActive) noexcept {
-    if (pressureActive) {
-        m_pressureSince = now;
-    } else {
-        m_healthySince = now;
-    }
-}
-
-void AdaptiveResourcePolicy::ResetTemporalStateAfterClockRollback(TimePoint now, bool pressureActive) noexcept {
-    m_pressureSince.reset();
-    m_healthySince.reset();
-    m_preloadAllowedSince.reset();
-    m_interactionUntil.reset();
-    if (pressureActive) {
-        m_pressureSince = now;
-    } else {
-        m_healthySince = now;
-    }
-}
 
 void AdaptiveResourcePolicy::SetBackgroundResidency(ResidencyPolicy residency) noexcept {
     if (m_backgroundResidency == residency) return;
@@ -196,8 +170,7 @@ std::optional<AdaptiveResourcePolicy::TimePoint> AdaptiveResourcePolicy::NextRee
         consider(SaturatingAdd(*m_preloadAllowedSince, m_config.WarmToHotDelay));
     }
 
-    if (foregroundDemand && !input.UiVisible && !input.UiPinned && m_backgroundResidency != ResidencyPolicy::Hot &&
-        m_interactionUntil) {
+    if (foregroundDemand && !input.UiVisible && m_backgroundResidency != ResidencyPolicy::Hot && m_interactionUntil) {
         consider(*m_interactionUntil);
     }
     return next;

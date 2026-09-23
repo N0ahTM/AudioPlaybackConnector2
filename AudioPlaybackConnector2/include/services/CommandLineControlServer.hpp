@@ -1,8 +1,10 @@
 #pragma once
 
 #include <windows.h>
+#include <wil/resource.h>
 
 #include <control/CommandProtocol.hpp>
+#include <control/CommandPipeIo.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -15,6 +17,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -37,13 +40,17 @@ public:
         std::chrono::milliseconds AcknowledgedRecordLifetime = std::chrono::seconds(1);
         bool RetryStartupFailures = true;
         TrustClient IsTrustedClient;
-#ifdef APC_COMMAND_PIPE_SERVER_TESTING
-        std::function<bool(std::size_t)> BeforeArmConnection;
-        std::function<void(std::size_t)> AfterPipeRecreated;
-        std::function<void(std::size_t)> BeforeDeliveryPromoted;
-        std::function<void(apc::control::CorrelationId, bool)> AfterDeliveryCompleted;
-        std::function<void(std::size_t, std::size_t)> AfterRequestCachePruned;
-#endif
+        // Native overlapped admission runs under the slot lock. Implementations
+        // must return immediately, preserve Win32 error semantics and never reenter.
+        std::move_only_function<BOOL(HANDLE, LPOVERLAPPED) noexcept> ConnectPipe =
+            [](HANDLE pipe, LPOVERLAPPED operation) noexcept { return ConnectNamedPipe(pipe, operation); };
+        // Cache time is sampled outside both request and pipe-slot locks. Timer
+        // submission is native and nonblocking under the request lock; it must not reenter.
+        std::move_only_function<std::chrono::steady_clock::time_point() noexcept> CacheNow = []() noexcept {
+            return std::chrono::steady_clock::now();
+        };
+        std::move_only_function<void(PTP_TIMER, FILETIME*) noexcept> SetCacheTimer =
+            [](PTP_TIMER timer, FILETIME* due) noexcept { SetThreadpoolTimer(timer, due, 0, 0); };
     };
 
     CommandLineControlServer();
@@ -91,21 +98,23 @@ private:
     bool StartCurrentTransferLocked(PipeInstance& instance) noexcept;
     void HandleIoCompletion(PipeInstance& instance, void* overlapped, ULONG ioResult, ULONG_PTR bytes) noexcept;
     void HandleConnectedInstance(PipeInstance& instance) noexcept;
-    void HandleConnectedInstanceLocked(PipeInstance& instance, bool trusted);
-    void HandleCompletedTransferLocked(PipeInstance& instance);
-    void DispatchRequestLocked(PipeInstance& instance) noexcept;
+    void HandleConnectedInstanceLocked(PipeInstance& instance, bool trusted, std::chrono::steady_clock::time_point now);
+    void HandleCompletedTransferLocked(PipeInstance& instance, std::chrono::steady_clock::time_point now);
+    void DispatchRequestLocked(PipeInstance& instance, std::chrono::steady_clock::time_point now) noexcept;
     void FinishClient(PipeInstance& instance) noexcept;
-    void FinishClientLocked(PipeInstance& instance) noexcept;
+    void FinishClientLocked(PipeInstance& instance, std::chrono::steady_clock::time_point now) noexcept;
+    // A returned record owns one active delivery, acquired under the cache lock.
+    // Every path must hand it to the pipe instance or call CompleteDelivery.
     [[nodiscard]] std::shared_ptr<RequestRecord> ExecuteOnce(apc::control::Request const& request,
-                                                             std::stop_token stopToken,
+                                                             std::stop_token const& stopToken,
                                                              std::uint64_t deadline,
                                                              apc::control::Response& uncachedResponse);
     void CompleteDelivery(apc::control::CorrelationId correlationId,
                           std::shared_ptr<RequestRecord> const& record,
-                          bool acknowledged) noexcept;
-    [[nodiscard]] std::shared_ptr<RequestRecord>
-    PromotePendingDelivery(apc::control::Request const& request, apc::control::Response const& response) noexcept;
-    void CompletePendingDelivery(apc::control::CorrelationId correlationId) noexcept;
+                          bool acknowledged,
+                          std::chrono::steady_clock::time_point now) noexcept;
+    void CompletePendingDelivery(apc::control::CorrelationId correlationId,
+                                 std::chrono::steady_clock::time_point now) noexcept;
     void PruneRequestRecords(std::chrono::steady_clock::time_point now) noexcept;
     void ScheduleRequestPruneLocked(std::chrono::steady_clock::time_point now) noexcept;
 
@@ -118,13 +127,14 @@ private:
     bool m_desiredRunning = false;
     bool m_starting = false;
     bool m_stopping = false;
+    std::thread::id m_stopThread;
     bool m_stopRequested = false;
     std::stop_source m_stopSource;
     Handler m_handler;
     std::vector<std::unique_ptr<PipeInstance>> m_instances;
-    PTP_TIMER m_startRetryTimer = nullptr;
-    PTP_TIMER m_requestPruneTimer = nullptr;
-    PTP_WORK m_deferredStopWork = nullptr;
+    wil::unique_threadpool_timer_nowait m_startRetryTimer;
+    wil::unique_threadpool_timer_nowait m_requestPruneTimer;
+    wil::unique_threadpool_work_nowait m_deferredStopWork;
     std::size_t m_startRetryFailures = 0;
 
     std::mutex m_requestMutex;

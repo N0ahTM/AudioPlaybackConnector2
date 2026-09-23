@@ -9,7 +9,6 @@ param(
     [string]$PackagePath,
 
     [Parameter(Mandatory = $true)]
-    [ValidatePattern('^\d+\.\d+\.\d+$')]
     [string]$Version,
 
     [Parameter(Mandatory = $true)]
@@ -19,6 +18,8 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSScriptRoot 'ReleaseVersion.psm1') -Force
+$expectedPackageVersion = (Resolve-ReleaseVersion -Tag "v$Version").PackageVersion
 
 foreach ($name in @('AZURE_AD_TENANT_ID', 'SELLER_ID', 'AZURE_AD_APPLICATION_CLIENT_ID', 'AZURE_AD_APPLICATION_SECRET')) {
     if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
@@ -56,7 +57,6 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $submissionPath = Join-Path ([IO.Path]::GetTempPath()) "msstore-submission-$PID.json"
-$expectedPackageVersion = "$Version.0"
 $submission = $null
 $uploadedPackage = $null
 

@@ -22,8 +22,3 @@ bool SingleInstanceGuard::TryAcquire(std::wstring_view mutexName) noexcept {
         return false;
     }
 }
-
-void SingleInstanceGuard::Release() noexcept {
-    m_mutex.reset();
-    m_mutexName.clear();
-}

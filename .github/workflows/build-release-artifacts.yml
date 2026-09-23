@@ -40,9 +40,11 @@ env:
 
 jobs:
   build:
-    runs-on: windows-2022
+    runs-on: windows-2025-vs2026
     permissions:
       contents: read
+      id-token: write
+      attestations: write
     outputs:
       artifact_name: ${{ steps.artifacts.outputs.ARTIFACT_NAME }}
       bundle_name: ${{ steps.artifacts.outputs.BUNDLE_NAME }}
@@ -58,20 +60,15 @@ jobs:
 
     - name: Validate release inputs
       shell: pwsh
+      env:
+        RELEASE_TAG: ${{ inputs.tag }}
+        RELEASE_SEMVER: ${{ inputs.semver }}
+        RELEASE_PACKAGE_VERSION: ${{ inputs.package_version }}
       run: |
-        if ('${{ inputs.tag }}' -ne 'v${{ inputs.semver }}') {
-          throw 'Release tag and semantic version do not match.'
-        }
-        if ('${{ inputs.package_version }}' -ne '${{ inputs.semver }}.0') {
-          throw 'MSIX package version must be the semantic version plus .0.'
-        }
-        if ('${{ inputs.package_version }}' -notmatch '^\d{1,5}\.\d{1,5}\.\d{1,5}\.\d{1,5}$') {
-          throw 'MSIX package version must contain four numeric components.'
-        }
-        foreach ($part in '${{ inputs.package_version }}'.Split('.')) {
-          if ([uint32]$part -gt [uint16]::MaxValue) {
-            throw 'An MSIX package version component exceeds 65535.'
-          }
+        Import-Module ./scripts/release/ReleaseVersion.psm1 -Force
+        $version = Resolve-ReleaseVersion -Tag $env:RELEASE_TAG
+        if ($env:RELEASE_SEMVER -cne $version.SemVer -or $env:RELEASE_PACKAGE_VERSION -cne $version.PackageVersion) {
+          throw 'Release inputs disagree with the version derived from the tag.'
         }
 
     - name: Validate release documentation and metadata
@@ -80,6 +77,16 @@ jobs:
         ./scripts/validate-localizations.ps1
         ./scripts/validate-markdown-links.ps1
         ./scripts/update-cli-reference.ps1 -Check
+        ./scripts/test-release-promotion.ps1
+        ./scripts/test-build-attestations.ps1
+        python scripts/test-sbom.py
+        if ($LASTEXITCODE -ne 0) { throw "SBOM gate tests failed." }
+        python scripts/test-dependency-vulnerabilities.py
+        if ($LASTEXITCODE -ne 0) { throw "Dependency vulnerability gate tests failed." }
+        python scripts/test-dependency-licenses.py
+        if ($LASTEXITCODE -ne 0) { throw "Dependency license gate tests failed." }
+        ./scripts/test-package-notices.ps1
+        ./scripts/test-release-version.ps1
         ./scripts/release/validate-release-metadata.ps1 -Version '${{ inputs.semver }}'
 
     - name: Add MSBuild to PATH
@@ -163,6 +170,7 @@ jobs:
         & msbuild 'AudioPlaybackConnector2 (Package)\AudioPlaybackConnector2 (Package).wapproj' `
           /p:Configuration=Release `
           /p:Platform=x64 `
+          /p:ReleaseTag=${{ inputs.tag }} `
           /p:PackageVersion=${{ inputs.package_version }} `
           "/p:AppxPackageDir=$root\" `
           "/p:AppxPackageTestDir=$root\" `
@@ -181,9 +189,29 @@ jobs:
       run: |
         foreach ($architecture in @('x64', 'ARM64')) {
           & msbuild AudioPlaybackConnector2.CoreTests/AudioPlaybackConnector2.CoreTests.vcxproj `
-            /p:Configuration=Release /p:Platform=$architecture /t:Rebuild
+            /p:Configuration=Release /p:Platform=$architecture `
+            /p:ReleaseTag=${{ inputs.tag }} /p:PackageVersion=${{ inputs.package_version }} /t:Build
           if ($LASTEXITCODE -ne 0) { throw "$architecture test build failed with exit code $LASTEXITCODE." }
         }
+
+    - name: Verify restored dependency licenses
+      shell: pwsh
+      run: |
+        foreach ($triplet in @('x64-windows-static-md', 'arm64-windows-static-md')) {
+          python scripts/verify-dependency-licenses.py --triplet $triplet
+          if ($LASTEXITCODE -ne 0) { throw "Dependency license verification failed: $triplet" }
+        }
+
+    - name: Analyze CoreRuntime with clang-tidy
+      if: ${{ inputs.run_static_analysis }}
+      shell: pwsh
+      run: ./scripts/run-clang-tidy.ps1 -ToolPath 'C:/Program Files/LLVM/bin/clang-tidy.exe' -LogPath "$env:RUNNER_TEMP/clang-tidy-core.log"
+
+    - name: Check dependency vulnerabilities
+      shell: pwsh
+      run: |
+        python scripts/check-dependency-vulnerabilities.py --report "$env:RUNNER_TEMP/dependency-vulnerabilities.json"
+        if ($LASTEXITCODE -ne 0) { throw 'Dependency vulnerability check failed; inspect the report or query error.' }
 
     - name: Run x64 regression tests
       run: .\x64\Release\tests\AudioPlaybackConnector2.CoreTests.exe
@@ -199,17 +227,21 @@ jobs:
           -ExpectedName N0ahTM.AudioPlaybackConnector2 `
           -ExpectedPublisher 'CN=AudioPlaybackConnector2' `
           -ExpectedProcessorArchitectures x64,arm64 `
+          -ExpectedRatingPromptFeature disabled `
           -ExpectedCertificatePath 'certs/AudioPlaybackConnector2.cer' `
           -RequireSignature `
           -WriteGitHubOutput
 
-    - name: Build Microsoft Store upload package
+    - name: Package the shared binaries for Microsoft Store
       shell: pwsh
       run: |
+        # DesktopBridge builds references through _TargetsToBuild even when BuildProjectReferences is false.
+        # Request output paths only: the signed-bundle build already produced both architectures.
         $root = Join-Path $env:RUNNER_TEMP 'store-upload'
         & msbuild 'AudioPlaybackConnector2 (Package)\AudioPlaybackConnector2 (Package).wapproj' `
           /p:Configuration=Release `
           /p:Platform=x64 `
+          /p:ReleaseTag=${{ inputs.tag }} `
           /p:PackageVersion=${{ inputs.package_version }} `
           "/p:AppxPackageDir=$root\" `
           /p:AppxPackageSigningEnabled=false `
@@ -218,7 +250,8 @@ jobs:
           /p:GenerateAppxPackageOnBuild=true `
           /p:AppxBundle=Always `
           '/p:AppxBundlePlatforms=x64|ARM64' `
-          /t:Rebuild
+          /p:_TargetsToBuild=GetTargetPath `
+          /t:Build
         if ($LASTEXITCODE -ne 0) { throw "Microsoft Store package build failed with exit code $LASTEXITCODE." }
 
     - name: Verify Microsoft Store upload package
@@ -241,7 +274,11 @@ jobs:
           -ExpectedPackageVersion '${{ inputs.package_version }}' `
           -ExpectedName 12144NoahMeyer.AudioPlaybackConnector2 `
           -ExpectedPublisher 'CN=3784F101-6355-463B-A35E-41BD0A95071B' `
-          -ExpectedProcessorArchitectures x64,arm64
+          -ExpectedProcessorArchitectures x64,arm64 `
+          -ExpectedRatingPromptFeature enabled
+
+        Import-Module ./scripts/release/PackageVerification.psm1 -Force
+        Assert-AppBundleBinaries -BundlePath $bundles[0].FullName -ReferenceBundlePath '${{ steps.bundle.outputs.PATH }}'
 
         "PATH=$($uploads[0].FullName)" >> $env:GITHUB_OUTPUT
         "NAME=$($uploads[0].Name)" >> $env:GITHUB_OUTPUT
@@ -302,6 +339,28 @@ jobs:
         "BUNDLE_NAME=$bundleName" >> $env:GITHUB_OUTPUT
         "DEPENDENCY_NAMES=$($dependencyNames -join ',')" >> $env:GITHUB_OUTPUT
         "DIR=$stage" >> $env:GITHUB_OUTPUT
+
+    - name: Generate and verify release-drop SBOM
+      shell: pwsh
+      env:
+        RELEASE_TAG: ${{ inputs.tag }}
+        RELEASE_DROP: ${{ steps.artifacts.outputs.DIR }}
+      run: ./scripts/release/generate-sbom.ps1 -DropPath $env:RELEASE_DROP -Tag $env:RELEASE_TAG
+
+    - name: Attest package SBOM
+      uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+      with:
+        subject-path: |
+          ${{ steps.artifacts.outputs.DIR }}/*.msixbundle
+          ${{ steps.artifacts.outputs.DIR }}/*.msixupload
+          ${{ steps.artifacts.outputs.DIR }}/Dependencies/**
+          ${{ steps.artifacts.outputs.DIR }}/*.appinstaller
+        sbom-path: ${{ steps.artifacts.outputs.DIR }}/_manifest/spdx_2.2/manifest.spdx.json
+
+    - name: Attest provenance of complete release drop
+      uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+      with:
+        subject-path: ${{ steps.artifacts.outputs.DIR }}/**
 
     - name: Upload release artifacts
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

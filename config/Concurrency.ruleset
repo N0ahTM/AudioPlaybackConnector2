@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<RuleSet Name="Concurrency and Lifetime" Description="MSVC Core Check concurrency/lifetime and Win32 concurrency checks." ToolsVersion="15.0">
+  <Rules AnalyzerId="Microsoft.Analyzers.NativeCodeAnalysis" RuleNamespace="Microsoft.Rules.Native">
+    <Rule Id="C26100" Action="Error" />
+    <Rule Id="C26101" Action="Error" />
+    <Rule Id="C26102" Action="Error" />
+    <Rule Id="C26105" Action="Error" />
+    <Rule Id="C26106" Action="Error" />
+    <Rule Id="C26110" Action="Error" />
+    <Rule Id="C26111" Action="Error" />
+    <Rule Id="C26112" Action="Error" />
+    <Rule Id="C26115" Action="Error" />
+    <Rule Id="C26116" Action="Error" />
+    <Rule Id="C26117" Action="Error" />
+    <Rule Id="C26130" Action="Error" />
+    <Rule Id="C26135" Action="Error" />
+    <Rule Id="C26136" Action="Error" />
+    <Rule Id="C26137" Action="Error" />
+    <Rule Id="C26138" Action="Error" />
+    <Rule Id="C26140" Action="Error" />
+    <Rule Id="C26160" Action="Error" />
+    <Rule Id="C26165" Action="Error" />
+    <Rule Id="C26166" Action="Error" />
+    <Rule Id="C26167" Action="Error" />
+    <Rule Id="C26441" Action="Error" />
+    <Rule Id="C26800" Action="Error" />
+    <Rule Id="C26810" Action="Error" />
+    <Rule Id="C26811" Action="Error" />
+    <Rule Id="C26822" Action="Error" />
+    <!-- C26823 stays off: this lifetime rule fires thousands of times inside the
+         pinned WIL result_macros.h implementation (pszDest/exception/host/functor
+         expansions), a Microsoft header whose internal guards the analyzer cannot
+         see. It produced no actionable first-party finding in triage; first-party
+         null-lifetime issues remain covered by C26800/C26830/C26846 and Cppcheck. -->
+    <Rule Id="C26823" Action="None" />
+    <Rule Id="C26824" Action="Error" />
+    <Rule Id="C26825" Action="Error" />
+    <Rule Id="C26829" Action="Error" />
+    <Rule Id="C26830" Action="Error" />
+    <Rule Id="C26846" Action="Error" />
+    <Rule Id="C26847" Action="Error" />
+    <Rule Id="C26848" Action="Error" />
+    <Rule Id="C26849" Action="Error" />
+    <Rule Id="C26859" Action="Error" />
+    <Rule Id="C26860" Action="Error" />
+  </Rules>
+</RuleSet>

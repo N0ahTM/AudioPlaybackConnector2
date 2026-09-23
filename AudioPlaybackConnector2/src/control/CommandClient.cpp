@@ -1,4 +1,7 @@
 #include <control/CommandClient.hpp>
+#include <control/CommandPipeIo.hpp>
+
+#include <algorithm>
 
 namespace apc::control::client {
 namespace {

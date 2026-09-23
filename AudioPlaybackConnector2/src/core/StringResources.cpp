@@ -1,26 +1,16 @@
 #include <pch.h>
 #include <core/StringResources.hpp>
-#include <util/Util.hpp>
+#include <nlohmann/json.hpp>
+#include <optional>
+#include <string_view>
+#include <winrt/base.h>
 #include <resource.h>
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-StringResources& StringResources::Instance() {
-    static StringResources s_instance;
-    return s_instance;
-}
-
-void StringResources::Initialize(HINSTANCE hInst) {
-    Initialize(hInst, {});
-}
-
-void StringResources::Initialize(HINSTANCE hInst, std::wstring_view language) {
-    auto guard = m_lock.lock_exclusive();
-    m_hInst = hInst;
-    m_map.clear();
-
+void StringResources::Initialize(HINSTANCE hInst, std::wstring_view language, util::LogSink const& log) {
     LANGID langId = GetUserDefaultUILanguage();
     int resId = IDR_STRINGS_EN;
     if (!language.empty() && language != L"system") {
@@ -57,34 +47,45 @@ void StringResources::Initialize(HINSTANCE hInst, std::wstring_view language) {
         }
     }
 
-    const auto load = [this](int resourceId, bool replace) {
-        const auto data = util::LoadResourceData(m_hInst, resourceId, L"JSON");
-        if (!data) return false;
-
+    const auto load = [&](int resourceId) -> std::optional<decltype(m_map)> {
+        const auto resource = FindResourceW(hInst, MAKEINTRESOURCEW(resourceId), L"JSON");
+        if (!resource) return std::nullopt;
+        const auto size = SizeofResource(hInst, resource);
+        const auto loaded = LoadResource(hInst, resource);
+        if (!loaded || size == 0) return std::nullopt;
+        const auto data = static_cast<char const*>(LockResource(loaded));
+        if (!data) return std::nullopt;
         try {
-            const std::string_view jsonView(reinterpret_cast<const char*>(data->data()), data->size());
-            const auto json = winrt::Windows::Data::Json::JsonObject::Parse(winrt::to_hstring(jsonView));
-            for (const auto pair : json) {
-                if (pair.Value().ValueType() != winrt::Windows::Data::Json::JsonValueType::String) continue;
-
-                auto key = winrt::to_string(pair.Key());
-                auto value = std::wstring(pair.Value().GetString());
-                if (replace)
-                    m_map.insert_or_assign(std::move(key), std::move(value));
-                else
-                    m_map.emplace(std::move(key), std::move(value));
+            // Resource bytes remain owned by the loaded module throughout parsing.
+            const std::string_view jsonView(data, size);
+            const auto json = nlohmann::json::parse(jsonView);
+            if (!json.is_object()) return std::nullopt;
+            decltype(m_map) strings;
+            for (auto const& [key, text] : json.items()) {
+                if (key.empty() || !text.is_string()) return std::nullopt;
+                strings.emplace(key, std::wstring(winrt::to_hstring(text.get_ref<std::string const&>())));
             }
-            return true;
+            return strings;
         } catch (...) {
-            DebugTrace(L"[StringResources] Initialize ERROR: failed to parse strings JSON resource {0}", resourceId);
-            return false;
+            log.Trace(L"[StringResources] Initialize ERROR: failed to parse strings JSON resource {0}", resourceId);
+            return std::nullopt;
         }
     };
 
-    // English is the complete source language. A selected locale overlays it so
-    // an incomplete community translation never turns a label into an empty string.
-    if (!load(IDR_STRINGS_EN, false)) return;
-    if (resId != IDR_STRINGS_EN) load(resId, true);
+    // Build the complete candidate before taking the publication lock. Parsing,
+    // logging and destruction of the previous language run outside the lock.
+    auto candidate = load(IDR_STRINGS_EN);
+    if (!candidate) return;
+    if (resId != IDR_STRINGS_EN) {
+        if (auto overlay = load(resId)) {
+            for (auto& [key, value] : *overlay)
+                candidate->insert_or_assign(key, std::move(value));
+        }
+    }
+    {
+        auto guard = m_lock.lock_exclusive();
+        m_map.swap(*candidate);
+    }
 }
 
 std::wstring StringResources::Get(std::string_view key) const {

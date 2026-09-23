@@ -1,11 +1,18 @@
 #include <control/ControlCommandAdapter.hpp>
+#include <control/CommandPipeIo.hpp>
+#include <app/AppModels.hpp>
+#include <util/Text.hpp>
 
+#include <windows.h>
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Data.Json.h>
+#include <wil/resource.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cwctype>
 #include <limits>
+#include <optional>
 #include <ranges>
 #include <sstream>
 #include <unordered_map>
@@ -14,7 +21,6 @@
 
 namespace {
 
-using apc::app::AppCommand;
 using apc::app::AppCommandContext;
 using apc::app::AppCommandKind;
 using apc::app::AppOutcomeReason;
@@ -70,10 +76,6 @@ std::wstring FormatResource(ControlCommandAdapter::Localize const& localize, std
     return FormatResource(localize, key, std::to_wstring(value));
 }
 
-bool IsRequestValidForAdapter(Request const& request) noexcept {
-    return apc::control::IsRequestValid(request);
-}
-
 std::optional<DeviceSelector> MakeSelector(TargetKind target, std::wstring_view value) {
     switch (target) {
         case TargetKind::Id: return DeviceSelector::ById(value);
@@ -92,117 +94,60 @@ std::optional<DeviceSelector> MakeSelector(TargetKind target, std::wstring_view 
     return std::nullopt;
 }
 
-struct Translation {
-    std::optional<AppCommand> Command;
-    AppOutcomeReason Failure = AppOutcomeReason::Unsupported;
-};
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Validated Wire Dispatch ////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
-Translation Translate(Request const& request) {
-    const auto noTarget = [&]() -> Translation {
-        if (request.Target != TargetKind::None || !request.Payload.empty()) {
-            return {.Failure = AppOutcomeReason::TargetRequired};
-        }
-        return {};
-    };
-    const auto explicitTarget = [&](TargetKind target, std::wstring_view value) -> Translation {
-        auto selector = MakeSelector(target, value);
-        if (!selector) return {.Failure = AppOutcomeReason::TargetRequired};
-        return {.Command = AppCommand{AppCommandKind::Status, std::move(*selector), {}}};
-    };
+std::wstring_view RequestTargetText(Request const& request) {
+    if (request.Command == CommandType::AliasSet) {
+        return std::wstring_view(request.Payload).substr(0, request.Payload.find(L'\n'));
+    }
+    return request.Payload;
+}
 
+std::wstring_view RequestAlias(Request const& request) {
+    if (request.Command != CommandType::AliasSet) return {};
+    return std::wstring_view(request.Payload).substr(request.Payload.find(L'\n') + 1);
+}
+
+// Handle validates the complete wire grammar before this function, but selector
+// construction is stricter than the wire payload rules (e.g. control characters).
+// Reject a missing selector instead of dereferencing it.
+AppResult
+Dispatch(apc::app::AppController const& controller, Request const& request, AppCommandContext const& context) {
+    auto target = MakeSelector(request.Target, RequestTargetText(request));
     switch (request.Command) {
-        case CommandType::Show: {
-            auto result = noTarget();
-            if (!result.Command && result.Failure != AppOutcomeReason::Unsupported) return result;
-            result.Command = AppCommand{AppCommandKind::ShowDevicePicker, {}, {}};
-            return result;
-        }
-        case CommandType::Settings: {
-            auto result = noTarget();
-            if (!result.Command && result.Failure != AppOutcomeReason::Unsupported) return result;
-            result.Command = AppCommand{AppCommandKind::ShowSettings, {}, {}};
-            return result;
-        }
-        case CommandType::List: {
-            auto result = noTarget();
-            if (!result.Command && result.Failure != AppOutcomeReason::Unsupported) return result;
-            result.Command = AppCommand{AppCommandKind::ListDevices, {}, {}};
-            return result;
-        }
-        case CommandType::Status: {
-            auto result = noTarget();
-            if (!result.Command && result.Failure != AppOutcomeReason::Unsupported) return result;
-            result.Command = AppCommand{AppCommandKind::Status, {}, {}};
-            return result;
-        }
-        case CommandType::DefaultShow: {
-            auto result = noTarget();
-            if (!result.Command && result.Failure != AppOutcomeReason::Unsupported) return result;
-            result.Command = AppCommand{AppCommandKind::ShowDefault, {}, {}};
-            return result;
-        }
-        case CommandType::DefaultClear: {
-            auto result = noTarget();
-            if (!result.Command && result.Failure != AppOutcomeReason::Unsupported) return result;
-            result.Command = AppCommand{AppCommandKind::ClearDefault, {}, {}};
-            return result;
-        }
-        case CommandType::AliasList: {
-            auto result = noTarget();
-            if (!result.Command && result.Failure != AppOutcomeReason::Unsupported) return result;
-            result.Command = AppCommand{AppCommandKind::ListAliases, {}, {}};
-            return result;
-        }
-        case CommandType::DefaultSet: {
-            auto result = explicitTarget(request.Target, request.Payload);
-            if (!result.Command) return result;
-            result.Command->Kind = AppCommandKind::SetDefault;
-            return result;
-        }
-        case CommandType::AliasClear: {
-            auto result = explicitTarget(request.Target, request.Payload);
-            if (!result.Command) return result;
-            result.Command->Kind = AppCommandKind::ClearAlias;
-            return result;
-        }
+        case CommandType::DefaultSet:
+        case CommandType::AliasSet:
+        case CommandType::AliasClear:
         case CommandType::Connect:
         case CommandType::Disconnect:
         case CommandType::Reconnect:
-        case CommandType::ToggleLast: {
-            auto result = explicitTarget(request.Target, request.Payload);
-            if (!result.Command) return result;
-            result.Command->Kind = request.Command == CommandType::Connect      ? AppCommandKind::Connect
-                                   : request.Command == CommandType::Disconnect ? AppCommandKind::Disconnect
-                                   : request.Command == CommandType::Reconnect  ? AppCommandKind::Reconnect
-                                                                                : AppCommandKind::ToggleLast;
-            return result;
-        }
-        case CommandType::DisconnectAll: {
-            auto result = noTarget();
-            if (!result.Command && result.Failure != AppOutcomeReason::Unsupported) return result;
-            result.Command = AppCommand{AppCommandKind::DisconnectAll, {}, {}};
-            return result;
-        }
-        case CommandType::ReconnectAll: {
-            auto result = noTarget();
-            if (!result.Command && result.Failure != AppOutcomeReason::Unsupported) return result;
-            result.Command = AppCommand{AppCommandKind::ReconnectAll, {}, {}};
-            return result;
-        }
-        case CommandType::AliasSet: {
-            const auto separator = request.Payload.find(L'\n');
-            if (separator == std::wstring::npos || separator == 0 || separator + 1 >= request.Payload.size()) {
-                return {.Failure = AppOutcomeReason::InvalidAliasPayload};
-            }
-            const auto targetText = request.Payload.substr(0, separator);
-            const auto alias = request.Payload.substr(separator + 1);
-            auto selector = MakeSelector(request.Target, targetText);
-            if (!selector) return {.Failure = AppOutcomeReason::TargetRequired};
-            return {.Command = AppCommand{AppCommandKind::SetAlias, std::move(*selector), std::move(alias)}};
-        }
-        case CommandType::Unknown: return {.Failure = AppOutcomeReason::Unsupported};
+        case CommandType::ToggleLast:
+            if (!target) return {AppResultCode::InvalidInput};
+            break;
+        default: break;
     }
-    return {.Failure = AppOutcomeReason::Unsupported};
+    switch (request.Command) {
+        case CommandType::Show: return controller.ShowDevicePicker(apc::app::DevicePickerOpenMode::EnsureOpen, context);
+        case CommandType::Settings: return controller.ShowSettings(context);
+        case CommandType::List: return controller.ListDevices(context);
+        case CommandType::Status: return controller.Status(context);
+        case CommandType::DefaultShow: return controller.ShowDefault(context);
+        case CommandType::DefaultClear: return controller.ClearDefault(context);
+        case CommandType::AliasList: return controller.ListAliases(context);
+        case CommandType::DefaultSet: return controller.SetDefault(std::move(*target), context);
+        case CommandType::AliasSet: return controller.SetAlias(std::move(*target), RequestAlias(request), context);
+        case CommandType::AliasClear: return controller.ClearAlias(std::move(*target), context);
+        case CommandType::Connect: return controller.Connect(std::move(*target), context);
+        case CommandType::Disconnect: return controller.Disconnect(std::move(*target), context);
+        case CommandType::Reconnect: return controller.Reconnect(std::move(*target), context);
+        case CommandType::ToggleLast: return controller.Toggle(std::move(*target), context);
+        case CommandType::DisconnectAll: return controller.DisconnectAll(context);
+        case CommandType::ReconnectAll: return controller.ReconnectAll(context);
+        case CommandType::Unknown: break;
+    }
+    return {AppResultCode::InvalidInput};
 }
 
 bool IsMutating(CommandType command) noexcept {
@@ -221,12 +166,12 @@ bool IsMutating(CommandType command) noexcept {
     }
 }
 
-bool IsQuery(AppCommandKind command) noexcept {
+bool IsQuery(CommandType command) noexcept {
     switch (command) {
-        case AppCommandKind::ListDevices:
-        case AppCommandKind::Status:
-        case AppCommandKind::ShowDefault:
-        case AppCommandKind::ListAliases: return true;
+        case CommandType::List:
+        case CommandType::Status:
+        case CommandType::DefaultShow:
+        case CommandType::AliasList: return true;
         default: return false;
     }
 }
@@ -253,14 +198,6 @@ ExitCode ToExitCode(AppResult const& result) noexcept {
 bool IsPreDispatchTermination(AppResult const& result) noexcept {
     return result.DispatchPhase == apc::app::AppDispatchPhase::NotStarted &&
            (result.Code == AppResultCode::Cancelled || result.Code == AppResultCode::TimedOut);
-}
-
-std::wstring LowerInvariant(std::wstring_view value) {
-    std::wstring lowered;
-    lowered.reserve(value.size());
-    for (const auto character : value)
-        lowered.push_back(static_cast<wchar_t>(std::towlower(character)));
-    return lowered;
 }
 
 std::wstring DeviceIdText(apc::app::DeviceSnapshot const& device) {
@@ -323,11 +260,11 @@ std::vector<apc::app::DeviceSnapshot> SortedDevices(std::vector<apc::app::Device
 
     std::ranges::sort(merged, [](auto const& left, auto const& right) {
         const auto leftLabel =
-            LowerInvariant(left.Alias.empty() ? (left.Name.empty() ? left.Id.View() : left.Name) : left.Alias);
-        const auto rightLabel =
-            LowerInvariant(right.Alias.empty() ? (right.Name.empty() ? right.Id.View() : right.Name) : right.Alias);
+            util::LowerInvariant(left.Alias.empty() ? (left.Name.empty() ? left.Id.View() : left.Name) : left.Alias);
+        const auto rightLabel = util::LowerInvariant(
+            right.Alias.empty() ? (right.Name.empty() ? right.Id.View() : right.Name) : right.Alias);
         if (leftLabel != rightLabel) return leftLabel < rightLabel;
-        return LowerInvariant(left.Id.View()) < LowerInvariant(right.Id.View());
+        return util::LowerInvariant(left.Id.View()) < util::LowerInvariant(right.Id.View());
     });
     return merged;
 }
@@ -365,20 +302,12 @@ std::wstring ActionName(AppCommandKind command) {
     }
 }
 
-std::wstring CommandTargetText(AppCommand const& command) {
-    if (!command.Target) return {};
-    if (command.Target->Kind() == DeviceSelectorKind::Id) return std::wstring(command.Target->IdText());
-    if (command.Target->Kind() == DeviceSelectorKind::Last || command.Target->Kind() == DeviceSelectorKind::Default) {
-        return {};
-    }
-    return std::wstring(command.Target->Query());
-}
-
 std::wstring FailureMessage(ControlCommandAdapter::Localize const& localize,
                             AppResult const& result,
-                            AppCommand const& command,
+                            Request const& request,
                             bool redact) {
-    const auto rawTarget = result.RequestedTarget.empty() ? CommandTargetText(command) : result.RequestedTarget;
+    const auto rawTarget =
+        result.RequestedTarget.empty() ? std::wstring(RequestTargetText(request)) : result.RequestedTarget;
     const auto target = result.Target   ? TargetDisplayName(localize, *result.Target, redact)
                         : result.Device ? DeviceDisplayName(localize, *result.Device, redact)
                                         : rawTarget;
@@ -402,7 +331,7 @@ std::wstring FailureMessage(ControlCommandAdapter::Localize const& localize,
                                                   : Resource(localize, "Command_NotReady");
     }
 
-    switch (command.Kind) {
+    switch (result.Command) {
         case AppCommandKind::Connect: return FormatResource(localize, "Command_ConnectFailed", target);
         case AppCommandKind::ToggleLast:
             return result.Reason == AppOutcomeReason::DisconnectFailed
@@ -419,7 +348,7 @@ std::wstring FailureMessage(ControlCommandAdapter::Localize const& localize,
 
 std::wstring SuccessMessage(ControlCommandAdapter::Localize const& localize,
                             AppResult const& result,
-                            AppCommand const& command,
+                            Request const& request,
                             std::wstring_view displayName) {
     switch (result.Reason) {
         case AppOutcomeReason::AlreadyConnected:
@@ -443,14 +372,16 @@ std::wstring SuccessMessage(ControlCommandAdapter::Localize const& localize,
         default: break;
     }
 
-    switch (command.Kind) {
+    switch (result.Command) {
         case AppCommandKind::ShowDevicePicker: return Resource(localize, "Command_ShowOpened");
         case AppCommandKind::ShowSettings: return Resource(localize, "Command_SettingsOpened");
         case AppCommandKind::SetDefault: return FormatResource(localize, "Command_DefaultSet", displayName);
         case AppCommandKind::ClearDefault: return Resource(localize, "Command_DefaultCleared");
         case AppCommandKind::SetAlias:
-            return FormatResource(
-                localize, "Command_AliasSet", displayName, result.Alias.empty() ? command.Alias : result.Alias);
+            return FormatResource(localize,
+                                  "Command_AliasSet",
+                                  displayName,
+                                  result.Alias.empty() ? RequestAlias(request) : std::wstring_view(result.Alias));
         case AppCommandKind::ClearAlias: return FormatResource(localize, "Command_AliasCleared", displayName);
         case AppCommandKind::DisconnectAll: return Resource(localize, "Command_DisconnectAllSucceeded");
         case AppCommandKind::ReconnectAll: return Resource(localize, "Command_ReconnectAllSucceeded");
@@ -569,8 +500,7 @@ Response FormatQuery(Request const& request,
     const auto code = ToExitCode(result);
     if (result.Code != AppResultCode::Success) {
         if (result.Code == AppResultCode::InternalError) return {code, {}, request.CorrelationId};
-        return MessageResponse(
-            request, code, FailureMessage(localize, result, AppCommand{result.Command, {}, {}}, redact), wantsJson);
+        return MessageResponse(request, code, FailureMessage(localize, result, request, redact), wantsJson);
     }
 
     const auto devices = SortedDevices(DevicesFor(result, snapshot));
@@ -720,7 +650,6 @@ Response FormatQuery(Request const& request,
 }
 
 Response FormatOperation(Request const& request,
-                         AppCommand const& command,
                          AppResult const& result,
                          ControlCommandAdapter::Localize const& localize,
                          bool redact,
@@ -744,7 +673,7 @@ Response FormatOperation(Request const& request,
         }
     }();
     if (result.Code != AppResultCode::Success && isResolutionFailure) {
-        return MessageResponse(request, code, FailureMessage(localize, result, command, redact), wantsJson);
+        return MessageResponse(request, code, FailureMessage(localize, result, request, redact), wantsJson);
     }
 
     const auto device = result.Device;
@@ -752,43 +681,43 @@ Response FormatOperation(Request const& request,
     std::wstring displayName = result.Target ? TargetDisplayName(localize, *result.Target, redact)
                                : device      ? DeviceDisplayName(localize, *device, redact)
                                              : std::wstring{};
-    if (!result.Target && !device && command.Target && command.Target->Kind() == DeviceSelectorKind::Id) {
-        id = std::wstring(command.Target->IdText());
+    if (!result.Target && !device && request.Target == TargetKind::Id) {
+        id = std::wstring(RequestTargetText(request));
         displayName = redact ? Resource(localize, "Privacy_RedactedDevice") : id;
     }
 
     std::wstring jsonName = displayName;
-    if (command.Kind == AppCommandKind::SetAlias && code == ExitCode::Success) {
+    if (result.Command == AppCommandKind::SetAlias && code == ExitCode::Success) {
         if (device) {
             jsonName = DeviceDisplayName(localize, *device, redact);
         } else if (!result.Alias.empty()) {
             jsonName = redact ? Resource(localize, "Privacy_RedactedDevice") : result.Alias;
         }
     }
-    if (command.Kind == AppCommandKind::ClearAlias && code == ExitCode::Success && (device || result.Target)) {
+    if (result.Command == AppCommandKind::ClearAlias && code == ExitCode::Success && (device || result.Target)) {
         jsonName = redact ? Resource(localize, "Privacy_RedactedDevice")
                           : (result.Target ? (result.Target->Name.empty() ? id : result.Target->Name)
                                            : (device->Name.empty() ? id : device->Name));
     }
 
-    auto message = result.Code == AppResultCode::Success ? SuccessMessage(localize, result, command, displayName)
-                                                         : FailureMessage(localize, result, command, redact);
-    if (result.Code == AppResultCode::Success && message.empty() && command.Kind == AppCommandKind::ToggleLast) {
+    auto message = result.Code == AppResultCode::Success ? SuccessMessage(localize, result, request, displayName)
+                                                         : FailureMessage(localize, result, request, redact);
+    if (result.Code == AppResultCode::Success && message.empty() && result.Command == AppCommandKind::ToggleLast) {
         message = Resource(localize, "Command_NotReady");
     }
     if (result.Code == AppResultCode::TimedOut && result.Reason == AppOutcomeReason::None) {
-        message = command.Kind == AppCommandKind::Reconnect
+        message = result.Command == AppCommandKind::Reconnect
                       ? FormatResource(localize, "Command_ReconnectFailed", displayName)
                       : FormatResource(localize, "Command_ConnectFailed", displayName);
     }
 
     return OperationResponse(
-        request, code, ActionName(command.Kind), id, jsonName, redact, std::move(message), localize, wantsJson);
+        request, code, ActionName(result.Command), id, jsonName, redact, std::move(message), localize, wantsJson);
 }
 
 AppCommandContext MakeContext(std::stop_token stopToken, std::uint64_t deadline) {
     AppCommandContext context;
-    context.StopToken = stopToken;
+    context.StopToken = std::move(stopToken);
     context.Completion = AppCommandContext::CompletionMode::WaitForCompletion;
     if (deadline == 0) return context;
 
@@ -813,11 +742,10 @@ ControlCommandAdapter::ControlCommandAdapter(apc::app::AppController const& cont
     : m_controller(controller), m_options(std::move(options)) {}
 
 Response ControlCommandAdapter::Handle(Request const& request,
-                                       std::stop_token stopToken,
+                                       std::stop_token const& stopToken,
                                        std::uint64_t deadline) const noexcept {
     try {
         const bool wantsJson = (request.Flags & CommandFlagJson) != 0;
-        const bool wantsRaw = (request.Flags & CommandFlagRaw) != 0;
 
         // Keep the transport's pre-dispatch cancellation and deadline
         // precedence for malformed requests.  Valid commands are allowed to
@@ -825,7 +753,7 @@ Response ControlCommandAdapter::Handle(Request const& request,
         // entered; this closes the race between this adapter and controller
         // preflight without inferring certainty from timing in the adapter.
         const bool preDispatchTermination = stopToken.stop_requested() || apc::control::RemainingWait(deadline) == 0;
-        if (!IsRequestValidForAdapter(request)) {
+        if (!IsRequestValid(request)) {
             if (preDispatchTermination) {
                 return MessageResponse(request,
                                        ExitCode::Unavailable,
@@ -838,74 +766,57 @@ Response ControlCommandAdapter::Handle(Request const& request,
                                    wantsJson);
         }
 
-        const auto translation = Translate(request);
-        if (!translation.Command) {
-            if (preDispatchTermination) {
-                return MessageResponse(request,
-                                       ExitCode::Unavailable,
-                                       Resource(m_options.LocalizeResource, "Command_NotReady"),
-                                       wantsJson);
-            }
-            const auto code = ExitCode::InvalidRequest;
-            AppResult invalid;
-            invalid.Code = AppResultCode::InvalidInput;
-            invalid.Command = AppCommandKind::Status;
-            invalid.Reason = translation.Failure;
-            return MessageResponse(
-                request, code, FailureMessage(m_options.LocalizeResource, invalid, AppCommand{}, false), wantsJson);
-        }
-
-        std::optional<AppSnapshot> snapshot;
-        if (!preDispatchTermination && IsQuery(translation.Command->Kind)) {
-            // Queries require an inventory-backed presentation snapshot.  A
-            // failed read therefore remains fail-closed and must not dispatch
-            // a query against partial state.
-            snapshot = m_controller.Snapshot();
-            if (!snapshot->IsRunning) {
-                return MessageResponse(request,
-                                       ExitCode::Unavailable,
-                                       Resource(m_options.LocalizeResource, "Command_NotReady"),
-                                       wantsJson);
-            }
-        }
-
-        std::unique_lock mutationLock(m_mutationMutex, std::defer_lock);
-        if (!preDispatchTermination && IsMutating(request.Command) && !mutationLock.try_lock()) {
+        const bool mutation = !preDispatchTermination && IsMutating(request.Command);
+        if (mutation && m_mutationActive.exchange(true)) {
             return MessageResponse(
                 request, ExitCode::Busy, Resource(m_options.LocalizeResource, "Command_Busy"), wantsJson);
         }
+        auto releaseMutation = wil::scope_exit([&] {
+            if (mutation) m_mutationActive.store(false);
+        });
 
         auto context = MakeContext(stopToken, deadline);
-        auto result = m_controller.Execute(*translation.Command, context);
-        if (IsPreDispatchTermination(result)) {
-            return MessageResponse(
-                request, ExitCode::Unavailable, Resource(m_options.LocalizeResource, "Command_NotReady"), wantsJson);
-        }
-        if (IsQuery(translation.Command->Kind)) {
-            auto currentSnapshot = result.Snapshot ? *result.Snapshot : std::move(*snapshot);
-            if (!currentSnapshot.IsRunning) {
-                return MessageResponse(request,
-                                       ExitCode::Unavailable,
-                                       Resource(m_options.LocalizeResource, "Command_NotReady"),
-                                       wantsJson);
-            }
-            if (result.Tray) currentSnapshot.Tray = *result.Tray;
-            const bool privacyMode = result.PrivacyModeEnabled.value_or(currentSnapshot.PrivacyModeEnabled);
-            const bool redact = privacyMode && !wantsRaw;
-            return FormatQuery(
-                request, result, std::move(currentSnapshot), m_options.LocalizeResource, redact, wantsJson);
-        }
-
-        // Operation results normally carry their privacy state directly.  Do
-        // not obtain a fallback inventory snapshot here: doing so would make
-        // a successful non-device command depend on device enumeration.
-        const bool privacyMode =
-            result.PrivacyModeEnabled.value_or(result.Snapshot && result.Snapshot->PrivacyModeEnabled);
-        const bool redact = privacyMode && !wantsRaw;
-        return FormatOperation(request, *translation.Command, result, m_options.LocalizeResource, redact, wantsJson);
+        auto result = Dispatch(m_controller, request, context);
+        return FormatResponse(request, result, m_options);
     } catch (...) {
         return {ExitCode::Indeterminate, {}, request.CorrelationId};
     }
+}
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Response Formatting ////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
+Response
+ControlCommandAdapter::FormatResponse(Request const& request, AppResult const& result, Options const& options) {
+    const bool wantsJson = (request.Flags & CommandFlagJson) != 0;
+    const bool wantsRaw = (request.Flags & CommandFlagRaw) != 0;
+    if (IsPreDispatchTermination(result)) {
+        return MessageResponse(
+            request, ExitCode::Unavailable, Resource(options.LocalizeResource, "Command_NotReady"), wantsJson);
+    }
+    if (IsQuery(request.Command)) {
+        if (!result.Snapshot) {
+            return MessageResponse(
+                request, ExitCode::Unavailable, Resource(options.LocalizeResource, "Command_NotReady"), wantsJson);
+        }
+        auto currentSnapshot = *result.Snapshot;
+        if (!currentSnapshot.IsRunning) {
+            return MessageResponse(
+                request, ExitCode::Unavailable, Resource(options.LocalizeResource, "Command_NotReady"), wantsJson);
+        }
+        if (result.Tray) currentSnapshot.Tray = *result.Tray;
+        const bool privacyMode = result.PrivacyModeEnabled.value_or(currentSnapshot.PrivacyModeEnabled);
+        const bool redact = privacyMode && !wantsRaw;
+        return FormatQuery(request, result, std::move(currentSnapshot), options.LocalizeResource, redact, wantsJson);
+    }
+
+    // Operation results normally carry their privacy state directly.  Do
+    // not obtain a fallback inventory snapshot here: doing so would make
+    // a successful non-device command depend on device enumeration.
+    const bool privacyMode = result.PrivacyModeEnabled.value_or(result.Snapshot && result.Snapshot->PrivacyModeEnabled);
+    const bool redact = privacyMode && !wantsRaw;
+    return FormatOperation(request, result, options.LocalizeResource, redact, wantsJson);
 }
 
 } // namespace apc::control

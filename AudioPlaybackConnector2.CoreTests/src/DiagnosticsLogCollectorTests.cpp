@@ -1,3 +1,5 @@
+#include "TestCheck.hpp"
+
 #include <ui/DiagnosticsLogCollector.hpp>
 
 #include <windows.h>
@@ -11,13 +13,6 @@
 #include <string_view>
 
 namespace {
-int g_failures = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 class TemporaryFile {
 public:

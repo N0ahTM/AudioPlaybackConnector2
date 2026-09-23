@@ -1,45 +1,9 @@
 #pragma once
 
 /*------------------------------------------------------------------------------------------------------------*/
-/*//////// Theme Helper //////////////////////////////////////////////////////////////////////////////////////*/
+/*//////// Windows Theme Query ///////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
 enum class Theme { Light, Dark };
 
-class ThemeHelper {
-public:
-    /*------------------------------------------------------------------------------------------------------------*/
-    /*//////// Type Aliases //////////////////////////////////////////////////////////////////////////////////////*/
-    /*------------------------------------------------------------------------------------------------------------*/
-
-    using ThemeChangedHandler = std::function<void()>;
-    using ThemeChangedToken = std::size_t;
-
-    /*------------------------------------------------------------------------------------------------------------*/
-    /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
-    /*------------------------------------------------------------------------------------------------------------*/
-
-    static Theme GetSystemTheme();
-    static void OnSettingChange(HWND hwnd, LPARAM lParam);
-    static ThemeChangedToken AddThemeChangedHandler(ThemeChangedHandler handler);
-    static void RemoveThemeChangedHandler(ThemeChangedToken token);
-
-private:
-    /*------------------------------------------------------------------------------------------------------------*/
-    /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
-    /*------------------------------------------------------------------------------------------------------------*/
-
-    struct HandlerState {
-        explicit HandlerState(ThemeChangedHandler handler) : Handler(std::move(handler)) {}
-
-        ThemeChangedHandler Handler;
-        std::mutex Mutex;
-        std::condition_variable Cv;
-        std::vector<std::thread::id> InvokingThreads;
-        std::size_t InFlight = 0;
-        bool Active = true;
-    };
-
-    struct StaticState;
-    static StaticState& GetStaticState();
-};
+[[nodiscard]] Theme GetSystemTheme() noexcept;

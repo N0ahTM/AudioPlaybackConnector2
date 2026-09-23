@@ -1,0 +1,32 @@
+{
+  "dependencies": [
+    {
+      "name": "nlohmann-json",
+      "version>=": "3.12.0"
+    },
+    {
+      "name": "cli11",
+      "version>=": "2.6.2"
+    },
+    {
+      "name": "spdlog",
+      "version>=": "1.17.0",
+      "default-features": false
+    }
+  ],
+  "overrides": [
+    {
+      "name": "nlohmann-json",
+      "version": "3.12.0",
+      "port-version": 2
+    },
+    {
+      "name": "cli11",
+      "version": "2.6.2"
+    },
+    {
+      "name": "spdlog",
+      "version": "1.17.0"
+    }
+  ]
+}

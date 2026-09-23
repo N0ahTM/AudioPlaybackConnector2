@@ -1,8 +1,15 @@
 #include <pch.h>
+#include <winrt/Microsoft.UI.Xaml.Controls.Primitives.h>
+#include <winrt/Windows.Foundation.Collections.h>
 #include <ui/TrayContextMenu.hpp>
 #include <core/StringResources.hpp>
 #include <ui/FlyoutPresenterStyle.hpp>
 #include <util/Util.hpp>
+
+#include <functional>
+#include <memory>
+#include <string_view>
+#include <utility>
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
@@ -14,7 +21,7 @@ void TrayContextMenu::Initialize(winrt::Microsoft::UI::Xaml::FrameworkElement an
                                  std::function<void()> onBluetooth,
                                  std::function<void()> onExit,
                                  std::function<void()> onClosed) {
-    m_anchor = anchor;
+    m_anchor = std::move(anchor);
 
     using namespace winrt::Microsoft::UI::Xaml::Controls;
     using namespace winrt::Microsoft::UI::Xaml;
@@ -28,7 +35,7 @@ void TrayContextMenu::Initialize(winrt::Microsoft::UI::Xaml::FrameworkElement an
     };
     auto actionState = std::make_shared<MenuActionState>();
     menu.Opened([actionState](auto const&, auto const&) { actionState->Open = true; });
-    menu.Closed([actionState, onClosed](auto const&, auto const&) {
+    menu.Closed([actionState, onClosed = std::move(onClosed)](auto const&, auto const&) {
         actionState->Open = false;
         if (onClosed) onClosed();
         auto pending = std::exchange(actionState->Pending, nullptr);
@@ -40,46 +47,36 @@ void TrayContextMenu::Initialize(winrt::Microsoft::UI::Xaml::FrameworkElement an
         else if (action)
             action();
     };
-    MenuFlyoutItem settingsItem;
-    settingsItem.Text(winrt::hstring(_("OpenSettings")));
-    FontIcon settingsIcon;
-    settingsIcon.Glyph(L"\xE713");
-    settingsItem.Icon(settingsIcon);
-    settingsItem.Click([onSettings, invokeAfterClose](auto, auto) { invokeAfterClose(onSettings); });
-
-    MenuFlyoutItem btItem;
-    MenuFlyoutItem helpItem;
-    helpItem.Text(winrt::hstring(_("Settings_Help")));
-    FontIcon helpIcon;
-    helpIcon.Glyph(L"\xE897");
-    helpItem.Icon(helpIcon);
-    helpItem.Click([onHelp, invokeAfterClose](auto, auto) { invokeAfterClose(onHelp); });
-    btItem.Text(winrt::hstring(_("BluetoothSettings")));
-    FontIcon btIcon;
-    btIcon.Glyph(L"\xE702");
-    btItem.Icon(btIcon);
-    btItem.Click([onBluetooth, invokeAfterClose](auto, auto) { invokeAfterClose(onBluetooth); });
+    auto addItem = [this, invokeAfterClose](std::string_view key, wchar_t const* glyph, std::function<void()> action) {
+        MenuFlyoutItem item;
+        item.Text(winrt::hstring(m_strings->Get(key)));
+        FontIcon icon;
+        icon.Glyph(glyph);
+        item.Icon(icon);
+        item.Click(
+            [action = std::move(action), invokeAfterClose](auto const&, auto const&) { invokeAfterClose(action); });
+        return item;
+    };
+    auto settingsItem = addItem("OpenSettings", L"\xE713", std::move(onSettings));
+    auto helpItem = addItem("Settings_Help", L"\xE897", std::move(onHelp));
+    auto btItem = addItem("BluetoothSettings", L"\xE702", std::move(onBluetooth));
 
     MenuFlyoutSeparator sep;
 
-    MenuFlyoutItem exitItem;
-    exitItem.Text(winrt::hstring(_("Exit")));
-    FontIcon exitIcon;
-    exitIcon.Glyph(L"\xE8BB");
-    exitItem.Icon(exitIcon);
-    exitItem.Click([onExit, invokeAfterClose](auto, auto) { invokeAfterClose(onExit); });
+    auto exitItem = addItem("Exit", L"\xE8BB", std::move(onExit));
 
     menu.Items().Append(settingsItem);
     menu.Items().Append(helpItem);
     menu.Items().Append(btItem);
     menu.Items().Append(sep);
     menu.Items().Append(exitItem);
-    menu.Opened(
-        [settingsItem = winrt::make_weak(settingsItem), backdropEffects = m_useSystemBackdropEffects](auto&, auto&) {
-            if (auto item = settingsItem.get()) {
-                apc::ui::ApplyFlyoutPresenterStyle(item, backdropEffects->load(std::memory_order_relaxed));
-            }
-        });
+    menu.Opened([settingsItem = winrt::make_weak(settingsItem),
+                 backdropEffects = m_useSystemBackdropEffects,
+                 log = m_log](auto&, auto&) {
+        if (auto item = settingsItem.get()) {
+            apc::ui::ApplyFlyoutPresenterStyle(item, backdropEffects->load(std::memory_order_relaxed), log);
+        }
+    });
 
     m_menu = menu;
     m_settingsItem = settingsItem;
@@ -89,27 +86,23 @@ void TrayContextMenu::Initialize(winrt::Microsoft::UI::Xaml::FrameworkElement an
 }
 
 void TrayContextMenu::ApplyLanguage() {
-    if (m_settingsItem) m_settingsItem.Text(winrt::hstring(_("OpenSettings")));
-    if (m_helpItem) m_helpItem.Text(winrt::hstring(_("Settings_Help")));
-    if (m_bluetoothItem) m_bluetoothItem.Text(winrt::hstring(_("BluetoothSettings")));
-    if (m_exitItem) m_exitItem.Text(winrt::hstring(_("Exit")));
-}
-
-void TrayContextMenu::SetSystemBackdropEffectsEnabled(bool enabled) noexcept {
-    m_useSystemBackdropEffects->store(enabled, std::memory_order_relaxed);
+    if (m_settingsItem) m_settingsItem.Text(winrt::hstring(m_strings->Get("OpenSettings")));
+    if (m_helpItem) m_helpItem.Text(winrt::hstring(m_strings->Get("Settings_Help")));
+    if (m_bluetoothItem) m_bluetoothItem.Text(winrt::hstring(m_strings->Get("BluetoothSettings")));
+    if (m_exitItem) m_exitItem.Text(winrt::hstring(m_strings->Get("Exit")));
 }
 
 bool TrayContextMenu::ShowAt(winrt::Windows::Foundation::Point point) {
     if (!m_menu) {
-        DebugTrace(L"[TrayContextMenu] ERROR: m_menu is null");
+        m_log.Trace(L"[TrayContextMenu] ERROR: m_menu is null");
         return false;
     }
     if (!m_anchor) {
-        DebugTrace(L"[TrayContextMenu] ERROR: m_anchor is null");
+        m_log.Trace(L"[TrayContextMenu] ERROR: m_anchor is null");
         return false;
     }
     if (!m_anchor.XamlRoot()) {
-        DebugTrace(L"[TrayContextMenu] ERROR: m_anchor.XamlRoot() is null");
+        m_log.Trace(L"[TrayContextMenu] ERROR: m_anchor.XamlRoot() is null");
         return false;
     }
     m_menu.XamlRoot(m_anchor.XamlRoot());

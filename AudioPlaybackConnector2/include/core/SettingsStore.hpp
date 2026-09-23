@@ -1,6 +1,8 @@
 #pragma once
 
 #include <core/SettingsData.hpp>
+#include <core/SettingsStoreWakeup.hpp>
+#include <util/Logger.hpp>
 
 #include <chrono>
 #include <cstdint>
@@ -10,6 +12,10 @@
 #include <optional>
 #include <string>
 #include <string_view>
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Types /////////////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 struct SettingsSnapshot {
     SettingsData Data;
@@ -33,15 +39,11 @@ struct DeviceAliasResult {
     bool DeviceExists = false;
 };
 
-struct RecordConnectedDeviceResult {
-    SettingsMutationResult Mutation;
-    bool AddedDevice = false;
-    bool PresentationChanged = false;
-    bool ConnectOnStartup = false;
-    bool EffectiveReconnectOnConnectionLoss = false;
-};
-
 enum class SettingsShutdownMode { Flush, DiscardStartupFailure };
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Storage Boundary //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 // The only persistence boundary. Production uses complete file writes and atomic replacement;
 // deterministic tests can block or fail this boundary without timing the store worker.
@@ -50,7 +52,8 @@ public:
     virtual ~SettingsStoreStorage() = default;
     [[nodiscard]] virtual std::optional<std::string> Read(std::filesystem::path const& path) = 0;
     [[nodiscard]] virtual bool WriteAtomically(std::filesystem::path const& path, std::string_view bytes) = 0;
-    virtual void PreserveCorrupt(std::filesystem::path const& path) noexcept = 0;
+    // True only when the original bytes have been preserved away from the writable path.
+    [[nodiscard]] virtual bool PreserveCorrupt(std::filesystem::path const& path) noexcept = 0;
 };
 
 // Owns all mutable settings and its sole persistence worker. Public operations are thread-safe.
@@ -58,6 +61,10 @@ public:
 // committing thread or an already-active publisher. Reentrant changes are queued and drained in revision order.
 class SettingsStore final {
 public:
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Subscription //////////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
+
     class Subscription final {
     public:
         Subscription() = default;
@@ -81,21 +88,24 @@ public:
 
     using SnapshotCallback = std::function<void(SettingsSnapshot const&)>;
 
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Constructors /////////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
+
     explicit SettingsStore(std::filesystem::path persistenceDirectory = {},
-                           std::shared_ptr<SettingsStoreStorage> storage = {});
+                           std::shared_ptr<SettingsStoreStorage> storage = {},
+                           std::shared_ptr<SettingsStoreWakeup> wakeup = {},
+                           util::LogSink log = {});
     ~SettingsStore();
     SettingsStore(SettingsStore const&) = delete;
     SettingsStore& operator=(SettingsStore const&) = delete;
 
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
+
     void Load();
     [[nodiscard]] SettingsSnapshot Snapshot() const;
-#if defined(APC_SETTINGS_STORE_TESTING)
-    // Test-only observability for the deterministic worker-parking regression.
-    [[nodiscard]] std::uint64_t WorkerLoopIterationsForTesting() const noexcept;
-    [[nodiscard]] bool WorkerWaitingForTesting() const noexcept;
-    void FailNextSnapshotCapturesForTesting(unsigned int count) noexcept;
-    [[nodiscard]] std::uint32_t SnapshotCaptureFailuresForTesting() const noexcept;
-#endif
     [[nodiscard]] Subscription Subscribe(SnapshotCallback callback);
 
     [[nodiscard]] SettingsMutationResult SetGlobalConnectOnStartup(bool enabled);
@@ -116,19 +126,28 @@ public:
     [[nodiscard]] SettingsMutationResult SetDefaultDevice(std::wstring_view deviceId);
     [[nodiscard]] SettingsMutationResult ClearDefaultDevice();
     [[nodiscard]] SettingsMutationResult ForgetDevice(std::wstring_view deviceId);
-    [[nodiscard]] RecordConnectedDeviceResult RecordConnectedDevice(std::wstring_view deviceId,
-                                                                    std::wstring_view deviceName);
     [[nodiscard]] SettingsMutationResult
-    RecordUpdateCheckMetadata(std::int64_t unixSeconds, std::optional<std::wstring> notifiedVersion = std::nullopt);
-
+    RecordConnectedDevice(std::wstring_view deviceId, std::wstring_view deviceName, std::wstring usageDay = {});
+    // Rating-prompt usage state; dates are local ISO YYYY-MM-DD days.
+    [[nodiscard]] SettingsMutationResult RecordRatingPromptFirstLaunch(std::wstring today);
+    [[nodiscard]] SettingsMutationResult MarkRatingPromptAsked();
     // A synchronous boundary for suspend and normal shutdown. It waits for the active attempt,
     // then writes the newest captured revision without ever overlapping the background worker.
     // Shutdown has one executor; concurrent callers receive its stored core result and wait for publication
     // drain unless they are the active publisher invoking shutdown from a callback.
     [[nodiscard]] bool FlushNow(unsigned int maximumAttempts = 1) noexcept;
-    [[nodiscard]] bool Shutdown(SettingsShutdownMode mode, unsigned int maximumAttempts = 3) noexcept;
+    // One total budget covers I/O, worker completion, concurrent shutdown and callback drain. False means
+    // incomplete persistence/drain; admission is nevertheless closed. Already-entered storage/callback code
+    // retains its state until it returns. No later completion may change the public settings snapshot.
+    [[nodiscard]] bool Shutdown(SettingsShutdownMode mode,
+                                unsigned int maximumAttempts = 3,
+                                std::chrono::milliseconds timeBudget = std::chrono::seconds(2)) noexcept;
 
 private:
+    /*------------------------------------------------------------------------------------------------------------*/
+    /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
+    /*------------------------------------------------------------------------------------------------------------*/
+
     struct Impl;
     std::shared_ptr<Impl> m_impl;
 };

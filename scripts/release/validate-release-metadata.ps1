@@ -1,32 +1,27 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidatePattern('^\d+\.\d+\.\d+$')]
     [string]$Version
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$packageVersion = "$Version.0"
+Import-Module (Join-Path $PSScriptRoot 'ReleaseVersion.psm1') -Force
+$packageVersion = (Resolve-ReleaseVersion -Tag "v$Version").PackageVersion
 $changelog = [IO.File]::ReadAllText((Resolve-Path 'CHANGELOG.md'))
-if ($changelog -notmatch "(?m)^## \[$([regex]::Escape($Version))\] - \d{4}-\d{2}-\d{2}$") {
+if ($changelog -notmatch "(?m)^## \[$([regex]::Escape($Version))\] - \d{4}-\d{2}-\d{2}\r?$") {
     throw "CHANGELOG.md has no dated [$Version] release section."
 }
 
 [xml]$props = Get-Content -LiteralPath 'Directory.Build.props' -Raw
-$defaultPackageVersion = [string]$props.Project.PropertyGroup.PackageVersion.'#text'
-if ([string]::IsNullOrWhiteSpace($defaultPackageVersion)) {
-    $defaultPackageVersion = [string]$props.Project.PropertyGroup.PackageVersion
-}
-if ($defaultPackageVersion -ne $packageVersion) {
-    throw "Directory.Build.props defaults to $defaultPackageVersion, expected $packageVersion."
-}
+$versionNodes = @($props.SelectNodes('/Project/PropertyGroup/PackageVersion'))
+if ($versionNodes.Count -ne 0) { throw 'Directory.Build.props must not declare an independent PackageVersion.' }
 
 [xml]$manifest = Get-Content -LiteralPath 'AudioPlaybackConnector2 (Package)/Package.appxmanifest' -Raw
 $manifestIdentity = $manifest.SelectSingleNode("/*[local-name()='Package']/*[local-name()='Identity']")
-if ($null -eq $manifestIdentity -or $manifestIdentity.Version -ne $packageVersion) {
-    throw "Package.appxmanifest must contain version $packageVersion."
+if ($null -eq $manifestIdentity -or $manifestIdentity.Version -ne '0.0.0.0') {
+    throw 'Package.appxmanifest must use the 0.0.0.0 template version; the build supplies the release version.'
 }
 
 $whatsNew = Get-Content -LiteralPath 'store/whats-new.json' -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable

@@ -11,33 +11,33 @@ on:
 jobs:
   version:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     outputs:
       semver: ${{ steps.version.outputs.semver }}
       tag: ${{ steps.version.outputs.tag }}
       package_version: ${{ steps.version.outputs.package_version }}
     steps:
+    - name: Checkout
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
     - name: Validate version
       id: version
       shell: pwsh
       env:
         INPUT_SEMVER: ${{ inputs.semver }}
       run: |
-        $semver = $env:INPUT_SEMVER
-        if ($semver -notmatch '^\d+\.\d+\.\d+$') {
-          throw 'Version must look like 1.2.3.'
-        }
-        foreach ($part in $semver.Split('.')) {
-          [uint64]$component = 0
-          if (-not [uint64]::TryParse($part, [ref]$component) -or $component -gt [uint16]::MaxValue) {
-            throw 'Version contains an invalid MSIX component.'
-          }
-        }
-        "semver=$semver" >> $env:GITHUB_OUTPUT
-        "tag=v$semver" >> $env:GITHUB_OUTPUT
-        "package_version=$semver.0" >> $env:GITHUB_OUTPUT
+        Import-Module ./scripts/release/ReleaseVersion.psm1 -Force
+        $version = Resolve-ReleaseVersion -Tag "v$env:INPUT_SEMVER"
+        "semver=$($version.SemVer)" >> $env:GITHUB_OUTPUT
+        "tag=$($version.Tag)" >> $env:GITHUB_OUTPUT
+        "package_version=$($version.PackageVersion)" >> $env:GITHUB_OUTPUT
 
   build-artifacts:
     needs: version
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/build-release-artifacts.yml
     with:
       source_ref: ${{ github.sha }}

@@ -7,11 +7,19 @@
 #include <functional>
 #include <memory>
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Resource Pressure Snapshot ////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 struct ResourcePressureSnapshot {
     ResourcePressureValues Values;
     std::chrono::steady_clock::time_point ObservedAt{};
     std::uint64_t Sequence = 0;
 };
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Resource Pressure Monitor /////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 class ResourcePressureMonitor {
 public:
@@ -23,7 +31,8 @@ public:
 
     using Callback = std::function<void(ResourcePressureSnapshot const&)>;
 
-    explicit ResourcePressureMonitor(Callback callback, Config config = {});
+    explicit ResourcePressureMonitor(Callback callback) : ResourcePressureMonitor(std::move(callback), Config{}) {}
+    ResourcePressureMonitor(Callback callback, Config config);
     ~ResourcePressureMonitor();
 
     ResourcePressureMonitor(ResourcePressureMonitor const&) = delete;

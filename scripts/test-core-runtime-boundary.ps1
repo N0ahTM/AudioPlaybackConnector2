@@ -29,7 +29,9 @@ try {
     New-Item -ItemType Directory -Path $sourceProjectDirectory | Out-Null
     New-Item -ItemType Directory -Path $wildcardDirectory | Out-Null
     Set-Content -LiteralPath $cleanProject -Encoding UTF8 -Value @'
-<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" />
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(VSInstallDir)VC\vcpkg\scripts\buildsystems\msbuild\vcpkg.targets" />
+</Project>
 '@
     Set-Content -LiteralPath $uiProject -Encoding UTF8 -Value @'
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
@@ -141,7 +143,81 @@ try {
     if ($negativeWildcardExitCode -eq 0) {
         throw 'Boundary verifier accepted an unverifiable first-party wildcard import.'
     }
+
+    $includeProject = Join-Path $testDirectory 'IncludeContext.vcxproj'
+    $nativeHeaders = Join-Path $testDirectory 'NativeHeaders'
+    $guiHeaders = Join-Path $testDirectory 'AudioPlaybackConnector2/include'
+    New-Item -ItemType Directory -Path $nativeHeaders, $guiHeaders -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $testDirectory 'include-context.cpp') -Value '#include <pch.h>'
+    Set-Content -LiteralPath (Join-Path $nativeHeaders 'pch.h') -Value '#include <cstdint>'
+    Set-Content -LiteralPath (Join-Path $guiHeaders 'pch.h') -Value '#include <winrt/Microsoft.UI.Xaml.h>'
+    Set-Content -LiteralPath $includeProject -Value @'
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemDefinitionGroup><ClCompile>
+    <AdditionalIncludeDirectories>$(ProjectDir)NativeHeaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+  </ClCompile></ItemDefinitionGroup>
+  <ItemGroup><ClCompile Include="$(MSBuildProjectDirectory)\include-context.cpp" /></ItemGroup>
+</Project>
+'@
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $resolvedVerifier -ProjectPath $includeProject *> $null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Boundary verifier ignored the declaring project include path or misresolved an absolute source path.'
+    }
+    Set-Content -LiteralPath (Join-Path $nativeHeaders 'pch.h') -Value '#include <winrt/Microsoft.UI.Xaml.h>'
+    $ErrorActionPreference = 'Continue'
+    $includeFailure = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $resolvedVerifier -ProjectPath $includeProject 2>&1
+    $negativeIncludeExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousErrorPreference
+    if ($negativeIncludeExitCode -eq 0 -or ($includeFailure -join ' ') -notmatch 'forbidden\s+XAML\s+dependency') {
+        throw "Boundary verifier failed to report a forbidden include (exit $negativeIncludeExitCode): $($includeFailure -join ' ')"
+    }
+    $sharedSource = Join-Path $testDirectory 'shared.cpp'
+    $sharedItems = Join-Path $testDirectory 'SharedSources.props'
+    $libraryProject = Join-Path $testDirectory 'Library.vcxproj'
+    $consumerProject = Join-Path $testDirectory 'Consumer.vcxproj'
+    Set-Content -LiteralPath $sharedSource -Value 'int answer() { return 42; }'
+    Set-Content -LiteralPath $sharedItems -Value @'
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup><ClCompile Include="shared.cpp" /></ItemGroup>
+</Project>
+'@
+    Set-Content -LiteralPath $libraryProject -Value @'
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="SharedSources.props" />
+</Project>
+'@
+    Set-Content -LiteralPath $consumerProject -Value @'
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup><ProjectReference Include="Library.vcxproj" /></ItemGroup>
+  <Import Project="SharedSources.props" />
+</Project>
+'@
+    $ErrorActionPreference = 'Continue'
+    $duplicateFailure = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $resolvedVerifier -ProjectPath $consumerProject 2>&1
+    $duplicateExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousErrorPreference
+    if ($duplicateExitCode -eq 0 -or ($duplicateFailure -join ' ') -notmatch 'source\s+compiled\s+more\s+than\s+once') {
+        throw "Boundary verifier missed duplicate compilation through shared imports: $($duplicateFailure -join ' ')"
+    }
+    Set-Content -LiteralPath $consumerProject -Value @'
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ProjectReference Include="Library.vcxproj" />
+    <ClInclude Include="shared.cpp" />
+  </ItemGroup>
+</Project>
+'@
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $resolvedVerifier -ProjectPath $consumerProject *> $null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Boundary verifier rejected a source referenced for browsing but compiled only by the library.'
+    }
 } finally {
+    $resolvedTestDirectory = [System.IO.Path]::GetFullPath($testDirectory)
+    $temporaryRoot = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\')
+    if ([System.IO.Path]::GetDirectoryName($resolvedTestDirectory) -ne $temporaryRoot -or
+        [System.IO.Path]::GetFileName($resolvedTestDirectory) -notlike 'apc-boundary-*') {
+        throw 'Refusing to remove a test directory outside its temporary root.'
+    }
     Remove-Item -LiteralPath $testDirectory -Recurse -Force -ErrorAction SilentlyContinue
 }
 

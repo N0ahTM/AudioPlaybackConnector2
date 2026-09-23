@@ -3,6 +3,7 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
+Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.Security
 
 function Read-AppPackage {
@@ -144,6 +145,122 @@ function Read-AppBundle {
     }
 }
 
+function Assert-AppBundleNotices {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)] [string]$BundlePath,
+        [Parameter(Mandatory = $true)] [string]$SourceDirectory
+    )
+
+    $bundle = Read-AppBundle -Path $BundlePath
+    $expectedHashes = @{}
+    foreach ($name in @('LICENSE', 'THIRD_PARTY_NOTICES.md')) {
+        $expectedHashes[$name] = (Get-FileHash -LiteralPath (Join-Path $SourceDirectory $name) -Algorithm SHA256).Hash
+    }
+    $archive = [IO.Compression.ZipFile]::OpenRead($bundle.Metadata.Path)
+    try {
+        foreach ($packageName in $bundle.Metadata.ApplicationPackages) {
+            $entries = @($archive.Entries | Where-Object { [Uri]::UnescapeDataString($_.FullName) -ieq $packageName })
+            if ($entries.Count -ne 1) { throw "Application package '$packageName' must occur exactly once in the bundle." }
+            $stream = $entries[0].Open()
+            try {
+                $package = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Read, $true)
+                try {
+                    foreach ($name in $expectedHashes.Keys) {
+                        $notices = @($package.Entries | Where-Object { $_.FullName -ieq $name })
+                        if ($notices.Count -ne 1) { throw "Notice '$name' must occur exactly once in '$packageName'." }
+                        $noticeStream = $notices[0].Open()
+                        try {
+                            $actualHash = (Get-FileHash -InputStream $noticeStream -Algorithm SHA256).Hash
+                            if ($actualHash -ne $expectedHashes[$name]) {
+                                throw "Notice '$name' in '$packageName' differs from the release source."
+                            }
+                        } finally { $noticeStream.Dispose() }
+                    }
+                } finally { $package.Dispose() }
+            } finally { $stream.Dispose() }
+        }
+    } finally { $archive.Dispose() }
+}
+
+function Get-AppBundleBinaryHashes {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$BundlePath
+    )
+    $bundle = Read-AppBundle -Path $BundlePath
+    $hashes = @{}
+    $archive = [IO.Compression.ZipFile]::OpenRead($bundle.Metadata.Path)
+    try {
+        for ($index = 0; $index -lt $bundle.Metadata.ApplicationPackages.Count; ++$index) {
+            $architecture = $bundle.Metadata.ApplicationArchitectures[$index]
+            if ($architecture -notin @('x64', 'arm64')) { throw "Unexpected application architecture: $architecture" }
+            $name = $bundle.Metadata.ApplicationPackages[$index]
+            $entries = @($archive.Entries | Where-Object { [Uri]::UnescapeDataString($_.FullName) -ieq $name })
+            if ($entries.Count -ne 1) { throw "Application package must occur exactly once: $name" }
+            $stream = $entries[0].Open()
+            try {
+                $package = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Read, $true)
+                try {
+                    foreach ($path in @('AudioPlaybackConnector2.exe', 'AudioPlaybackConnector2.Control/AudioPlaybackConnector2.Control.exe')) {
+                        $matches = @($package.Entries | Where-Object FullName -IEQ $path)
+                        if ($matches.Count -ne 1) { throw "Expected one packaged executable: $architecture/$path" }
+                        $binary = $matches[0].Open()
+                        try { $actual = (Get-FileHash -InputStream $binary -Algorithm SHA256).Hash }
+                        finally { $binary.Dispose() }
+                        $key = "$architecture/$path"
+                        if ($hashes.ContainsKey($key)) { throw "Duplicate architecture/executable: $key" }
+                        $hashes[$key] = $actual
+                    }
+                } finally { $package.Dispose() }
+            } finally { $stream.Dispose() }
+        }
+    } finally { $archive.Dispose() }
+    return $hashes
+}
+
+function Assert-AppBundleBinaries {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$BundlePath,
+        [Parameter(Mandatory)] [string]$ReferenceBundlePath
+    )
+    $expected = Get-AppBundleBinaryHashes -BundlePath $ReferenceBundlePath
+    $actual = Get-AppBundleBinaryHashes -BundlePath $BundlePath
+    if ((($expected.Keys | Sort-Object) -join ',') -cne (($actual.Keys | Sort-Object) -join ',')) {
+        throw 'Package channels do not contain the same architecture/executable set.'
+    }
+    foreach ($key in $expected.Keys) {
+        if ($actual[$key] -ne $expected[$key]) { throw "Package channels contain different binary bytes: $key" }
+    }
+}
+
+function Assert-AppBundleRatingPromptFeature {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [string]$BundlePath,
+        [Parameter(Mandatory)] [bool]$ExpectedEnabled
+    )
+    $bundle = Read-AppBundle -Path $BundlePath
+    $archive = [IO.Compression.ZipFile]::OpenRead($bundle.Metadata.Path)
+    try {
+        foreach ($name in $bundle.Metadata.ApplicationPackages) {
+            $entries = @($archive.Entries | Where-Object { [Uri]::UnescapeDataString($_.FullName) -ieq $name })
+            if ($entries.Count -ne 1) { throw "Application package must occur exactly once: $name" }
+            $stream = $entries[0].Open()
+            try {
+                $package = [IO.Compression.ZipArchive]::new($stream, [IO.Compression.ZipArchiveMode]::Read, $true)
+                try {
+                    $markers = @($package.Entries | Where-Object FullName -CEQ 'StoreRatingPrompt.enabled')
+                    if ($markers.Count -ne [int]$ExpectedEnabled) {
+                        throw "Rating-prompt feature marker mismatch in '$name': found $($markers.Count), expected $([int]$ExpectedEnabled)."
+                    }
+                } finally { $package.Dispose() }
+            } finally { $stream.Dispose() }
+        }
+    } finally { $archive.Dispose() }
+}
+
 function Get-AppPackageSigner {
     [CmdletBinding()]
     param(
@@ -251,4 +368,4 @@ function Test-AppPackageIntegrity {
     }
 }
 
-Export-ModuleMember -Function Read-AppPackage, Read-AppBundle, Test-AppPackageIntegrity
+Export-ModuleMember -Function Read-AppPackage, Read-AppBundle, Test-AppPackageIntegrity, Assert-AppBundleNotices, Assert-AppBundleBinaries, Assert-AppBundleRatingPromptFeature

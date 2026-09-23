@@ -1,11 +1,16 @@
 #include <pch.h>
+#include <winrt/Windows.Foundation.h>
 #include <ui/FlyoutPresenterStyle.hpp>
 #include <util/Util.hpp>
+
+#include <winrt/Microsoft.UI.Xaml.Controls.h>
+#include <winrt/Microsoft.UI.Xaml.Media.h>
 
 namespace apc::ui {
 
 void ApplyFlyoutPresenterStyle(winrt::Microsoft::UI::Xaml::DependencyObject const& content,
-                               bool useSystemBackdropEffects) noexcept {
+                               bool useSystemBackdropEffects,
+                               util::LogSink const& log) noexcept {
     try {
         auto parent = winrt::Microsoft::UI::Xaml::Media::VisualTreeHelper::GetParent(content);
         while (parent) {
@@ -51,11 +56,11 @@ void ApplyFlyoutPresenterStyle(winrt::Microsoft::UI::Xaml::DependencyObject cons
             parent = winrt::Microsoft::UI::Xaml::Media::VisualTreeHelper::GetParent(parent);
         }
     } catch (winrt::hresult_error const& ex) {
-        util::DebugTraceException(L"[FlyoutPresenterStyle] ERROR: ApplyFlyoutPresenterStyle failed", ex);
+        log.Exception(L"[FlyoutPresenterStyle] ERROR: ApplyFlyoutPresenterStyle failed", ex);
     } catch (std::exception const& ex) {
-        util::DebugTraceException(L"[FlyoutPresenterStyle] ERROR: ApplyFlyoutPresenterStyle failed", ex);
+        log.Exception(L"[FlyoutPresenterStyle] ERROR: ApplyFlyoutPresenterStyle failed", ex);
     } catch (...) {
-        util::DebugTraceUnknownException(L"[FlyoutPresenterStyle] ERROR: ApplyFlyoutPresenterStyle failed");
+        log.UnknownException(L"[FlyoutPresenterStyle] ERROR: ApplyFlyoutPresenterStyle failed");
     }
 }
 

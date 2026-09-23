@@ -1,16 +1,20 @@
 #pragma once
 
+#include <core/StringResources.hpp>
+#include <memory>
+
+#include <util/Logger.hpp>
+
+// Win32 aliases GetCurrentTime to GetTickCount; WinUI uses it as a method name.
+#undef GetCurrentTime
+
 #include <SettingsWindow.g.h>
-#include <app/StartupTaskCoordinator.hpp>
-#include <services/SettingsController.hpp>
-#include <services/UpdateService.hpp>
+#include <app/AppController.hpp>
 #include <ui/SettingsDiagnosticsReport.hpp>
 #include <ui/WindowPlacement.hpp>
 
 #include <optional>
 #include <winrt/Microsoft.UI.Xaml.Media.Animation.h>
-
-class UpdateCoordinator;
 
 namespace winrt::AudioPlaybackConnector2::implementation {
 struct SettingsWindow : SettingsWindowT<SettingsWindow> {
@@ -21,10 +25,6 @@ struct SettingsWindow : SettingsWindowT<SettingsWindow> {
 
     void RootGrid_Loaded(winrt::Windows::Foundation::IInspectable const& sender,
                          winrt::Microsoft::UI::Xaml::RoutedEventArgs const& e);
-    void CheckForUpdatesButton_Click(winrt::Windows::Foundation::IInspectable const& sender,
-                                     winrt::Microsoft::UI::Xaml::RoutedEventArgs const& e);
-    void OpenAppInstallerButton_Click(winrt::Windows::Foundation::IInspectable const& sender,
-                                      winrt::Microsoft::UI::Xaml::RoutedEventArgs const& e);
     void ResetWindowPlacementButton_Click(winrt::Windows::Foundation::IInspectable const& sender,
                                           winrt::Microsoft::UI::Xaml::RoutedEventArgs const& e);
     void RepositoryButton_Click(winrt::Windows::Foundation::IInspectable const& sender,
@@ -49,10 +49,11 @@ struct SettingsWindow : SettingsWindowT<SettingsWindow> {
                                          winrt::Microsoft::UI::Xaml::SizeChangedEventArgs const& e);
     void LanguageComboBox_SelectionChanged(winrt::Windows::Foundation::IInspectable const& sender,
                                            winrt::Microsoft::UI::Xaml::Controls::SelectionChangedEventArgs const& e);
-    void SetSettingsController(std::shared_ptr<ISettingsController> controller);
-    void SetStartupTaskCoordinator(std::shared_ptr<StartupTaskCoordinator> coordinator);
+    void SetAppController(std::shared_ptr<apc::app::AppController> controller,
+                          util::LogSink log,
+                          std::shared_ptr<StringResources const> strings);
     void SetInitialSettingsSnapshot(SettingsData snapshot);
-    void SetUpdateCoordinator(std::shared_ptr<UpdateCoordinator> coordinator);
+    void ApplyLanguage(std::wstring_view language);
     void SetDefaultPlacement(util::SettingsWindowPlacement placement);
     void ShowHelpPage();
     void SetTargetPlacement(util::SettingsWindowPlacement placement);
@@ -89,7 +90,6 @@ private:
     [[nodiscard]] util::SettingsWindowPlacement CalculateAdaptivePlacement();
     [[nodiscard]] double MeasureVisibleContentHeight(double contentWidth);
     [[nodiscard]] std::wstring BuildReportBugUri() const;
-    void SetUpdateCheckBusy(bool busy);
     void SetStartupTaskBusy(bool busy);
     void ApplyStartupTaskSnapshot(StartupTaskSnapshot const& snapshot) noexcept;
     static winrt::fire_and_forget CopyDiagnosticsAsync(winrt::weak_ref<SettingsWindow> weak,
@@ -98,22 +98,20 @@ private:
                                                        std::size_t connectedDeviceCount,
                                                        std::filesystem::path logPath,
                                                        apc::ui::SettingsDiagnosticsReportContext context,
-                                                       std::uint64_t requestId);
-    void ShowUpdateCheckResult(UpdateCheckResult const& result);
-    void StartWithWindowsToggle_Toggled(winrt::Windows::Foundation::IInspectable const& sender,
-                                        winrt::Microsoft::UI::Xaml::RoutedEventArgs const& e);
-    winrt::fire_and_forget RunManualUpdateCheckAsync();
+                                                       std::uint64_t requestId,
+                                                       util::LogSink log);
     util::SettingsWindowPlacement m_defaultPlacement = util::CalculateSettingsWindowPlacement();
     util::SettingsWindowPlacement m_targetPlacement = util::CalculateSettingsWindowPlacement();
     winrt::Microsoft::UI::Dispatching::DispatcherQueueTimer m_placementSaveTimer{nullptr};
-    std::atomic_uint64_t m_updateCheckRequestId = 0;
     std::uint64_t m_lastStartupTaskPublication = 0;
     std::uint64_t m_diagnosticsCopyRequestId = 0;
     bool m_diagnosticsCopyInProgress = false;
-    std::shared_ptr<ISettingsController> m_settingsController;
-    std::shared_ptr<StartupTaskCoordinator> m_startupTaskCoordinator;
-    StartupTaskCoordinator::HandlerToken m_startupTaskHandlerToken = 0;
-    std::shared_ptr<UpdateCoordinator> m_updateCoordinator;
+    util::LogSink m_log;
+    std::shared_ptr<StringResources const> m_strings;
+    std::shared_ptr<apc::app::AppController> m_appController;
+    apc::app::AppController::Subscription m_appSubscription;
+    std::uint64_t m_lastAppRevision = 0;
+    bool m_closed = false;
     std::optional<SettingsData> m_initialSettingsSnapshot;
     winrt::event_token m_actualThemeChangedToken{};
     SettingsPage m_currentPage = SettingsPage::App;

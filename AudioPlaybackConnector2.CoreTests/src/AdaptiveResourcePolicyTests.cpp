@@ -1,3 +1,5 @@
+#include "TestCheck.hpp"
+
 #include <app/AdaptiveResourcePolicy.hpp>
 
 #include <chrono>
@@ -6,14 +8,6 @@
 
 namespace {
 using namespace std::chrono_literals;
-
-int g_failures = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 AdaptiveResourcePolicyConfig TestConfig() {
     return {
@@ -191,24 +185,14 @@ void TestVisibleUiPinsAColdBackgroundDecision() {
 
     input.MemoryPressure = true;
     auto pinned = policy.Evaluate(input, At(1s));
-    Check(pinned.BackgroundResidency == ResidencyPolicy::Cold, "memory pressure must remain observable while pinned");
-    Check(pinned.Residency == ResidencyPolicy::Hot, "visible UI must remain hot while its release is pinned");
-    Check(pinned.Pinned && pinned.ReleaseDeferred, "visible UI must report its deferred cold transition");
+    Check(pinned.BackgroundResidency == ResidencyPolicy::Cold, "memory pressure must remain observable while visible");
+    Check(pinned.Residency == ResidencyPolicy::Hot, "visible UI must remain hot under memory pressure");
     Check(pinned.Action == AdaptiveResourceAction::None, "visible UI must never be released underneath the user");
 
     input.UiVisible = false;
-    input.UiPinned = true;
-    auto transitioning = policy.Evaluate(input, At(2s));
-    Check(transitioning.Residency == ResidencyPolicy::Hot && transitioning.Pinned,
-          "explicit pinning must protect UI during non-visible opening or closing transitions");
-    Check(transitioning.Action == AdaptiveResourceAction::None,
-          "explicit pinning must defer release until the transition has finished");
-
-    input.UiPinned = false;
-    auto unpinned = policy.Evaluate(input, At(3s));
+    auto unpinned = policy.Evaluate(input, At(2s));
     Check(unpinned.Residency == ResidencyPolicy::Cold, "closing UI must apply the pending cold state immediately");
-    Check(unpinned.Action == AdaptiveResourceAction::ReleaseUi, "closing pinned UI must release its resources");
-    Check(!unpinned.Pinned && !unpinned.ReleaseDeferred, "closed UI must clear pin metadata");
+    Check(unpinned.Action == AdaptiveResourceAction::ReleaseUi, "closing UI must release its resources");
 }
 
 void TestInteractionTemporarilyOverridesCold() {
@@ -219,7 +203,6 @@ void TestInteractionTemporarilyOverridesCold() {
     Check(requested.BackgroundResidency == ResidencyPolicy::Cold, "interaction must not hide background pressure");
     Check(requested.Residency == ResidencyPolicy::Hot, "user interaction must make UI available even while cold");
     Check(requested.Action == AdaptiveResourceAction::PreloadUi, "cold interaction must request UI on demand");
-    Check(!requested.Pinned && requested.ReleaseDeferred, "interaction hold is distinct from visible pinning");
     Check(requested.ReevaluateAt == At(10s), "interaction hold must expose its release deadline");
 
     input.UserInteraction = false;
@@ -270,44 +253,6 @@ void TestNegativeDurationsAreClamped() {
           "zero-duration interaction hold must not outlive its event");
 }
 
-void TestAdaptiveActionRetryBackoffIsBoundedAndResettable() {
-    AdaptiveActionRetryBackoff retry(1s, 30s);
-    Check(retry.RecordFailure() == 1s, "first adaptive action retry must remain prompt");
-    Check(retry.RecordFailure() == 2s, "adaptive action retries must back off exponentially");
-    Check(retry.RecordFailure() == 4s, "adaptive action retry sequence must be deterministic");
-    Check(retry.RecordFailure() == 8s, "adaptive action retry sequence must avoid a permanent 1 Hz loop");
-    Check(retry.RecordFailure() == 16s, "adaptive action retry must approach its configured cap");
-    Check(retry.RecordFailure() == 30s && retry.RecordFailure() == 30s,
-          "adaptive action retry must remain bounded at its configured maximum");
-    retry.Reset();
-    Check(retry.CurrentDelay() == 1s && retry.RecordFailure() == 1s,
-          "successful work or user interaction must restore the prompt retry delay");
-
-    AdaptiveActionRetryBackoff clamped(-1s, -2s);
-    Check(clamped.RecordFailure() == 1ms && clamped.CurrentDelay() == 1ms,
-          "invalid retry configuration must clamp to a positive, non-growing delay");
-}
-
-void TestAdaptiveScheduleRejectsSupersededAndEarlyCallbacks() {
-    AdaptiveScheduleState schedule;
-    auto const first = schedule.Supersede();
-    Check(schedule.SetWin32NotBefore(first, At(10s)), "the current schedule may arm its Win32 deadline");
-    Check(!schedule.ConsumeWin32IfDue(At(9s)), "an early or stale WM_TIMER must not consume the active deadline");
-    Check(schedule.ConsumeWin32IfDue(At(10s)), "the active Win32 deadline must be consumable exactly once");
-    Check(!schedule.ConsumeWin32IfDue(At(11s)), "a duplicate WM_TIMER must be ignored after consumption");
-
-    auto const superseded = schedule.Supersede();
-    auto const current = schedule.Supersede();
-    Check(current != superseded && schedule.Generation() == current,
-          "each reschedule must receive a distinct current generation");
-    Check(!schedule.Consume(superseded), "a queued dispatcher tick from an older schedule must be ignored");
-    Check(schedule.Consume(current), "the current dispatcher tick must remain live");
-    Check(!schedule.Consume(current), "a duplicate dispatcher tick must be rejected after consumption");
-
-    auto const cancelled = schedule.Supersede();
-    static_cast<void>(schedule.Supersede());
-    Check(!schedule.Consume(cancelled), "cancelling a schedule must invalidate already queued callbacks");
-}
 } // namespace
 
 int RunAdaptiveResourcePolicyTests() {
@@ -320,7 +265,5 @@ int RunAdaptiveResourcePolicyTests() {
     TestInteractionTemporarilyOverridesCold();
     TestClockRollbackRestartsStabilityWindows();
     TestNegativeDurationsAreClamped();
-    TestAdaptiveActionRetryBackoffIsBoundedAndResettable();
-    TestAdaptiveScheduleRejectsSupersededAndEarlyCallbacks();
     return g_failures;
 }

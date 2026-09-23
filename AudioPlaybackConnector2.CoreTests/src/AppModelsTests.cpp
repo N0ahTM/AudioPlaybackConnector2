@@ -1,5 +1,6 @@
+#include "TestCheck.hpp"
+
 #include <app/AppModels.hpp>
-#include <ui/TrayPrimaryActivation.hpp>
 
 #include <chrono>
 #include <iostream>
@@ -8,7 +9,6 @@
 
 namespace {
 
-using apc::app::AppCommand;
 using apc::app::AppCommandContext;
 using apc::app::AppCommandKind;
 using apc::app::AppEvent;
@@ -17,14 +17,6 @@ using apc::app::DeviceConnectionState;
 using apc::app::DeviceSelector;
 using apc::core::DeviceId;
 using apc::core::DeviceIdHash;
-
-int g_failures = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 void TestDeviceIdValidationAndValueSemantics() {
     auto id = DeviceId::TryCreate(L"Bluetooth#Exact Case ");
@@ -52,8 +44,6 @@ void TestSelectorNormalizationAndContracts() {
     auto exact = DeviceSelector::ById(L"device-a");
     Check(exact.has_value() && exact->Kind() == apc::app::DeviceSelectorKind::Id,
           "an exact ID selector must retain its selector kind");
-    Check(exact && exact->Id() && exact->Id()->View() == L"device-a",
-          "an exact ID selector must expose a strong ID copy");
     Check(exact && exact->IdText() == L"device-a", "an exact ID selector must preserve external ID text");
     Check(exact && exact->Query().empty(), "an exact ID selector must not expose a text query");
 
@@ -80,14 +70,14 @@ void TestSelectorNormalizationAndContracts() {
     auto longExternalId = DeviceSelector::ById(std::wstring(513, L'x'));
     Check(longExternalId && longExternalId->IdText().size() == 513,
           "an external ID selector must retain valid P01 text beyond the internal DeviceId bound");
-    Check(longExternalId && !longExternalId->Id(),
+    Check(longExternalId && !DeviceId::TryCreate(longExternalId->IdText()),
           "an external ID beyond the settings bound must not masquerade as a validated DeviceId");
 
     auto last = DeviceSelector::Last();
     auto defaultDevice = DeviceSelector::Default();
-    Check(last.Kind() == apc::app::DeviceSelectorKind::Last && !last.Id() && last.Query().empty(),
+    Check(last.Kind() == apc::app::DeviceSelectorKind::Last && last.IdText().empty() && last.Query().empty(),
           "the last selector must have no payload");
-    Check(defaultDevice.Kind() == apc::app::DeviceSelectorKind::Default && !defaultDevice.Id() &&
+    Check(defaultDevice.Kind() == apc::app::DeviceSelectorKind::Default && defaultDevice.IdText().empty() &&
               defaultDevice.Query().empty(),
           "the default selector must have no payload");
 }
@@ -97,49 +87,15 @@ void TestCommandContractsAndNormalizedResults() {
     Check(exact.has_value(), "command contract fixture must have a valid target");
     if (!exact) return;
 
-    AppCommand connect{AppCommandKind::Connect, exact, {}};
-    Check(connect.IsWellFormed(), "connect with an exact target must be well formed");
-
-    AppCommand alias{AppCommandKind::SetAlias, exact, L"Living room"};
-    Check(alias.IsWellFormed(), "alias set with an explicit target and one-line alias must be well formed");
-    AppCommand longAlias{AppCommandKind::SetAlias, exact, std::wstring(129, L'x')};
-    Check(longAlias.IsWellFormed(),
-          "alias set must retain valid P01 text beyond the persisted alias bound for downstream validation");
-    AppCommand oversizedAlias{
-        AppCommandKind::SetAlias, exact, std::wstring(apc::app::c_maxAppCommandTextCharacters + 1, L'x')};
-    Check(!oversizedAlias.IsWellFormed(), "alias set must reject text beyond the P01 payload bound");
-    AppCommand invalidAliasUtf16{AppCommandKind::SetAlias, exact, std::wstring(1, static_cast<wchar_t>(0xD800))};
-    Check(invalidAliasUtf16.IsWellFormed(),
-          "command grammar must retain bounded invalid UTF-16 accepted by the existing wire validator");
-
-    AppCommand invalidAlias{AppCommandKind::SetAlias, exact, L"line\nwrapped"};
-    Check(!invalidAlias.IsWellFormed(), "alias set must reject line breaks before persistence or transport");
-    AppCommand invalidAliasNul{AppCommandKind::SetAlias, exact, std::wstring{L"abc\0nul", 7}};
-    Check(!invalidAliasNul.IsWellFormed(), "alias set must reject embedded NUL");
-
-    AppCommand invalidDefault{AppCommandKind::SetDefault, DeviceSelector::Last(), {}};
-    Check(!invalidDefault.IsWellFormed(), "default set must reject implicit last-device selection");
-
-    AppCommand invalidStatus{AppCommandKind::Status, exact, {}};
-    Check(!invalidStatus.IsWellFormed(), "query commands must reject an unexpected target");
-
-    AppCommand toggle{AppCommandKind::ToggleLast, DeviceSelector::Default(), {}};
-    Check(toggle.IsWellFormed(), "toggle-last must retain its default-device selector");
-    AppCommand toggleLast{AppCommandKind::ToggleLast, DeviceSelector::Last(), {}};
-    Check(toggleLast.IsWellFormed(), "toggle-last must retain its last-device selector");
-    AppCommand missingToggleTarget{AppCommandKind::ToggleLast, {}, {}};
-    Check(!missingToggleTarget.IsWellFormed(), "toggle-last must reject a missing selector");
-
-    auto trayActivation = apc::ui::MakeTrayPrimaryActivationCommand();
-    Check(trayActivation.IsWellFormed() &&
-              trayActivation.PickerOpenMode == apc::app::DevicePickerOpenMode::ToggleIfOpen,
-          "the tray activation command must allow toggle mode only for show-picker");
-    AppCommand invalidPickerMode{AppCommandKind::Status, {}, {}, apc::app::DevicePickerOpenMode::ToggleIfOpen};
-    Check(!invalidPickerMode.IsWellFormed(), "toggle mode must be rejected on non-picker commands");
-
     apc::app::AppResult success{AppResultCode::Success, AppCommandKind::Connect};
-    success.Device = apc::app::DeviceSnapshot{
-        *exact->Id(), L"Headphones", {}, L"Headphones", DeviceConnectionState::Connected, true, true, false};
+    success.Device = apc::app::DeviceSnapshot{*apc::app::ExternalDeviceId::TryCreate(exact->IdText()),
+                                              L"Headphones",
+                                              {},
+                                              L"Headphones",
+                                              DeviceConnectionState::Connected,
+                                              true,
+                                              true,
+                                              false};
     apc::app::AppResult timeout{AppResultCode::TimedOut, AppCommandKind::Connect};
     Check(success.Succeeded() && !timeout.Succeeded(), "normalized result status must distinguish success and timeout");
     Check(success ==
@@ -186,7 +142,7 @@ void TestSnapshotsEventsAndCommandContextAreValueOnly() {
     const auto externalEventId = apc::app::ExternalDeviceId::TryCreate(longEventId);
     AppEvent longConnected = apc::app::DeviceConnectedEvent{*externalEventId};
     Check(externalEventId && std::get<apc::app::DeviceConnectedEvent>(longConnected).Id.View() == longEventId &&
-              !std::get<apc::app::DeviceConnectedEvent>(longConnected).Id.Bounded(),
+              !DeviceId::TryCreate(std::get<apc::app::DeviceConnectedEvent>(longConnected).Id.View()),
           "typed device events must use the P01 external identity rather than the persistence-bounded DeviceId");
     AppEvent activity = apc::app::DeviceActivityChangedEvent{};
     AppEvent inventory = apc::app::DeviceInventoryChangedEvent{};
@@ -204,10 +160,10 @@ void TestSnapshotsEventsAndCommandContextAreValueOnly() {
 void TestExternalSnapshotIdRetainsProtocolLengthWithoutWeakeningDeviceId() {
     const std::wstring longId(513, L'x');
     const auto external = apc::app::ExternalDeviceId::TryCreate(longId);
-    Check(external && external->View() == longId && !external->Bounded(),
+    Check(external && external->View() == longId && !DeviceId::TryCreate(external->View()),
           "external snapshot IDs must retain valid P01 text while exposing no invalid persistence identity");
     const auto bounded = apc::core::DeviceId::TryCreate(L"device-a");
-    Check(bounded && apc::app::ExternalDeviceId{*bounded}.Bounded() == bounded,
+    Check(bounded && DeviceId::TryCreate(apc::app::ExternalDeviceId{*bounded}.View()) == bounded,
           "external snapshot IDs must round-trip bounded DeviceId values");
 }
 

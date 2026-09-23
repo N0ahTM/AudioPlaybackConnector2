@@ -1,60 +1,35 @@
+#include "TestCheck.hpp"
+#include "AppTestFixture.hpp"
 #include <core/TrayTooltipBuilder.hpp>
 
-#include <iostream>
-#include <vector>
-
 namespace {
-
-int g_failures = 0;
-
-void Check(bool condition, char const* message) {
-    if (condition) return;
-    std::cerr << "FAIL: " << message << '\n';
-    ++g_failures;
+void TestSnapshotLabelsAndPrivacy() {
+    apc::tests::AppFixture fixture;
+    Check(apc::tray::BuildTooltip(L"App", L"Hidden", fixture.Controller.Snapshot()) == L"App",
+          "a tray without connections must show only the application name");
+    (void)fixture.Settings->RememberDevice(L"device", L"Saved name");
+    apc::tests::device::ConnectSuccessfully(*fixture.Devices, L"device");
+    auto const connected = fixture.Controller.Snapshot();
+    Check(apc::tray::BuildTooltip(L"App", L"Hidden", connected) == L"App\nSaved name\n" &&
+              !connected.Tray.HasBusyOperations,
+          "the tray must use the same persisted label and connected state as the application snapshot");
+    (void)fixture.Controller.SetPrivacyMode(true);
+    Check(apc::tray::BuildTooltip(L"App", L"Hidden", fixture.Controller.Snapshot()) == L"App\nHidden\n",
+          "privacy must redact names using the same snapshot as the connections");
+    Check(apc::tray::BuildTooltip(L"App", L"Hidden", connected) == L"App\nSaved name\n",
+          "a retained snapshot must not perform another settings read during rendering");
+    (void)fixture.Controller.SetAlias(L"device", L"Desk");
+    Check(apc::tray::BuildTooltip(L"App", L"Hidden", fixture.Controller.Snapshot()) == L"App\nDesk\n",
+          "explicit aliases remain visible in privacy mode");
+    (void)fixture.Controller.Disconnect(*apc::app::DeviceSelector::ById(L"device"),
+                                        apc::app::AppCommandContext::Detached());
+    auto const disconnecting = fixture.Controller.Snapshot();
+    Check(disconnecting.Tray.HasBusyOperations && apc::tray::BuildTooltip(L"App", L"Hidden", disconnecting) == L"App",
+          "disconnection must remove the label while retaining the busy indicator in the same snapshot");
 }
-
-void TestEmptyTooltip() {
-    Check(apc::tray::BuildTooltip(L"App", L"Hidden", {}, {}, false) == L"App",
-          "an empty connection list must return only the app name");
-}
-
-void TestNamePrecedenceAndFallbacks() {
-    std::vector<DeviceTrayPresentationItem> connected{{L"id-alias", L"Live alias device"},
-                                                      {L"id-persisted", L"Live persisted device"},
-                                                      {L"id-live", L"Live only"},
-                                                      {L"id-only", L""}};
-    std::vector<DeviceSettings> settings{{L"id-alias", L"Persisted alias device", L"Alias"},
-                                         {L"id-persisted", L"Persisted name", L""}};
-
-    Check(apc::tray::BuildTooltip(L"App", L"Hidden", connected, settings, false) ==
-              L"App\nAlias\nPersisted name\nLive only\nid-only\n",
-          "tooltip names must prefer alias, persisted name, live name, then id");
-}
-
-void TestPrivacyAndMissingSettings() {
-    std::vector<DeviceTrayPresentationItem> connected{{L"id-alias", L"Live alias device"},
-                                                      {L"id-private", L"Private device"}};
-    std::vector<DeviceSettings> settings{{L"id-alias", L"", L"Visible alias"}};
-
-    Check(apc::tray::BuildTooltip(L"App", L"Hidden", connected, settings, true) == L"App\nVisible alias\nHidden\n",
-          "privacy mode must retain aliases and redact every other device name");
-    Check(apc::tray::BuildTooltip(L"App", L"Hidden", connected, {}, false) ==
-              L"App\nLive alias device\nPrivate device\n",
-          "missing settings must preserve live device names");
-}
-
-void TestConnectionOrderAndDuplicates() {
-    std::vector<DeviceTrayPresentationItem> connected{{L"id", L"First"}, {L"id", L"Second"}};
-    Check(apc::tray::BuildTooltip(L"App", L"Hidden", connected, {}, false) == L"App\nFirst\nSecond\n",
-          "tooltip construction must preserve connection order and duplicate entries");
-}
-
 } // namespace
 
 int RunTrayTooltipBuilderTests() {
-    TestEmptyTooltip();
-    TestNamePrecedenceAndFallbacks();
-    TestPrivacyAndMissingSettings();
-    TestConnectionOrderAndDuplicates();
+    TestSnapshotLabelsAndPrivacy();
     return g_failures;
 }

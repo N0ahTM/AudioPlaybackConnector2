@@ -1,6 +1,8 @@
 #pragma once
 
 #include <core/DeviceId.hpp>
+#include <app/StartupTaskSnapshot.hpp>
+#include <core/SettingsData.hpp>
 
 #include <chrono>
 #include <cstddef>
@@ -15,16 +17,20 @@
 
 namespace apc::app {
 
-// Decoded command text is bounded by the existing P01 64 KiB payload limit.
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Identity and Selectors ////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
+// Decoded command text is bounded by the control protocol's 64 KiB payload limit.
 // Persistence-specific limits remain in their owning settings boundary.
 inline constexpr std::size_t c_maxAppCommandTextCharacters = 64u * 1024u / sizeof(wchar_t);
 
 enum class DeviceConnectionState { Idle, Connecting, Connected, Disconnecting, WaitingForReconnect, Failed };
 
-// A snapshot identity is bounded by the P01 command payload, not by the
-// smaller P07 persistence field.  DeviceId remains the validated persistence
-// value; this type keeps a valid external identity lossless while offering a
-// bounded conversion for callers that need to address settings/MRU state.
+// A snapshot identity is bounded by the control command payload, not by the
+// smaller persistence field.  DeviceId remains the validated persistence
+// value; this type keeps a valid external identity lossless. Persistence
+// validates its own bounded DeviceId at the storage boundary.
 class ExternalDeviceId {
 public:
     [[nodiscard]] static std::optional<ExternalDeviceId> TryCreate(std::wstring_view value) {
@@ -40,7 +46,6 @@ public:
     // This conversion deliberately owns its result; View() is the borrowing alternative.
     // cppcheck-suppress returnByReference
     [[nodiscard]] std::wstring ToString() const { return m_value; }
-    [[nodiscard]] std::optional<apc::core::DeviceId> Bounded() const { return apc::core::DeviceId::TryCreate(m_value); }
 
     friend bool operator==(ExternalDeviceId const&, ExternalDeviceId const&) = default;
 
@@ -51,9 +56,8 @@ private:
 };
 
 // Selectors are either exact external ID text, a non-empty matching query, or
-// one of the two stateful selectors. Id() yields a validated internal ID when
-// the text also satisfies the P07 identity bound; IdText() preserves all valid
-// P01 input for transport-compatible handling.
+// one of the two stateful selectors. IdText() preserves all valid control input;
+// persistence validates its own identity bound.
 enum class DeviceSelectorKind { Id, Name, Mac, Last, Auto, Alias, Default };
 
 class DeviceSelector {
@@ -63,7 +67,7 @@ public:
         return DeviceSelector(DeviceSelectorKind::Id, std::wstring(value));
     }
 
-    [[nodiscard]] static DeviceSelector ById(apc::core::DeviceId value) {
+    [[nodiscard]] static DeviceSelector ById(apc::core::DeviceId const& value) {
         return DeviceSelector(DeviceSelectorKind::Id, std::wstring(value.View()));
     }
 
@@ -79,37 +83,23 @@ public:
 
     [[nodiscard]] DeviceSelectorKind Kind() const noexcept { return m_kind; }
 
-    // Returns a validated internal copy, if the external text satisfies the
-    // P07 identity bound. Use IdText() to retain longer P01 input.
-    [[nodiscard]] std::optional<apc::core::DeviceId> Id() const {
-        if (m_kind != DeviceSelectorKind::Id) return std::nullopt;
-        if (auto const* idText = std::get_if<std::wstring>(&m_value)) {
-            return apc::core::DeviceId::TryCreate(*idText);
-        }
-        return std::nullopt;
-    }
-
     // Returns the exact external ID text, including IDs too large for the
-    // validated internal DeviceId P07 bound.
+    // validated internal DeviceId bound.
     [[nodiscard]] std::wstring_view IdText() const noexcept {
         if (m_kind != DeviceSelectorKind::Id) return {};
-        if (auto const* idText = std::get_if<std::wstring>(&m_value)) return *idText;
-        return {};
+        return m_value;
     }
 
     // Non-empty only for Name, Mac, Auto, and Alias selectors.
     [[nodiscard]] std::wstring_view Query() const noexcept {
         if (!IsQueryKind(m_kind)) return {};
-        if (auto const* query = std::get_if<std::wstring>(&m_value)) return *query;
-        return {};
+        return m_value;
     }
 
     friend bool operator==(DeviceSelector const&, DeviceSelector const&) = default;
 
 private:
-    using Value = std::variant<std::monostate, std::wstring>;
-
-    DeviceSelector(DeviceSelectorKind kind, Value value) noexcept : m_kind(kind), m_value(std::move(value)) {}
+    DeviceSelector(DeviceSelectorKind kind, std::wstring value) noexcept : m_kind(kind), m_value(std::move(value)) {}
 
     [[nodiscard]] static bool IsValidCommandText(std::wstring_view value) noexcept {
         // CommandProtocol::IsRequestValid deliberately accepts any bounded
@@ -124,8 +114,12 @@ private:
     }
 
     DeviceSelectorKind m_kind;
-    Value m_value;
+    std::wstring m_value;
 };
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Actions and Outcomes //////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 enum class AppCommandKind {
     ShowDevicePicker,
@@ -147,70 +141,9 @@ enum class AppCommandKind {
 };
 
 // A tray primary activation toggles an already-open picker, while a control
-// command is idempotent and only ensures that the picker is open.  Keeping
-// this distinction in the typed intent preserves P09 behavior without making
-// TrayController depend on AppController or transport details.
+// command is idempotent and only ensures that the picker is open. The typed
+// mode carries this distinction to the UI without exposing transport details.
 enum class DevicePickerOpenMode { EnsureOpen, ToggleIfOpen };
-
-// The command carries intent only. It has no pipe headers, JSON flags,
-// localized text, or platform handles; adapters translate those concerns at
-// the boundary. Target and Alias are meaningful only for the command kinds
-// checked by IsWellFormed(). Tray Exit is intentionally not a command here:
-// it is an AppRuntime lifecycle intent, not a shared UI/CLI use case. The
-// command grammar retains valid P01 alias text above the P07 persistence
-// limit; SettingsController owns that later failure/result translation.
-struct AppCommand {
-    AppCommandKind Kind = AppCommandKind::Status;
-    std::optional<DeviceSelector> Target;
-    std::wstring Alias;
-    DevicePickerOpenMode PickerOpenMode = DevicePickerOpenMode::EnsureOpen;
-
-    [[nodiscard]] bool IsWellFormed() const noexcept {
-        if (PickerOpenMode != DevicePickerOpenMode::EnsureOpen && Kind != AppCommandKind::ShowDevicePicker) {
-            return false;
-        }
-        const bool hasTarget = Target.has_value();
-        const bool hasAlias = !Alias.empty();
-        const bool aliasIsValid = hasAlias && Alias.size() <= c_maxAppCommandTextCharacters && !Alias.contains(L'\r') &&
-                                  !Alias.contains(L'\n') && !Alias.contains(L'\0');
-
-        switch (Kind) {
-            case AppCommandKind::SetAlias: return hasTarget && IsExplicitTarget(*Target) && aliasIsValid;
-            case AppCommandKind::SetDefault: return hasTarget && IsExplicitTarget(*Target) && !hasAlias;
-            case AppCommandKind::ClearAlias: return hasTarget && IsExplicitTarget(*Target) && !hasAlias;
-            case AppCommandKind::Connect:
-            case AppCommandKind::Disconnect:
-            case AppCommandKind::Reconnect:
-            case AppCommandKind::ToggleLast: return hasTarget && !hasAlias;
-            case AppCommandKind::ShowDevicePicker:
-            case AppCommandKind::ShowSettings:
-            case AppCommandKind::ListDevices:
-            case AppCommandKind::Status:
-            case AppCommandKind::ShowDefault:
-            case AppCommandKind::ClearDefault:
-            case AppCommandKind::ListAliases:
-            case AppCommandKind::DisconnectAll:
-            case AppCommandKind::ReconnectAll: return !hasTarget && !hasAlias;
-        }
-        return false;
-    }
-
-    friend bool operator==(AppCommand const&, AppCommand const&) = default;
-
-private:
-    [[nodiscard]] static bool IsExplicitTarget(DeviceSelector const& target) noexcept {
-        switch (target.Kind()) {
-            case DeviceSelectorKind::Id:
-            case DeviceSelectorKind::Name:
-            case DeviceSelectorKind::Mac:
-            case DeviceSelectorKind::Auto:
-            case DeviceSelectorKind::Alias: return true;
-            case DeviceSelectorKind::Last:
-            case DeviceSelectorKind::Default: return false;
-        }
-        return false;
-    }
-};
 
 enum class AppResultCode {
     Success,
@@ -267,6 +200,10 @@ enum class AppOutcomeReason {
     InternalError
 };
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Application Snapshots /////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 // Snapshot values own all strings and containers. The controller publishes
 // copies; they do not expose service locks, XAML objects, or transport state.
 struct DeviceSnapshot {
@@ -282,12 +219,13 @@ struct DeviceSnapshot {
     // richer lifecycle state used to render progress and failure.
     bool IsConnected = false;
     bool IsBusy = false;
+    bool IsAvailable = false;
 
     friend bool operator==(DeviceSnapshot const&, DeviceSnapshot const&) = default;
 };
 
 // A resolved control target may be an external identifier that is valid for
-// P01 but intentionally too large for the bounded persistence DeviceId type.
+// transport but intentionally too large for the bounded persistence DeviceId type.
 // It therefore remains a plain, transport-neutral value object.
 struct AppTargetSnapshot {
     std::wstring Id;
@@ -361,9 +299,19 @@ struct AppSnapshot {
 
         friend bool operator==(ResourceStatusSnapshot const&, ResourceStatusSnapshot const&) = default;
     } AdaptiveResources;
+    // Versions of the concrete owners from the successful capture.
+    SettingsData Settings;
+    std::optional<StartupTaskSnapshot> StartupTask;
+    std::uint64_t SettingsRevision = 0;
+    std::uint64_t DeviceGeneration = 0;
+    bool InventoryComplete = false;
 
     friend bool operator==(AppSnapshot const&, AppSnapshot const&) = default;
 };
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Action Results and Context ////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 struct AppResult {
     AppResultCode Code = AppResultCode::Success;
@@ -394,49 +342,69 @@ struct AppCommandContext {
     TimePoint Deadline = TimePoint::max();
     CompletionMode Completion = CompletionMode::WaitForCompletion;
 
+    [[nodiscard]] static AppCommandContext Detached() noexcept {
+        return {.StopToken = {}, .Deadline = TimePoint::max(), .Completion = CompletionMode::Detached};
+    }
+
     [[nodiscard]] bool IsCancellationRequested() const noexcept { return StopToken.stop_requested(); }
     [[nodiscard]] bool IsExpired(TimePoint now) const noexcept {
         return Deadline != TimePoint::max() && now >= Deadline;
     }
 };
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Application Events ////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 struct DeviceConnectedEvent {
-    // Device events originate at the P01 transport/device boundary. They
+    // Device events originate at the transport/device boundary. They
     // must retain a valid external identity even when it cannot be persisted
-    // in the smaller P07 DeviceId field.
+    // in the smaller persistence DeviceId field.
     ExternalDeviceId Id;
     friend bool operator==(DeviceConnectedEvent const&, DeviceConnectedEvent const&) = default;
 };
 
 struct DeviceDisconnectedEvent {
     ExternalDeviceId Id;
+    bool NotifyUser = false;
     friend bool operator==(DeviceDisconnectedEvent const&, DeviceDisconnectedEvent const&) = default;
 };
 
 struct DeviceConnectionErrorEvent {
     ExternalDeviceId Id;
-    // The legacy free-form message is deliberately normalized away here.
     // Presentation chooses localized text from this actionable category.
     AppResultCode Code = AppResultCode::OperationFailed;
+    enum class Reason { Unknown, TimedOut, Denied, ReconnectExhausted };
+    Reason FailureReason = Reason::Unknown;
     friend bool operator==(DeviceConnectionErrorEvent const&, DeviceConnectionErrorEvent const&) = default;
 };
 
 struct DeviceStatusChangedEvent {
     ExternalDeviceId Id;
-    // The legacy presentation status string is deliberately normalized to
-    // this stable state; localized text is not part of a fact event.
+    // Facts carry stable states; localized text belongs to presentation.
     DeviceConnectionState State = DeviceConnectionState::Idle;
     friend bool operator==(DeviceStatusChangedEvent const&, DeviceStatusChangedEvent const&) = default;
 };
 
-// These facts intentionally carry no payload: the legacy producer publishes
-// them without an ID or generation, so the bridge must not invent one.
+// These invalidations tell consumers to obtain current presentation data.
 struct DeviceActivityChangedEvent {
     friend bool operator==(DeviceActivityChangedEvent const&, DeviceActivityChangedEvent const&) = default;
 };
 
 struct DeviceInventoryChangedEvent {
     friend bool operator==(DeviceInventoryChangedEvent const&, DeviceInventoryChangedEvent const&) = default;
+};
+
+struct StartupTaskChangedEvent {
+    StartupTaskSnapshot Snapshot;
+    friend bool operator==(StartupTaskChangedEvent const&, StartupTaskChangedEvent const&) = default;
+};
+
+struct SettingsChangedEvent {
+    std::uint64_t SettingsRevision = 0;
+    std::wstring Language;
+    bool UseSystemBackdropEffects = true;
+    friend bool operator==(SettingsChangedEvent const&, SettingsChangedEvent const&) = default;
 };
 
 struct AutoReconnectTriggeredEvent {
@@ -455,6 +423,8 @@ using AppEvent = std::variant<DeviceConnectedEvent,
                               DeviceStatusChangedEvent,
                               DeviceActivityChangedEvent,
                               DeviceInventoryChangedEvent,
+                              SettingsChangedEvent,
+                              StartupTaskChangedEvent,
                               AutoReconnectTriggeredEvent,
                               AutoReconnectFailedEvent>;
 

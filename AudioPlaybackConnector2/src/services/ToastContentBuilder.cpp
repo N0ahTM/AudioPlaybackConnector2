@@ -1,5 +1,8 @@
 #include <pch.h>
 
+#include <algorithm>
+#include <winrt/Windows.Foundation.h>
+
 #include <services/ToastContentBuilder.hpp>
 #include <services/ToastXmlSanitizer.hpp>
 

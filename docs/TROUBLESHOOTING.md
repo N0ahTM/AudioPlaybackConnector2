@@ -43,6 +43,4 @@ The connected indicator reports connection state; it does not measure audible pl
 
 ## A2DP Sink audio always plays through the default output device
 
-Windows may ignore the per-app output device selected in **Settings > System > Sound > Volume mixer** for an `A2DP Sink` entry. In that case the Bluetooth source audio keeps playing through the current default playback device.
-
-`AudioPlaybackConnection` does not expose a supported output-device selector. Windows may therefore ignore a per-app output selected for an A2DP Sink. AudioPlaybackConnector2 does not recommend registry modifications to change this unsupported Windows behavior.
+Windows may ignore the A2DP Sink output selected in **Settings > System > Sound > Volume mixer** and use the default playback device. `AudioPlaybackConnection` exposes no supported output selector; registry modifications are not recommended.

@@ -7,12 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-09-23
+
 ### Added
+- Ask for a Microsoft Store review once with a silent notification when the app is deliberately opened, shown only in the Store channel at the earliest 14 days after first launch and after at least three days with a device connection. The prompt appears at most once; a dedicated action opens the review page.
 - Add versioned usage, CLI, architecture, translation, release, and security documentation with automated link, CLI-help, localization, and release-metadata validation.
 
 ### Changed
 - Fall back to the English source string when a selected locale does not yet contain a translated key.
 - Keep contributor guidance and pull-request checks proportional to the files and behavior changed.
+- Store and Windows App Installer now handle updates; the in-app GitHub update check and Inno Setup installers have been removed. Existing 0.9.1 GitHub Setup installations need a manual switch to the App Installer feed. GitHub and Store packages use separate identities.
+- Settings now use a strict versioned format. Existing 0.9.1 preferences, including device aliases and connection policies, are migrated automatically; unsupported or damaged files are preserved before defaults are used.
+
+### Fixed
+- Harden device, settings, command-pipe, notification and shutdown lifetimes against stale callbacks and concurrent work.
+- Preserve unreadable settings files before resetting; reject changes if the original file cannot be preserved.
+
+### Known limitations
+- A connected device may occasionally produce no audio, including after a playback pause. Reconnect to recover ([#1](https://github.com/N0ahTM/AudioPlaybackConnector2/issues/1)).
+- Windows may ignore per-app output routing for A2DP sink audio ([#13](https://github.com/N0ahTM/AudioPlaybackConnector2/issues/13)).
 
 ## [0.9.1] - 2026-09-13
 

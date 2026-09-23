@@ -1,5 +1,9 @@
 #include <app/AdaptiveScheduleState.hpp>
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 std::uint64_t AdaptiveScheduleState::Supersede() noexcept {
     ++m_generation;
     if (m_generation == 0) ++m_generation;
@@ -26,8 +30,4 @@ bool AdaptiveScheduleState::ConsumeWin32IfDue(TimePoint now) noexcept {
     m_win32NotBefore.reset();
     m_active = false;
     return true;
-}
-
-std::uint64_t AdaptiveScheduleState::Generation() const noexcept {
-    return m_generation;
 }

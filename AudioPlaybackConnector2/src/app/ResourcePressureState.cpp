@@ -1,5 +1,9 @@
 #include <app/ResourcePressureState.hpp>
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Pressure Classification ///////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 bool ResourcePressureValues::IsMemoryPressure() const noexcept {
     return Memory == MemoryPressureState::Low;
 }
@@ -18,6 +22,10 @@ bool ResourcePressureValues::IsBackgroundConstrained() const noexcept {
 bool ResourcePressureValues::CanPreload() const noexcept {
     return Memory == MemoryPressureState::High && EnergySaver == false && UserActivity == UserActivityState::Available;
 }
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Pressure State Reduction //////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 ResourcePressureValues ResourcePressureStateReducer::Apply(ResourcePressureProbe const& probe) noexcept {
     if (probe.LowMemorySignaled == true) {

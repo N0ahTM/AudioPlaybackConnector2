@@ -14,6 +14,27 @@
 
 namespace apc::device {
 
+// Only the serialized device owner resolves an operation. Its first terminal result is immutable, even when the
+// session subsequently disconnects or starts a new epoch. Waiters never infer completion from a later snapshot.
+struct DeviceOperationCompletion {
+    std::weak_ptr<void> Owner;
+    std::wstring DeviceId;
+    std::uint64_t Epoch = 0;
+    bool OwnsCancellation = false;
+    std::mutex Mutex;
+    std::condition_variable_any Changed;
+    std::optional<DeviceOperationStatus> Status;
+
+    void Resolve(DeviceOperationStatus status) {
+        {
+            std::lock_guard guard(Mutex);
+            if (Status) return;
+            Status = status;
+        }
+        Changed.notify_all();
+    }
+};
+
 struct DeviceService::State : std::enable_shared_from_this<DeviceService::State> {
     using Task = std::function<void()>;
 
@@ -49,11 +70,13 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
     mutable std::mutex SnapshotMutex;
     DeviceServiceSnapshot PublishedSnapshot;
 
+    util::LogSink Log;
     std::unique_ptr<DeviceWatcherPlatform> WatcherPlatform;
     std::unique_ptr<DeviceConnectionPlatform> ConnectionPlatform;
     std::unique_ptr<DeviceTimerPlatform> TimerPlatform;
     std::unique_ptr<DeviceWatcher> Watcher;
     std::unordered_map<std::wstring, std::shared_ptr<DeviceSession>> Sessions;
+    std::vector<std::weak_ptr<DeviceOperationCompletion>> PendingOperations;
     std::unordered_set<std::wstring> IndividuallyReconnectEnabled;
     std::unordered_map<std::wstring, std::uint64_t> PowerTransitionRecoveryEpochs;
     FactSink Subscriber;
@@ -65,6 +88,7 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
     bool IsShutdown = false;
     bool IsIncomingEnabled = false;
     bool IsGlobalReconnectEnabled = true;
+    std::optional<std::uint64_t> SettingsPolicyRevision;
 
     void Initialize() {
         if (!ConnectionPlatform) ConnectionPlatform = CreateWindowsDeviceConnectionPlatform();
@@ -77,13 +101,14 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
             [weak](DeviceWatcherFact const& fact) {
                 if (auto service = weak.lock()) service->OnWatcherFact(fact);
             },
-            std::move(WatcherPlatform));
+            std::move(WatcherPlatform),
+            Log);
         UpdatePublishedSnapshot();
     }
 
     // The queue lock protects queue bookkeeping only. Tasks, platform calls, and fact publication run after it is
     // released.
-    [[nodiscard]] bool Post(Task task) {
+    [[nodiscard]] bool Post(Task task, bool waitForCompletion = true) {
         bool runsHere = false;
         bool waitsForCompletion = false;
         auto completion = std::make_shared<Completion>();
@@ -94,7 +119,7 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
                 IsExecuting = true;
                 ExecutorThread = std::this_thread::get_id();
                 runsHere = true;
-            } else if (ExecutorThread != std::this_thread::get_id()) {
+            } else if (waitForCompletion && ExecutorThread != std::this_thread::get_id()) {
                 waitsForCompletion = true;
             }
         }
@@ -121,7 +146,7 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
             try {
                 next.Work();
             } catch (...) {
-                util::DebugTraceUnknownException(L"[DeviceService] serialized task failed");
+                Log.UnknownException(L"[DeviceService] serialized task failed");
             }
             next.CompletionState->Signal();
         }
@@ -146,8 +171,36 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
             snapshot.Sessions.push_back(session->Snapshot());
         }
         std::ranges::sort(snapshot.Sessions, {}, &DeviceSessionSnapshot::DeviceId);
-        std::lock_guard guard(SnapshotMutex);
-        PublishedSnapshot = std::move(snapshot);
+        {
+            std::lock_guard guard(SnapshotMutex);
+            PublishedSnapshot = std::move(snapshot);
+        }
+        std::erase_if(PendingOperations, [this](auto const& weak) {
+            auto completion = weak.lock();
+            return !completion || ResolveOperation(*completion);
+        });
+    }
+
+    [[nodiscard]] bool ResolveOperation(DeviceOperationCompletion& completion) const {
+        auto const session = Sessions.find(completion.DeviceId);
+        if (IsShutdown || session == Sessions.end()) {
+            completion.Resolve(DeviceOperationStatus::Cancelled);
+            return true;
+        }
+        auto const snapshot = session->second->Snapshot();
+        if (snapshot.OperationEpoch != completion.Epoch || snapshot.State == DeviceLifecycleState::Idle) {
+            completion.Resolve(DeviceOperationStatus::Cancelled);
+            return true;
+        }
+        if (snapshot.State == DeviceLifecycleState::Connected) {
+            completion.Resolve(DeviceOperationStatus::Succeeded);
+            return true;
+        }
+        if (snapshot.State == DeviceLifecycleState::Failed) {
+            completion.Resolve(DeviceOperationStatus::Failed);
+            return true;
+        }
+        return false;
     }
 
     void Publish(DeviceFactKind kind,
@@ -230,7 +283,7 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
     }
 
     [[nodiscard]] DeviceCommandResult
-    Result(DeviceCommandKind command, DeviceCommandResultKind kind, std::wstring deviceId = {}) const {
+    Result(DeviceCommandKind command, DeviceCommandResultKind kind, std::wstring deviceId = {}) {
         DeviceCommandResult result;
         result.Command = command;
         result.Kind = kind;
@@ -239,6 +292,17 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
             if (auto existing = Sessions.find(result.DeviceId); existing != Sessions.end()) {
                 result.OperationEpoch = existing->second->Snapshot().OperationEpoch;
             }
+        }
+        if ((command == DeviceCommandKind::Connect || command == DeviceCommandKind::Reconnect) &&
+            (kind == DeviceCommandResultKind::Accepted || kind == DeviceCommandResultKind::Coalesced)) {
+            auto completion = std::make_shared<DeviceOperationCompletion>();
+            completion->Owner = shared_from_this();
+            completion->DeviceId = result.DeviceId;
+            completion->Epoch = result.OperationEpoch;
+            completion->OwnsCancellation = kind == DeviceCommandResultKind::Accepted;
+            std::erase_if(PendingOperations, [](auto const& weak) { return weak.expired(); });
+            if (!ResolveOperation(*completion)) PendingOperations.push_back(completion);
+            result.Completion = std::move(completion);
         }
         return result;
     }
@@ -291,29 +355,10 @@ struct DeviceService::State : std::enable_shared_from_this<DeviceService::State>
         Publish(DeviceFactKind::SessionChanged);
         return recoveryDeviceIds;
     }
-
-    winrt::Windows::Foundation::IAsyncAction AwaitTerminal(std::wstring deviceId, std::uint64_t operationEpoch) {
-        auto const cancellation = co_await winrt::get_cancellation_token();
-
-        for (;;) {
-            if (cancellation()) co_return;
-            auto const snapshot = Snapshot();
-            if (snapshot.IsShutdown) throw winrt::hresult_error(E_ABORT);
-
-            auto const iter = std::ranges::find(snapshot.Sessions, deviceId, &DeviceSessionSnapshot::DeviceId);
-            if (iter == snapshot.Sessions.end() || iter->OperationEpoch != operationEpoch) {
-                throw winrt::hresult_error(E_ABORT);
-            }
-            if (iter->State == DeviceLifecycleState::Connected) co_return;
-            if (iter->State == DeviceLifecycleState::Failed) throw winrt::hresult_error(E_FAIL);
-            if (iter->State == DeviceLifecycleState::Idle) throw winrt::hresult_error(E_ABORT);
-
-            co_await winrt::resume_after(std::chrono::milliseconds(25));
-        }
-    }
 };
 
 DeviceService::DeviceService(DeviceServiceDependencies dependencies) : m_state(std::make_shared<State>()) {
+    m_state->Log = std::move(dependencies.Log);
     m_state->WatcherPlatform = std::move(dependencies.WatcherPlatform);
     m_state->ConnectionPlatform = std::move(dependencies.ConnectionPlatform);
     m_state->TimerPlatform = std::move(dependencies.TimerPlatform);
@@ -397,7 +442,7 @@ DeviceCommandResult DeviceService::Connect(std::wstring deviceId) {
     if (!state || deviceId.empty())
         return {.Command = DeviceCommandKind::Connect, .Kind = DeviceCommandResultKind::Rejected};
     auto result = std::make_shared<DeviceCommandResult>();
-    auto const ran = state->Post([state, deviceId = std::move(deviceId), result] {
+    auto const ran = state->Post([state, deviceId, result] {
         if (state->IsShutdown || state->IsSuspended) {
             *result = state->Result(DeviceCommandKind::Connect, DeviceCommandResultKind::Rejected, deviceId);
             return;
@@ -434,7 +479,7 @@ DeviceCommandResult DeviceService::Disconnect(std::wstring deviceId) {
     if (!state || deviceId.empty())
         return {.Command = DeviceCommandKind::Disconnect, .Kind = DeviceCommandResultKind::Rejected};
     auto result = std::make_shared<DeviceCommandResult>();
-    auto const ran = state->Post([state, deviceId = std::move(deviceId), result] {
+    auto const ran = state->Post([state, deviceId, result] {
         if (state->IsShutdown || state->IsSuspended) {
             *result = state->Result(DeviceCommandKind::Disconnect, DeviceCommandResultKind::Rejected, deviceId);
             return;
@@ -457,7 +502,7 @@ DeviceCommandResult DeviceService::Reconnect(std::wstring deviceId) {
     if (!state || deviceId.empty())
         return {.Command = DeviceCommandKind::Reconnect, .Kind = DeviceCommandResultKind::Rejected};
     auto result = std::make_shared<DeviceCommandResult>();
-    auto const ran = state->Post([state, deviceId = std::move(deviceId), result] {
+    auto const ran = state->Post([state, deviceId, result] {
         if (state->IsShutdown || state->IsSuspended) {
             *result = state->Result(DeviceCommandKind::Reconnect, DeviceCommandResultKind::Rejected, deviceId);
             return;
@@ -490,7 +535,7 @@ DeviceCommandResult DeviceService::CancelReconnect(std::wstring deviceId) {
     if (!state || deviceId.empty())
         return {.Command = DeviceCommandKind::Reconnect, .Kind = DeviceCommandResultKind::Rejected};
     auto result = std::make_shared<DeviceCommandResult>();
-    auto const ran = state->Post([state, deviceId = std::move(deviceId), result] {
+    auto const ran = state->Post([state, deviceId, result] {
         if (state->IsShutdown) {
             *result = state->Result(DeviceCommandKind::Reconnect, DeviceCommandResultKind::Rejected, deviceId);
             return;
@@ -570,36 +615,36 @@ DeviceCommandResult DeviceService::ReconnectAll() {
                                      .Kind = DeviceCommandResultKind::Coalesced};
 }
 
-void DeviceService::ConfigureIncomingConnections(bool enabled) {
+void DeviceService::ApplySettingsPolicy(DeviceSettingsPolicy policy) {
     auto state = m_state;
     if (!state) return;
-    static_cast<void>(state->Post([state, enabled] {
-        if (state->IsShutdown) return;
-        state->IsIncomingEnabled = enabled;
-        for (auto const& [id, session] : state->Sessions) {
-            (void)id;
-            session->SetIncomingEnabled(enabled);
-        }
-        if (enabled && state->Watcher) {
-            auto const inventory = state->Watcher->Snapshot();
-            for (auto const& device : inventory.Devices) {
-                state->GetOrCreateSession(device.Id)->SetIncomingEnabled(true);
+    static_cast<void>(state->Post(
+        [state, policy = std::move(policy)] {
+            if (state->IsShutdown || policy.StopToken.stop_requested() ||
+                (state->SettingsPolicyRevision && policy.Revision <= *state->SettingsPolicyRevision))
+                return;
+            std::unordered_set<std::wstring> reconnectIds(policy.ReconnectDeviceIds.begin(),
+                                                          policy.ReconnectDeviceIds.end());
+            const bool reconnectChanged = state->IsGlobalReconnectEnabled != policy.GlobalReconnectOnConnectionLoss ||
+                                          state->IndividuallyReconnectEnabled != reconnectIds;
+            const bool incomingChanged = state->IsIncomingEnabled != policy.AllowIncomingConnections;
+            state->SettingsPolicyRevision = policy.Revision;
+            state->IsGlobalReconnectEnabled = policy.GlobalReconnectOnConnectionLoss;
+            state->IndividuallyReconnectEnabled.swap(reconnectIds);
+            state->IsIncomingEnabled = policy.AllowIncomingConnections;
+            for (auto const& [id, session] : state->Sessions) {
+                if (reconnectChanged)
+                    session->SetReconnectEnabled(state->IsGlobalReconnectEnabled ||
+                                                 state->IndividuallyReconnectEnabled.contains(id));
+                if (incomingChanged) session->SetIncomingEnabled(state->IsIncomingEnabled);
             }
-        }
-    }));
-}
-
-void DeviceService::ConfigureReconnectPolicy(bool globallyEnabled, std::vector<std::wstring> enabledDeviceIds) {
-    auto state = m_state;
-    if (!state) return;
-    static_cast<void>(state->Post([state, globallyEnabled, enabledDeviceIds = std::move(enabledDeviceIds)] {
-        if (state->IsShutdown) return;
-        state->IsGlobalReconnectEnabled = globallyEnabled;
-        state->IndividuallyReconnectEnabled = {enabledDeviceIds.begin(), enabledDeviceIds.end()};
-        for (auto const& [id, session] : state->Sessions) {
-            session->SetReconnectEnabled(globallyEnabled || state->IndividuallyReconnectEnabled.contains(id));
-        }
-    }));
+            if (incomingChanged && state->IsIncomingEnabled && state->Watcher) {
+                auto const inventory = state->Watcher->Snapshot();
+                for (auto const& device : inventory.Devices)
+                    (void)state->GetOrCreateSession(device.Id);
+            }
+        },
+        false));
 }
 
 void DeviceService::ConnectStartupTargets(std::vector<std::wstring> deviceIds) {
@@ -652,18 +697,6 @@ void DeviceService::Shutdown() noexcept {
 
 DeviceServiceSnapshot DeviceService::Snapshot() const {
     return m_state ? m_state->Snapshot() : DeviceServiceSnapshot{};
-}
-
-void DeviceService::StartDeviceWatcher() {
-    static_cast<void>(Start());
-}
-
-void DeviceService::StopDeviceWatcher() {
-    static_cast<void>(Stop());
-}
-
-void DeviceService::ShutdownForProcessExit() noexcept {
-    Shutdown();
 }
 
 std::vector<std::wstring> DeviceService::SuspendForPowerTransition() {
@@ -721,77 +754,39 @@ void DeviceService::ResumeSuspendedSessions(std::vector<std::wstring> deviceIds)
     }));
 }
 
-void DeviceService::SetIncomingConnectionsEnabled(bool enabled) {
-    ConfigureIncomingConnections(enabled);
-}
-
-void DeviceService::ApplyReconnectOnConnectionLossPolicy(bool globallyEnabled,
-                                                         std::span<const std::wstring> individuallyEnabledDeviceIds) {
-    ConfigureReconnectPolicy(
-        globallyEnabled,
-        std::vector<std::wstring>(individuallyEnabledDeviceIds.begin(), individuallyEnabledDeviceIds.end()));
-}
-
-void DeviceService::SetReconnectOnConnectionLoss(std::wstring deviceId, bool enabled) {
+DeviceOperationStatus DeviceService::WaitForCompletion(DeviceCommandResult const& command,
+                                                       std::stop_token const& stopToken,
+                                                       std::chrono::steady_clock::time_point deadline) {
     auto const state = m_state;
-    if (!state || deviceId.empty()) return;
-    static_cast<void>(state->Post([state, deviceId = std::move(deviceId), enabled] {
-        if (state->IsShutdown) return;
-        if (enabled) {
-            state->IndividuallyReconnectEnabled.insert(deviceId);
-        } else {
-            state->IndividuallyReconnectEnabled.erase(deviceId);
-        }
-        if (auto iter = state->Sessions.find(deviceId); iter != state->Sessions.end()) {
-            iter->second->SetReconnectEnabled(enabled || state->IsGlobalReconnectEnabled);
-        }
-    }));
-}
-
-winrt::Windows::Foundation::IAsyncAction DeviceService::ConnectAsync(winrt::hstring deviceId) {
-    auto const state = m_state;
-    if (!state || deviceId.empty()) co_return;
-    auto const cancellation = co_await winrt::get_cancellation_token();
-    auto const result = Connect(std::wstring(deviceId));
-    if (result.Kind == DeviceCommandResultKind::Rejected) throw winrt::hresult_error(E_ABORT);
-    if (result.Kind == DeviceCommandResultKind::Accepted) {
-        auto const weak = state->weak_from_this();
-        cancellation.callback([weak, deviceId = std::wstring(deviceId), operationEpoch = result.OperationEpoch] {
-            if (auto current = weak.lock()) {
-                static_cast<void>(current->Post(
-                    [current, deviceId, operationEpoch] { current->CancelOperation(deviceId, operationEpoch); }));
-            }
-        });
+    auto const completion = command.Completion;
+    if (!state || !completion || completion->Owner.lock() != state) return DeviceOperationStatus::Rejected;
+    {
+        std::lock_guard guard(state->QueueMutex);
+        // A fact handler must not block the context that must deliver this operation's terminal transition.
+        if (state->IsExecuting && state->ExecutorThread == std::this_thread::get_id())
+            return DeviceOperationStatus::Rejected;
     }
-    cancellation.enable_propagation();
-    co_await state->AwaitTerminal(std::wstring(deviceId), result.OperationEpoch);
-}
-
-void DeviceService::ConnectDetached(winrt::hstring deviceId) {
-    static_cast<void>(Connect(std::wstring(deviceId)));
-}
-
-winrt::Windows::Foundation::IAsyncAction DeviceService::ReconnectAsync(winrt::hstring deviceId) {
-    auto const state = m_state;
-    if (!state || deviceId.empty()) co_return;
-    auto const cancellation = co_await winrt::get_cancellation_token();
-    auto const result = Reconnect(std::wstring(deviceId));
-    if (result.Kind == DeviceCommandResultKind::Rejected) throw winrt::hresult_error(E_ABORT);
-    if (result.Kind == DeviceCommandResultKind::Accepted) {
-        auto const weak = state->weak_from_this();
-        cancellation.callback([weak, deviceId = std::wstring(deviceId), operationEpoch = result.OperationEpoch] {
-            if (auto current = weak.lock()) {
-                static_cast<void>(current->Post(
-                    [current, deviceId, operationEpoch] { current->CancelOperation(deviceId, operationEpoch); }));
-            }
-        });
+    DeviceOperationStatus outcome;
+    {
+        std::unique_lock lock(completion->Mutex);
+        if (completion->Changed.wait_until(lock, stopToken, deadline, [&] { return completion->Status.has_value(); }))
+            return *completion->Status;
+        outcome = stopToken.stop_requested() ? DeviceOperationStatus::Cancelled : DeviceOperationStatus::TimedOut;
     }
-    cancellation.enable_propagation();
-    co_await state->AwaitTerminal(std::wstring(deviceId), result.OperationEpoch);
-}
-
-void DeviceService::ReconnectDetached(winrt::hstring deviceId) {
-    static_cast<void>(Reconnect(std::wstring(deviceId)));
+    if (completion->OwnsCancellation) {
+        // Queue cancellation without waiting behind another publisher. The epoch and terminal check protect a
+        // replacement operation and an operation which completed while this cancellation was queued.
+        (void)state->Post(
+            [state, completion] {
+                {
+                    std::lock_guard guard(completion->Mutex);
+                    if (completion->Status) return;
+                }
+                state->CancelOperation(completion->DeviceId, completion->Epoch);
+            },
+            false);
+    }
+    return outcome;
 }
 
 winrt::Windows::Foundation::IAsyncOperation<winrt::Windows::Devices::Enumeration::DeviceInformationCollection>
@@ -801,44 +796,10 @@ DeviceService::RefreshDevicesAsync() {
     co_return co_await state->Watcher->RefreshAsync();
 }
 
-std::vector<DeviceSessionSnapshot> DeviceService::GetConnectedDevices() const {
-    std::vector<DeviceSessionSnapshot> result;
-    auto const snapshot = Snapshot();
-    for (auto const& session : snapshot.Sessions) {
-        if (session.State == DeviceLifecycleState::Connected) result.push_back(session);
-    }
-    return result;
-}
-
-std::vector<DeviceSessionSnapshot> DeviceService::GetConnectionSessions() const {
-    return Snapshot().Sessions;
-}
-
-std::vector<std::wstring> DeviceService::GetPowerTransitionRecoveryDeviceIds() const {
-    std::vector<std::wstring> result;
-    auto const snapshot = Snapshot();
-    for (auto const& session : snapshot.Sessions) {
-        if (State::RequiresPowerTransitionRecovery(session) && !session.DeviceId.empty())
-            result.push_back(session.DeviceId);
-    }
-    return result;
-}
-
 bool DeviceService::IsDeviceConnected(std::wstring_view deviceId) const {
     auto const snapshot = Snapshot();
     auto const iter = std::ranges::find(snapshot.Sessions, deviceId, &DeviceSessionSnapshot::DeviceId);
     return iter != snapshot.Sessions.end() && iter->State == DeviceLifecycleState::Connected;
-}
-
-std::optional<std::wstring> DeviceService::GetConnectionDisplayName(std::wstring_view deviceId) const {
-    auto const snapshot = Snapshot();
-    auto const iter = std::ranges::find(snapshot.Sessions, deviceId, &DeviceSessionSnapshot::DeviceId);
-    if (iter == snapshot.Sessions.end() || iter->State != DeviceLifecycleState::Connected) return std::nullopt;
-    return iter->DeviceName;
-}
-
-bool DeviceService::HasConnections() const {
-    return !GetConnectedDevices().empty();
 }
 
 bool DeviceService::HasBusyOperations() const {
@@ -855,43 +816,6 @@ bool DeviceService::IsDeviceBusy(std::wstring_view deviceId) const {
     if (iter == snapshot.Sessions.end()) return false;
     return iter->State == DeviceLifecycleState::Connecting || iter->State == DeviceLifecycleState::Disconnecting ||
            iter->State == DeviceLifecycleState::WaitingForReconnect;
-}
-
-device_picker::DeviceActivitySnapshot DeviceService::GetDevicePickerActivitySnapshot() const {
-    device_picker::DeviceActivitySnapshot result;
-    auto const snapshot = Snapshot();
-    for (auto const& session : snapshot.Sessions) {
-        if (session.State == DeviceLifecycleState::Connected) result.ConnectedIds.insert(session.DeviceId);
-        if (session.State == DeviceLifecycleState::Connecting || session.State == DeviceLifecycleState::Disconnecting ||
-            session.State == DeviceLifecycleState::WaitingForReconnect) {
-            result.BusyIds.insert(session.DeviceId);
-        }
-    }
-    return result;
-}
-
-device_picker::DeviceInventorySnapshot DeviceService::GetDevicePickerInventorySnapshot() const {
-    return Snapshot().Inventory;
-}
-
-std::optional<device_picker::DeviceInventorySnapshot>
-DeviceService::GetDevicePickerInventorySnapshotIfChanged(std::uint64_t knownGeneration) const {
-    auto const inventory = Snapshot().Inventory;
-    if (inventory.Generation == knownGeneration) return std::nullopt;
-    return inventory;
-}
-
-DeviceTrayPresentationSnapshot DeviceService::GetTrayPresentationSnapshot() const {
-    DeviceTrayPresentationSnapshot result;
-    auto const snapshot = Snapshot();
-    for (auto const& session : snapshot.Sessions) {
-        result.HasBusyOperations = result.HasBusyOperations || session.State == DeviceLifecycleState::Connecting ||
-                                   session.State == DeviceLifecycleState::Disconnecting ||
-                                   session.State == DeviceLifecycleState::WaitingForReconnect;
-        if (session.State == DeviceLifecycleState::Connected)
-            result.ConnectedDevices.push_back({.Id = session.DeviceId, .Name = session.DeviceName});
-    }
-    return result;
 }
 
 } // namespace apc::device

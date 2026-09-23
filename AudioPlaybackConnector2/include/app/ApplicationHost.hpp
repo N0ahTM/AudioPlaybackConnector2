@@ -1,24 +1,21 @@
 #pragma once
 
-#include <app/AdaptiveResourcePolicy.hpp>
-#include <app/AdaptiveResourceDiagnostics.hpp>
+#include <core/StringResources.hpp>
+
 #include <app/AppController.hpp>
-#include <app/ControlUiActionGate.hpp>
-#include <app/DeviceEventRouter.hpp>
-#include <app/LegacyAppUseCaseBridge.hpp>
+#include <app/AdaptiveResourceController.hpp>
 #include <app/PowerTransitionCoordinator.hpp>
-#include <app/ResourcePressureMonitor.hpp>
 #include <app/SettingsWindowPresenter.hpp>
 #include <app/SingleInstanceGuard.hpp>
 #include <app/StartupTaskCoordinator.hpp>
-#include <app/UiRefreshCoalescer.hpp>
+#include <app/UiRefreshScheduler.hpp>
+#include <app/UiDispatcher.hpp>
 
 #include <core/DeviceService.hpp>
 #include <core/SettingsStore.hpp>
 
 #include <services/CommandLineControlServer.hpp>
 #include <services/NotificationService.hpp>
-#include <services/SettingsController.hpp>
 #include <services/TrayController.hpp>
 
 #include <control/ControlCommandAdapter.hpp>
@@ -26,26 +23,29 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
-#include <deque>
+#include <functional>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <stop_token>
 #include <string_view>
-
-class UpdateCoordinator;
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Application Host //////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
-class ApplicationHost : public std::enable_shared_from_this<ApplicationHost> {
+class ApplicationHost : public std::enable_shared_from_this<ApplicationHost>, public apc::app::AppPresentation {
 public:
+    apc::app::AppUiActionResult PresentDevicePicker(apc::app::DevicePickerOpenMode mode,
+                                                    apc::app::AppCommandContext const& context) override;
+    apc::app::AppUiActionResult PresentSettings(apc::app::AppCommandContext const& context) override;
+    apc::app::AppSnapshot::ResourceStatusSnapshot ResourceStatus() const override;
+    std::uint64_t PickerOpenedGeneration() const override;
+
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Constructors / Destructor /////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    ApplicationHost();
+    explicit ApplicationHost(util::LogSink log, util::EmergencyLog emergency);
     ~ApplicationHost();
 
     /*------------------------------------------------------------------------------------------------------------*/
@@ -56,7 +56,6 @@ public:
     void Shutdown() noexcept;
 
 private:
-    using ControlUiActionResult = ControlUiActionGate::Result;
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Setup /////////////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
@@ -71,29 +70,11 @@ private:
     void InitializeDeviceService();
     void InitializeAppController();
     void InitializeCommandLineControl();
-    void InitializeAdaptiveResources() noexcept;
     void SetupDeviceEvents();
-    void TeardownDeviceEvents();
-    void TryAutoReconnect();
-    winrt::fire_and_forget CheckForUpdatesOnStartupAsync();
     void HandlePowerSuspend();
     void HandlePowerResume();
-    void ExecuteTrayCommand(
-        apc::app::AppCommand command,
-        apc::app::AppCommandContext::CompletionMode completion = apc::app::AppCommandContext::CompletionMode::Detached);
-    [[nodiscard]] bool RefreshTrayVisualState(bool forceErrorWhenIdle = false,
-                                              std::wstring_view reason = L"unspecified");
-    void ScheduleDeviceVisualRefresh(bool forceErrorWhenIdle = false,
-                                     bool inventoryChanged = false,
-                                     bool refreshTray = true);
-    void QueueDeviceVisualRefreshDrain() noexcept;
-    void DrainDeviceVisualRefresh() noexcept;
-    [[nodiscard]] bool ScheduleNativeDeviceVisualRefreshRetry(std::chrono::milliseconds delay) noexcept;
-    void CancelNativeDeviceVisualRefreshRetry() noexcept;
-    void HandleResourcePressureSnapshot(ResourcePressureSnapshot snapshot);
-    void EvaluateAdaptiveResources(bool userInteraction, std::wstring_view reason) noexcept;
-    void ScheduleAdaptiveResourceEvaluation(std::optional<AdaptiveResourcePolicy::TimePoint> reevaluateAt) noexcept;
-    [[nodiscard]] winrt::hstring ResolveKnownDeviceName(winrt::hstring const& id) const;
+    void ScheduleDeviceVisualRefresh(UiRefreshScheduler::Flags refresh);
+    bool RefreshDeviceVisuals(UiRefreshScheduler::Flags flags);
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Actions ///////////////////////////////////////////////////////////////////////////////////////////*/
@@ -103,22 +84,8 @@ private:
     void ExitApplication() noexcept;
     [[nodiscard]] bool CloseMainWindow(std::wstring_view reason) noexcept;
     [[nodiscard]] bool PerformTeardown(SettingsShutdownMode settingsShutdownMode) noexcept;
-    [[nodiscard]] bool RunOnUIThread(std::function<void()> work) noexcept;
-    [[nodiscard]] bool QueueUiFallbackWork(std::function<void()> work) noexcept;
-    void DrainUiFallbackWork() noexcept;
-    ControlUiActionResult RunControlUiAction(std::function<bool()> work, apc::app::AppCommandContext const& context);
 
-    void PublishDeviceFact(apc::app::LegacyAppUseCaseBridge::DeviceFact fact) noexcept;
-
-    /*------------------------------------------------------------------------------------------------------------*/
-    /*//////// Device Event Handlers /////////////////////////////////////////////////////////////////////////////*/
-    /*------------------------------------------------------------------------------------------------------------*/
-
-    void OnDeviceConnected(winrt::hstring const& id);
-    void OnDeviceDisconnected(winrt::hstring const& id, apc::device::DeviceDisconnectReason reason);
-    void OnConnectionError(winrt::hstring const& id, winrt::hstring msg);
-    void OnAutoReconnectTriggered(winrt::hstring const& id);
-    void OnAutoReconnectFailed(winrt::hstring const& id);
+    void HandleAppEvent(apc::app::AppController::EventNotification const& event);
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Window Subclass ///////////////////////////////////////////////////////////////////////////////////*/
@@ -126,72 +93,48 @@ private:
 
     static LRESULT CALLBACK
     SubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR uIdSubclass, DWORD_PTR dwRefData) noexcept;
-    static void CALLBACK DeviceVisualRefreshRetryTimerCallback(PTP_CALLBACK_INSTANCE,
-                                                               void* context,
-                                                               PTP_TIMER) noexcept;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
+    util::LogSink m_log;
+    std::shared_ptr<StringResources> m_strings = std::make_shared<StringResources>();
+    util::EmergencyLog m_emergencyLog;
     winrt::Microsoft::UI::Xaml::Window m_mainWindow{nullptr};
     winrt::event_token m_mainWindowLoadedToken{};
     HWND m_hwnd = nullptr;
 
     std::shared_ptr<SettingsStore> m_settingsStore;
     std::shared_ptr<apc::device::DeviceService> m_deviceService;
-    std::shared_ptr<ISettingsController> m_settingsController;
     std::shared_ptr<StartupTaskCoordinator> m_startupTaskCoordinator;
     winrt::Microsoft::UI::Dispatching::DispatcherQueue m_dispatcherQueue{nullptr};
     winrt::Microsoft::UI::Dispatching::DispatcherQueueTimer m_mainWindowLoadedWatchdog{nullptr};
 
     std::shared_ptr<NotificationService> m_notificationService;
-    std::shared_ptr<UpdateCoordinator> m_updateCoordinator;
     std::shared_ptr<TrayController> m_trayController;
-    std::shared_ptr<apc::app::LegacyAppUseCaseBridge> m_appBridge;
-    std::unique_ptr<apc::app::AppController> m_appController;
+    std::shared_ptr<apc::app::AppController> m_appController;
     std::unique_ptr<apc::control::ControlCommandAdapter> m_controlCommandAdapter;
     CommandLineControlServer m_commandLineControlServer;
-    std::mutex m_uiFallbackWorkMutex;
-    std::deque<std::function<void()>> m_uiFallbackWork;
-    bool m_uiFallbackMessagePending = false;
-    DeviceEventRouter m_deviceEventRouter;
+    apc::app::AppController::Subscription m_appEventSubscription;
+    std::uint64_t m_lastAppEventRevision = 0;
+    std::wstring m_appliedLanguage;
+    std::optional<bool> m_appliedBackdrop;
     SingleInstanceGuard m_singleInstanceGuard;
-    static inline UINT s_wmTaskbarCreated = 0;
-    static constexpr UINT_PTR c_timerAnimation = 0x41504332;
-    static constexpr UINT_PTR c_timerTransientTrayError = 0x41504333;
-    static constexpr UINT_PTR c_timerAdaptiveResources = 0x41504334;
-    static constexpr UINT_PTR c_timerDeviceVisualRefreshRetry = 0x41504335;
-    static constexpr UINT c_messageDrainUiFallbackWork = WM_APP + 2;
-    static constexpr UINT c_messageDrainDeviceVisualRefresh = WM_APP + 3;
-    static constexpr UINT c_transientTrayErrorMs = 3000;
-    static constexpr UiRefreshCoalescer::Flags c_visualRefreshRequested = 1U << 0;
-    static constexpr UiRefreshCoalescer::Flags c_visualRefreshForceError = 1U << 1;
-    static constexpr UiRefreshCoalescer::Flags c_visualRefreshInventoryChanged = 1U << 2;
-    std::chrono::steady_clock::time_point m_trayErrorUntil{};
-    std::wstring m_transientTrayErrorTooltip;
-    bool m_connectingAnimationTimerActive = false;
-    AdaptiveResourcePolicy m_adaptiveResourcePolicy;
-    ResourcePressureValues m_resourcePressureValues;
-    std::unique_ptr<ResourcePressureMonitor> m_resourcePressureMonitor;
-    HPOWERNOTIFY m_powerSavingStatusNotification = nullptr;
-    winrt::Microsoft::UI::Dispatching::DispatcherQueueTimer m_adaptiveResourceFallbackTimer{nullptr};
-    AdaptiveActionRetryBackoff m_adaptiveActionRetryBackoff;
-    AdaptiveScheduleState m_adaptiveScheduleState;
-    std::mutex m_resourceAuthorizationMutex;
-    AdaptiveResourceDiagnostics m_adaptiveResourceDiagnostics;
-    std::optional<AdaptiveResourcePolicy::TimePoint> m_lastResourcePressureObservedAt;
-    std::uint64_t m_lastResourcePressureSequence = 0;
-    std::uint64_t m_latestConstrainedResourcePressureSequence = 0;
+    UINT m_taskbarCreatedMessage = 0;
+    static constexpr UiRefreshScheduler::Flags c_visualRefreshRequested = 1U << 0;
+    static constexpr UiRefreshScheduler::Flags c_visualRefreshForceError = 1U << 1;
+    static constexpr UiRefreshScheduler::Flags c_visualRefreshInventoryChanged = 1U << 2;
+    // Assigned once before publishing the controller; retained through its final snapshots.
+    const std::shared_ptr<AdaptiveResourceController> m_adaptiveResources =
+        std::make_shared<AdaptiveResourceController>(m_log);
     ULONG_PTR m_gdiplusToken = 0;
     std::atomic<bool> m_exiting = false;
     std::atomic<bool> m_started = false;
     std::atomic<bool> m_teardownWindowCloseSucceeded = true;
     bool m_windowSubclassInstalled = false;
-    UiRefreshCoalescer m_deviceVisualRefreshCoalescer;
-    unsigned int m_deviceVisualRefreshConsecutiveFailures = 0;
-    std::mutex m_deviceVisualRefreshRetryTimerMutex;
-    wil::unique_threadpool_timer m_deviceVisualRefreshRetryTimer;
-    PowerTransitionCoordinator m_powerTransitionCoordinator{m_exiting};
-    SettingsWindowPresenter m_settingsWindowPresenter;
+    std::shared_ptr<UiDispatcher> m_uiDispatcher;
+    std::unique_ptr<UiRefreshScheduler> m_visualRefresh;
+    PowerTransitionCoordinator m_powerTransitionCoordinator{m_exiting, {}, m_log};
+    SettingsWindowPresenter m_settingsWindowPresenter{m_log, m_strings};
 };

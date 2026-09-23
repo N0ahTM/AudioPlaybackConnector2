@@ -1,5 +1,16 @@
 #pragma once
 
+#include <windows.h>
+#include <shellapi.h>
+#include <objidl.h>
+#include <gdiplus.h>
+#include <wil/resource.h>
+#include <array>
+#include <cstdint>
+#include <optional>
+
+#include <util/Logger.hpp>
+
 #include <string_view>
 
 /*------------------------------------------------------------------------------------------------------------*/
@@ -14,8 +25,11 @@ enum class TrayIconState { Idle, Connecting, Connected, Error };
 /*//////// Tray Icon /////////////////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
+// Owned by TrayController and accessed exclusively on its UI thread.
+// Cross-thread tray requests are dispatched before entering this component.
 class TrayIcon {
 public:
+    explicit TrayIcon(util::LogSink log) : m_log(std::move(log)) {}
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
@@ -46,12 +60,12 @@ private:
     /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
+    util::LogSink m_log;
     HWND m_hwnd = nullptr;
     UINT m_callbackMsg = 0;
     NOTIFYICONDATAW m_nid{};
     NOTIFYICONIDENTIFIER m_niid{};
 
-    mutable wil::srwlock m_lock;
     TrayIconState m_state = TrayIconState::Idle;
     uint8_t m_connectingFrame = 0;
     bool m_initialized = false;

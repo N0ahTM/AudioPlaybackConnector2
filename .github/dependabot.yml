@@ -1,0 +1,26 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 1
+    groups:
+      github-actions:
+        patterns: ['*']
+  - package-ecosystem: nuget
+    directories:
+      - /AudioPlaybackConnector2
+      - /AudioPlaybackConnector2.CoreRuntime
+      - /AudioPlaybackConnector2.CoreTests
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 1
+    groups:
+      microsoft-packages:
+        patterns: ['*']
+  - package-ecosystem: vcpkg
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 1

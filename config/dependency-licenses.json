@@ -1,0 +1,44 @@
+{
+  "vcpkg": [
+    {
+      "name": "cli11",
+      "version": "2.6.2",
+      "portVersion": 0,
+      "scope": "product",
+      "license": "BSD-3-Clause",
+      "copyrightSha256": "67b3109b49e096c9359b53bc950fed576b909508a13ff19a81b5156628ef1cd0"
+    },
+    {
+      "name": "nlohmann-json",
+      "version": "3.12.0",
+      "portVersion": 2,
+      "scope": "product",
+      "license": "MIT",
+      "copyrightSha256": "7eb6c4a4ea81fb9156a690e97f5a95594900e31eaf1c1834b3683cdfe6d90ba1"
+    },
+    {
+      "name": "spdlog",
+      "version": "1.17.0",
+      "portVersion": 0,
+      "scope": "product",
+      "license": "MIT",
+      "copyrightSha256": "6f301b835ea37583961bfc9864411c27abec2bf253cb55f98441c54073b6df6d"
+    },
+    {
+      "name": "vcpkg-cmake",
+      "version": "2024-04-23",
+      "portVersion": 0,
+      "scope": "build",
+      "license": "MIT",
+      "copyrightSha256": "50da1661589023a2668812fdacb204e4014c41269baa1558897b61290fd28c78"
+    },
+    {
+      "name": "vcpkg-cmake-config",
+      "version": "2024-05-23",
+      "portVersion": 0,
+      "scope": "build",
+      "license": "MIT",
+      "copyrightSha256": "9b984166e65d1e2715d825d96aea090f0c22ab48401c123fc0689cc81b803fcc"
+    }
+  ]
+}

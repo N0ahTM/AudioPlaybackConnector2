@@ -49,29 +49,26 @@ jobs:
         } else {
           $env:REF_NAME
         }
-        if ($tag -notmatch '^v\d+\.\d+\.\d+$') {
-          throw 'Release tag must look like v1.2.3.'
-        }
+        Import-Module ./scripts/release/ReleaseVersion.psm1 -Force
+        $version = Resolve-ReleaseVersion -Tag $tag
         $head = (git rev-parse HEAD).Trim()
         $tagCommit = (git rev-parse "$tag^{commit}").Trim()
         if ($head -ne $tagCommit) {
           throw "Checked out commit $head does not match $tag ($tagCommit)."
         }
-        $semver = $tag.TrimStart('v')
-        foreach ($part in $semver.Split('.')) {
-          if ([uint32]$part -gt [uint16]::MaxValue) {
-            throw 'A release version component exceeds 65535.'
-          }
-        }
         "source_ref=$tag" >> $env:GITHUB_OUTPUT
-        "semver=$semver" >> $env:GITHUB_OUTPUT
+        "semver=$($version.SemVer)" >> $env:GITHUB_OUTPUT
         "tag=$tag" >> $env:GITHUB_OUTPUT
-        "package_version=$semver.0" >> $env:GITHUB_OUTPUT
+        "package_version=$($version.PackageVersion)" >> $env:GITHUB_OUTPUT
         "commit_sha=$tagCommit" >> $env:GITHUB_OUTPUT
 
   build-artifacts:
     needs: version
     if: ${{ github.event_name == 'push' }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     uses: ./.github/workflows/build-release-artifacts.yml
     with:
       source_ref: ${{ needs.version.outputs.source_ref }}
@@ -132,12 +129,13 @@ jobs:
           release-artifacts/*.msixbundle
           release-artifacts/*.appinstaller
           release-artifacts/*.cer
+          release-artifacts/_manifest/AudioPlaybackConnector2_SBOM.zip
           release-artifacts/Dependencies/**/*.appx
           release-artifacts/Dependencies/**/*.msix
         fail_on_unmatched_files: true
 
   validate-promotion:
-    runs-on: windows-2022
+    runs-on: windows-2025-vs2026
     needs: version
     if: ${{ github.event_name == 'workflow_dispatch' && !inputs.store_only }}
     permissions:
@@ -210,6 +208,17 @@ jobs:
         run-id: ${{ steps.build.outputs.RUN_ID }}
         github-token: ${{ github.token }}
 
+    - name: Verify SBOM coverage and build attestations
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RELEASE_TAG: ${{ needs.version.outputs.tag }}
+        EXPECTED_SHA: ${{ needs.version.outputs.commit_sha }}
+      run: |
+        ./scripts/release/verify-build-attestations.ps1 `
+          -Repository $env:GITHUB_REPOSITORY -Tag $env:RELEASE_TAG `
+          -ExpectedCommit $env:EXPECTED_SHA -ArtifactDirectory release-artifacts
+
     - name: Verify release assets against immutable build
       id: release
       shell: pwsh
@@ -252,7 +261,7 @@ jobs:
         ) -join "`n" | Add-Content -Path $env:GITHUB_STEP_SUMMARY
 
   rebuild-store-upload:
-    runs-on: windows-2022
+    runs-on: windows-2025-vs2026
     needs: version
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.store_only }}
     permissions:
@@ -289,21 +298,15 @@ jobs:
     - name: Build Store-linked x64 and ARM64 upload package
       shell: pwsh
       run: |
-        $manifestPath = Resolve-Path 'AudioPlaybackConnector2 (Package)/Package.appxmanifest'
-        [xml]$manifest = Get-Content -LiteralPath $manifestPath -Raw
-        $identity = $manifest.SelectSingleNode("/*[local-name()='Package']/*[local-name()='Identity']")
-        if ($null -eq $identity) { throw 'Package identity is missing from the release manifest.' }
-        $identity.SetAttribute('Name', '12144NoahMeyer.AudioPlaybackConnector2')
-        $identity.SetAttribute('Publisher', 'CN=3784F101-6355-463B-A35E-41BD0A95071B')
-        $manifest.Save($manifestPath)
-
         $root = Join-Path $env:RUNNER_TEMP 'store-upload'
         & msbuild 'AudioPlaybackConnector2 (Package)\AudioPlaybackConnector2 (Package).wapproj' `
           /p:Configuration=Release `
           /p:Platform=x64 `
+          /p:ReleaseTag=${{ needs.version.outputs.tag }} `
           /p:PackageVersion=${{ needs.version.outputs.package_version }} `
           "/p:AppxPackageDir=$root\" `
           /p:AppxPackageSigningEnabled=false `
+          /p:StorePackage=true `
           /p:UapAppxPackageBuildMode=StoreUpload `
           /p:GenerateAppxPackageOnBuild=true `
           /p:AppxBundle=Always `
@@ -331,7 +334,8 @@ jobs:
           -ExpectedPackageVersion '${{ needs.version.outputs.package_version }}' `
           -ExpectedName 12144NoahMeyer.AudioPlaybackConnector2 `
           -ExpectedPublisher 'CN=3784F101-6355-463B-A35E-41BD0A95071B' `
-          -ExpectedProcessorArchitectures x64,arm64
+          -ExpectedProcessorArchitectures x64,arm64 `
+          -ExpectedRatingPromptFeature enabled
 
         # Preserve the versioned package name. Partner Center can leave the
         # Version field empty while processing a new upload, so the filename is
@@ -537,7 +541,7 @@ jobs:
           -ProductId 9N366PGKJZ0K `
           -PackagePath '${{ steps.store-package.outputs.PATH }}' `
           -Version '${{ needs.version.outputs.semver }}' `
-          -WhatsNewPath './store-automation/store/whats-new.json'
+          -WhatsNewPath './store/whats-new.json'
 
         @(
           '## Microsoft Store submission',

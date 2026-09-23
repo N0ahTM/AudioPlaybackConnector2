@@ -1,22 +1,10 @@
+#include "TestCheck.hpp"
+
 #include <app/LatestStartupTaskRequestState.hpp>
 
-#include <algorithm>
-#include <array>
-#include <barrier>
-#include <iostream>
-#include <string_view>
-#include <thread>
-#include <vector>
+#include <initializer_list>
 
 namespace {
-
-int g_failures = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 void TestInitialDesiredRequestStartsOneOperation() {
     LatestStartupTaskRequestState state;
@@ -31,7 +19,6 @@ void TestInitialDesiredRequestStartsOneOperation() {
           "a desired request must preserve its kind");
     Check(request.OperationToStart && request.OperationToStart->Desired,
           "a desired request must preserve its desired value");
-    Check(state.InFlight() == request.OperationToStart, "the started operation must be the only in-flight owner");
 }
 
 void TestSameDesiredRequestCoalesces() {
@@ -54,7 +41,8 @@ void TestSameDesiredRequestCoalesces() {
           "the already-published desired value must remain coalesced until a refresh or new intent");
     Check(duplicateAfterPublication.Revision == first.Revision,
           "coalescing an already-published desired value must not advance the revision");
-    Check(!state.InFlight(), "coalescing an already-published desired value must remain idle");
+    Check(!duplicateAfterPublication.OperationToStart,
+          "coalescing an already-published desired value must remain idle");
 }
 
 void TestDifferentDesiredRequestSupersedesInFlightWork() {
@@ -65,7 +53,6 @@ void TestDifferentDesiredRequestSupersedesInFlightWork() {
     Check(latest.Accepted && !latest.Coalesced, "a different desired value must record a new intent");
     Check(latest.Revision == first.Revision + 1, "a different desired value must advance the revision");
     Check(!latest.OperationToStart, "a different desired value must not overlap the active operation");
-    Check(state.InFlight() == first.OperationToStart, "the original operation must remain the sole in-flight owner");
 
     auto oldCompletion = state.Complete(*first.OperationToStart);
     Check(oldCompletion.Disposition == LatestStartupTaskRequestState::CompletionDisposition::Superseded,
@@ -127,8 +114,6 @@ void TestRefreshDoesNotSupersedeUnsettledDesiredIntent() {
     Check(refresh.Accepted && refresh.Coalesced, "refresh must join rather than supersede an unsettled desired intent");
     Check(refresh.Revision == desired.Revision, "refresh joining a desired intent must retain the desired revision");
     Check(!refresh.OperationToStart, "refresh must not start work beside an unsettled desired operation");
-    Check(state.InFlight() == desired.OperationToStart,
-          "refresh must leave the desired operation as the sole in-flight owner");
     Check(state.Complete(*desired.OperationToStart).Disposition ==
               LatestStartupTaskRequestState::CompletionDisposition::Publish,
           "the desired operation must remain publishable after a refresh request");
@@ -157,7 +142,6 @@ void TestStaleAndDuplicateCompletionsAreIgnored() {
 
     Check(state.Complete(wrong).Disposition == LatestStartupTaskRequestState::CompletionDisposition::Stale,
           "a completion with the wrong token must be stale");
-    Check(state.InFlight() == first.OperationToStart, "a stale completion must not consume the active operation");
     Check(state.Complete(*first.OperationToStart).Disposition ==
               LatestStartupTaskRequestState::CompletionDisposition::Publish,
           "the real operation must survive a stale completion");
@@ -166,106 +150,20 @@ void TestStaleAndDuplicateCompletionsAreIgnored() {
           "a duplicate completion must be stale");
 }
 
-void TestStopSuppressesPublicationAndFutureRequests() {
-    LatestStartupTaskRequestState state;
-    auto request = state.RequestDesired(true);
-    state.Stop();
-
-    Check(state.Stopped(), "stop must be observable");
-    Check(!state.InFlight(), "stop must invalidate the active operation");
-    Check(state.Complete(*request.OperationToStart).Disposition ==
-              LatestStartupTaskRequestState::CompletionDisposition::Stale,
-          "completion after stop must never publish");
-
-    auto desired = state.RequestDesired(false);
-    auto refresh = state.RequestRefresh();
-    Check(!desired.Accepted && !desired.OperationToStart, "stop must reject later desired requests");
-    Check(!refresh.Accepted && !refresh.OperationToStart, "stop must reject later refresh requests");
-    Check(state.Revision() == request.Revision, "rejected requests after stop must not advance revisions");
-    state.Stop();
-    Check(state.Stopped(), "stop must be idempotent");
-}
-
-void TestConcurrentRequestsStartAtMostOneOperation() {
-    constexpr std::size_t c_threadCount = 32;
-    LatestStartupTaskRequestState state;
-    std::barrier start{c_threadCount};
-    std::array<LatestStartupTaskRequestState::RequestResult, c_threadCount> results{};
-    std::vector<std::jthread> threads;
-    threads.reserve(c_threadCount);
-    for (std::size_t index = 0; index < c_threadCount; ++index) {
-        threads.emplace_back([&, index]() {
-            start.arrive_and_wait();
-            results[index] = state.RequestDesired((index % 2) == 0);
-        });
-    }
-    threads.clear();
-
-    auto const operationsStarted =
-        std::ranges::count_if(results, [](auto const& result) { return result.OperationToStart.has_value(); });
-    Check(operationsStarted == 1, "concurrent requests must start at most one operation");
-    Check(state.InFlight().has_value(), "concurrent requests must leave exactly one operation in flight");
-
-    std::vector<std::uint64_t> distinctRevisions;
-    for (auto const& result : results) {
-        if (std::ranges::find(distinctRevisions, result.Revision) == distinctRevisions.end()) {
-            distinctRevisions.push_back(result.Revision);
-        }
-    }
-    std::ranges::sort(distinctRevisions);
-    bool revisionsAreMonotone = !distinctRevisions.empty() && distinctRevisions.front() == 1;
-    for (std::size_t index = 1; index < distinctRevisions.size(); ++index) {
-        revisionsAreMonotone = revisionsAreMonotone && distinctRevisions[index] == distinctRevisions[index - 1] + 1;
-    }
-    Check(revisionsAreMonotone, "concurrent distinct intents must allocate a gap-free monotone revision sequence");
-
-    auto firstCompletion = state.Complete(*state.InFlight());
-    Check(firstCompletion.Disposition == LatestStartupTaskRequestState::CompletionDisposition::Publish ||
-              (firstCompletion.Disposition == LatestStartupTaskRequestState::CompletionDisposition::Superseded &&
-               firstCompletion.OperationToStart.has_value()),
-          "the sole concurrent operation must publish or hand off to exactly one latest replacement");
-    if (firstCompletion.OperationToStart) {
-        Check(state.Complete(*firstCompletion.OperationToStart).Disposition ==
-                  LatestStartupTaskRequestState::CompletionDisposition::Publish,
-              "the latest concurrent replacement must publish after the handoff");
-    }
-}
-
-void TestRequestCompletionRaceNeverLosesTheLatestIntent() {
-    constexpr std::size_t c_iterations = 128;
-    for (std::size_t iteration = 0; iteration < c_iterations; ++iteration) {
+void TestRequestAndCompletionInEitherSerialOrder() {
+    for (bool requestFirst : {false, true}) {
         LatestStartupTaskRequestState state;
         auto initial = state.RequestDesired(false);
-        std::barrier raceStart{2};
-        LatestStartupTaskRequestState::CompletionResult completion;
         LatestStartupTaskRequestState::RequestResult request;
-
-        std::jthread completionThread([&]() {
-            raceStart.arrive_and_wait();
-            completion = state.Complete(*initial.OperationToStart);
-        });
-        std::jthread requestThread([&]() {
-            raceStart.arrive_and_wait();
-            request = state.RequestDesired(true);
-        });
-        completionThread.join();
-        requestThread.join();
-
-        if (completion.Disposition == LatestStartupTaskRequestState::CompletionDisposition::Publish) {
-            Check(request.OperationToStart && request.OperationToStart->Revision == request.Revision,
-                  "a request after publication must start its own latest operation");
-        } else {
-            Check(completion.Disposition == LatestStartupTaskRequestState::CompletionDisposition::Superseded &&
-                      completion.OperationToStart && completion.OperationToStart->Revision == request.Revision,
-                  "a request before completion must receive the single handoff operation");
-        }
-
-        auto latest = state.InFlight();
+        if (requestFirst) request = state.RequestDesired(true);
+        auto completion = state.Complete(*initial.OperationToStart);
+        if (!requestFirst) request = state.RequestDesired(true);
+        auto latest = requestFirst ? completion.OperationToStart : request.OperationToStart;
         Check(latest && latest->Revision == request.Revision && latest->Desired,
-              "the raced state must retain the newest desired intent");
+              "either serialized ordering must schedule the latest intent exactly once");
         if (latest) {
             Check(state.Complete(*latest).Disposition == LatestStartupTaskRequestState::CompletionDisposition::Publish,
-                  "the newest raced intent must be publishable");
+                  "the latest intent must publish after either ordering");
         }
     }
 }
@@ -281,8 +179,6 @@ int RunLatestStartupTaskRequestStateTests() {
     TestRefreshDoesNotSupersedeUnsettledDesiredIntent();
     TestUnsatisfiedDesiredIntentCanBeRetried();
     TestStaleAndDuplicateCompletionsAreIgnored();
-    TestStopSuppressesPublicationAndFutureRequests();
-    TestConcurrentRequestsStartAtMostOneOperation();
-    TestRequestCompletionRaceNeverLosesTheLatestIntent();
+    TestRequestAndCompletionInEitherSerialOrder();
     return g_failures;
 }

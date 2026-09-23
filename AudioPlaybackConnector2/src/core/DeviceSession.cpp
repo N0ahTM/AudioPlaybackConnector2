@@ -1,6 +1,8 @@
 #include <pch.h>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.Media.Audio.h>
+#include <winrt/Windows.System.Threading.h>
 
-#include <core/AudioConnectionService.hpp>
 #include <core/DeviceSession.hpp>
 #include <core/ReconnectPolicy.hpp>
 
@@ -25,7 +27,7 @@ ToConnectionResult(winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResu
 }
 
 [[nodiscard]] DeviceOpenResult
-ToOpenResult(winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResult result) noexcept {
+ToOpenResult(winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResult const& result) noexcept {
     using Status = winrt::Windows::Media::Audio::AudioPlaybackConnectionOpenResultStatus;
     auto const status = result.Status();
     return {
@@ -43,8 +45,8 @@ public:
 
     [[nodiscard]] std::uint64_t RegisterStateChanged(StateChangedHandler handler) override {
         if (!m_connection) return 0;
-        m_stateChangedToken = AudioConnectionService::RegisterStateChanged(
-            m_connection, [handler = std::move(handler)](auto sender, auto const&) {
+        m_stateChangedToken =
+            m_connection.StateChanged([handler = std::move(handler)](auto const& sender, auto const&) {
                 if (!handler) return;
                 try {
                     auto const state = sender.State();
@@ -62,7 +64,10 @@ public:
 
     void RevokeStateChanged(std::uint64_t token) noexcept override {
         if (token == 0 || token != static_cast<std::uint64_t>(m_stateChangedToken.value)) return;
-        AudioConnectionService::RevokeStateChanged(m_connection, m_stateChangedToken);
+        try {
+            m_connection.StateChanged(m_stateChangedToken);
+        } catch (...) {
+        }
         m_stateChangedToken = {};
     }
 
@@ -81,7 +86,7 @@ private:
                                                 Completion completion) {
         try {
             co_await winrt::resume_background();
-            co_await AudioConnectionService::StartAsync(connection);
+            co_await connection.StartAsync();
             if (completion) completion(DeviceConnectionResult::Success);
         } catch (winrt::hresult_error const&) {
             if (completion) completion(DeviceConnectionResult::Failed);
@@ -94,7 +99,7 @@ private:
                                                OpenCompletion completion) {
         try {
             co_await winrt::resume_background();
-            auto const result = co_await AudioConnectionService::OpenAsync(connection);
+            auto const result = co_await connection.OpenAsync();
             if (completion) completion(ToOpenResult(result));
         } catch (winrt::hresult_error const&) {
             if (completion) completion({.Result = DeviceConnectionResult::Failed});
@@ -107,7 +112,7 @@ private:
                                                 CloseCompletion completion) noexcept {
         try {
             co_await winrt::resume_background();
-            AudioConnectionService::Close(connection);
+            if (connection) connection.Close();
         } catch (...) {
         }
         if (completion) completion();
@@ -120,7 +125,8 @@ private:
 class WindowsDeviceConnectionPlatform final : public DeviceConnectionPlatform {
 public:
     [[nodiscard]] std::unique_ptr<DeviceConnection> Create(std::wstring const& deviceId) override {
-        auto connection = AudioConnectionService::TryCreateFromId(winrt::hstring(deviceId));
+        auto connection =
+            winrt::Windows::Media::Audio::AudioPlaybackConnection::TryCreateFromId(winrt::hstring(deviceId));
         if (!connection) return {};
         return std::make_unique<WindowsDeviceConnection>(std::move(connection));
     }

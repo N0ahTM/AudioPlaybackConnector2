@@ -1,5 +1,7 @@
 #pragma once
 
+class StringResources;
+
 #include <core/SettingsData.hpp>
 #include <ui/DiagnosticsLogCollector.hpp>
 
@@ -44,7 +46,8 @@ struct SettingsDiagnosticsReportContext {
     std::wstring DumpWarning;
 };
 
-[[nodiscard]] SettingsDiagnosticsReportContext CaptureSettingsDiagnosticsReportContext(std::wstring appVersionText);
+[[nodiscard]] SettingsDiagnosticsReportContext CaptureSettingsDiagnosticsReportContext(std::wstring appVersionText,
+                                                                                       StringResources const& strings);
 [[nodiscard]] std::wstring BuildSettingsDiagnosticsReport(SettingsData const& settings,
                                                           std::size_t connectedDeviceCount,
                                                           SettingsDiagnosticsReportContext const& context,

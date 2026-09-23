@@ -1,6 +1,12 @@
 #pragma once
 
-#include <chrono>
+#include <limits>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+
+#include <windows.h>
+#include <wil/result.h>
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// String Helpers ////////////////////////////////////////////////////////////////////////////////////*/
@@ -41,49 +47,6 @@ inline std::string Utf16ToUtf8(std::wstring_view utf16) {
                                                  nullptr,
                                                  nullptr));
     return out;
-}
-
-inline std::filesystem::path GetModuleFsPath(HMODULE hModule) {
-    std::wstring path(MAX_PATH, L'\0');
-    DWORD actual = 0;
-    while (true) {
-        actual = GetModuleFileNameW(hModule, path.data(), static_cast<DWORD>(path.size()));
-        THROW_LAST_ERROR_IF(actual == 0);
-        if (static_cast<size_t>(actual) >= path.size())
-            path.resize(path.size() * 2);
-        else
-            break;
-    }
-    path.resize(actual);
-    return std::filesystem::path(path);
-}
-
-inline std::optional<std::vector<uint8_t>> LoadResourceData(HMODULE hInst, int id, const wchar_t* type) {
-    auto hRes = FindResourceW(hInst, MAKEINTRESOURCEW(id), type);
-    if (!hRes) return std::nullopt;
-    auto size = SizeofResource(hInst, hRes);
-    if (size == 0) return std::nullopt;
-    auto hData = LoadResource(hInst, hRes);
-    if (!hData) return std::nullopt;
-    auto* ptr = static_cast<const uint8_t*>(LockResource(hData));
-    if (!ptr) return std::nullopt;
-    return std::vector<uint8_t>(ptr, ptr + size);
-}
-
-inline std::wstring ReplacePlaceholders(std::wstring_view templateStr, std::wstring_view replacement) {
-    std::wstring result;
-    size_t pos = 0;
-    while (pos < templateStr.size()) {
-        auto found = templateStr.find(L"{0}", pos);
-        if (found == std::wstring_view::npos) {
-            result.append(templateStr.substr(pos));
-            break;
-        }
-        result.append(templateStr.substr(pos, found - pos));
-        result.append(replacement);
-        pos = found + 3;
-    }
-    return result;
 }
 
 } // namespace util

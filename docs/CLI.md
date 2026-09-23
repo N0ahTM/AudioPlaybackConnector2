@@ -1,8 +1,6 @@
 # Command-line reference
 
-`apc2ctl.exe` controls AudioPlaybackConnector2 in the current Windows user session. Run `apc2ctl help` for the built-in synopsis. The client attempts to start the installed app when no instance is available.
-
-The following block is synchronized with the executable by `scripts/update-cli-reference.ps1`.
+`apc2ctl.exe` controls the current Windows user session and attempts to start the installed app if needed. `apc2ctl help` shows this synopsis, synchronized by `scripts/update-cli-reference.ps1`:
 
 <!-- BEGIN GENERATED APC2CTL HELP -->
 ```text
@@ -32,82 +30,16 @@ matches are rejected as ambiguous; use an explicit selector to disambiguate.
 ```
 <!-- END GENERATED APC2CTL HELP -->
 
-## General commands
+## Commands and targets
 
-```text
-apc2ctl show
-apc2ctl settings
-apc2ctl status [--json] [--raw]
-apc2ctl list [--json] [--raw]
-apc2ctl disconnect-all [--json] [--raw]
-apc2ctl reconnect-all [--json] [--raw]
-```
+`show` opens the picker; `settings` opens Settings; `status` returns app/connection state; `list` returns known devices. Bulk actions operate on all connections.
 
-`show` opens the device picker and `settings` opens Settings. `status` returns application and connection state. `list` returns known devices.
-
-## Device actions
-
-```text
-apc2ctl connect TARGET [--json] [--raw]
-apc2ctl disconnect TARGET [--json] [--raw]
-apc2ctl reconnect TARGET [--json] [--raw]
-apc2ctl toggle [TARGET] [--json] [--raw]
-```
-
-Use exactly one target form:
-
-```text
---id ID
---name NAME
---mac MAC
---alias ALIAS
---last
---default
-TARGET
-```
-
-`--last` and `--default` are available for connect, disconnect, reconnect, and toggle. `toggle` uses `--default` when no target is supplied. Commands that configure an alias or default require an explicit device.
-
-A positional `TARGET` is resolved in this order:
-
-1. exact Windows device ID;
-2. exact alias or device name;
-3. MAC address contained in the Windows device ID;
-4. alias or device-name substring.
-
-Equal-rank matches are rejected as ambiguous. Use `--id`, `--name`, `--mac`, or `--alias` to disambiguate. Insert `--` immediately before a value that starts with `-`.
-
-Examples:
+Use exactly one target. `--last`/`--default` apply to connect/disconnect/reconnect/toggle; targetless `toggle` uses the default. Alias/default configuration requires an explicit device (`--id`, `--name`, `--mac`, `--alias` or positional). Default selection also controls tray double-click. Resolution precedence and `--` escaping are specified above.
 
 ```powershell
-apc2ctl connect --name "WH-1000XM5"
 apc2ctl reconnect --alias "Desk speakers"
 apc2ctl disconnect --mac "11:22:33:44:55:66"
-apc2ctl toggle --default
 apc2ctl connect -- --device-name-starting-with-a-dash
-```
-
-## Default device
-
-```text
-apc2ctl default show [--json] [--raw]
-apc2ctl default set TARGET [--json] [--raw]
-apc2ctl default clear [--json] [--raw]
-```
-
-`default set` accepts `--id`, `--name`, `--mac`, `--alias`, or a positional target. The default is used by tray-icon double-click and `toggle --default`.
-
-## Aliases
-
-```text
-apc2ctl alias list [--json] [--raw]
-apc2ctl alias set TARGET (--value VALUE | VALUE) [--json] [--raw]
-apc2ctl alias clear TARGET [--json] [--raw]
-```
-
-Examples:
-
-```powershell
 apc2ctl alias set --name "WH-1000XM5" --value "Headphones"
 apc2ctl alias set --id '<Windows device id>' 'Desk speakers'
 apc2ctl alias clear --alias 'Headphones'
@@ -115,9 +47,7 @@ apc2ctl alias clear --alias 'Headphones'
 
 ## Output and privacy
 
-`--json` requests machine-readable output. JSON responses contain at least `ok` and `exitCode`; command-specific fields may also be present. Scripts must use the process exit code rather than parsing localized human-readable text.
-
-Privacy mode redacts known device details by default. `--raw` explicitly requests real names and IDs for the current command. Treat raw output as sensitive and avoid writing it to shared logs.
+Queries, device/bulk actions and alias/default commands accept `--json` and `--raw`. JSON contains at least `ok` and `exitCode`; use the process exit code, not localized output, in scripts. Privacy redacts known device details by default. `--raw` requests real names/IDs for this command; avoid shared logs.
 
 ## Exit codes
 

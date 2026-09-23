@@ -1,127 +1,33 @@
 #include <pch.h>
 
+#include <winrt/Windows.Storage.h>
+
 #include <core/SettingsStore.hpp>
+#include <core/SettingsCodec.hpp>
 
 #include <core/SettingsLimits.hpp>
 #include <util/Logger.hpp>
 #include <util/RuntimeApartment.hpp>
 #include <util/Util.hpp>
+#include <wil/stl.h>
+#include <wil/win32_helpers.h>
 
-#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <limits>
-#include <new>
+#include <stdexcept>
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
-#include <unordered_set>
 
 namespace {
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Persistence Policy ////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 constexpr auto c_debounceDelay = std::chrono::milliseconds(300);
 constexpr auto c_maxRetryDelay = std::chrono::minutes(5);
-
-[[nodiscard]] std::wstring BoundedString(winrt::hstring const& value, std::size_t limit) {
-    return apc::limits::TruncateUtf16(std::wstring_view(value), limit);
-}
-
-[[nodiscard]] bool IsPersistable(SettingsData const& data) {
-    if (data.Devices.size() > apc::limits::c_maxPersistedDeviceCount ||
-        data.LastConnectedIds.size() > apc::limits::c_maxPersistedDeviceCount ||
-        !apc::limits::IsSupportedLanguage(data.Language) ||
-        !apc::limits::IsBoundedUtf16(data.LastNotifiedUpdateVersion, apc::limits::c_maxVersionCharacters) ||
-        !apc::limits::IsBoundedUtf16(data.DefaultDeviceId, apc::limits::c_maxDeviceIdCharacters) ||
-        ((data.DefaultDevice == DefaultDeviceMode::SpecificDevice) != !data.DefaultDeviceId.empty())) {
-        return false;
-    }
-    if (data.SettingsWindowBounds && (data.SettingsWindowBounds->Width <= 0 || data.SettingsWindowBounds->Height <= 0 ||
-                                      data.SettingsWindowBounds->Dpi < apc::limits::c_minWindowDpi ||
-                                      data.SettingsWindowBounds->Dpi > apc::limits::c_maxWindowDpi)) {
-        return false;
-    }
-    std::unordered_set<std::wstring_view> deviceIds;
-    std::unordered_set<std::wstring_view> connectedIds;
-    for (auto const& device : data.Devices) {
-        if (device.Id.empty() || !apc::limits::IsBoundedUtf16(device.Id, apc::limits::c_maxDeviceIdCharacters) ||
-            !apc::limits::IsBoundedUtf16(device.Name, apc::limits::c_maxDeviceNameCharacters) ||
-            !apc::limits::IsBoundedUtf16(device.Alias, apc::limits::c_maxDeviceAliasCharacters) ||
-            !deviceIds.insert(device.Id).second) {
-            return false;
-        }
-    }
-    for (auto const& id : data.LastConnectedIds) {
-        if (id.empty() || !apc::limits::IsBoundedUtf16(id, apc::limits::c_maxDeviceIdCharacters) ||
-            !connectedIds.insert(id).second) {
-            return false;
-        }
-    }
-    return true;
-}
-
-[[nodiscard]] bool
-GetOptionalBoolean(winrt::Windows::Data::Json::JsonObject const& json, winrt::hstring const& key, bool fallback) {
-    if (!json.HasKey(key)) return fallback;
-    const auto value = json.Lookup(key);
-    return value.ValueType() == winrt::Windows::Data::Json::JsonValueType::Boolean ? value.GetBoolean() : fallback;
-}
-
-[[nodiscard]] winrt::hstring GetOptionalString(winrt::Windows::Data::Json::JsonObject const& json,
-                                               winrt::hstring const& key,
-                                               winrt::hstring const& fallback) {
-    if (!json.HasKey(key)) return fallback;
-    const auto value = json.Lookup(key);
-    return value.ValueType() == winrt::Windows::Data::Json::JsonValueType::String ? value.GetString() : fallback;
-}
-
-[[nodiscard]] std::int64_t
-GetOptionalInt64(winrt::Windows::Data::Json::JsonObject const& json, winrt::hstring const& key, std::int64_t fallback) {
-    if (!json.HasKey(key)) return fallback;
-    const auto value = json.Lookup(key);
-    if (value.ValueType() != winrt::Windows::Data::Json::JsonValueType::Number) return fallback;
-    const auto number = value.GetNumber();
-    constexpr double c_int64Min = -9223372036854775808.0;
-    constexpr double c_int64ExclusiveMax = 9223372036854775808.0;
-    if (!std::isfinite(number) || std::trunc(number) != number || number < c_int64Min || number >= c_int64ExclusiveMax)
-        return fallback;
-    return static_cast<std::int64_t>(number);
-}
-
-[[nodiscard]] std::int32_t
-GetOptionalInt32(winrt::Windows::Data::Json::JsonObject const& json, winrt::hstring const& key, std::int32_t fallback) {
-    if (!json.HasKey(key)) return fallback;
-    const auto value = json.Lookup(key);
-    if (value.ValueType() != winrt::Windows::Data::Json::JsonValueType::Number) return fallback;
-    const auto number = value.GetNumber();
-    if (!std::isfinite(number) || std::trunc(number) != number ||
-        number < static_cast<double>(std::numeric_limits<std::int32_t>::min()) ||
-        number > static_cast<double>(std::numeric_limits<std::int32_t>::max())) {
-        return fallback;
-    }
-    return static_cast<std::int32_t>(number);
-}
-
-[[nodiscard]] winrt::Windows::Data::Json::JsonObject
-GetOptionalObject(winrt::Windows::Data::Json::JsonObject const& json, winrt::hstring const& key) {
-    if (!json.HasKey(key)) return nullptr;
-    const auto value = json.Lookup(key);
-    return value.ValueType() == winrt::Windows::Data::Json::JsonValueType::Object ? value.GetObject() : nullptr;
-}
-
-[[nodiscard]] winrt::Windows::Data::Json::JsonArray GetOptionalArray(winrt::Windows::Data::Json::JsonObject const& json,
-                                                                     winrt::hstring const& key) {
-    if (!json.HasKey(key)) return nullptr;
-    const auto value = json.Lookup(key);
-    return value.ValueType() == winrt::Windows::Data::Json::JsonValueType::Array ? value.GetArray() : nullptr;
-}
-
-[[nodiscard]] DefaultDeviceMode ParseDefaultDeviceMode(std::wstring_view value) noexcept {
-    return value == L"specificDevice" ? DefaultDeviceMode::SpecificDevice : DefaultDeviceMode::LastConnected;
-}
-
-[[nodiscard]] std::wstring_view SerializeDefaultDeviceMode(DefaultDeviceMode mode) noexcept {
-    return mode == DefaultDeviceMode::SpecificDevice ? L"specificDevice" : L"lastConnected";
-}
 
 [[nodiscard]] std::chrono::milliseconds RetryDelay(unsigned int failures) noexcept {
     const auto exponent = std::min(failures == 0 ? 0U : failures - 1, 10U);
@@ -129,9 +35,9 @@ GetOptionalObject(winrt::Windows::Data::Json::JsonObject const& json, winrt::hst
     return std::min(milliseconds, std::chrono::duration_cast<std::chrono::milliseconds>(c_maxRetryDelay));
 }
 
-void BackupUnreadableSettingsFile(std::filesystem::path const& path) noexcept {
+bool BackupUnreadableSettingsFile(std::filesystem::path const& path, util::LogSink const& log) noexcept {
     try {
-        if (path.empty() || !std::filesystem::exists(path)) return;
+        if (path.empty() || !std::filesystem::exists(path)) return false;
         auto backup = path;
         backup += L".corrupt.bak";
         for (std::uint64_t suffix = 1; std::filesystem::exists(backup); ++suffix) {
@@ -139,22 +45,32 @@ void BackupUnreadableSettingsFile(std::filesystem::path const& path) noexcept {
             backup += std::format(L".corrupt.{}.bak", suffix);
         }
         if (!MoveFileExW(path.c_str(), backup.c_str(), MOVEFILE_WRITE_THROUGH)) {
-            DebugTrace(L"[SettingsStore] ERROR: failed to preserve corrupt file: {0}", path.wstring());
+            log.Trace(L"[SettingsStore] ERROR: failed to preserve corrupt file: {0}", path.wstring());
+            return false;
         }
+        return true;
     } catch (std::exception const& exception) {
-        DebugTrace(L"[SettingsStore] ERROR: corrupt-file preservation failed: {0}",
-                   util::Utf8ToUtf16(exception.what()));
+        log.Trace(L"[SettingsStore] ERROR: corrupt-file preservation failed: {0}", util::Utf8ToUtf16(exception.what()));
     } catch (...) {
-        DebugTrace(L"[SettingsStore] ERROR: corrupt-file preservation failed");
+        log.Trace(L"[SettingsStore] ERROR: corrupt-file preservation failed");
     }
+    return false;
 }
 
 class FilesystemSettingsStoreStorage final : public SettingsStoreStorage {
+    util::LogSink log;
+
 public:
+    explicit FilesystemSettingsStoreStorage(util::LogSink sink) : log(std::move(sink)) {}
+
     std::optional<std::string> Read(std::filesystem::path const& path) override {
         wil::unique_hfile file(CreateFileW(
             path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
-        if (!file) return std::nullopt;
+        if (!file) {
+            auto const error = GetLastError();
+            if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) return std::nullopt;
+            throw std::runtime_error("settings file could not be opened");
+        }
         LARGE_INTEGER size{};
         if (!GetFileSizeEx(file.get(), &size) || size.QuadPart < 0 ||
             static_cast<std::uint64_t>(size.QuadPart) > apc::limits::c_maxSettingsFileBytes) {
@@ -195,25 +111,72 @@ public:
         return true;
     }
 
-    void PreserveCorrupt(std::filesystem::path const& path) noexcept override { BackupUnreadableSettingsFile(path); }
+    bool PreserveCorrupt(std::filesystem::path const& path) noexcept override {
+        return BackupUnreadableSettingsFile(path, log);
+    }
+};
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// System Clock and Wakeup ///////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
+class SystemSettingsWakeup final : public SettingsStoreWakeup {
+public:
+    Clock::time_point Now() const noexcept override { return Clock::now(); }
+    std::uint64_t Version() const noexcept override {
+        std::scoped_lock lock(m_mutex);
+        return m_version;
+    }
+    void Notify() noexcept override {
+        {
+            std::scoped_lock lock(m_mutex);
+            ++m_version;
+        }
+        m_changed.notify_one();
+    }
+    void Wait(std::uint64_t version, std::optional<Clock::time_point> deadline) noexcept override {
+        std::unique_lock lock(m_mutex);
+        auto changed = [&] { return version != m_version; };
+        if (deadline)
+            m_changed.wait_until(lock, *deadline, changed);
+        else
+            m_changed.wait(lock, changed);
+    }
+
+private:
+    mutable std::mutex m_mutex;
+    std::condition_variable m_changed;
+    std::uint64_t m_version = 0;
 };
 
 } // namespace
 
-struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::Impl> {
-    static_assert(std::is_nothrow_move_assignable_v<SettingsData>);
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Settings State and Persistence ////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
-    explicit Impl(std::filesystem::path directory, std::shared_ptr<SettingsStoreStorage> persistenceStorage)
-        : persistenceDirectory(std::move(directory)), storage(std::move(persistenceStorage)) {
-        if (!storage) storage = std::make_shared<FilesystemSettingsStoreStorage>();
+struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::Impl> {
+    using DataSnapshot = std::shared_ptr<const SettingsData>;
+    static_assert(std::is_nothrow_copy_assignable_v<DataSnapshot>);
+
+    explicit Impl(std::filesystem::path directory,
+                  std::shared_ptr<SettingsStoreStorage> persistenceStorage,
+                  std::shared_ptr<SettingsStoreWakeup> persistenceWakeup,
+                  util::LogSink logger)
+        : log(std::move(logger)), persistenceDirectory(std::move(directory)), storage(std::move(persistenceStorage)),
+          wakeup(persistenceWakeup ? std::move(persistenceWakeup) : std::make_shared<SystemSettingsWakeup>()) {
+        if (!storage) storage = std::make_shared<FilesystemSettingsStoreStorage>(log);
     }
 
+    util::LogSink log;
     std::mutex mutex;
     std::mutex publicationMutex;
     std::condition_variable publicationChanged;
     std::condition_variable shutdownChanged;
     std::condition_variable changed;
-    SettingsData data;
+    // The store and an admitted writer share immutable data. Replacing the
+    // current revision cannot change or destroy the writer's captured revision.
+    DataSnapshot data = std::make_shared<const SettingsData>();
     std::uint64_t revision = 0;
     std::uint64_t persistedRevision = 0;
     std::uint64_t nextSubscriptionId = 0;
@@ -272,6 +235,7 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
     std::thread::id publisherThread;
     std::filesystem::path persistenceDirectory;
     std::shared_ptr<SettingsStoreStorage> storage;
+    const std::shared_ptr<SettingsStoreWakeup> wakeup;
     bool timerArmed = false;
     std::chrono::steady_clock::time_point due{};
     bool writerActive = false;
@@ -280,48 +244,31 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
     bool shutdownCoreComplete = false;
     bool shutdownResult = false;
     bool discardRequested = false;
-    bool synchronousFallback = false;
+    bool workerFinished = false;
+    bool workerReady = false;
+    bool workerFlushResult = false;
+    unsigned int shutdownAttempts = 3;
     bool workerStartKnown = false;
     bool loadClaimed = false;
     bool loadActive = false;
+    bool preservationFailed = false;
     unsigned int failures = 0;
-#if defined(APC_SETTINGS_STORE_TESTING)
-    std::atomic_uint64_t workerLoopIterations = 0;
-    std::atomic_bool workerWaiting = false;
-    std::atomic_uint32_t forcedSnapshotCaptureFailures = 0;
-    std::atomic_uint32_t snapshotCaptureFailures = 0;
-#endif
     std::jthread worker;
 
-    [[nodiscard]] SettingsSnapshot SnapshotLocked() const { return {data, revision, revision != persistedRevision}; }
-
-    [[nodiscard]] bool TryCaptureSnapshotLocked(SettingsData& snapshot, std::uint64_t& capturedRevision) noexcept {
-        try {
-#if defined(APC_SETTINGS_STORE_TESTING)
-            auto remaining = forcedSnapshotCaptureFailures.load(std::memory_order_relaxed);
-            while (remaining != 0 &&
-                   !forcedSnapshotCaptureFailures.compare_exchange_weak(
-                       remaining, remaining - 1, std::memory_order_relaxed, std::memory_order_relaxed)) {
-            }
-            if (remaining != 0) {
-                ++snapshotCaptureFailures;
-                throw std::bad_alloc();
-            }
-#endif
-            snapshot = data;
-            capturedRevision = revision;
-            return true;
-        } catch (...) {
-            return false;
-        }
+    // Called only after releasing the store lock. The worker waits on its own
+    // versioned signal; synchronous callers retain the store condition variable.
+    void NotifyChanged() noexcept {
+        changed.notify_all();
+        wakeup->Notify();
     }
 
-    void CompleteLoadWithoutCommit() noexcept {
+    void CompleteLoadWithoutCommit(bool originalPreserved = true) noexcept {
         {
             std::scoped_lock lock(mutex);
             loadActive = false;
+            preservationFailed = !originalPreserved;
         }
-        changed.notify_all();
+        NotifyChanged();
     }
 
     [[nodiscard]] std::filesystem::path Path() const {
@@ -341,108 +288,48 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
                 if (!error) return directory / L"AudioPlaybackConnector2.json";
             }
         }
-        return util::GetModuleFsPath(GetModuleHandleW(nullptr)).remove_filename() / L"AudioPlaybackConnector2.json";
+        return std::filesystem::path(wil::GetModuleFileNameW<std::wstring>()).parent_path() /
+               L"AudioPlaybackConnector2.json";
     }
 
     [[nodiscard]] bool Write(SettingsData const& snapshot) noexcept {
         try {
-            if (!IsPersistable(snapshot)) {
-                DebugTrace(L"[SettingsStore] ERROR: refusing invalid or oversized settings");
-                return false;
-            }
-            winrt::Windows::Data::Json::JsonObject json;
-            json.Insert(L"globalConnectOnStartup",
-                        winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.GlobalConnectOnStartup));
-            json.Insert(
-                L"globalReconnectOnConnectionLoss",
-                winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.GlobalReconnectOnConnectionLoss));
-            json.Insert(L"allowIncomingConnections",
-                        winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.AllowIncomingConnections));
-            json.Insert(L"startWithWindows",
-                        winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.StartWithWindows));
-            json.Insert(L"showNotifications",
-                        winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.ShowNotifications));
-            json.Insert(L"useSystemBackdropEffects",
-                        winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.UseSystemBackdropEffects));
-            json.Insert(L"privacyModeEnabled",
-                        winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(snapshot.PrivacyModeEnabled));
-            json.Insert(L"language", winrt::Windows::Data::Json::JsonValue::CreateStringValue(snapshot.Language));
-            json.Insert(L"lastUpdateCheckUnixSeconds",
-                        winrt::Windows::Data::Json::JsonValue::CreateNumberValue(
-                            static_cast<double>(snapshot.LastUpdateCheckUnixSeconds)));
-            json.Insert(L"lastNotifiedUpdateVersion",
-                        winrt::Windows::Data::Json::JsonValue::CreateStringValue(snapshot.LastNotifiedUpdateVersion));
-            json.Insert(L"defaultDeviceMode",
-                        winrt::Windows::Data::Json::JsonValue::CreateStringValue(
-                            winrt::hstring(SerializeDefaultDeviceMode(snapshot.DefaultDevice))));
-            json.Insert(L"defaultDeviceId",
-                        winrt::Windows::Data::Json::JsonValue::CreateStringValue(snapshot.DefaultDeviceId));
-            if (snapshot.SettingsWindowBounds) {
-                winrt::Windows::Data::Json::JsonObject bounds;
-                bounds.Insert(
-                    L"x", winrt::Windows::Data::Json::JsonValue::CreateNumberValue(snapshot.SettingsWindowBounds->X));
-                bounds.Insert(
-                    L"y", winrt::Windows::Data::Json::JsonValue::CreateNumberValue(snapshot.SettingsWindowBounds->Y));
-                bounds.Insert(
-                    L"width",
-                    winrt::Windows::Data::Json::JsonValue::CreateNumberValue(snapshot.SettingsWindowBounds->Width));
-                bounds.Insert(
-                    L"height",
-                    winrt::Windows::Data::Json::JsonValue::CreateNumberValue(snapshot.SettingsWindowBounds->Height));
-                bounds.Insert(
-                    L"dpi",
-                    winrt::Windows::Data::Json::JsonValue::CreateNumberValue(snapshot.SettingsWindowBounds->Dpi));
-                json.Insert(L"settingsWindowBounds", bounds);
-            }
-            winrt::Windows::Data::Json::JsonArray devices;
-            for (auto const& device : snapshot.Devices) {
-                winrt::Windows::Data::Json::JsonObject entry;
-                entry.Insert(L"id", winrt::Windows::Data::Json::JsonValue::CreateStringValue(device.Id));
-                entry.Insert(L"name", winrt::Windows::Data::Json::JsonValue::CreateStringValue(device.Name));
-                entry.Insert(L"alias", winrt::Windows::Data::Json::JsonValue::CreateStringValue(device.Alias));
-                entry.Insert(L"connectOnStartup",
-                             winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(device.ConnectOnStartup));
-                entry.Insert(
-                    L"reconnectOnConnectionLoss",
-                    winrt::Windows::Data::Json::JsonValue::CreateBooleanValue(device.ReconnectOnConnectionLoss));
-                devices.Append(entry);
-            }
-            json.Insert(L"devices", devices);
-            winrt::Windows::Data::Json::JsonArray lastConnected;
-            for (auto const& id : snapshot.LastConnectedIds)
-                lastConnected.Append(winrt::Windows::Data::Json::JsonValue::CreateStringValue(id));
-            json.Insert(L"lastConnectedIds", lastConnected);
-            const auto utf8 = util::Utf16ToUtf8(json.Stringify());
-            if (utf8.size() > apc::limits::c_maxSettingsFileBytes) return false;
+            const auto utf8 = apc::settings::Encode(snapshot);
             return storage->WriteAtomically(Path(), utf8);
         } catch (std::exception const& exception) {
-            DebugTrace(L"[SettingsStore] write failed: {0}", util::Utf8ToUtf16(exception.what()));
+            log.Trace(L"[SettingsStore] write failed: {0}", util::Utf8ToUtf16(exception.what()));
         } catch (...) {
-            DebugTrace(L"[SettingsStore] write failed");
+            log.Trace(L"[SettingsStore] write failed");
         }
         return false;
     }
 
-    void CompleteWriteLocked(std::uint64_t capturedRevision, bool succeeded) noexcept {
+    void CompleteWriteLocked(std::uint64_t capturedRevision,
+                             bool succeeded,
+                             SettingsStoreWakeup::Clock::time_point now) noexcept {
         writerActive = false;
+        if (shutdownRequested) return;
         if (succeeded) {
             persistedRevision = std::max(persistedRevision, capturedRevision);
             failures = 0;
             if (revision != persistedRevision && !shutdownRequested && !closing) {
                 timerArmed = true;
-                due = std::chrono::steady_clock::now() + c_debounceDelay;
+                due = now + c_debounceDelay;
             }
         } else if (!shutdownRequested && !closing) {
             failures = std::min(failures + 1, 10U);
             timerArmed = true;
-            due = std::chrono::steady_clock::now() + RetryDelay(failures);
+            due = now + RetryDelay(failures);
         }
     }
 
     void CompleteWrite(std::uint64_t capturedRevision, bool succeeded) noexcept {
-        std::scoped_lock lock(mutex);
-        CompleteWriteLocked(capturedRevision, succeeded);
-        changed.notify_all();
+        const auto now = wakeup->Now();
+        {
+            std::scoped_lock lock(mutex);
+            CompleteWriteLocked(capturedRevision, succeeded, now);
+        }
+        NotifyChanged();
     }
 
     [[nodiscard]] bool FlushSynchronously(unsigned int maximumAttempts) noexcept {
@@ -450,22 +337,20 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
         if (!apartment.Ready()) return false;
         maximumAttempts = std::max(maximumAttempts, 1U);
         for (unsigned int attempt = 0; attempt < maximumAttempts; ++attempt) {
-            SettingsData snapshot;
+            DataSnapshot snapshot;
             std::uint64_t capturedRevision = 0;
             {
                 std::unique_lock lock(mutex);
                 timerArmed = false;
                 changed.notify_all();
-                changed.wait(lock, [&] { return !writerActive && !loadActive; });
+                changed.wait(lock, [&] { return shutdownRequested || (!writerActive && !loadActive); });
+                if (shutdownRequested || preservationFailed) return false;
                 if (discardRequested || revision == persistedRevision) return true;
                 writerActive = true;
-                if (!TryCaptureSnapshotLocked(snapshot, capturedRevision)) {
-                    CompleteWriteLocked(revision, false);
-                    changed.notify_all();
-                    continue;
-                }
+                snapshot = data;
+                capturedRevision = revision;
             }
-            const auto succeeded = Write(snapshot);
+            const auto succeeded = Write(*snapshot);
             CompleteWrite(capturedRevision, succeeded);
             if (!succeeded) continue;
         }
@@ -473,68 +358,64 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
         return revision == persistedRevision;
     }
 
-    void Worker(std::stop_token stopToken) noexcept {
-        util::RuntimeApartment apartment;
-        if (!apartment.Ready()) {
-            std::scoped_lock lock(mutex);
-            synchronousFallback = true;
-            workerStartKnown = true;
-            timerArmed = false;
-            changed.notify_all();
-            return;
-        }
-        std::unique_lock lock(mutex);
-        workerStartKnown = true;
-        changed.notify_all();
-        while (!stopToken.stop_requested()) {
-#if defined(APC_SETTINGS_STORE_TESTING)
-            ++workerLoopIterations;
-            workerWaiting.store(true, std::memory_order_release);
-#endif
-            changed.wait(lock, [&] {
-                const auto ready =
-                    stopToken.stop_requested() || shutdownRequested || (timerArmed && !loadActive && !writerActive);
-#if defined(APC_SETTINGS_STORE_TESTING)
-                if (ready) workerWaiting.store(false, std::memory_order_release);
-#endif
-                return ready;
-            });
-#if defined(APC_SETTINGS_STORE_TESTING)
-            workerWaiting.store(false, std::memory_order_release);
-#endif
-            if (stopToken.stop_requested() || shutdownRequested) return;
-            const auto scheduled = due;
-            if (changed.wait_until(lock, scheduled, [&] {
-                    return stopToken.stop_requested() || shutdownRequested || !timerArmed || writerActive ||
-                           due != scheduled || loadActive;
-                }))
-                continue;
-            SettingsData snapshot;
-            std::uint64_t capturedRevision = 0;
-            if (writerActive || revision == persistedRevision || discardRequested) continue;
-            writerActive = true;
-            timerArmed = false;
-            if (!TryCaptureSnapshotLocked(snapshot, capturedRevision)) {
-                CompleteWriteLocked(revision, false);
-                changed.notify_all();
-                continue;
+    void Worker(std::stop_token const& stopToken) noexcept {
+        const auto finish = wil::scope_exit([&] {
+            {
+                std::scoped_lock lock(mutex);
+                workerFinished = true;
             }
-            lock.unlock();
-            const auto succeeded = Write(snapshot);
-            CompleteWrite(capturedRevision, succeeded);
-            lock.lock();
+            changed.notify_all();
+        });
+        util::RuntimeApartment apartment;
+        {
+            std::scoped_lock lock(mutex);
+            workerReady = apartment.Ready();
+            workerStartKnown = true;
+        }
+        changed.notify_all();
+        if (!apartment.Ready()) return;
+
+        while (!stopToken.stop_requested()) {
+            // Capture the signal before inspecting state. A concurrent change
+            // then invalidates this version even if Wait has not started yet.
+            const auto version = wakeup->Version();
+            const auto now = wakeup->Now();
+            std::optional<SettingsStoreWakeup::Clock::time_point> deadline;
+            DataSnapshot snapshot;
+            std::uint64_t capturedRevision = 0;
+            {
+                std::unique_lock lock(mutex);
+                if (shutdownRequested) return;
+                if (closing) {
+                    const auto attempts = shutdownAttempts;
+                    const auto discard = discardRequested;
+                    lock.unlock();
+                    const auto flushed = discard || FlushSynchronously(attempts);
+                    lock.lock();
+                    workerFlushResult = flushed;
+                    return;
+                }
+                if (timerArmed && !loadActive && !writerActive && !discardRequested && revision != persistedRevision) {
+                    if (now < due) {
+                        deadline = due;
+                    } else {
+                        writerActive = true;
+                        timerArmed = false;
+                        snapshot = data;
+                        capturedRevision = revision;
+                    }
+                }
+            }
+            if (snapshot) {
+                CompleteWrite(capturedRevision, Write(*snapshot));
+            } else {
+                wakeup->Wait(version, deadline);
+            }
         }
     }
-
-    void EnqueuePublicationWithLockHeld(SettingsSnapshot snapshot,
-                                        std::vector<SubscriptionStatePtr> subscriptionStates) {
-        pendingPublications.push_back({std::move(snapshot), std::move(subscriptionStates)});
-    }
-
     void DeactivateSubscriptionsLocked() noexcept {
         for (auto const& [_, entry] : subscriptions)
             entry.State->Deactivate();
-        subscriptions.clear();
     }
 
     void DrainPublications() noexcept {
@@ -566,32 +447,34 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
                 try {
                     subscription->Callback(publication.Snapshot);
                 } catch (...) {
-                    DebugTrace(L"[SettingsStore] subscriber threw");
+                    log.Trace(L"[SettingsStore] subscriber threw");
                 }
                 subscription->CompleteCallback();
             }
         }
     }
 
-    void WaitForPublicationDrain() noexcept {
+    [[nodiscard]] bool WaitForPublicationDrain(std::chrono::steady_clock::time_point deadline) noexcept {
         std::unique_lock publicationLock(publicationMutex);
-        if (publishing && publisherThread == std::this_thread::get_id()) return;
-        publicationChanged.wait(publicationLock, [&] { return !publishing; });
+        if (publishing && publisherThread == std::this_thread::get_id()) return true;
+        return publicationChanged.wait_until(publicationLock, deadline, [&] { return !publishing; });
     }
 
     template <typename Mutation> [[nodiscard]] SettingsMutationResult Commit(Mutation&& mutation) {
-        // Callbacks may destroy SettingsStore while DrainPublications runs. Keep the implementation alive
-        // through the synchronous-fallback write that follows the drain as well.
+        // Callbacks may destroy SettingsStore while DrainPublications runs.
         const auto lifetime = shared_from_this();
         static_cast<void>(lifetime);
         std::vector<SubscriptionStatePtr> subscriptionsToNotify;
         SettingsSnapshot snapshot;
         std::uint64_t committedRevision = 0;
-        bool useSynchronousFallback = false;
-        {
+        for (;;) {
+            const auto now = wakeup->Now();
             std::unique_lock lock(mutex);
-            changed.wait(lock, [&] { return closing || shutdownRequested || !loadActive; });
-            if (closing || shutdownRequested) return {SettingsMutationStatus::Rejected, revision};
+            if (loadActive && !closing && !shutdownRequested) {
+                changed.wait(lock, [&] { return closing || shutdownRequested || !loadActive; });
+                continue;
+            }
+            if (closing || shutdownRequested || preservationFailed) return {SettingsMutationStatus::Rejected, revision};
             if (revision == std::numeric_limits<std::uint64_t>::max())
                 return {SettingsMutationStatus::Rejected, revision};
 
@@ -605,32 +488,36 @@ struct SettingsStore::Impl final : std::enable_shared_from_this<SettingsStore::I
             // revision, timer, and publication queue are untouched until the candidate and callback list are
             // complete. Enqueuing before the no-throw move commit prevents a subscriber publication from being
             // lost if a later staging operation fails.
-            SettingsData candidate = data;
+            SettingsData candidate = *data;
             if (!mutation(candidate)) return {SettingsMutationStatus::Unchanged, revision};
+            auto committedData = std::make_shared<const SettingsData>(std::move(candidate));
             committedRevision = revision + 1;
             if (!subscriptions.empty()) {
-                snapshot = {candidate, committedRevision, committedRevision != persistedRevision};
+                snapshot = {*committedData, committedRevision, committedRevision != persistedRevision};
                 subscriptionsToNotify.reserve(subscriptions.size());
                 for (auto const& [_, entry] : subscriptions) {
                     subscriptionsToNotify.push_back(entry.State);
                 }
-                EnqueuePublicationWithLockHeld(std::move(snapshot), std::move(subscriptionsToNotify));
+                pendingPublications.push_back({std::move(snapshot), std::move(subscriptionsToNotify)});
             }
 
-            // SettingsData is statically required to have a no-throw move assignment. From this point on the
+            // The immutable data pointer can be published without allocation. From this point on the
             // commit consists only of no-throw state publication and the notification below is unconditional.
-            data = std::move(candidate);
+            data = std::move(committedData);
             revision = committedRevision;
             timerArmed = true;
-            due = std::chrono::steady_clock::now() + c_debounceDelay;
-            useSynchronousFallback = synchronousFallback;
+            due = now + c_debounceDelay;
+            break;
         }
-        changed.notify_all();
+        NotifyChanged();
         DrainPublications();
-        if (useSynchronousFallback) static_cast<void>(FlushSynchronously(3));
         return {SettingsMutationStatus::Applied, committedRevision};
     }
 };
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Subscription Lifecycle ////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 SettingsStore::Subscription::~Subscription() {
     Reset();
@@ -655,206 +542,143 @@ void SettingsStore::Subscription::Reset() noexcept {
     m_unsubscribe = {};
 }
 
-SettingsStore::SettingsStore(std::filesystem::path persistenceDirectory, std::shared_ptr<SettingsStoreStorage> storage)
-    : m_impl(std::make_shared<Impl>(std::move(persistenceDirectory), std::move(storage))) {
-    try {
-        m_impl->worker = std::jthread([impl = m_impl](std::stop_token stopToken) { impl->Worker(stopToken); });
-    } catch (std::exception const& exception) {
-        DebugTrace(L"[SettingsStore] worker creation failed; writes will be synchronous: {0}",
-                   util::Utf8ToUtf16(exception.what()));
-        std::scoped_lock lock(m_impl->mutex);
-        m_impl->synchronousFallback = true;
-        m_impl->workerStartKnown = true;
-    } catch (...) {
-        DebugTrace(L"[SettingsStore] worker creation failed; writes will be synchronous");
-        std::scoped_lock lock(m_impl->mutex);
-        m_impl->synchronousFallback = true;
-        m_impl->workerStartKnown = true;
-    }
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Constructors /////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
+SettingsStore::SettingsStore(std::filesystem::path persistenceDirectory,
+                             std::shared_ptr<SettingsStoreStorage> storage,
+                             std::shared_ptr<SettingsStoreWakeup> wakeup,
+                             util::LogSink log)
+    : m_impl(std::make_shared<Impl>(
+          std::move(persistenceDirectory), std::move(storage), std::move(wakeup), std::move(log))) {
+    // Without its persistence executor the store cannot offer a bounded shutdown.
+    // Fail construction instead of falling back to storage I/O on a UI or callback thread.
+    m_impl->worker = std::jthread([impl = m_impl](std::stop_token const& stopToken) { impl->Worker(stopToken); });
     std::unique_lock lock(m_impl->mutex);
     m_impl->changed.wait(lock, [&] { return m_impl->workerStartKnown; });
+    if (!m_impl->workerReady) {
+        lock.unlock();
+        m_impl->worker.join();
+        throw std::runtime_error("SettingsStore persistence apartment initialization failed");
+    }
 }
 
 SettingsStore::~SettingsStore() {
     static_cast<void>(Shutdown(SettingsShutdownMode::Flush, 3));
 }
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 SettingsSnapshot SettingsStore::Snapshot() const {
-    std::scoped_lock lock(m_impl->mutex);
-    return m_impl->SnapshotLocked();
+    Impl::DataSnapshot data;
+    std::uint64_t revision;
+    bool dirty;
+    {
+        std::scoped_lock lock(m_impl->mutex);
+        data = m_impl->data;
+        revision = m_impl->revision;
+        dirty = revision != m_impl->persistedRevision;
+    }
+    return {*data, revision, dirty};
 }
-
-#if defined(APC_SETTINGS_STORE_TESTING)
-std::uint64_t SettingsStore::WorkerLoopIterationsForTesting() const noexcept {
-    return m_impl->workerLoopIterations.load(std::memory_order_relaxed);
-}
-
-bool SettingsStore::WorkerWaitingForTesting() const noexcept {
-    return m_impl->workerWaiting.load(std::memory_order_acquire);
-}
-
-void SettingsStore::FailNextSnapshotCapturesForTesting(unsigned int count) noexcept {
-    m_impl->forcedSnapshotCaptureFailures.store(count, std::memory_order_relaxed);
-}
-
-std::uint32_t SettingsStore::SnapshotCaptureFailuresForTesting() const noexcept {
-    return m_impl->snapshotCaptureFailures.load(std::memory_order_relaxed);
-}
-#endif
 
 SettingsStore::Subscription SettingsStore::Subscribe(SnapshotCallback callback) {
     if (!callback) return {};
+    auto state = std::make_shared<Impl::SubscriptionState>(std::move(callback));
+    std::weak_ptr weak = m_impl;
+    std::function<void()> unsubscribe;
     std::scoped_lock lock(m_impl->mutex);
     if (m_impl->shutdownRequested || m_impl->closing) return {};
     const auto identifier = ++m_impl->nextSubscriptionId;
-    auto state = std::make_shared<Impl::SubscriptionState>(std::move(callback));
-    m_impl->subscriptions.emplace(identifier, Impl::SubscriptionEntry{state});
-    std::weak_ptr weak = m_impl;
-    return Subscription([weak, state, identifier] {
+    unsubscribe = [weak, state, identifier] {
         state->DeactivateAndWait();
         if (auto impl = weak.lock()) {
             std::scoped_lock lock(impl->mutex);
             impl->subscriptions.erase(identifier);
         }
-    });
+    };
+    m_impl->subscriptions.emplace(identifier, Impl::SubscriptionEntry{state});
+    return Subscription(std::move(unsubscribe));
 }
 
 void SettingsStore::Load() {
     const auto lifetime = m_impl;
     static_cast<void>(lifetime);
     SettingsData loaded;
+    bool needsRewrite = false;
     {
-        std::scoped_lock lock(m_impl->mutex);
-        if (m_impl->loadClaimed || m_impl->closing || m_impl->shutdownRequested) return;
-        m_impl->loadClaimed = true;
+        std::scoped_lock lock(lifetime->mutex);
+        if (lifetime->loadClaimed || lifetime->closing || lifetime->shutdownRequested) return;
+        lifetime->loadClaimed = true;
         // Runtime changes own the state once they have committed. A later Load must not race the writer or
         // replace those changes with an older file snapshot.
-        if (m_impl->revision != 0) return;
-        m_impl->loadActive = true;
+        if (lifetime->revision != 0) return;
+        lifetime->loadActive = true;
     }
     std::filesystem::path path;
     try {
-        path = m_impl->Path();
-        const auto bytes = m_impl->storage->Read(path);
-        if (!bytes || bytes->empty()) {
-            m_impl->CompleteLoadWithoutCommit();
+        path = lifetime->Path();
+        const auto bytes = lifetime->storage->Read(path);
+        if (!bytes) {
+            lifetime->CompleteLoadWithoutCommit();
             return;
         }
-        const auto json = winrt::Windows::Data::Json::JsonObject::Parse(winrt::to_hstring(*bytes));
-        const auto legacyGlobal = GetOptionalBoolean(json, L"globalAutoReconnect", false);
-        loaded.GlobalConnectOnStartup = GetOptionalBoolean(json, L"globalConnectOnStartup", legacyGlobal);
-        loaded.GlobalReconnectOnConnectionLoss =
-            GetOptionalBoolean(json, L"globalReconnectOnConnectionLoss", legacyGlobal);
-        loaded.AllowIncomingConnections = GetOptionalBoolean(json, L"allowIncomingConnections", false);
-        loaded.StartWithWindows = GetOptionalBoolean(json, L"startWithWindows", false);
-        loaded.ShowNotifications = GetOptionalBoolean(json, L"showNotifications", true);
-        loaded.UseSystemBackdropEffects = GetOptionalBoolean(json, L"useSystemBackdropEffects", true);
-        loaded.PrivacyModeEnabled = GetOptionalBoolean(json, L"privacyModeEnabled", false);
-        loaded.LastUpdateCheckUnixSeconds = GetOptionalInt64(json, L"lastUpdateCheckUnixSeconds", 0);
-        loaded.LastNotifiedUpdateVersion = BoundedString(GetOptionalString(json, L"lastNotifiedUpdateVersion", L""),
-                                                         apc::limits::c_maxVersionCharacters);
-        const auto language = GetOptionalString(json, L"language", L"system");
-        loaded.Language = apc::limits::IsSupportedLanguage(language) ? std::wstring(language) : L"system";
-        loaded.DefaultDevice = ParseDefaultDeviceMode(GetOptionalString(json, L"defaultDeviceMode", L""));
-        loaded.DefaultDeviceId = GetOptionalString(json, L"defaultDeviceId", L"");
-        if (loaded.DefaultDevice != DefaultDeviceMode::SpecificDevice || loaded.DefaultDeviceId.empty() ||
-            !apc::limits::IsBoundedUtf16(loaded.DefaultDeviceId, apc::limits::c_maxDeviceIdCharacters)) {
-            loaded.DefaultDevice = DefaultDeviceMode::LastConnected;
-            loaded.DefaultDeviceId.clear();
-        }
-        if (auto boundsJson = GetOptionalObject(json, L"settingsWindowBounds")) {
-            const auto persistedDpi = GetOptionalInt32(boundsJson, L"dpi", USER_DEFAULT_SCREEN_DPI);
-            PersistedWindowBounds bounds{
-                GetOptionalInt32(boundsJson, L"x", 0),
-                GetOptionalInt32(boundsJson, L"y", 0),
-                GetOptionalInt32(boundsJson, L"width", 0),
-                GetOptionalInt32(boundsJson, L"height", 0),
-                static_cast<std::uint32_t>(persistedDpi > 0 ? persistedDpi : USER_DEFAULT_SCREEN_DPI)};
-            if (bounds.Width > 0 && bounds.Height > 0 && bounds.Dpi >= apc::limits::c_minWindowDpi &&
-                bounds.Dpi <= apc::limits::c_maxWindowDpi)
-                loaded.SettingsWindowBounds = bounds;
-        }
-        std::unordered_set<std::wstring> deviceIds;
-        if (auto devices = GetOptionalArray(json, L"devices"))
-            for (auto value : devices) {
-                if (loaded.Devices.size() == apc::limits::c_maxPersistedDeviceCount) break;
-                if (value.ValueType() != winrt::Windows::Data::Json::JsonValueType::Object) continue;
-                try {
-                    const auto entry = value.GetObject();
-                    DeviceSettings device;
-                    device.Id = GetOptionalString(entry, L"id", L"");
-                    if (device.Id.empty() ||
-                        !apc::limits::IsBoundedUtf16(device.Id, apc::limits::c_maxDeviceIdCharacters) ||
-                        !deviceIds.insert(device.Id).second)
-                        continue;
-                    device.Name =
-                        BoundedString(GetOptionalString(entry, L"name", L""), apc::limits::c_maxDeviceNameCharacters);
-                    device.Alias =
-                        BoundedString(GetOptionalString(entry, L"alias", L""), apc::limits::c_maxDeviceAliasCharacters);
-                    const auto legacy = GetOptionalBoolean(entry, L"autoReconnect", false);
-                    device.ConnectOnStartup = GetOptionalBoolean(entry, L"connectOnStartup", legacy);
-                    device.ReconnectOnConnectionLoss = GetOptionalBoolean(entry, L"reconnectOnConnectionLoss", legacy);
-                    loaded.Devices.push_back(std::move(device));
-                } catch (...) {
-                    DebugTrace(L"[SettingsStore] skipping invalid device entry");
-                }
-            }
-        std::unordered_set<std::wstring> recentIds;
-        if (auto ids = GetOptionalArray(json, L"lastConnectedIds"))
-            for (auto value : ids) {
-                if (loaded.LastConnectedIds.size() == apc::limits::c_maxPersistedDeviceCount) break;
-                if (value.ValueType() != winrt::Windows::Data::Json::JsonValueType::String) continue;
-                auto identifier = std::wstring(value.GetString());
-                if (!identifier.empty() &&
-                    apc::limits::IsBoundedUtf16(identifier, apc::limits::c_maxDeviceIdCharacters) &&
-                    recentIds.insert(identifier).second)
-                    loaded.LastConnectedIds.push_back(std::move(identifier));
-            }
+        auto decoded = apc::settings::DecodePersisted(*bytes);
+        loaded = std::move(decoded.Data);
+        needsRewrite = decoded.NeedsRewrite;
     } catch (std::exception const& exception) {
-        DebugTrace(L"[SettingsStore] load failed: {0}", util::Utf8ToUtf16(exception.what()));
-        m_impl->storage->PreserveCorrupt(path);
-        m_impl->CompleteLoadWithoutCommit();
+        lifetime->log.Trace(L"[SettingsStore] load failed: {0}", util::Utf8ToUtf16(exception.what()));
+        lifetime->CompleteLoadWithoutCommit(lifetime->storage->PreserveCorrupt(path));
         return;
     } catch (...) {
-        DebugTrace(L"[SettingsStore] load failed");
-        m_impl->storage->PreserveCorrupt(path);
-        m_impl->CompleteLoadWithoutCommit();
+        lifetime->log.Trace(L"[SettingsStore] load failed");
+        lifetime->CompleteLoadWithoutCommit(lifetime->storage->PreserveCorrupt(path));
         return;
     }
     std::vector<Impl::SubscriptionStatePtr> subscriptionsToNotify;
     SettingsSnapshot snapshot;
     try {
+        auto loadedData = std::make_shared<const SettingsData>(std::move(loaded));
+        std::optional<SettingsStoreWakeup::Clock::time_point> rewriteDue;
+        if (needsRewrite) rewriteDue = lifetime->wakeup->Now() + c_debounceDelay;
         {
-            std::scoped_lock lock(m_impl->mutex);
-            if (m_impl->shutdownRequested || m_impl->revision != 0) {
-                m_impl->loadActive = false;
-                m_impl->changed.notify_all();
+            std::scoped_lock lock(lifetime->mutex);
+            if (lifetime->shutdownRequested || lifetime->revision != 0) {
+                lifetime->loadActive = false;
+                lifetime->changed.notify_all();
                 return;
             }
 
-            std::unique_lock publicationLock(m_impl->publicationMutex, std::defer_lock);
-            const auto shouldPublish = !m_impl->closing && !m_impl->subscriptions.empty();
+            std::unique_lock publicationLock(lifetime->publicationMutex, std::defer_lock);
+            const auto shouldPublish = !lifetime->closing && !lifetime->subscriptions.empty();
             if (shouldPublish) publicationLock.lock();
             if (shouldPublish) {
-                snapshot = {loaded, 1, false};
-                subscriptionsToNotify.reserve(m_impl->subscriptions.size());
-                for (auto const& [_, entry] : m_impl->subscriptions) {
+                snapshot = {*loadedData, 1, false};
+                subscriptionsToNotify.reserve(lifetime->subscriptions.size());
+                for (auto const& [_, entry] : lifetime->subscriptions) {
                     subscriptionsToNotify.push_back(entry.State);
                 }
-                m_impl->EnqueuePublicationWithLockHeld(std::move(snapshot), std::move(subscriptionsToNotify));
+                lifetime->pendingPublications.push_back({std::move(snapshot), std::move(subscriptionsToNotify)});
             }
 
-            m_impl->data = std::move(loaded);
-            m_impl->revision = 1;
-            m_impl->persistedRevision = 1;
-            m_impl->loadActive = false;
+            lifetime->data = std::move(loadedData);
+            lifetime->revision = 1;
+            lifetime->persistedRevision = needsRewrite ? 0 : 1;
+            if (needsRewrite) {
+                lifetime->timerArmed = true;
+                lifetime->due = *rewriteDue;
+            }
+            lifetime->loadActive = false;
         }
-        m_impl->changed.notify_all();
+        lifetime->NotifyChanged();
     } catch (...) {
-        m_impl->CompleteLoadWithoutCommit();
+        lifetime->CompleteLoadWithoutCommit();
         throw;
     }
-    m_impl->DrainPublications();
+    lifetime->DrainPublications();
 }
 
 namespace {
@@ -863,6 +687,10 @@ DeviceSettings* FindDevice(SettingsData& data, std::wstring_view id) {
     return it == data.Devices.end() ? nullptr : &*it;
 }
 } // namespace
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Settings Mutations ////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 SettingsMutationResult SettingsStore::SetGlobalConnectOnStartup(bool enabled) {
     return m_impl->Commit([=](auto& data) { return std::exchange(data.GlobalConnectOnStartup, enabled) != enabled; });
@@ -890,6 +718,16 @@ SettingsMutationResult SettingsStore::SetLanguage(std::wstring_view language) {
 }
 SettingsMutationResult SettingsStore::SetPrivacyModeEnabled(bool enabled) {
     return m_impl->Commit([=](auto& data) { return std::exchange(data.PrivacyModeEnabled, enabled) != enabled; });
+}
+SettingsMutationResult SettingsStore::RecordRatingPromptFirstLaunch(std::wstring today) {
+    return m_impl->Commit([today = std::move(today)](auto& data) {
+        if (today.empty() || !data.RatingPrompt.FirstLaunchDate.empty()) return false;
+        data.RatingPrompt.FirstLaunchDate = std::move(today);
+        return true;
+    });
+}
+SettingsMutationResult SettingsStore::MarkRatingPromptAsked() {
+    return m_impl->Commit([](auto& data) { return !std::exchange(data.RatingPrompt.Asked, true); });
 }
 SettingsMutationResult SettingsStore::SetSettingsWindowBounds(std::optional<PersistedWindowBounds> bounds) {
     if (bounds && (bounds->Width <= 0 || bounds->Height <= 0 || bounds->Dpi < apc::limits::c_minWindowDpi ||
@@ -997,114 +835,103 @@ SettingsMutationResult SettingsStore::ForgetDevice(std::wstring_view deviceId) {
         return defaultWasRemoved || before != data.Devices.size() + data.LastConnectedIds.size();
     });
 }
-RecordConnectedDeviceResult SettingsStore::RecordConnectedDevice(std::wstring_view deviceId,
-                                                                 std::wstring_view deviceName) {
-    RecordConnectedDeviceResult result;
+SettingsMutationResult
+SettingsStore::RecordConnectedDevice(std::wstring_view deviceId, std::wstring_view deviceName, std::wstring usageDay) {
     if (deviceId.empty() || !apc::limits::IsBoundedUtf16(deviceId, apc::limits::c_maxDeviceIdCharacters) ||
         !apc::limits::IsBoundedUtf16(deviceName, apc::limits::c_maxDeviceNameCharacters)) {
-        result.Mutation = {SettingsMutationStatus::Rejected, Snapshot().Revision};
-        return result;
-    }
-    result.Mutation =
-        m_impl->Commit([&result, deviceId = std::wstring(deviceId), deviceName = std::wstring(deviceName)](auto& data) {
-            result.EffectiveReconnectOnConnectionLoss = data.GlobalReconnectOnConnectionLoss;
-            auto* device = FindDevice(data, deviceId);
-            bool nameChanged = false;
-            if (!device) {
-                if (data.Devices.size() < apc::limits::c_maxPersistedDeviceCount) {
-                    data.Devices.push_back(
-                        {deviceId, deviceName, L"", data.GlobalConnectOnStartup, data.GlobalReconnectOnConnectionLoss});
-                    device = &data.Devices.back();
-                    result.AddedDevice = true;
-                    result.PresentationChanged = true;
-                }
-            } else if (!deviceName.empty() && device->Name != deviceName) {
-                device->Name = deviceName;
-                nameChanged = true;
-                result.PresentationChanged = device->Alias.empty() && !data.PrivacyModeEnabled;
-            }
-            if (device) {
-                result.ConnectOnStartup = device->ConnectOnStartup;
-                result.EffectiveReconnectOnConnectionLoss =
-                    result.EffectiveReconnectOnConnectionLoss || device->ReconnectOnConnectionLoss;
-            }
-            const auto before = data.LastConnectedIds;
-            std::erase(data.LastConnectedIds, deviceId);
-            data.LastConnectedIds.insert(data.LastConnectedIds.begin(), deviceId);
-            if (data.LastConnectedIds.size() > apc::limits::c_maxPersistedDeviceCount) data.LastConnectedIds.pop_back();
-            return result.AddedDevice || nameChanged || data.LastConnectedIds != before;
-        });
-    return result;
-}
-SettingsMutationResult SettingsStore::RecordUpdateCheckMetadata(std::int64_t unixSeconds,
-                                                                std::optional<std::wstring> notifiedVersion) {
-    if (notifiedVersion && !apc::limits::IsBoundedUtf16(*notifiedVersion, apc::limits::c_maxVersionCharacters))
         return {SettingsMutationStatus::Rejected, Snapshot().Revision};
-    return m_impl->Commit([unixSeconds, notifiedVersion = std::move(notifiedVersion)](auto& data) {
-        const auto changed = data.LastUpdateCheckUnixSeconds != unixSeconds ||
-                             (notifiedVersion && data.LastNotifiedUpdateVersion != *notifiedVersion);
-        data.LastUpdateCheckUnixSeconds = unixSeconds;
-        if (notifiedVersion) data.LastNotifiedUpdateVersion = *notifiedVersion;
+    }
+    return m_impl->Commit([deviceId = std::wstring(deviceId),
+                           deviceName = std::wstring(deviceName),
+                           usageDay = std::move(usageDay)](auto& data) {
+        auto* device = FindDevice(data, deviceId);
+        bool changed = false;
+        if (!device && data.Devices.size() < apc::limits::c_maxPersistedDeviceCount) {
+            data.Devices.push_back(
+                {deviceId, deviceName, L"", data.GlobalConnectOnStartup, data.GlobalReconnectOnConnectionLoss});
+            changed = true;
+        } else if (device && !deviceName.empty() && device->Name != deviceName) {
+            device->Name = deviceName;
+            changed = true;
+        }
+        const auto before = data.LastConnectedIds;
+        std::erase(data.LastConnectedIds, deviceId);
+        data.LastConnectedIds.insert(data.LastConnectedIds.begin(), deviceId);
+        if (data.LastConnectedIds.size() > apc::limits::c_maxPersistedDeviceCount) data.LastConnectedIds.pop_back();
+        changed = changed || data.LastConnectedIds != before;
+        // A real connected transition counts as one rating-prompt usage day.
+        if (!data.RatingPrompt.Asked && !usageDay.empty() && data.RatingPrompt.LastUsageDate != usageDay &&
+            data.RatingPrompt.UsageDays < std::numeric_limits<int>::max()) {
+            data.RatingPrompt.LastUsageDate = std::move(usageDay);
+            ++data.RatingPrompt.UsageDays;
+            changed = true;
+        }
         return changed;
     });
 }
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Flush and Shutdown ////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 bool SettingsStore::FlushNow(unsigned int maximumAttempts) noexcept {
-    return m_impl->FlushSynchronously(maximumAttempts);
+    const auto impl = m_impl;
+    return impl->FlushSynchronously(maximumAttempts);
 }
 
-bool SettingsStore::Shutdown(SettingsShutdownMode mode, unsigned int maximumAttempts) noexcept {
+bool SettingsStore::Shutdown(SettingsShutdownMode mode,
+                             unsigned int maximumAttempts,
+                             std::chrono::milliseconds timeBudget) noexcept {
     const auto impl = m_impl;
-    if (!impl) return true;
-    bool isShutdownExecutor = false;
-    bool shutdownResult = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::max(timeBudget, std::chrono::milliseconds::zero());
+    bool workerFinished = false;
+    bool result = false;
+    decltype(impl->subscriptions) retiredSubscriptions;
     {
         std::unique_lock lock(impl->mutex);
         if (impl->closing) {
-            impl->shutdownChanged.wait(lock, [&] { return impl->shutdownCoreComplete; });
-            shutdownResult = impl->shutdownResult;
-        } else {
-            isShutdownExecutor = true;
-            impl->closing = true;
-            impl->timerArmed = false;
-            impl->DeactivateSubscriptionsLocked();
+            if (!impl->shutdownChanged.wait_until(lock, deadline, [&] { return impl->shutdownCoreComplete; }))
+                return false;
+            result = impl->shutdownResult;
+            lock.unlock();
+            return result && impl->WaitForPublicationDrain(deadline);
         }
-    }
-
-    if (!isShutdownExecutor) {
-        impl->WaitForPublicationDrain();
-        return shutdownResult;
-    }
-
-    impl->changed.notify_all();
-    {
-        std::unique_lock lock(impl->mutex);
-        // Close admission first, then let an already-admitted read publish its state without callbacks. This
-        // gives the final flush the loaded snapshot while rejecting post-shutdown mutations and subscriptions.
-        impl->changed.wait(lock, [&] { return !impl->loadActive; });
-    }
-    shutdownResult = mode == SettingsShutdownMode::Flush ? impl->FlushSynchronously(maximumAttempts) : true;
-    {
-        std::scoped_lock lock(impl->mutex);
-        impl->shutdownRequested = true;
+        impl->closing = true;
+        impl->timerArmed = false;
+        impl->shutdownAttempts = std::max(maximumAttempts, 1U);
         impl->discardRequested = mode == SettingsShutdownMode::DiscardStartupFailure;
+        impl->DeactivateSubscriptionsLocked();
+        retiredSubscriptions = std::move(impl->subscriptions);
+        lock.unlock();
+        impl->NotifyChanged();
+        lock.lock();
+
+        // Only the persistence worker performs the final write. This caller never enters storage I/O.
+        const auto drained = impl->changed.wait_until(
+            lock, deadline, [&] { return impl->workerFinished && !impl->writerActive && !impl->loadActive; });
+        result = drained && impl->workerFlushResult;
+        workerFinished = impl->workerFinished;
+        // Fence late load/write completions even when their platform call cannot be interrupted.
+        impl->shutdownRequested = true;
         impl->timerArmed = false;
     }
-    {
-        std::scoped_lock publicationLock(impl->publicationMutex);
-        impl->pendingPublications.clear();
-    }
-    impl->changed.notify_all();
-    if (impl->worker.joinable()) {
-        impl->worker.request_stop();
+    impl->NotifyChanged();
+    impl->worker.request_stop();
+    if (workerFinished) {
         impl->worker.join();
+    } else {
+        // The worker retains Impl, including storage and every value used after this boundary.
+        // Detaching releases only the thread handle; worker exit releases the retained state.
+        // No callback captures the facade. The shutdown fence rejects new work and late state commits.
+        impl->worker.detach();
     }
     {
         std::scoped_lock lock(impl->mutex);
-        impl->shutdownResult = shutdownResult;
+        impl->shutdownResult = result;
         impl->shutdownCoreComplete = true;
     }
     impl->shutdownChanged.notify_all();
-    impl->WaitForPublicationDrain();
-    return shutdownResult;
+    const auto publicationsDrained = impl->WaitForPublicationDrain(deadline);
+    if (!result || !publicationsDrained)
+        impl->log.Trace(L"[SettingsStore] shutdown incomplete: persistence or publication did not drain");
+    return result && publicationsDrained;
 }

@@ -1,10 +1,12 @@
+#include "TestCheck.hpp"
+#include "DeviceTestFixture.hpp"
+
 #include <core/DeviceWatcher.hpp>
 
 #include <algorithm>
 #include <deque>
 #include <iostream>
 #include <memory>
-#include <stdexcept>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -14,20 +16,8 @@
 namespace {
 
 using apc::device::DeviceWatcher;
-using apc::device::DeviceWatcherCallbacks;
 using apc::device::DeviceWatcherFact;
 using apc::device::DeviceWatcherFactKind;
-using apc::device::DeviceWatcherPlatform;
-using apc::device::DeviceWatcherRegistration;
-using apc::device_picker::DeviceIdentity;
-
-int g_failures = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 class ManualExecutor {
 public:
@@ -50,95 +40,6 @@ private:
     std::deque<DeviceWatcher::Task> m_tasks;
 };
 
-class FakeDeviceInformationWatcherState {
-public:
-    explicit FakeDeviceInformationWatcherState(DeviceWatcherCallbacks callbacks) : Callbacks(std::move(callbacks)) {}
-
-    void Add(std::wstring id, std::wstring name) { Callbacks.DeviceAdded({std::move(id), std::move(name)}); }
-    void Remove(std::wstring id) { Callbacks.DeviceRemoved(std::move(id)); }
-    void CompleteEnumeration() { Callbacks.EnumerationCompleted(); }
-
-    int StartCalls = 0;
-    int StopCalls = 0;
-    int RevokeCalls = 0;
-    bool FailStart = false;
-
-private:
-    DeviceWatcherCallbacks Callbacks;
-};
-
-class FakeDeviceInformationWatcher final : public DeviceWatcherRegistration {
-public:
-    explicit FakeDeviceInformationWatcher(std::shared_ptr<FakeDeviceInformationWatcherState> state)
-        : m_state(std::move(state)) {}
-
-    void Start() override {
-        ++m_state->StartCalls;
-        if (m_state->FailStart) throw std::runtime_error("planned watcher start failure");
-    }
-    void Stop() noexcept override { ++m_state->StopCalls; }
-    void RevokeCallbacks() noexcept override { ++m_state->RevokeCalls; }
-
-private:
-    std::shared_ptr<FakeDeviceInformationWatcherState> m_state;
-};
-
-class FakeDeviceWatcherPlatform final : public DeviceWatcherPlatform {
-public:
-    [[nodiscard]] std::unique_ptr<DeviceWatcherRegistration>
-    CreateDeviceInformationWatcher(DeviceWatcherCallbacks callbacks) override {
-        auto state = std::make_shared<FakeDeviceInformationWatcherState>(std::move(callbacks));
-        state->FailStart = FailNextStart;
-        FailNextStart = false;
-        LastWatcher = state;
-        Watchers.push_back(std::move(state));
-        return std::make_unique<FakeDeviceInformationWatcher>(LastWatcher);
-    }
-
-    winrt::Windows::Foundation::IAsyncAction RefreshAsync(RefreshCompletion completion) override {
-        auto gate = RefreshGate;
-        if (!gate) {
-            if (completion) completion(nullptr, {});
-            co_return;
-        }
-
-        co_await winrt::resume_background();
-        SetEvent(gate->Started);
-        WaitForSingleObject(gate->Released, INFINITE);
-        if (completion) completion(nullptr, gate->Inventory);
-        co_return;
-    }
-
-    struct PendingRefresh {
-        PendingRefresh()
-            : Started(CreateEventW(nullptr, TRUE, FALSE, nullptr)),
-              Released(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {}
-
-        ~PendingRefresh() {
-            if (Started) CloseHandle(Started);
-            if (Released) CloseHandle(Released);
-        }
-
-        HANDLE Started = nullptr;
-        HANDLE Released = nullptr;
-        std::vector<DeviceIdentity> Inventory;
-    };
-
-    [[nodiscard]] std::shared_ptr<PendingRefresh> BeginRefresh(std::vector<DeviceIdentity> inventory) {
-        auto gate = std::make_shared<PendingRefresh>();
-        gate->Inventory = std::move(inventory);
-        RefreshGate = gate;
-        return gate;
-    }
-
-    std::shared_ptr<FakeDeviceInformationWatcherState> LastWatcher;
-    std::vector<std::shared_ptr<FakeDeviceInformationWatcherState>> Watchers;
-    bool FailNextStart = false;
-
-private:
-    std::shared_ptr<PendingRefresh> RefreshGate;
-};
-
 struct Fixture {
     Fixture()
         : PlatformAccess(Platform.get()), Watcher([this](DeviceWatcher::Task task) { Executor.Post(std::move(task)); },
@@ -146,8 +47,9 @@ struct Fixture {
                                                   std::move(Platform)) {}
 
     ManualExecutor Executor;
-    std::unique_ptr<FakeDeviceWatcherPlatform> Platform = std::make_unique<FakeDeviceWatcherPlatform>();
-    FakeDeviceWatcherPlatform* PlatformAccess = nullptr;
+    std::unique_ptr<apc::tests::device::FakeWatcherPlatform> Platform =
+        std::make_unique<apc::tests::device::FakeWatcherPlatform>();
+    apc::tests::device::FakeWatcherPlatform* PlatformAccess = nullptr;
     DeviceWatcher Watcher;
     std::vector<DeviceWatcherFact> Facts;
 };
@@ -240,7 +142,7 @@ void TestEnumerationCompletePublishesOncePerGeneration() {
 
 void TestShutdownRevokesCallbacksWithoutRetainingOwner() {
     ManualExecutor executor;
-    auto platform = std::make_unique<FakeDeviceWatcherPlatform>();
+    auto platform = std::make_unique<apc::tests::device::FakeWatcherPlatform>();
     auto* const platformAccess = platform.get();
     std::size_t factCount = 0;
     auto watcher =
@@ -267,12 +169,12 @@ void TestRefreshDoesNotOverwriteNewerCallbackInventory() {
     auto refreshGate = fixture.PlatformAccess->BeginRefresh({{L"stale", L"Stale"}});
     auto refresh = fixture.Watcher.RefreshAsync();
 
-    Check(WaitForSingleObject(refreshGate->Started, 2'000) == WAIT_OBJECT_0,
+    Check(WaitForSingleObject(refreshGate->Started.get(), 2'000) == WAIT_OBJECT_0,
           "the controlled refresh must reach its deterministic release point");
     platformWatcher->Add(L"fresh", L"Fresh");
     fixture.Executor.RunAll();
 
-    SetEvent(refreshGate->Released);
+    SetEvent(refreshGate->Released.get());
     refresh.get();
     fixture.Executor.RunAll();
 
@@ -292,9 +194,3 @@ int RunDeviceWatcherTests() {
     TestRefreshDoesNotOverwriteNewerCallbackInventory();
     return g_failures;
 }
-
-#ifdef APC_DEVICE_WATCHER_STANDALONE
-int main() {
-    return RunDeviceWatcherTests();
-}
-#endif

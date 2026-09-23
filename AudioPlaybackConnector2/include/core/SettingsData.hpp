@@ -19,6 +19,17 @@ struct DeviceSettings {
 
 enum class DefaultDeviceMode { LastConnected, SpecificDevice };
 
+// Local settings-file state of the store rating prompt. Dates are local calendar days,
+// ISO YYYY-MM-DD. All fields default to "never started"; the prompt is shown at most once.
+struct RatingPromptData {
+    std::wstring FirstLaunchDate;
+    int UsageDays = 0;
+    std::wstring LastUsageDate;
+    bool Asked = false;
+
+    bool operator==(RatingPromptData const&) const = default;
+};
+
 struct PersistedWindowBounds {
     int32_t X = 0;
     int32_t Y = 0;
@@ -37,14 +48,13 @@ struct SettingsData {
     bool ShowNotifications = true;
     bool UseSystemBackdropEffects = true;
     std::wstring Language = L"system";
-    int64_t LastUpdateCheckUnixSeconds = 0;
-    std::wstring LastNotifiedUpdateVersion;
     std::optional<PersistedWindowBounds> SettingsWindowBounds;
     bool PrivacyModeEnabled = false;
     DefaultDeviceMode DefaultDevice = DefaultDeviceMode::LastConnected;
     std::wstring DefaultDeviceId;
     std::vector<DeviceSettings> Devices;
     std::vector<std::wstring> LastConnectedIds;
+    RatingPromptData RatingPrompt;
 
     bool operator==(SettingsData const&) const = default;
 };

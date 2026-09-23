@@ -9,9 +9,13 @@
 
 namespace apc::app {
 
-// DeviceService facts can arrive while their UI dispatch is queued. This fence is the sole owner of
-// the queued-fact generation: producers advance it before dispatch and the UI consumer verifies its
-// token before publishing a typed fact. Equal facts deliberately share a generation so duplicate
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Device Fact Publication Fence /////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
+// DeviceService facts can arrive while their UI presentation is queued. The controller owns this fence
+// and advances it when normalizing facts; the UI consumer verifies its token before presentation.
+// Equal facts deliberately share a generation so duplicate
 // source notifications retain their current behavior. It never calls user code while holding its mutex.
 class DeviceFactPublicationFence {
 public:
@@ -25,20 +29,24 @@ public:
         Channel FactChannel = Channel::Connection;
     };
 
-    [[nodiscard]] Token RecordConnected(std::wstring_view deviceId) {
-        return RecordConnection(deviceId, true, Status::Connected);
-    }
+    struct Observation {
+        bool WasConnected = false;
+        bool WasWaitingForReconnect = false;
+        Token Connection;
+        Token State;
+    };
 
-    [[nodiscard]] Token RecordDisconnected(std::wstring_view deviceId) {
-        return RecordConnection(deviceId, false, Status::None);
-    }
-
-    [[nodiscard]] Token RecordStatus(std::wstring_view deviceId, Status status) {
+    [[nodiscard]] Observation Observe(std::wstring_view deviceId, Status status) {
         std::scoped_lock lock(m_mutex);
         auto& state = m_devices[std::wstring(deviceId)];
+        const bool wasConnected = state.IsConnected;
+        const bool wasWaiting = state.CurrentStatus == Status::WaitingForReconnect;
         UpdateConnection(state, status == Status::Connected);
         UpdateStatus(state, status);
-        return Token{std::wstring(deviceId), state.StatusGeneration, Token::Channel::Status};
+        return {wasConnected,
+                wasWaiting,
+                {std::wstring(deviceId), state.ConnectionGeneration, Token::Channel::Connection},
+                {std::wstring(deviceId), state.StatusGeneration, Token::Channel::Status}};
     }
 
     [[nodiscard]] bool IsCurrent(Token const& token) const {
@@ -57,14 +65,6 @@ private:
         std::uint64_t StatusGeneration = 0;
         bool IsGenerationExhausted = false;
     };
-
-    [[nodiscard]] Token RecordConnection(std::wstring_view deviceId, bool isConnected, Status status) {
-        std::scoped_lock lock(m_mutex);
-        auto& state = m_devices[std::wstring(deviceId)];
-        UpdateConnection(state, isConnected);
-        UpdateStatus(state, status);
-        return Token{std::wstring(deviceId), state.ConnectionGeneration, Token::Channel::Connection};
-    }
 
     static void UpdateConnection(DeviceState& state, bool isConnected) noexcept {
         if (state.IsConnected == isConnected) return;

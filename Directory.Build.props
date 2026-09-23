@@ -1,11 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project>
-  <PropertyGroup>
-    <PackageVersion Condition="'$(PackageVersion)' == ''">0.9.1.0</PackageVersion>
-    <_ApcPackageVersionFormatValid>$([System.Text.RegularExpressions.Regex]::IsMatch('$(PackageVersion)', '^\d{1,5}\.\d{1,5}\.\d{1,5}\.\d{1,5}$'))</_ApcPackageVersionFormatValid>
-    <_ApcPackageVersionMajor Condition="'$(_ApcPackageVersionFormatValid)' == 'true'">$([System.Version]::Parse('$(PackageVersion)').Major)</_ApcPackageVersionMajor>
-    <_ApcPackageVersionMinor Condition="'$(_ApcPackageVersionFormatValid)' == 'true'">$([System.Version]::Parse('$(PackageVersion)').Minor)</_ApcPackageVersionMinor>
-    <_ApcPackageVersionBuild Condition="'$(_ApcPackageVersionFormatValid)' == 'true'">$([System.Version]::Parse('$(PackageVersion)').Build)</_ApcPackageVersionBuild>
-    <_ApcPackageVersionRevision Condition="'$(_ApcPackageVersionFormatValid)' == 'true'">$([System.Version]::Parse('$(PackageVersion)').Revision)</_ApcPackageVersionRevision>
+  <PropertyGroup Condition="'$(MSBuildProjectExtension)' == '.vcxproj'">
+    <PlatformToolset>v145</PlatformToolset>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+    <CodeAnalysisRuleSet>$(MSBuildThisFileDirectory)config\Concurrency.ruleset</CodeAnalysisRuleSet>
+    <EnableCppCoreCheck>true</EnableCppCoreCheck>
   </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(MSBuildProjectExtension)' == '.vcxproj'">
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <SDLCheck>true</SDLCheck>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
+      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'AudioPlaybackConnector2.CoreRuntime'">
+    <VcpkgEnableManifest>true</VcpkgEnableManifest>
+    <VcpkgManifestRoot>$(MSBuildThisFileDirectory)</VcpkgManifestRoot>
+    <VcpkgTriplet>$(Platform.ToLower())-windows-static-md</VcpkgTriplet>
+    <!-- Manifest restore removes packages outside its requested triplet. Isolate architecture restores. -->
+    <VcpkgInstalledDir>$(MSBuildThisFileDirectory)vcpkg_installed\$(VcpkgTriplet)\</VcpkgInstalledDir>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(MSBuildProjectExtension)' == '.vcxproj'">
+    <ClCompile>
+      <!-- Code analysis checks first-party sources only; NuGet/vcpkg headers are external. -->
+      <ExternalIncludePath>$(MSBuildThisFileDirectory)packages;$(MSBuildThisFileDirectory)vcpkg_installed;%(ExternalIncludePath)</ExternalIncludePath>
+      <AdditionalOptions Condition="'$(RunCodeAnalysis)' == 'true'">/analyze:external- %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
+  </ItemDefinitionGroup>
 </Project>

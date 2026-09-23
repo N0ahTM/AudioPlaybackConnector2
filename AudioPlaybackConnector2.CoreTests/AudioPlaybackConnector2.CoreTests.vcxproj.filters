@@ -1,0 +1,304 @@
+<?xml version='1.0' encoding='utf-8'?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
+  <ItemGroup>
+    <Filter Include="Dependencies">
+      <UniqueIdentifier>{ddbb476e-e8a7-54a5-8990-e57b39a59826}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Headers">
+      <UniqueIdentifier>{ac81023b-8931-5fb9-8909-4d9f123b5f75}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Headers\App">
+      <UniqueIdentifier>{ea5ae772-ae15-5bbc-bc91-57a0cacb205b}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Headers\Control">
+      <UniqueIdentifier>{755e9203-d3db-5b6f-96a7-0c85c893bc13}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Headers\Core">
+      <UniqueIdentifier>{3990786d-2903-5090-96f2-837802f35ee2}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Headers\Services">
+      <UniqueIdentifier>{354a5054-6625-546d-ba31-cfe17ba33876}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Headers\UI">
+      <UniqueIdentifier>{53bf734a-394c-5f40-a758-5d59c5651786}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Headers\Util">
+      <UniqueIdentifier>{be2afa1e-55e3-5539-9363-1ba3ed6f0f04}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Tests">
+      <UniqueIdentifier>{dd5b7273-13e5-5085-a900-6aca35d87d04}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Tests\Application">
+      <UniqueIdentifier>{053cb136-740f-5ce8-b4c5-4a255e9e0d22}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Tests\Control">
+      <UniqueIdentifier>{8118b147-7c18-5efb-ad84-58916f9d0161}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Tests\Devices">
+      <UniqueIdentifier>{fdabb9c0-b4c5-532a-ba39-68e5375253d0}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Tests\Diagnostics">
+      <UniqueIdentifier>{59cd0bc3-7cbe-5df0-9b22-40927f6d1a56}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Tests\Localization">
+      <UniqueIdentifier>{7f528bcd-7506-55b0-b22c-922a0d26f8df}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Tests\Notifications">
+      <UniqueIdentifier>{e66ed9c1-d45d-5a24-95ba-34b057d6ca3f}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Tests\Presentation">
+      <UniqueIdentifier>{5a944b97-8a43-5376-bb5a-3a43f0d8596e}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Tests\Settings">
+      <UniqueIdentifier>{720e9e8a-7e19-51cf-a9fa-75718dbb3adc}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Tests\Shared">
+      <UniqueIdentifier>{bcb8b0b2-a966-5c1c-9d9b-b3a29a24afe7}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="packages.config">
+      <Filter>Dependencies</Filter>
+    </None>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveActionRetryBackoff.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveResourcePolicy.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveScheduleState.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppController.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppModels.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppPresentation.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\DeviceFactPublicationFence.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\LatestStartupTaskRequestState.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\RatingPromptPolicy.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResourcePressureMonitor.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResourcePressureState.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\SingleInstanceGuard.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\StartupTaskCoordinator.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\UiRefreshCoalescer.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandClient.hpp">
+      <Filter>Headers\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandPipeSecurity.hpp">
+      <Filter>Headers\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandProtocol.hpp">
+      <Filter>Headers\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\control\ControlTargetMatcher.hpp">
+      <Filter>Headers\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\control\ControlUiActionGate.hpp">
+      <Filter>Headers\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceId.hpp">
+      <Filter>Headers\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DevicePickerTypes.hpp">
+      <Filter>Headers\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceService.hpp">
+      <Filter>Headers\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceSession.hpp">
+      <Filter>Headers\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceWatcher.hpp">
+      <Filter>Headers\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\ReconnectPolicy.hpp">
+      <Filter>Headers\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsLimits.hpp">
+      <Filter>Headers\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsStore.hpp">
+      <Filter>Headers\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\TrayTooltipBuilder.hpp">
+      <Filter>Headers\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\services\CommandLineControlServer.hpp">
+      <Filter>Headers\Services</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\services\ToastXmlSanitizer.hpp">
+      <Filter>Headers\Services</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\ui\DiagnosticsLogCollector.hpp">
+      <Filter>Headers\UI</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\util\RuntimeApartment.hpp">
+      <Filter>Headers\Util</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\util\Text.hpp">
+      <Filter>Headers\Util</Filter>
+    </ClInclude>
+    <ClCompile Include="src\AdaptiveActionRetryBackoffTests.cpp">
+      <Filter>Tests\Application</Filter>
+    </ClCompile>
+    <ClCompile Include="src\AdaptiveResourcePolicyTests.cpp">
+      <Filter>Tests\Application</Filter>
+    </ClCompile>
+    <ClCompile Include="src\AdaptiveScheduleStateTests.cpp">
+      <Filter>Tests\Application</Filter>
+    </ClCompile>
+    <ClCompile Include="src\AppControllerTests.cpp">
+      <Filter>Tests\Application</Filter>
+    </ClCompile>
+    <ClCompile Include="src\AppControllerUseCasesTests.cpp">
+      <Filter>Tests\Application</Filter>
+    </ClCompile>
+    <ClCompile Include="src\AppModelsTests.cpp">
+      <Filter>Tests\Application</Filter>
+    </ClCompile>
+    <ClInclude Include="src\AppTestFixture.hpp">
+      <Filter>Tests\Application</Filter>
+    </ClInclude>
+    <ClCompile Include="src\LatestStartupTaskRequestStateTests.cpp">
+      <Filter>Tests\Application</Filter>
+    </ClCompile>
+    <ClCompile Include="src\PowerTransitionCoordinatorTests.cpp">
+      <Filter>Tests\Application</Filter>
+    </ClCompile>
+    <ClCompile Include="src\RatingPromptPolicyTests.cpp">
+      <Filter>Tests\Application</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ResourcePressureMonitorTests.cpp">
+      <Filter>Tests\Application</Filter>
+    </ClCompile>
+    <ClCompile Include="src\SingleInstanceGuardTests.cpp">
+      <Filter>Tests\Application</Filter>
+    </ClCompile>
+    <ClCompile Include="src\StartupTaskCoordinatorTests.cpp">
+      <Filter>Tests\Application</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UiDispatcherTests.cpp">
+      <Filter>Tests\Application</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UiRefreshCoalescerTests.cpp">
+      <Filter>Tests\Application</Filter>
+    </ClCompile>
+    <ClCompile Include="src\UiRefreshSchedulerTests.cpp">
+      <Filter>Tests\Application</Filter>
+    </ClCompile>
+    <ClCompile Include="src\CliParserTests.cpp">
+      <Filter>Tests\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="src\CommandClientTests.cpp">
+      <Filter>Tests\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="src\CommandLineControlServerTests.cpp">
+      <Filter>Tests\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="src\CommandPipeSecurityTests.cpp">
+      <Filter>Tests\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ControlCommandAdapterTests.cpp">
+      <Filter>Tests\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ControlTargetMatcherTests.cpp">
+      <Filter>Tests\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ControlUiActionGateTests.cpp">
+      <Filter>Tests\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ProtocolBoundaryTests.cpp">
+      <Filter>Tests\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="src\DeviceIncomingTests.cpp">
+      <Filter>Tests\Devices</Filter>
+    </ClCompile>
+    <ClCompile Include="src\DevicePowerTests.cpp">
+      <Filter>Tests\Devices</Filter>
+    </ClCompile>
+    <ClCompile Include="src\DeviceReconnectTests.cpp">
+      <Filter>Tests\Devices</Filter>
+    </ClCompile>
+    <ClCompile Include="src\DeviceServiceTests.cpp">
+      <Filter>Tests\Devices</Filter>
+    </ClCompile>
+    <ClInclude Include="src\DeviceTestFixture.hpp">
+      <Filter>Tests\Devices</Filter>
+    </ClInclude>
+    <ClCompile Include="src\DeviceWatcherTests.cpp">
+      <Filter>Tests\Devices</Filter>
+    </ClCompile>
+    <ClCompile Include="src\ReconnectPolicyTests.cpp">
+      <Filter>Tests\Devices</Filter>
+    </ClCompile>
+    <ClCompile Include="src\TrayTooltipBuilderTests.cpp">
+      <Filter>Tests\Devices</Filter>
+    </ClCompile>
+    <ClCompile Include="src\CrashHandlerTests.cpp">
+      <Filter>Tests\Diagnostics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\DiagnosticsLogCollectorTests.cpp">
+      <Filter>Tests\Diagnostics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\LoggerTests.cpp">
+      <Filter>Tests\Diagnostics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\RuntimeApartmentTests.cpp">
+      <Filter>Tests\Diagnostics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\SettingsDiagnosticsReportBuilderTests.cpp">
+      <Filter>Tests\Diagnostics</Filter>
+    </ClCompile>
+    <ClCompile Include="src\StringResourcesTests.cpp">
+      <Filter>Tests\Localization</Filter>
+    </ClCompile>
+    <ResourceCompile Include="StringResourcesTests.rc">
+      <Filter>Tests\Localization</Filter>
+    </ResourceCompile>
+    <ClCompile Include="src\ToastContentBuilderTests.cpp">
+      <Filter>Tests\Notifications</Filter>
+    </ClCompile>
+    <ClCompile Include="src\DevicePickerViewStateTests.cpp">
+      <Filter>Tests\Presentation</Filter>
+    </ClCompile>
+    <ClInclude Include="src\ManualSettingsWakeup.hpp">
+      <Filter>Tests\Settings</Filter>
+    </ClInclude>
+    <ClCompile Include="src\SettingsCodecTests.cpp">
+      <Filter>Tests\Settings</Filter>
+    </ClCompile>
+    <ClCompile Include="src\SettingsLimitsTests.cpp">
+      <Filter>Tests\Settings</Filter>
+    </ClCompile>
+    <ClCompile Include="src\SettingsStoreTests.cpp">
+      <Filter>Tests\Settings</Filter>
+    </ClCompile>
+    <ClCompile Include="src\Main.cpp">
+      <Filter>Tests\Shared</Filter>
+    </ClCompile>
+    <ClInclude Include="src\TestCheck.hpp">
+      <Filter>Tests\Shared</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>

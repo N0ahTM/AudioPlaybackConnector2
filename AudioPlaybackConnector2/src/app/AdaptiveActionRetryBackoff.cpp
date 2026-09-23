@@ -2,6 +2,10 @@
 
 #include <algorithm>
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 AdaptiveActionRetryBackoff::AdaptiveActionRetryBackoff(std::chrono::milliseconds initialDelay,
                                                        std::chrono::milliseconds maximumDelay) noexcept
     : m_initialDelay(std::max(initialDelay, std::chrono::milliseconds{1})),

@@ -1,25 +1,38 @@
 #pragma once
 
-#include <cstdint>
-#include <functional>
+#include <core/StringResources.hpp>
+#include <app/AppModels.hpp>
 #include <memory>
-#include <mutex>
-#include <vector>
+
+#include <util/Logger.hpp>
+
+#include <cstdint>
+#include <utility>
+#include <winrt/Microsoft.UI.Dispatching.h>
+#include <winrt/Microsoft.Windows.AppNotifications.h>
+
+namespace apc::app {
+class AppController;
+}
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Notification Service //////////////////////////////////////////////////////////////////////////////*/
 /*------------------------------------------------------------------------------------------------------------*/
 
+// Lifecycle, preferences and rendering belong to the host UI thread. Native
+// activation callbacks only enqueue immutable arguments for that same owner.
 class NotificationService : public std::enable_shared_from_this<NotificationService> {
 public:
-    using ReconnectRequestedCallback = std::function<void(winrt::hstring deviceId)>;
-    using ShouldShowNotificationCallback = std::function<bool()>;
-
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Lifecycle /////////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    NotificationService() = default;
+    explicit NotificationService(util::LogSink log,
+                                 std::shared_ptr<StringResources const> strings,
+                                 winrt::Microsoft::UI::Dispatching::DispatcherQueue dispatcher,
+                                 std::weak_ptr<apc::app::AppController> controller)
+        : m_log(std::move(log)), m_strings(std::move(strings)), m_dispatcher(std::move(dispatcher)),
+          m_controller(std::move(controller)) {}
     ~NotificationService();
 
     NotificationService(const NotificationService&) = delete;
@@ -31,60 +44,45 @@ public:
     void Teardown() noexcept;
 
     /*------------------------------------------------------------------------------------------------------------*/
-    /*//////// Callbacks /////////////////////////////////////////////////////////////////////////////////////////*/
-    /*------------------------------------------------------------------------------------------------------------*/
-
-    void SetReconnectCallback(ReconnectRequestedCallback callback);
-    void SetShouldShowNotificationCallback(ShouldShowNotificationCallback callback);
-
-    /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Notifications /////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
     void ShowAppStarted();
-    void ShowDeviceConnected(winrt::hstring const& id, winrt::hstring const& deviceName);
-    void ShowDeviceDisconnected(winrt::hstring const& id, winrt::hstring const& deviceName);
-    void ShowAutoReconnect(winrt::hstring const& id, winrt::hstring const& deviceName);
-    void ShowAutoReconnectFailed(winrt::hstring const& id, winrt::hstring const& deviceName);
-    [[nodiscard]] bool ShowUpdateAvailable(std::wstring const& latestVersion);
-
-    void
-    OnNotificationInvoked(winrt::Microsoft::Windows::AppNotifications::AppNotificationActivatedEventArgs const& args);
+    void HandleEvent(apc::app::AppEvent const& event) noexcept;
+    // One-shot store rating notification; evaluates channel/age/usage eligibility and
+    // marks the prompt as shown only when the notification was actually presented.
+    void MaybeShowRatingPrompt() noexcept;
 
 private:
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Internal Helpers //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    struct StatusNotificationTagReservation {
-        std::vector<winrt::hstring> TagsToRemove;
-        winrt::hstring CurrentTag;
-        uint64_t Generation = 0;
-    };
-
-    void TeardownCore(bool clearCallbacks);
-    [[nodiscard]] StatusNotificationTagReservation ReserveStatusNotificationTag();
-    void RollbackStatusNotificationTag(StatusNotificationTagReservation&& reservation);
-    [[nodiscard]] bool ShouldShowNotifications() const;
-    winrt::fire_and_forget RemoveStaleStatusToastsAsync(
+    struct Content;
+    void ShowNotification(Content const& content, winrt::hstring const& id = {}, winrt::hstring const& deviceName = {});
+    void OnNotificationInvoked(winrt::hstring const& argument);
+    static winrt::fire_and_forget OpenStoreReviewPage();
+    static winrt::fire_and_forget RemoveStaleStatusToastsAsync(
         winrt::Microsoft::Windows::AppNotifications::AppNotificationManager notificationManager,
         winrt::hstring group,
-        std::vector<winrt::hstring> tagsToRemove);
-    bool ShowStatusToast(std::wstring const& xml, winrt::Windows::Foundation::DateTime const& expiration);
+        winrt::hstring tagToRemove,
+        util::LogSink log);
+    bool ShowToast(std::wstring const& xml, winrt::Windows::Foundation::DateTime const& expiration, bool isStatus);
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
+    util::LogSink m_log;
+    std::shared_ptr<StringResources const> m_strings;
     winrt::Microsoft::Windows::AppNotifications::AppNotificationManager m_notificationManager{nullptr};
     winrt::event_token m_notificationInvokedToken{};
-    ReconnectRequestedCallback m_reconnectCallback;
-    ShouldShowNotificationCallback m_shouldShowNotificationCallback;
-    std::vector<winrt::hstring> m_statusNotificationTags;
-    uint64_t m_statusNotificationGeneration = 0;
+    winrt::hstring m_statusNotificationTag;
+    bool m_showInProgress = false;
     bool m_notificationsRegistered = false;
     bool m_isTearingDown = false;
-    std::mutex m_lifecycleMutex;
-    std::mutex m_statusNotificationMutex;
-    mutable wil::srwlock m_lock;
+    winrt::Microsoft::UI::Dispatching::DispatcherQueue m_dispatcher{nullptr};
+    uint64_t m_registrationGeneration = 0;
+    // The host owns both components; toast callbacks must not retain the controller.
+    std::weak_ptr<apc::app::AppController> m_controller;
 };

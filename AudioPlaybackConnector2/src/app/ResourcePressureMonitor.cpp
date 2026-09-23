@@ -6,6 +6,7 @@
 #endif
 #include <windows.h>
 #include <shellapi.h>
+#include <wil/resource.h>
 
 #include <app/ResourcePressureMonitor.hpp>
 
@@ -17,6 +18,10 @@
 #include <mutex>
 #include <optional>
 #include <utility>
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Windows Probes ////////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 namespace {
 thread_local void const* g_activeResourcePressureCallback = nullptr;
@@ -69,9 +74,13 @@ FILETIME RelativeDueTime(std::chrono::milliseconds delay) noexcept {
 }
 } // namespace
 
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Monitor Lifetime and Callbacks ////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
 struct ResourcePressureMonitor::Impl {
     struct RunContext : std::enable_shared_from_this<RunContext> {
-        explicit RunContext(Callback callback,
+        explicit RunContext(std::shared_ptr<const Callback> callback,
                             Config config,
                             std::shared_ptr<std::atomic_uint64_t> sequence,
                             void const* ownerIdentity,
@@ -85,26 +94,26 @@ struct ResourcePressureMonitor::Impl {
         ~RunContext() { Shutdown(true); }
 
         [[nodiscard]] bool Initialize() noexcept {
-            LowMemory = CreateMemoryResourceNotification(LowMemoryResourceNotification);
+            LowMemory.reset(CreateMemoryResourceNotification(LowMemoryResourceNotification));
             if (!LowMemory) return false;
-            HighMemory = CreateMemoryResourceNotification(HighMemoryResourceNotification);
+            HighMemory.reset(CreateMemoryResourceNotification(HighMemoryResourceNotification));
             if (!HighMemory) return false;
 
-            LowWait = CreateThreadpoolWait(&MemoryCallback, this, nullptr);
+            LowWait.reset(CreateThreadpoolWait(&MemoryCallback, this, nullptr));
             if (!LowWait) return false;
-            HighWait = CreateThreadpoolWait(&MemoryCallback, this, nullptr);
+            HighWait.reset(CreateThreadpoolWait(&MemoryCallback, this, nullptr));
             if (!HighWait) return false;
-            PollTimer = CreateThreadpoolTimer(&TimerCallback, this, nullptr);
-            return PollTimer != nullptr;
+            PollTimer.reset(CreateThreadpoolTimer(&TimerCallback, this, nullptr));
+            return static_cast<bool>(PollTimer);
         }
 
         void Arm() noexcept {
             std::scoped_lock lock(ControlMutex);
             Running.store(true);
-            SetThreadpoolWait(LowWait, LowMemory, nullptr);
-            SetThreadpoolWait(HighWait, HighMemory, nullptr);
+            SetThreadpoolWait(LowWait.get(), LowMemory.get(), nullptr);
+            SetThreadpoolWait(HighWait.get(), HighMemory.get(), nullptr);
             auto dueTime = RelativeDueTime(std::chrono::milliseconds{1});
-            SetThreadpoolTimer(PollTimer, &dueTime, 0, std::min<DWORD>(NormalPeriod / 5, 1000));
+            SetThreadpoolTimer(PollTimer.get(), &dueTime, 0, std::min<DWORD>(NormalPeriod / 5, 1000));
         }
 
         [[nodiscard]] bool RequestProbe() noexcept {
@@ -112,7 +121,7 @@ struct ResourcePressureMonitor::Impl {
                 std::scoped_lock lock(ControlMutex);
                 if (!Running.load() || !IsOwnerEpochCurrent() || !PollTimer) return false;
                 auto dueTime = RelativeDueTime(std::chrono::milliseconds{1});
-                SetThreadpoolTimer(PollTimer, &dueTime, 0, 0);
+                SetThreadpoolTimer(PollTimer.get(), &dueTime, 0, 0);
                 return true;
             } catch (...) {
                 return false;
@@ -125,30 +134,21 @@ struct ResourcePressureMonitor::Impl {
 
             {
                 std::scoped_lock lock(ControlMutex);
-                if (LowWait) SetThreadpoolWait(LowWait, nullptr, nullptr);
-                if (HighWait) SetThreadpoolWait(HighWait, nullptr, nullptr);
-                if (PollTimer) SetThreadpoolTimer(PollTimer, nullptr, 0, 0);
+                if (LowWait) SetThreadpoolWait(LowWait.get(), nullptr, nullptr);
+                if (HighWait) SetThreadpoolWait(HighWait.get(), nullptr, nullptr);
+                if (PollTimer) SetThreadpoolTimer(PollTimer.get(), nullptr, 0, 0);
             }
 
-            if (LowWait) WaitForThreadpoolWaitCallbacks(LowWait, TRUE);
-            if (HighWait) WaitForThreadpoolWaitCallbacks(HighWait, TRUE);
-            if (PollTimer) WaitForThreadpoolTimerCallbacks(PollTimer, TRUE);
+            if (LowWait) WaitForThreadpoolWaitCallbacks(LowWait.get(), TRUE);
+            if (HighWait) WaitForThreadpoolWaitCallbacks(HighWait.get(), TRUE);
+            if (PollTimer) WaitForThreadpoolTimerCallbacks(PollTimer.get(), TRUE);
 
-            if (LowWait) {
-                CloseThreadpoolWait(std::exchange(LowWait, nullptr));
-            }
-            if (HighWait) {
-                CloseThreadpoolWait(std::exchange(HighWait, nullptr));
-            }
-            if (PollTimer) {
-                CloseThreadpoolTimer(std::exchange(PollTimer, nullptr));
-            }
-            if (LowMemory) {
-                CloseHandle(std::exchange(LowMemory, nullptr));
-            }
-            if (HighMemory) {
-                CloseHandle(std::exchange(HighMemory, nullptr));
-            }
+            // All native callbacks have drained above; these owners only close resources.
+            LowWait.reset();
+            HighWait.reset();
+            PollTimer.reset();
+            LowMemory.reset();
+            HighMemory.reset();
 
             if (waitForPublicCallbacks && g_activeResourcePressureCallback != OwnerIdentity) {
                 WaitForPublicCallbacks();
@@ -168,19 +168,6 @@ struct ResourcePressureMonitor::Impl {
         }
 
     private:
-        struct PublicCallbackGuard {
-            explicit PublicCallbackGuard(std::shared_ptr<RunContext> owner) : Owner(std::move(owner)) {}
-            ~PublicCallbackGuard() { Owner->FinishPublicCallback(); }
-            std::shared_ptr<RunContext> Owner;
-        };
-
-        struct ActiveCallbackScope {
-            explicit ActiveCallbackScope(void const* current) noexcept
-                : Previous(std::exchange(g_activeResourcePressureCallback, current)) {}
-            ~ActiveCallbackScope() { g_activeResourcePressureCallback = Previous; }
-            void const* Previous;
-        };
-
         static void CALLBACK MemoryCallback(PTP_CALLBACK_INSTANCE instance,
                                             void* context,
                                             PTP_WAIT,
@@ -199,20 +186,25 @@ struct ResourcePressureMonitor::Impl {
         }
 
         void ProbeAndPublish(PTP_CALLBACK_INSTANCE instance) {
+            if (!Running.load() || !IsOwnerEpochCurrent()) return;
+            const auto probeTicket = NextProbeTicket.fetch_add(1) + 1;
+            ResourcePressureProbe probe{
+                .LowMemorySignaled = QueryMemoryState(LowMemory.get()),
+                .HighMemorySignaled = QueryMemoryState(HighMemory.get()),
+                .MemoryProbeAttempted = true,
+            };
+            probe.UserActivity = QueryUserActivity();
+            probe.EnergySaver = QueryEnergySaver();
+            probe.UserActivityProbeAttempted = true;
+            probe.EnergySaverProbeAttempted = true;
+            const auto observedAt = std::chrono::steady_clock::now();
+
             bool deliverSnapshots = false;
             {
                 std::scoped_lock lock(ControlMutex);
-                if (!Running.load() || !IsOwnerEpochCurrent()) return;
-
-                ResourcePressureProbe probe{
-                    .LowMemorySignaled = QueryMemoryState(LowMemory),
-                    .HighMemorySignaled = QueryMemoryState(HighMemory),
-                    .MemoryProbeAttempted = true,
-                };
-                probe.UserActivity = QueryUserActivity();
-                probe.EnergySaver = QueryEnergySaver();
-                probe.UserActivityProbeAttempted = true;
-                probe.EnergySaverProbeAttempted = true;
+                // A later-started probe may finish first; never restore an older sensor state or timer plan.
+                if (!Running.load() || !IsOwnerEpochCurrent() || probeTicket <= LastAppliedProbeTicket) return;
+                LastAppliedProbeTicket = probeTicket;
                 const auto values = Reducer.Apply(probe);
                 ArmMemoryWaits(probe.LowMemorySignaled, probe.HighMemorySignaled);
                 const bool probesComplete = probe.LowMemorySignaled.has_value() &&
@@ -220,11 +212,10 @@ struct ResourcePressureMonitor::Impl {
                                             probe.EnergySaver.has_value();
                 ScheduleNextPoll(ShouldUseConstrainedPollInterval(values, probesComplete));
 
-                auto const observedAt = std::chrono::steady_clock::now();
                 const bool heartbeatDue =
                     (!LastSnapshotPublishedAt || observedAt - *LastSnapshotPublishedAt >= HeartbeatInterval);
                 if (!LastPublished || *LastPublished != values || heartbeatDue) {
-                    if (Handler) {
+                    if (Handler && *Handler) {
                         PendingSnapshots.push_back({
                             .Values = values,
                             .ObservedAt = observedAt,
@@ -245,9 +236,11 @@ struct ResourcePressureMonitor::Impl {
             }
 
             if (!deliverSnapshots) return;
-            PublicCallbackGuard callbackGuard(shared_from_this());
+            auto callbackGuard = wil::scope_exit([owner = shared_from_this()] { owner->FinishPublicCallback(); });
             DisassociateCurrentThreadFromCallback(instance);
-            ActiveCallbackScope callbackScope(OwnerIdentity);
+            const auto previousCallback = std::exchange(g_activeResourcePressureCallback, OwnerIdentity);
+            auto callbackScope =
+                wil::scope_exit([previousCallback] { g_activeResourcePressureCallback = previousCallback; });
             for (;;) {
                 std::optional<ResourcePressureSnapshot> snapshot;
                 {
@@ -261,7 +254,7 @@ struct ResourcePressureMonitor::Impl {
                     PendingSnapshots.pop_front();
                 }
                 try {
-                    Handler(*snapshot);
+                    (*Handler)(*snapshot);
                 } catch (...) {
                 }
             }
@@ -269,14 +262,14 @@ struct ResourcePressureMonitor::Impl {
 
         void ArmMemoryWaits(std::optional<bool> lowMemorySignaled, std::optional<bool> highMemorySignaled) noexcept {
             auto const plan = PlanMemoryNotificationWaits(lowMemorySignaled, highMemorySignaled);
-            SetThreadpoolWait(LowWait, plan.ArmLow ? LowMemory : nullptr, nullptr);
-            SetThreadpoolWait(HighWait, plan.ArmHigh ? HighMemory : nullptr, nullptr);
+            SetThreadpoolWait(LowWait.get(), plan.ArmLow ? LowMemory.get() : nullptr, nullptr);
+            SetThreadpoolWait(HighWait.get(), plan.ArmHigh ? HighMemory.get() : nullptr, nullptr);
         }
 
         void ScheduleNextPoll(bool constrained) noexcept {
             auto const period = constrained ? ConstrainedPeriod : NormalPeriod;
             auto dueTime = RelativeDueTime(std::chrono::milliseconds{period});
-            SetThreadpoolTimer(PollTimer, &dueTime, 0, std::min<DWORD>(period / 5, 1000));
+            SetThreadpoolTimer(PollTimer.get(), &dueTime, 0, std::min<DWORD>(period / 5, 1000));
         }
 
         [[nodiscard]] bool IsOwnerEpochCurrent() const noexcept { return OwnerEpoch->load() == Epoch; }
@@ -289,12 +282,14 @@ struct ResourcePressureMonitor::Impl {
             }
         }
 
-        Callback Handler;
+        std::shared_ptr<const Callback> Handler;
         DWORD NormalPeriod = 0;
         DWORD ConstrainedPeriod = 0;
         std::atomic_bool Running = false;
         std::atomic_bool ShutdownStarted = false;
         std::mutex ControlMutex;
+        std::atomic_uint64_t NextProbeTicket = 0;
+        std::uint64_t LastAppliedProbeTicket = 0;
         std::mutex PublicCallbackMutex;
         std::condition_variable PublicCallbackFinished;
         std::size_t PublicCallbacks = 0;
@@ -308,22 +303,23 @@ struct ResourcePressureMonitor::Impl {
         std::uint64_t Epoch = 0;
         std::chrono::milliseconds HeartbeatInterval;
         bool DeliveryActive = false;
-        HANDLE LowMemory = nullptr;
-        HANDLE HighMemory = nullptr;
-        PTP_WAIT LowWait = nullptr;
-        PTP_WAIT HighWait = nullptr;
-        PTP_TIMER PollTimer = nullptr;
+        wil::unique_handle LowMemory;
+        wil::unique_handle HighMemory;
+        wil::unique_threadpool_wait_nowait LowWait;
+        wil::unique_threadpool_wait_nowait HighWait;
+        wil::unique_threadpool_timer_nowait PollTimer;
     };
 
-    explicit Impl(Callback callback, Config config) : Handler(std::move(callback)), MonitorConfig(config) {
-        DeferredStopWork = CreateThreadpoolWork(&DeferredStopCallback, this, nullptr);
+    explicit Impl(Callback callback, Config config)
+        : Handler(std::make_shared<const Callback>(std::move(callback))), MonitorConfig(config) {
+        DeferredStopWork.reset(CreateThreadpoolWork(&DeferredStopCallback, this, nullptr));
     }
 
     ~Impl() {
         Stop();
         if (DeferredStopWork) {
-            WaitForThreadpoolWorkCallbacks(DeferredStopWork, TRUE);
-            CloseThreadpoolWork(std::exchange(DeferredStopWork, nullptr));
+            WaitForThreadpoolWorkCallbacks(DeferredStopWork.get(), TRUE);
+            DeferredStopWork.reset();
         }
     }
 
@@ -344,7 +340,7 @@ struct ResourcePressureMonitor::Impl {
             auto const epoch = Epoch->fetch_add(1) + 1;
             auto context = std::make_shared<RunContext>(Handler, MonitorConfig, Sequence, this, Epoch, epoch);
             if (!context->Initialize()) return false;
-            Active = context;
+            Active.store(context);
             Running.store(true);
             context->Arm();
             auto const stopAfterArm = StopRequestFlags.exchange(0);
@@ -367,7 +363,7 @@ struct ResourcePressureMonitor::Impl {
         if (calledFromCallback) {
             std::unique_lock lock(LifecycleMutex, std::try_to_lock);
             if (!lock.owns_lock()) {
-                if (DeferredStopWork) SubmitThreadpoolWork(DeferredStopWork);
+                if (DeferredStopWork) SubmitThreadpoolWork(DeferredStopWork.get());
                 return;
             }
             auto const pendingStop = StopRequestFlags.exchange(0);
@@ -383,13 +379,9 @@ struct ResourcePressureMonitor::Impl {
 
     [[nodiscard]] bool RequestProbe() noexcept {
         try {
-            std::shared_ptr<RunContext> context;
-            {
-                std::scoped_lock lock(LifecycleMutex);
-                if (!Running.load() || !Active) return false;
-                context = Active;
-            }
-            return context->RequestProbe();
+            if (!Running.load()) return false;
+            auto context = Active.load();
+            return context && context->RequestProbe();
         } catch (...) {
             return false;
         }
@@ -405,8 +397,10 @@ struct ResourcePressureMonitor::Impl {
 
     void StopWhileLocked(bool calledFromCallback) noexcept {
         Running.store(false);
-        auto context = std::exchange(Active, nullptr);
+        auto context = Active.exchange(nullptr);
         if (context) {
+            // Platform drain stays serialized with Start; native callbacks never take LifecycleMutex.
+            // Public callbacks can reenter RequestProbe through the atomic Active gate.
             context->Shutdown(!calledFromCallback);
             if (calledFromCallback && context->HasPublicCallbacks()) {
                 Retiring = std::move(context);
@@ -423,7 +417,9 @@ struct ResourcePressureMonitor::Impl {
         Retiring.reset();
     }
 
-    Callback Handler;
+    // Keep the callable alive while contexts are retired under LifecycleMutex.
+    // Contexts release only shared_ptr references under that lock, not user captures.
+    std::shared_ptr<const Callback> Handler;
     static constexpr std::uint32_t c_stopRequested = 0x1;
     static constexpr std::uint32_t c_stopOriginatedFromCallback = 0x2;
     Config MonitorConfig;
@@ -432,10 +428,14 @@ struct ResourcePressureMonitor::Impl {
     std::atomic_bool Running = false;
     std::atomic_uint32_t StopRequestFlags = 0;
     mutable std::mutex LifecycleMutex;
-    std::shared_ptr<RunContext> Active;
+    std::atomic<std::shared_ptr<RunContext>> Active;
     std::shared_ptr<RunContext> Retiring;
-    PTP_WORK DeferredStopWork = nullptr;
+    wil::unique_threadpool_work_nowait DeferredStopWork;
 };
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Public Interface //////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
 
 ResourcePressureMonitor::ResourcePressureMonitor(Callback callback, Config config)
     : m_impl(std::make_unique<Impl>(std::move(callback), config)) {}

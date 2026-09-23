@@ -1,19 +1,28 @@
+#include "TestCheck.hpp"
+
 #include <control/CommandPipeSecurity.hpp>
 #include <control/CommandProtocol.hpp>
-#include <app/LegacyAppUseCaseBridge.hpp>
+#include <control/CommandPipeIo.hpp>
+#include "AppTestFixture.hpp"
 #include <services/CommandLineControlServer.hpp>
 
 #include <aclapi.h>
+#include <appmodel.h>
+#include <wil/resource.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <optional>
+#include <stop_token>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -23,65 +32,39 @@
 
 namespace {
 using namespace std::chrono_literals;
-using apc::app::LegacyAppUseCaseBridge;
 
-int g_failures = 0;
 std::atomic_uint64_t g_pipeSequence = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
-
-class UniqueHandle {
-public:
-    UniqueHandle() = default;
-    explicit UniqueHandle(HANDLE value) noexcept : m_value(value) {}
-    ~UniqueHandle() { Reset(); }
-    UniqueHandle(UniqueHandle const&) = delete;
-    UniqueHandle& operator=(UniqueHandle const&) = delete;
-    UniqueHandle(UniqueHandle&& other) noexcept : m_value(std::exchange(other.m_value, nullptr)) {}
-    UniqueHandle& operator=(UniqueHandle&& other) noexcept {
-        if (this != &other) {
-            Reset();
-            m_value = std::exchange(other.m_value, nullptr);
-        }
-        return *this;
-    }
-
-    void Reset(HANDLE value = nullptr) noexcept {
-        if (m_value && m_value != INVALID_HANDLE_VALUE) CloseHandle(m_value);
-        m_value = value;
-    }
-    [[nodiscard]] HANDLE Get() const noexcept { return m_value; }
-    [[nodiscard]] explicit operator bool() const noexcept { return m_value && m_value != INVALID_HANDLE_VALUE; }
-
-private:
-    HANDLE m_value = nullptr;
-};
 
 class Event {
 public:
     Event() : m_handle(CreateEventW(nullptr, TRUE, FALSE, nullptr)) {
         if (!m_handle) throw std::runtime_error("CreateEventW failed");
     }
-    ~Event() { CloseHandle(m_handle); }
     Event(Event const&) = delete;
     Event& operator=(Event const&) = delete;
 
-    void Signal() const noexcept { SetEvent(m_handle); }
+    void Signal() const noexcept { SetEvent(m_handle.get()); }
     [[nodiscard]] bool Wait(DWORD timeoutMs) const noexcept {
-        return WaitForSingleObject(m_handle, timeoutMs) == WAIT_OBJECT_0;
+        return WaitForSingleObject(m_handle.get(), timeoutMs) == WAIT_OBJECT_0;
     }
 
 private:
-    HANDLE m_handle = nullptr;
+    wil::unique_handle m_handle;
 };
 
 std::wstring UniquePipeName(std::wstring_view testName) {
     return L"\\\\.\\pipe\\AudioPlaybackConnector2.ServerTests." + std::to_wstring(GetCurrentProcessId()) + L"." +
            std::to_wstring(++g_pipeSequence) + L"." + std::wstring(testName);
+}
+
+/*------------------------------------------------------------------------------------------------------------*/
+/*//////// Bounded Test Host /////////////////////////////////////////////////////////////////////////////////*/
+/*------------------------------------------------------------------------------------------------------------*/
+
+bool IsCurrentTestProcessClient(HANDLE pipe) noexcept {
+    ULONG clientId = 0;
+    return GetNamedPipeClientProcessId(pipe, &clientId) && clientId == GetCurrentProcessId() &&
+           apc::control::IsTrustedPeerProcess(GetCurrentProcess(), clientId);
 }
 
 CommandLineControlServer::Options TestOptions(std::wstring_view testName, std::size_t instances = 2) {
@@ -95,23 +78,23 @@ CommandLineControlServer::Options TestOptions(std::wstring_view testName, std::s
     serverOptions.RetryDelayMs = 10;
     serverOptions.RequestRecordLifetime = 2s;
     serverOptions.RetryStartupFailures = false;
-    serverOptions.IsTrustedClient = [](HANDLE) noexcept { return true; };
+    serverOptions.IsTrustedClient = IsCurrentTestProcessClient;
     return serverOptions;
 }
 
-UniqueHandle OpenClient(std::wstring const& targetPipeName, DWORD timeoutMs = 2000) {
+wil::unique_handle OpenClient(std::wstring const& targetPipeName, DWORD timeoutMs = 2000) {
     const auto deadline = GetTickCount64() + timeoutMs;
     DWORD baseError = ERROR_SUCCESS;
     while (true) {
         for (std::size_t index = 0; index < apc::control::c_pipeInstanceCount; ++index) {
             const auto instanceName = apc::control::PipeInstanceName(targetPipeName, index);
-            UniqueHandle pipeHandle(CreateFileW(instanceName.c_str(),
-                                                GENERIC_READ | FILE_WRITE_DATA,
-                                                0,
-                                                nullptr,
-                                                OPEN_EXISTING,
-                                                FILE_FLAG_OVERLAPPED,
-                                                nullptr));
+            wil::unique_handle pipeHandle(CreateFileW(instanceName.c_str(),
+                                                      GENERIC_READ | FILE_WRITE_DATA,
+                                                      0,
+                                                      nullptr,
+                                                      OPEN_EXISTING,
+                                                      FILE_FLAG_OVERLAPPED,
+                                                      nullptr));
             if (pipeHandle) return pipeHandle;
             if (index == 0) baseError = GetLastError();
         }
@@ -156,8 +139,21 @@ std::optional<apc::control::Response> Exchange(std::wstring const& pipeName,
                                                bool acknowledge = true,
                                                DWORD timeoutMs = 1000) {
     auto pipe = OpenClient(pipeName, timeoutMs);
-    if (!pipe || !WriteRequest(pipe.Get(), request, timeoutMs)) return std::nullopt;
-    return ReadResponse(pipe.Get(), request.CorrelationId, acknowledge, timeoutMs);
+    if (!pipe || !WriteRequest(pipe.get(), request, timeoutMs)) return std::nullopt;
+    return ReadResponse(pipe.get(), request.CorrelationId, acknowledge, timeoutMs);
+}
+
+bool WaitForServerDisconnect(HANDLE pipe, DWORD timeoutMs = 1000) {
+    std::byte unexpectedByte{};
+    return apc::control::ReadExact(pipe, &unexpectedByte, 1, nullptr, apc::control::DeadlineAfter(timeoutMs)) ==
+           apc::control::IoStatus::Closed;
+}
+
+bool CompleteRoundTrip(std::wstring const& pipeName, apc::control::Request const& request) {
+    auto pipe = OpenClient(pipeName);
+    if (!pipe || !WriteRequest(pipe.get(), request)) return false;
+    auto response = ReadResponse(pipe.get(), request.CorrelationId);
+    return response && response->Code == apc::control::ExitCode::Success && WaitForServerDisconnect(pipe.get());
 }
 
 bool WaitUntil(std::function<bool()> predicate, DWORD timeoutMs) {
@@ -171,16 +167,6 @@ bool WaitUntil(std::function<bool()> predicate, DWORD timeoutMs) {
 
 void TestProductionRoundTripFragmentationAndRearm() {
     auto options = TestOptions(L"roundtrip", 1);
-    options.IsTrustedClient = {};
-    auto currentImage = apc::control::details::ProcessImagePath(GetCurrentProcess());
-    Check(static_cast<bool>(currentImage), "production trust test must resolve its client executable");
-    if (!currentImage) return;
-    auto currentIdentity = apc::control::ExecutableIdentityFromPath(*currentImage);
-    Check(static_cast<bool>(currentIdentity), "production trust test must resolve its client file identity");
-    if (!currentIdentity) return;
-    options.IsTrustedClient = [currentIdentity](HANDLE pipe) noexcept {
-        return apc::control::IsTrustedNamedPipeClient(pipe, currentIdentity);
-    };
     const auto pipeName = options.PipeName;
     CommandLineControlServer server(std::move(options));
     std::atomic_int calls = 0;
@@ -202,25 +188,28 @@ void TestProductionRoundTripFragmentationAndRearm() {
         header.Command = static_cast<std::uint32_t>(request.Command);
         header.Target = static_cast<std::uint32_t>(request.Target);
         header.PayloadBytes = *apc::control::PayloadByteCount(request.Payload);
-        auto* headerBytes = reinterpret_cast<std::byte*>(&header);
+        std::array<std::byte, sizeof(header)> headerBytes;
+        std::memcpy(headerBytes.data(), &header, headerBytes.size());
         const auto deadline = apc::control::DeadlineAfter(1000);
-        Check(apc::control::WriteExact(pipe.Get(), headerBytes, 7, nullptr, deadline) ==
+        Check(apc::control::WriteExact(pipe.get(), headerBytes.data(), 7, nullptr, deadline) ==
                   apc::control::IoStatus::Success,
               "fragmented header prefix must be accepted");
-        Check(apc::control::WriteExact(pipe.Get(), headerBytes + 7, sizeof(header) - 7, nullptr, deadline) ==
+        Check(apc::control::WriteExact(pipe.get(), headerBytes.data() + 7, sizeof(header) - 7, nullptr, deadline) ==
                   apc::control::IoStatus::Success,
               "fragmented header suffix must be accepted");
-        auto* payloadBytes = reinterpret_cast<std::byte*>(request.Payload.data());
-        Check(apc::control::WriteExact(pipe.Get(), payloadBytes, 3, nullptr, deadline) ==
+        std::vector<std::byte> payloadBytes(header.PayloadBytes);
+        std::memcpy(payloadBytes.data(), request.Payload.data(), payloadBytes.size());
+        Check(apc::control::WriteExact(pipe.get(), payloadBytes.data(), 3, nullptr, deadline) ==
                   apc::control::IoStatus::Success,
               "fragmented payload prefix must be accepted");
-        Check(apc::control::WriteExact(pipe.Get(), payloadBytes + 3, header.PayloadBytes - 3, nullptr, deadline) ==
-                  apc::control::IoStatus::Success,
-              "fragmented payload suffix must be accepted");
-        auto response = ReadResponse(pipe.Get(), request.CorrelationId);
+        Check(
+            apc::control::WriteExact(pipe.get(), payloadBytes.data() + 3, header.PayloadBytes - 3, nullptr, deadline) ==
+                apc::control::IoStatus::Success,
+            "fragmented payload suffix must be accepted");
+        auto response = ReadResponse(pipe.get(), request.CorrelationId);
         Check(response && response->Payload == L"echo:device-id", "fragmented request must reach the real handler");
     }
-    pipe.Reset();
+    pipe.reset();
 
     auto second = Exchange(pipeName, MakeRequest(2));
     Check(second && second->Code == apc::control::ExitCode::Success,
@@ -247,9 +236,9 @@ void TestDisconnectBeforeResponseRetriesExactlyOnce() {
 
     auto request = MakeRequest(10);
     auto abandoned = OpenClient(pipeName);
-    Check(abandoned && WriteRequest(abandoned.Get(), request), "abandoning client must send its complete request");
+    Check(abandoned && WriteRequest(abandoned.get(), request), "abandoning client must send its complete request");
     Check(started.Wait(1000), "handler must start before the first client disconnects");
-    abandoned.Reset();
+    abandoned.reset();
     release.Signal();
     Check(finished.Wait(1000), "abandoned request handler must finish");
 
@@ -296,12 +285,12 @@ void TestParallelDuplicatesAndCorrelationConflict() {
         auto request = MakeRequest(30);
         auto first = OpenClient(pipeName);
         auto second = OpenClient(pipeName);
-        Check(first && second && WriteRequest(first.Get(), request) && WriteRequest(second.Get(), request),
+        Check(first && second && WriteRequest(first.get(), request) && WriteRequest(second.get(), request),
               "parallel duplicate clients must send the same request");
         Check(started.Wait(1000), "one parallel handler must start");
         release.Signal();
-        auto firstResponse = ReadResponse(first.Get(), request.CorrelationId);
-        auto secondResponse = ReadResponse(second.Get(), request.CorrelationId);
+        auto firstResponse = ReadResponse(first.get(), request.CorrelationId);
+        auto secondResponse = ReadResponse(second.get(), request.CorrelationId);
         Check(firstResponse && secondResponse && firstResponse->Payload == secondResponse->Payload,
               "parallel duplicates must receive the same response");
         Check(calls.load() == 1, "parallel duplicate requests must execute once");
@@ -311,60 +300,57 @@ void TestParallelDuplicatesAndCorrelationConflict() {
     {
         auto options = TestOptions(L"parallel-cache-pressure", 2);
         options.MaxRequestRecords = 1;
-        options.AcknowledgedRecordLifetime = 100ms;
+        options.AcknowledgedRecordLifetime = 1ms;
+        options.ResponseTimeoutMs = 5000;
         const auto pipeName = options.PipeName;
-        Event secondPromotionReached;
-        Event releaseSecondPromotion;
-        std::atomic_int promotions = 0;
-        options.BeforeDeliveryPromoted = [&](std::size_t) noexcept {
-            if (++promotions == 2) {
-                secondPromotionReached.Signal();
-                (void)releaseSecondPromotion.Wait(3000);
-            }
-        };
         CommandLineControlServer server(std::move(options));
-        Event handlerStarted;
-        Event releaseHandler;
         std::atomic_int calls = 0;
+        const std::wstring payload(apc::control::c_maxPayloadBytes / sizeof(wchar_t), L'r');
         server.Start([&](apc::control::Request const&, std::stop_token, std::uint64_t) {
             ++calls;
-            handlerStarted.Signal();
-            (void)releaseHandler.Wait(1500);
-            return apc::control::Response{apc::control::ExitCode::Success, L"retained"};
+            return apc::control::Response{apc::control::ExitCode::Success, payload};
         });
 
-        auto request = MakeRequest(32);
+        const auto request = MakeRequest(32);
         auto first = OpenClient(pipeName);
         auto second = OpenClient(pipeName);
-        Check(first && second && WriteRequest(first.Get(), request) && WriteRequest(second.Get(), request),
+        Check(first && second && WriteRequest(first.get(), request) && WriteRequest(second.get(), request),
               "cache-pressure duplicates must both be accepted");
-        Check(handlerStarted.Wait(1000), "cache-pressure canonical handler must start");
-        releaseHandler.Signal();
-        Check(secondPromotionReached.Wait(1000), "one duplicate delivery must remain queued before promotion");
 
-        std::optional<apc::control::Response> firstResponse;
-        std::optional<apc::control::Response> secondResponse;
-        Event oneResponseRead;
-        std::jthread firstReader([&] {
-            firstResponse = ReadResponse(first.Get(), request.CorrelationId, true, 3000);
-            oneResponseRead.Signal();
-        });
-        std::jthread secondReader([&] {
-            secondResponse = ReadResponse(second.Get(), request.CorrelationId, true, 3000);
-            oneResponseRead.Signal();
-        });
-        Check(oneResponseRead.Wait(1000), "one duplicate must receive and acknowledge the canonical response");
+        // Reading only the header proves that the second delivery owns the
+        // record. Its 64 KiB body cannot fit in the 4 KiB pipe buffer.
+        apc::control::ResponseHeader secondHeader;
+        auto const headerStatus = apc::control::ReadExact(
+            second.get(), &secondHeader, sizeof(secondHeader), nullptr, apc::control::DeadlineAfter(1000));
+        Check(headerStatus == apc::control::IoStatus::Success &&
+                  secondHeader.PayloadBytes == apc::control::c_maxPayloadBytes,
+              "the duplicate must begin its full response before cache pressure");
+        auto firstResponse = ReadResponse(first.get(), request.CorrelationId);
+        Check(firstResponse && firstResponse->Payload == payload && WaitForServerDisconnect(first.get()),
+              "one duplicate must complete its response and acknowledgement");
 
         auto pressure = Exchange(pipeName, MakeRequest(33), true, 1000);
         Check(pressure && pressure->Code == apc::control::ExitCode::Busy,
-              "cache pressure must not evict a record with a queued duplicate");
-        releaseSecondPromotion.Signal();
-        firstReader.join();
-        secondReader.join();
-        Check(firstResponse && secondResponse && firstResponse->Payload == L"retained" &&
-                  secondResponse->Payload == L"retained",
-              "both duplicates must receive the retained response after cache pressure");
-        Check(calls.load() == 1, "cache pressure must not re-execute a queued duplicate");
+              "cache pressure must not evict a record whose duplicate delivery is blocked on pipe I/O");
+
+        std::wstring secondPayload(payload.size(), L'\0');
+        auto const bodyStatus = apc::control::ReadExact(second.get(),
+                                                        secondPayload.data(),
+                                                        apc::control::c_maxPayloadBytes,
+                                                        nullptr,
+                                                        apc::control::DeadlineAfter(1000));
+        Check(bodyStatus == apc::control::IoStatus::Success && secondPayload == payload,
+              "the blocked duplicate must receive the original response after cache pressure");
+        Check(apc::control::WriteAcknowledgement(
+                  second.get(), request.CorrelationId, nullptr, apc::control::DeadlineAfter(1000)) ==
+                      apc::control::IoStatus::Success &&
+                  WaitForServerDisconnect(second.get()),
+              "the retained duplicate delivery must finish normally");
+        Check(calls.load() == 1, "cache pressure must not execute the duplicate again");
+        auto nextResponse = Exchange(pipeName, MakeRequest(34));
+        Check(nextResponse && nextResponse->Code == apc::control::ExitCode::Success &&
+                  nextResponse->Payload == payload && calls.load() == 2,
+              "finishing both deliveries must release cache capacity for the next command");
         server.Stop();
     }
 
@@ -385,16 +371,16 @@ void TestParallelDuplicatesAndCorrelationConflict() {
         auto original = MakeRequest(31, apc::control::CommandType::Show);
         auto conflicting = MakeRequest(31, apc::control::CommandType::Settings);
         auto originalPipe = OpenClient(pipeName);
-        Check(originalPipe && WriteRequest(originalPipe.Get(), original), "canonical request must be sent");
+        Check(originalPipe && WriteRequest(originalPipe.get(), original), "canonical request must be sent");
         Check(started.Wait(1000), "canonical handler must be in flight");
         auto conflict = Exchange(pipeName, conflicting);
         Check(conflict && conflict->Code == apc::control::ExitCode::InvalidRequest,
               "same correlation with a different request must be rejected");
         release.Signal();
-        auto originalResponse = ReadResponse(originalPipe.Get(), original.CorrelationId, false);
+        auto originalResponse = ReadResponse(originalPipe.get(), original.CorrelationId, false);
         Check(originalResponse && originalResponse->Payload == L"canonical",
               "canonical response must survive conflict");
-        originalPipe.Reset();
+        originalPipe.reset();
         auto retry = Exchange(pipeName, original);
         Check(retry && retry->Payload == L"canonical", "conflict ACK must not evict the canonical record");
         Check(calls.load() == 1, "correlation conflict must never execute or re-enable the original request");
@@ -429,10 +415,10 @@ void TestMalformedTimeoutOversizeAndRecovery() {
     invalidHeader.PayloadBytes = apc::control::c_maxPayloadBytes + sizeof(wchar_t);
     Check(malformed &&
               apc::control::WriteExact(
-                  malformed.Get(), &invalidHeader, sizeof(invalidHeader), nullptr, apc::control::DeadlineAfter(500)) ==
+                  malformed.get(), &invalidHeader, sizeof(invalidHeader), nullptr, apc::control::DeadlineAfter(500)) ==
                   apc::control::IoStatus::Success,
           "malformed header must reach the server");
-    malformed.Reset();
+    malformed.reset();
 
     auto silent = OpenClient(pipeName);
     auto validHeader = apc::control::RequestHeader{};
@@ -441,16 +427,16 @@ void TestMalformedTimeoutOversizeAndRecovery() {
     validHeader.Command = static_cast<std::uint32_t>(apc::control::CommandType::Show);
     Check(silent &&
               apc::control::WriteExact(
-                  silent.Get(), &validHeader, sizeof(validHeader) / 2, nullptr, apc::control::DeadlineAfter(500)) ==
+                  silent.get(), &validHeader, sizeof(validHeader) / 2, nullptr, apc::control::DeadlineAfter(500)) ==
                   apc::control::IoStatus::Success,
           "partial header must be accepted before timeout");
     Sleep(120);
     std::byte byte{};
-    const auto closed = apc::control::ReadExact(silent.Get(), &byte, 1, nullptr, apc::control::DeadlineAfter(500));
+    const auto closed = apc::control::ReadExact(silent.get(), &byte, 1, nullptr, apc::control::DeadlineAfter(500));
     Check(closed == apc::control::IoStatus::Closed || closed == apc::control::IoStatus::Cancelled ||
               closed == apc::control::IoStatus::Failed,
           "partial client must be disconnected at the absolute request deadline");
-    silent.Reset();
+    silent.reset();
 
     auto oversized = Exchange(pipeName, MakeRequest(42));
     Check(oversized && oversized->Code == apc::control::ExitCode::Indeterminate && oversized->Payload.empty(),
@@ -465,99 +451,85 @@ void TestMalformedTimeoutOversizeAndRecovery() {
     server.Stop();
 }
 
-void TestRequestStopCancelsLeasedBridgeWorkBeforeBridgeDrain() {
-    auto options = TestOptions(L"request-stop-bridge-drain", 1);
-    const auto pipeName = options.PipeName;
-
-    SettingsData settings;
-    settings.Devices.push_back(DeviceSettings{L"device-id", L"Device", {}, false, false});
-    std::mutex operationMutex;
-    std::condition_variable operationChanged;
+void TestRequestStopCancelsControllerWorkBeforeDrain() {
+    auto options = TestOptions(L"request-stop-controller-drain", 1);
+    auto const pipeName = options.PipeName;
+    apc::tests::AppFixture fixture;
     Event operationEntered;
-    std::atomic_bool cancellationObserved = false;
-    std::atomic_bool releaseForFailedTest = false;
-    std::atomic_int mutations = 0;
-    std::atomic_int settingsUiCalls = 0;
-    const SettingsSnapshot settingsSnapshot{settings, 1, false};
-    LegacyAppUseCaseBridge::Operations operations;
-    operations.ReadSettings = [&] { return settingsSnapshot; };
-    operations.ReadConnectedDevices = [] {
-        return std::vector<LegacyAppUseCaseBridge::DeviceRecord>{
-            {L"device-id", L"Device", {}, apc::app::DeviceConnectionState::Idle, false, true, false}};
-    };
-    operations.Connect = [&](std::wstring_view, apc::app::AppCommandContext const& context) {
+    std::mutex mutex;
+    std::condition_variable_any changed;
+    std::atomic_bool cancelled = false;
+    fixture.Presentation->SettingsAction = [&](apc::app::AppCommandContext const& context) {
         operationEntered.Signal();
-        std::stop_callback cancellationWake{context.StopToken, [&] { operationChanged.notify_all(); }};
-        std::unique_lock lock(operationMutex);
-        operationChanged.wait(lock, [&] {
-            return context.IsCancellationRequested() || releaseForFailedTest.load(std::memory_order_acquire);
-        });
-        if (context.IsCancellationRequested()) {
-            cancellationObserved = true;
-            return LegacyAppUseCaseBridge::OperationResult{LegacyAppUseCaseBridge::OperationStatus::Cancelled};
-        }
-        ++mutations;
-        return LegacyAppUseCaseBridge::OperationResult{LegacyAppUseCaseBridge::OperationStatus::Failed};
+        std::unique_lock lock(mutex);
+        changed.wait_until(
+            lock, context.StopToken, std::chrono::steady_clock::now() + std::chrono::seconds(3), [] { return false; });
+        cancelled = context.IsCancellationRequested();
+        return apc::app::AppUiActionResult{
+            cancelled ? apc::app::AppActionStatus::Cancelled : apc::app::AppActionStatus::TimedOut, std::nullopt};
     };
-    operations.ShowSettings = [&](apc::app::AppCommandContext const&) {
-        ++settingsUiCalls;
-        return LegacyAppUseCaseBridge::UiActionResult{LegacyAppUseCaseBridge::OperationStatus::Succeeded, std::nullopt};
-    };
-    LegacyAppUseCaseBridge bridge(std::move(operations));
-
     CommandLineControlServer server(std::move(options));
-    server.Start([&](apc::control::Request const& request, std::stop_token stopToken, std::uint64_t) {
+    server.Start([&](apc::control::Request const&, std::stop_token token, std::uint64_t) {
         apc::app::AppCommandContext context;
-        context.StopToken = stopToken;
-        const auto result = bridge.Execute(
-            apc::app::AppCommand{apc::app::AppCommandKind::Connect, apc::app::DeviceSelector::ById(request.Payload)},
-            context);
+        context.StopToken = token;
+        auto result = fixture.Controller.ShowSettings(context);
         return apc::control::Response{result.Code == apc::app::AppResultCode::Cancelled
                                           ? apc::control::ExitCode::Indeterminate
                                           : apc::control::ExitCode::OperationFailed,
                                       L""};
     });
-
     auto client = OpenClient(pipeName);
-    auto request = MakeRequest(61, apc::control::CommandType::Connect);
-    request.Target = apc::control::TargetKind::Id;
-    request.Payload = L"device-id";
-    Check(client && WriteRequest(client.Get(), request), "leased request must reach the control handler");
-    Check(operationEntered.Wait(1000), "bridge operation must begin before teardown requests cancellation");
-
+    auto request = MakeRequest(61, apc::control::CommandType::Settings);
+    Check(client && WriteRequest(client.get(), request), "request must reach the concrete controller");
+    Check(operationEntered.Wait(1000), "presentation must be admitted before teardown");
     Event teardownReturned;
     std::jthread teardown([&] {
-        // This is the production ordering in ApplicationHost::PerformTeardown:
-        // first signal the P01 handler, then wait for bridge admission to drain.
         server.RequestStop();
-        bridge.SetRunning(false);
+        fixture.Controller.Shutdown();
         teardownReturned.Signal();
     });
-    const bool teardownCompleted = teardownReturned.Wait(1000);
-    Check(teardownCompleted,
-          "request-stop cancellation must release the admitted bridge lease before teardown can drain it");
-    if (!teardownCompleted) {
-        releaseForFailedTest.store(true, std::memory_order_release);
-        operationChanged.notify_all();
-    }
+    Check(teardownReturned.Wait(1000),
+          "request-stop cancellation must release the active controller call before drain");
     teardown.join();
-
-    Check(cancellationObserved.load() && mutations.load() == 0,
-          "a cancelled leased operation must not mutate state after teardown begins");
-    Check(!server.IsRunning(), "RequestStop must close P01 admission before bridge teardown");
-    const auto lateFact = bridge.Observe({LegacyAppUseCaseBridge::FactKind::DeviceStatusChanged,
-                                          L"device-id",
-                                          apc::app::DeviceConnectionState::Connecting,
-                                          apc::app::AppResultCode::OperationFailed});
-    const auto lateUi = bridge.Execute(apc::app::AppCommand{apc::app::AppCommandKind::ShowSettings});
-    Check(!lateFact && lateUi.Code == apc::app::AppResultCode::Unavailable && settingsUiCalls.load() == 0,
-          "after bridge drain no late fact, mutation, or UI callback may run");
-
-    client.Reset();
+    Check(cancelled && !server.IsRunning(), "teardown must cancel the admitted operation and close pipe admission");
+    Check(fixture.Controller.ShowSettings().Code == apc::app::AppResultCode::Unavailable &&
+              fixture.Presentation->SettingsCalls == 1,
+          "after controller drain no late presentation call may run");
+    client.reset();
     server.Stop();
 }
 
 void TestStopLifecycleAndRearmRetry() {
+    {
+        auto options = TestOptions(L"start-stop-race", 1);
+        const auto pipeName = options.PipeName;
+        CommandLineControlServer server(std::move(options));
+        auto handler = [](apc::control::Request const&, std::stop_token, std::uint64_t) {
+            return apc::control::Response{apc::control::ExitCode::Success, L"after-race"};
+        };
+        for (int iteration = 0; iteration < 12; ++iteration) {
+            Event begin;
+            std::jthread starter([&] {
+                (void)begin.Wait(INFINITE);
+                server.Start(handler);
+            });
+            std::jthread stopper([&] {
+                (void)begin.Wait(INFINITE);
+                server.Stop();
+            });
+            begin.Signal();
+            starter.join();
+            stopper.join();
+            server.Stop();
+            Check(!server.IsRunning(), "concurrent startup and stop must leave a stoppable server");
+            server.Start(handler);
+            auto response = Exchange(pipeName, MakeRequest(490 + iteration));
+            Check(response && response->Payload == L"after-race",
+                  "concurrent startup and stop must preserve a working restart");
+            server.Stop();
+        }
+    }
+
     {
         auto options = TestOptions(L"stop-silent", 1);
         const auto pipeName = options.PipeName;
@@ -570,7 +542,7 @@ void TestStopLifecycleAndRearmRetry() {
         server.Stop();
         Check(GetTickCount64() - started < 1500, "Stop must cancel and drain a silent overlapped client");
         Check(!server.IsRunning(), "Stop must publish the stopped state");
-        silent.Reset();
+        silent.reset();
 
         server.Start([](apc::control::Request const&, std::stop_token, std::uint64_t) {
             return apc::control::Response{apc::control::ExitCode::Success, L"restarted"};
@@ -601,10 +573,10 @@ void TestStopLifecycleAndRearmRetry() {
         });
         auto pipe = OpenClient(pipeName);
         auto request = MakeRequest(51);
-        Check(pipe && WriteRequest(pipe.Get(), request), "reentrant-stop request must reach the handler");
+        Check(pipe && WriteRequest(pipe.get(), request), "reentrant-stop request must reach the handler");
         Check(returned.Wait(1000), "Stop and Start called from a handler must return without self-deadlock");
         Check(WaitUntil([&] { return !server.IsRunning(); }, 1000), "reentrant Stop must linearize immediately");
-        pipe.Reset();
+        pipe.reset();
         server.Start([](apc::control::Request const&, std::stop_token, std::uint64_t) {
             return apc::control::Response{apc::control::ExitCode::Success, L"after-stop"};
         });
@@ -619,17 +591,18 @@ void TestStopLifecycleAndRearmRetry() {
         const auto pipeName = options.PipeName;
         std::atomic_bool injected = false;
         std::atomic_bool earlyClientOpened = false;
-        options.BeforeArmConnection = [&](std::size_t) noexcept {
-            if (injected.exchange(true)) return true;
-            UniqueHandle client(CreateFileW(pipeName.c_str(),
-                                            GENERIC_READ | FILE_WRITE_DATA,
-                                            0,
-                                            nullptr,
-                                            OPEN_EXISTING,
-                                            FILE_FLAG_OVERLAPPED,
-                                            nullptr));
+        options.ConnectPipe = [&](HANDLE pipe, LPOVERLAPPED operation) noexcept {
+            if (injected.exchange(true)) return ConnectNamedPipe(pipe, operation);
+            wil::unique_handle client(CreateFileW(pipeName.c_str(),
+                                                  GENERIC_READ | FILE_WRITE_DATA,
+                                                  0,
+                                                  nullptr,
+                                                  OPEN_EXISTING,
+                                                  FILE_FLAG_OVERLAPPED,
+                                                  nullptr));
             earlyClientOpened = static_cast<bool>(client);
-            return true;
+            client.reset();
+            return ConnectNamedPipe(pipe, operation);
         };
         CommandLineControlServer server(std::move(options));
         server.Start([](apc::control::Request const&, std::stop_token, std::uint64_t) {
@@ -647,12 +620,13 @@ void TestStopLifecycleAndRearmRetry() {
         const auto pipeName = options.PipeName;
         options.RetryDelayMs = 1;
         std::atomic_int attempts = 0;
-        Event recreated;
-        options.BeforeArmConnection = [&](std::size_t) noexcept {
-            ++attempts;
-            return false;
+        options.ConnectPipe = [&](HANDLE pipe, LPOVERLAPPED operation) noexcept -> BOOL {
+            if (++attempts <= 8) {
+                SetLastError(ERROR_RETRY);
+                return FALSE;
+            }
+            return ConnectNamedPipe(pipe, operation);
         };
-        options.AfterPipeRecreated = [&](std::size_t) noexcept { recreated.Signal(); };
         CommandLineControlServer server(std::move(options));
         server.Start([](apc::control::Request const&, std::stop_token, std::uint64_t) {
             return apc::control::Response{apc::control::ExitCode::Success, L"recovered"};
@@ -660,15 +634,11 @@ void TestStopLifecycleAndRearmRetry() {
         Check(server.IsRunning(), "server lifecycle must stay healthy while an individual slot retries");
         auto stale = OpenClient(pipeName);
         Check(static_cast<bool>(stale), "unarmed fixture client must attach to the old pipe instance");
-        Check(recreated.Wait(2000), "persistent arm failures must recreate the affected slot");
         if (stale) {
-            std::byte byte{};
-            const auto closed =
-                apc::control::ReadExact(stale.Get(), &byte, 1, nullptr, apc::control::DeadlineAfter(500));
-            Check(closed != apc::control::IoStatus::Success,
+            Check(WaitForServerDisconnect(stale.get(), 3000),
                   "slot recreation must close clients attached to the invalid old instance");
         }
-        stale.Reset();
+        stale.reset();
         auto response = Exchange(pipeName, MakeRequest(53), true, 2000);
         Check(response && response->Payload == L"recovered", "failed arm must recover with bounded backoff");
         Check(attempts.load() >= 8, "persistent arm failures must exercise slot recreation");
@@ -704,17 +674,86 @@ void TestStopLifecycleAndRearmRetry() {
     }
 }
 
-void TestStartupSquattingAndSecurityDescriptor() {
+void TestHandlerCaptureDestructionOutsideLifecycleLock() {
+    CommandLineControlServer server(TestOptions(L"handler-capture-stop", 1));
+    Event destructorEntered, allowDestruction, released, startEntered, startReturned;
+    auto capture = std::shared_ptr<int>(new int, [&](int* value) noexcept {
+        delete value;
+        server.Stop();
+        server.Start([](apc::control::Request const&, std::stop_token, std::uint64_t) {
+            return apc::control::Response{apc::control::ExitCode::Success, L"must-not-start-during-stop"};
+        });
+        destructorEntered.Signal();
+        static_cast<void>(allowDestruction.Wait(5000));
+        released.Signal();
+    });
+    server.Start([capture = std::move(capture)](apc::control::Request const&, std::stop_token, std::uint64_t) {
+        return apc::control::Response{apc::control::ExitCode::Success, L"unused"};
+    });
+    Check(server.IsRunning(), "capture-destruction fixture must start the pipe server");
+
+    std::thread stopper([&] { server.Stop(); });
+    const bool entered = destructorEntered.Wait(5000);
+    Check(entered, "handler capture destruction must reenter Stop and Start without a lifecycle self-wait");
+    if (!entered) std::terminate();
+    std::thread starter([&] {
+        startEntered.Signal();
+        server.Start([](apc::control::Request const&, std::stop_token, std::uint64_t) {
+            return apc::control::Response{apc::control::ExitCode::Success, L"after-stop"};
+        });
+        startReturned.Signal();
+    });
+    Check(startEntered.Wait(2000), "concurrent restart must enter during handler capture destruction");
+    Check(!startReturned.Wait(100), "a concurrent Start must wait for handler capture destruction");
+    allowDestruction.Signal();
+    const bool completed = released.Wait(5000);
+    Check(completed, "handler capture destruction must finish before another Start proceeds");
+    if (!completed) std::terminate();
+    stopper.join();
+    starter.join();
+    Check(server.IsRunning(), "a concurrent Start must resume after handler capture destruction");
+    server.Stop();
+}
+
+void TestStopNotificationOutsideLifecycleLock() {
+    auto options = TestOptions(L"stop-callback-reentrancy", 1);
+    auto const pipeName = options.PipeName;
+    CommandLineControlServer server(std::move(options));
+    Event registered, callbackReturned, release;
+    server.Start([&](apc::control::Request const&, std::stop_token token, std::uint64_t) {
+        std::stop_callback callback(token, [&] {
+            server.RequestStop();
+            callbackReturned.Signal();
+        });
+        registered.Signal();
+        static_cast<void>(release.Wait(5000));
+        return apc::control::Response{apc::control::ExitCode::Success, L"stopped"};
+    });
+    auto client = OpenClient(pipeName);
+    Check(client && WriteRequest(client.get(), MakeRequest(62)), "stop-callback fixture must reach the handler");
+    Check(registered.Wait(2000), "handler must register its stop callback before cancellation");
+
+    std::thread requester([&] { server.RequestStop(); });
+    const bool notified = callbackReturned.Wait(5000);
+    Check(notified, "stop callback must reenter RequestStop without holding the lifecycle lock");
+    release.Signal();
+    if (!notified) std::terminate();
+    requester.join();
+    client.reset();
+    server.Stop();
+}
+
+void TestStartupSquattingAndSlotRecovery() {
     auto options = TestOptions(L"squatting", 1);
     const auto pipeName = options.PipeName;
-    UniqueHandle squatter(CreateNamedPipeW(pipeName.c_str(),
-                                           PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
-                                           PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-                                           1,
-                                           1024,
-                                           1024,
-                                           0,
-                                           nullptr));
+    wil::unique_handle squatter(CreateNamedPipeW(pipeName.c_str(),
+                                                 PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                                                 PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                                                 1,
+                                                 1024,
+                                                 1024,
+                                                 0,
+                                                 nullptr));
     Check(static_cast<bool>(squatter), "squatting fixture must own the predictable pipe name");
 
     CommandLineControlServer server(std::move(options));
@@ -723,7 +762,7 @@ void TestStartupSquattingAndSecurityDescriptor() {
     });
     Check(!server.IsRunning(), "pipe squatting must degrade only the optional control endpoint");
     server.Stop();
-    squatter.Reset();
+    squatter.reset();
 
     server.Start([](apc::control::Request const&, std::stop_token, std::uint64_t) {
         return apc::control::Response{apc::control::ExitCode::Success, L"ok"};
@@ -735,19 +774,15 @@ void TestStartupSquattingAndSecurityDescriptor() {
         auto partialOptions = TestOptions(L"partial-squatting", 2);
         const auto partialPipeName = partialOptions.PipeName;
         const auto blockedSlotName = apc::control::PipeInstanceName(partialPipeName, 1);
-        UniqueHandle blockedSlot(CreateNamedPipeW(blockedSlotName.c_str(),
-                                                  PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
-                                                  PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-                                                  1,
-                                                  1024,
-                                                  1024,
-                                                  0,
-                                                  nullptr));
+        wil::unique_handle blockedSlot(CreateNamedPipeW(blockedSlotName.c_str(),
+                                                        PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                                                        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
+                                                        1,
+                                                        1024,
+                                                        1024,
+                                                        0,
+                                                        nullptr));
         Check(static_cast<bool>(blockedSlot), "one-slot squatting fixture must be created");
-        Event recoveredSlot;
-        partialOptions.AfterPipeRecreated = [&](std::size_t index) noexcept {
-            if (index == 1) recoveredSlot.Signal();
-        };
         CommandLineControlServer partialServer(std::move(partialOptions));
         partialServer.Start([](apc::control::Request const&, std::stop_token, std::uint64_t) {
             return apc::control::Response{apc::control::ExitCode::Success, L"available-slot"};
@@ -756,12 +791,11 @@ void TestStartupSquattingAndSecurityDescriptor() {
         auto partialResponse = Exchange(partialPipeName, MakeRequest(60));
         Check(partialResponse && partialResponse->Payload == L"available-slot",
               "a healthy slot must serve commands while another slot is blocked");
-        blockedSlot.Reset();
-        Check(recoveredSlot.Wait(3000), "a blocked startup slot must recover after its namespace becomes available");
-        UniqueHandle recoveredClient;
-        const auto recoveredDeadline = GetTickCount64() + 1000;
+        blockedSlot.reset();
+        wil::unique_handle recoveredClient;
+        const auto recoveredDeadline = GetTickCount64() + 3000;
         do {
-            recoveredClient.Reset(CreateFileW(blockedSlotName.c_str(),
+            recoveredClient.reset(CreateFileW(blockedSlotName.c_str(),
                                               GENERIC_READ | FILE_WRITE_DATA,
                                               0,
                                               nullptr,
@@ -772,109 +806,25 @@ void TestStartupSquattingAndSecurityDescriptor() {
             Sleep(5);
         } while (GetTickCount64() < recoveredDeadline);
         const auto recoveredRequest = MakeRequest(61);
-        Check(recoveredClient && WriteRequest(recoveredClient.Get(), recoveredRequest),
+        Check(recoveredClient && WriteRequest(recoveredClient.get(), recoveredRequest),
               "the specifically recovered slot must accept a complete request");
         auto recoveredResponse =
-            recoveredClient ? ReadResponse(recoveredClient.Get(), recoveredRequest.CorrelationId) : std::nullopt;
+            recoveredClient ? ReadResponse(recoveredClient.get(), recoveredRequest.CorrelationId) : std::nullopt;
         Check(recoveredResponse && recoveredResponse->Payload == L"available-slot",
               "the specifically recovered slot must deliver its response and ACK path");
         partialServer.Stop();
     }
 
-    auto security = apc::control::PipeSecurityAttributes::CreateCurrentUserOnly();
-    Check(security && security->Get() && security->Get()->bInheritHandle == FALSE,
-          "pipe security attributes must be non-inheritable");
-    if (security && security->Get()) {
-        SECURITY_DESCRIPTOR_CONTROL control = 0;
-        DWORD revision = 0;
-        Check(GetSecurityDescriptorControl(security->Get()->lpSecurityDescriptor, &control, &revision) != FALSE &&
-                  (control & SE_DACL_PROTECTED) != 0,
-              "pipe DACL must be protected from inherited broad ACEs");
-        BOOL present = FALSE;
-        BOOL defaulted = FALSE;
-        PACL dacl = nullptr;
-        Check(GetSecurityDescriptorDacl(security->Get()->lpSecurityDescriptor, &present, &dacl, &defaulted) != FALSE &&
-                  present && dacl,
-              "pipe security descriptor must contain a non-null DACL");
-        if (dacl) {
-            Check(dacl->AceCount == 1, "pipe DACL must contain only the current-user allow ACE");
-            void* rawAce = nullptr;
-            Check(dacl->AceCount == 1 && GetAce(dacl, 0, &rawAce) != FALSE && rawAce,
-                  "pipe DACL must expose its only ACE");
-            if (rawAce) {
-                auto const* ace = static_cast<ACCESS_ALLOWED_ACE const*>(rawAce);
-                Check(ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE,
-                      "pipe DACL must grant rather than deny the current user");
-                constexpr ACCESS_MASK clientAccess = GENERIC_READ | FILE_WRITE_DATA;
-                Check(ace->Mask == clientAccess, "pipe DACL must grant client I/O without FILE_CREATE_PIPE_INSTANCE");
-                Check((ace->Mask & FILE_CREATE_PIPE_INSTANCE) == 0,
-                      "pipe clients must not be able to create rogue server instances");
-                auto const* self = apc::control::details::CurrentProcessIdentity();
-                auto* aceSid = reinterpret_cast<PSID>(const_cast<DWORD*>(&ace->SidStart));
-                Check(self && IsValidSid(aceSid) &&
-                          EqualSid(reinterpret_cast<PSID>(const_cast<std::byte*>(self->UserSid.data())), aceSid) !=
-                              FALSE,
-                      "pipe DACL ACE must target the current user SID");
-            }
-        }
-
-        const auto protectedName = UniquePipeName(L"protected-instance");
-        UniqueHandle protectedPipe(CreateNamedPipeW(protectedName.c_str(),
-                                                    PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
-                                                    PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-                                                    PIPE_UNLIMITED_INSTANCES,
-                                                    1024,
-                                                    1024,
-                                                    0,
-                                                    security->Get()));
-        Check(static_cast<bool>(protectedPipe), "protected pipe fixture must be created");
-        UniqueHandle client(
-            CreateFileW(protectedName.c_str(), GENERIC_READ | FILE_WRITE_DATA, 0, nullptr, OPEN_EXISTING, 0, nullptr));
-        Check(static_cast<bool>(client), "the restricted DACL must still permit client read/write access");
-        SetLastError(ERROR_SUCCESS);
-        UniqueHandle rogue(CreateNamedPipeW(protectedName.c_str(),
-                                            PIPE_ACCESS_DUPLEX,
-                                            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-                                            PIPE_UNLIMITED_INSTANCES,
-                                            1024,
-                                            1024,
-                                            0,
-                                            nullptr));
-        Check(!rogue && GetLastError() == ERROR_ACCESS_DENIED,
-              "the restricted DACL must reject same-user rogue server instances");
-    }
     auto derivedPipeName = apc::control::PipeName();
-    Check(derivedPipeName && derivedPipeName->starts_with(apc::control::c_pipeNamePrefix),
+    Check(derivedPipeName && derivedPipeName->starts_with(LR"(\\.\pipe\AudioPlaybackConnector2.Control.v2.)"),
           "pipe namespace derivation must succeed without fallback identity");
-    Check(apc::control::IsTrustedPeerProcess(GetCurrentProcessId()), "current process identity must trust itself");
-    Check(apc::control::IsTrustedPeerProcess(GetCurrentProcess(), GetCurrentProcessId()),
-          "an already-open current-process handle must trust itself without reopening the process");
-    auto currentImage = apc::control::details::ProcessImagePath(GetCurrentProcess());
-    auto currentIdentity = currentImage ? apc::control::ExecutableIdentityFromPath(*currentImage) : std::nullopt;
-    Check(currentIdentity &&
-              apc::control::IsTrustedPeerProcess(GetCurrentProcess(), GetCurrentProcessId(), currentIdentity),
-          "strict unpackaged trust must accept the exact current executable image");
-    if (currentIdentity) {
-        auto differentIdentity = *currentIdentity;
-        differentIdentity.FileId.Identifier[0] ^= 1;
-        Check(!apc::control::IsTrustedPeerProcess(
-                  GetCurrentProcess(), GetCurrentProcessId(), std::optional(differentIdentity)),
-              "strict unpackaged trust must reject a different executable file identity");
-    }
-    Check(!apc::control::IsTrustedPeerProcess(GetCurrentProcess(), GetCurrentProcessId(), std::nullopt),
-          "strict unpackaged trust must reject a missing executable identity");
-    Check(!apc::control::ExecutableIdentityFromPath(L"C:\\definitely-not-an-existing-executable.exe"),
-          "invalid executable paths must fail closed without closing an invalid handle");
-    Check(!apc::control::IsTrustedPeerProcess(0), "invalid peer identity must fail closed");
 }
 
 void TestStartStopHandleStability() {
     auto options = TestOptions(L"leaks", 1);
     const auto pipeName = options.PipeName;
-    std::atomic_size_t acknowledgements = 0;
-    options.AfterDeliveryCompleted = [&](apc::control::CorrelationId, bool acknowledged) noexcept {
-        if (acknowledged) ++acknowledgements;
-    };
+    // The close must follow the ACK, not an expired acknowledgement deadline.
+    options.AcknowledgementTimeoutMs = 5000;
     CommandLineControlServer server(std::move(options));
     const auto handler = [](apc::control::Request const&, std::stop_token, std::uint64_t) {
         return apc::control::Response{apc::control::ExitCode::Success, L"ok"};
@@ -882,9 +832,8 @@ void TestStartStopHandleStability() {
 
     for (std::uint64_t cycle = 0; cycle < 5; ++cycle) {
         server.Start(handler);
-        (void)Exchange(pipeName, MakeRequest(100 + cycle));
-        Check(WaitUntil([&] { return acknowledgements.load() >= cycle + 1; }, 1000),
-              "warmup ACK must be observed before stopping the endpoint");
+        Check(CompleteRoundTrip(pipeName, MakeRequest(100 + cycle)),
+              "warmup exchange must reach server disconnect before stopping the endpoint");
         server.Stop();
     }
     DWORD before = 0;
@@ -892,11 +841,8 @@ void TestStartStopHandleStability() {
 
     for (std::uint64_t cycle = 0; cycle < 100; ++cycle) {
         server.Start(handler);
-        auto response = Exchange(pipeName, MakeRequest(1000 + cycle));
-        Check(response && response->Code == apc::control::ExitCode::Success,
-              "stress cycle must complete a production roundtrip");
-        Check(WaitUntil([&] { return acknowledgements.load() >= cycle + 6; }, 1000),
-              "stress ACK must be observed before stopping the endpoint");
+        Check(CompleteRoundTrip(pipeName, MakeRequest(1000 + cycle)),
+              "stress exchange must reach server disconnect before stopping the endpoint");
         server.Stop();
     }
     DWORD after = 0;
@@ -925,39 +871,50 @@ void TestMaximumRequestAndIdleCachePruning() {
         server.Stop();
     }
 
-    {
+    for (bool acknowledge : {true, false}) {
         auto options = TestOptions(L"cache-idle-prune", 1);
         options.AcknowledgedRecordLifetime = 30ms;
-        Event cacheEmpty;
-        options.AfterRequestCachePruned = [&](std::size_t records, std::size_t bytes) noexcept {
-            if (records == 0 && bytes == 0) cacheEmpty.Signal();
+        options.RequestRecordLifetime = 60ms;
+        options.MaxRequestCacheBytes = 1; // Clamp to exactly one maximum request/response reservation.
+        std::atomic<std::int64_t> elapsedMs = 0;
+        options.CacheNow = [&]() noexcept {
+            return std::chrono::steady_clock::time_point{} + std::chrono::milliseconds(elapsedMs.load());
+        };
+        Event timerArmed;
+        Event timerIdle;
+        std::atomic_bool wasArmed = false;
+        options.SetCacheTimer = [&](PTP_TIMER timer, FILETIME* due) noexcept {
+            SetThreadpoolTimer(timer, due, 0, 0);
+            if (due) {
+                wasArmed = true;
+                timerArmed.Signal();
+            } else if (wasArmed.load()) {
+                timerIdle.Signal();
+            }
         };
         const auto pipeName = options.PipeName;
         CommandLineControlServer server(std::move(options));
-        server.Start([](apc::control::Request const&, std::stop_token, std::uint64_t) {
+        std::atomic_int handlerCalls = 0;
+        server.Start([&](apc::control::Request const&, std::stop_token, std::uint64_t) {
+            ++handlerCalls;
             return apc::control::Response{apc::control::ExitCode::Success, L"cached"};
         });
-        auto response = Exchange(pipeName, MakeRequest(301));
-        Check(response && response->Payload == L"cached", "cache-prune fixture must complete and acknowledge");
-        Check(cacheEmpty.Wait(2000), "idle request records must be released when their TTL expires");
-        server.Stop();
-    }
-
-    {
-        auto options = TestOptions(L"unacknowledged-cache-idle-prune", 1);
-        options.RequestRecordLifetime = 250ms;
-        Event cacheEmpty;
-        options.AfterRequestCachePruned = [&](std::size_t records, std::size_t bytes) noexcept {
-            if (records == 0 && bytes == 0) cacheEmpty.Signal();
-        };
-        const auto pipeName = options.PipeName;
-        CommandLineControlServer server(std::move(options));
-        server.Start([](apc::control::Request const&, std::stop_token, std::uint64_t) {
-            return apc::control::Response{apc::control::ExitCode::Success, L"unacknowledged"};
-        });
-        auto response = Exchange(pipeName, MakeRequest(302), false);
-        Check(response && response->Payload == L"unacknowledged", "unacknowledged prune fixture must complete");
-        Check(cacheEmpty.Wait(2000), "unacknowledged request records must be released when their TTL expires");
+        const auto request = MakeRequest(301);
+        auto response = Exchange(pipeName, request, acknowledge);
+        Check(response && response->Payload == L"cached", "expiry fixture must complete its first request");
+        Check(timerArmed.Wait(2000), "completed delivery must schedule cache expiry");
+        Check(!timerIdle.Wait(80), "native timer must retain the record while the cache clock has not advanced");
+        // No further client request or Stop can trigger pruning before this wait.
+        elapsedMs = acknowledge ? 31 : 61;
+        Check(timerIdle.Wait(2000), "idle timer must prune the expired record and disarm itself");
+        auto capacityProbe = MakeRequest(302, apc::control::CommandType::Connect);
+        capacityProbe.Target = apc::control::TargetKind::Name;
+        capacityProbe.Payload.assign(apc::control::c_maxPayloadBytes / sizeof(wchar_t), L'z');
+        Check(CompleteRoundTrip(pipeName, capacityProbe),
+              "idle pruning must restore the entire byte budget before the next request");
+        auto replay = Exchange(pipeName, request, acknowledge);
+        Check(replay && replay->Payload == L"cached" && handlerCalls.load() == 3,
+              "expired correlation must execute again for acknowledged and unacknowledged results");
         server.Stop();
     }
 }
@@ -979,6 +936,38 @@ void TestStrictCommandSemantics() {
     defaultSet.Target = apc::control::TargetKind::Last;
     Check(!apc::control::IsRequestValid(defaultSet), "default-set must require an explicit resolvable target");
 }
+
+void TestProductionTrustRejectsUnpackagedClientBeforeHandler() {
+    UINT32 packageLength = 0;
+    Check(GetCurrentPackageFamilyName(&packageLength, nullptr) == APPMODEL_ERROR_NO_PACKAGE,
+          "the bounded test host must run without package identity");
+    auto expectedIdentity = apc::control::ProcessExecutableIdentity(GetCurrentProcess());
+    Check(expectedIdentity.has_value(), "the negative trust test must resolve its own executable identity");
+#if defined(_DEBUG)
+    // Debug builds intentionally support exact-file development peers. Missing
+    // identity remains forbidden in that configuration; Release rejects both.
+    expectedIdentity.reset();
+#endif
+    auto options = TestOptions(L"production-trust-rejection", 1);
+    Event trustChecked;
+    options.IsTrustedClient = [expectedIdentity, &trustChecked](HANDLE pipe) noexcept {
+        auto const trusted = apc::control::IsTrustedNamedPipeClient(pipe, expectedIdentity);
+        trustChecked.Signal();
+        return trusted;
+    };
+    auto pipeName = options.PipeName;
+    CommandLineControlServer server(std::move(options));
+    std::atomic_uint32_t handlerCalls = 0;
+    server.Start([&](auto const&, std::stop_token, std::uint64_t) {
+        ++handlerCalls;
+        return apc::control::Response{apc::control::ExitCode::Success, L"must not run"};
+    });
+    Check(server.IsRunning(), "production trust fixture must start");
+    auto response = Exchange(pipeName, MakeRequest(401));
+    Check(trustChecked.Wait(2000), "the connected client must pass through the production trust check");
+    Check(!response && handlerCalls == 0, "an untrusted peer must receive no handler result or execute a command");
+    server.Stop();
+}
 } // namespace
 
 int RunCommandLineControlServerTests() {
@@ -987,11 +976,14 @@ int RunCommandLineControlServerTests() {
     TestDisconnectAfterResponseBeforeAckRetriesExactlyOnce();
     TestParallelDuplicatesAndCorrelationConflict();
     TestMalformedTimeoutOversizeAndRecovery();
-    TestRequestStopCancelsLeasedBridgeWorkBeforeBridgeDrain();
+    TestRequestStopCancelsControllerWorkBeforeDrain();
     TestStopLifecycleAndRearmRetry();
-    TestStartupSquattingAndSecurityDescriptor();
+    TestHandlerCaptureDestructionOutsideLifecycleLock();
+    TestStopNotificationOutsideLifecycleLock();
+    TestStartupSquattingAndSlotRecovery();
     TestStartStopHandleStability();
     TestMaximumRequestAndIdleCachePruning();
     TestStrictCommandSemantics();
+    TestProductionTrustRejectsUnpackagedClientBeforeHandler();
     return g_failures;
 }

@@ -1,20 +1,23 @@
 #pragma once
 
-#include <core/DeviceTrayPresentation.hpp>
-#include <core/DeviceService.hpp>
+#include <core/StringResources.hpp>
+#include <memory>
+
+#include <app/AppController.hpp>
 #include <ui/TrayIcon.hpp>
 #include <ui/TrayContextMenu.hpp>
-#include <ui/TrayPrimaryActivation.hpp>
 #include <DevicePickerView/DevicePickerView.xaml.h>
 #include <ui/WindowPlacement.hpp>
+#include <core/ThemeHelper.hpp>
 
 #include <functional>
-#include <memory>
+#include <condition_variable>
+#include <mutex>
+#include <chrono>
+#include <stop_token>
 #include <atomic>
 #include <cstdint>
 #include <string_view>
-
-class SettingsStore;
 
 /*------------------------------------------------------------------------------------------------------------*/
 /*//////// Tray Controller ///////////////////////////////////////////////////////////////////////////////////*/
@@ -26,19 +29,15 @@ public:
     /*//////// Callback Types ////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    using ShowDevicePickerCallback = apc::ui::TrayPrimaryActivationCallback;
-    using ShowSettingsCallback = std::move_only_function<void()>;
+    using ShowHelpCallback = std::move_only_function<void()>;
     using ExitCallback = std::move_only_function<void()>;
-    using DeviceActionCallback = std::move_only_function<void(winrt::hstring)>;
-    using BulkDeviceActionCallback = std::move_only_function<void()>;
-    using ToggleDeviceCallback = std::move_only_function<void()>;
     using ResourceStateChangedCallback = std::move_only_function<void(bool userInteraction)>;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Lifecycle /////////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    TrayController();
+    explicit TrayController(util::LogSink log, std::shared_ptr<StringResources const> strings);
     ~TrayController();
 
     TrayController(const TrayController&) = delete;
@@ -46,11 +45,11 @@ public:
     TrayController(TrayController&&) = delete;
     TrayController& operator=(TrayController&&) = delete;
 
-    void Initialize(HWND hwnd, winrt::Microsoft::UI::Xaml::Window mainWindow);
-    void SetDeviceService(std::shared_ptr<apc::device::DeviceService> deviceService);
-    void SetSettingsStore(std::shared_ptr<SettingsStore> settingsStore);
-    void SetDeviceSettings(std::shared_ptr<ISettingsController> controller,
-                           apc::app::SettingsWindowCommandExecutor::ExecuteCallback execute);
+    void Initialize(HWND hwnd,
+                    winrt::Microsoft::UI::Xaml::Window mainWindow,
+                    std::weak_ptr<apc::app::AppController> controller,
+                    ExitCallback exit,
+                    ShowHelpCallback showHelp);
     void PreloadDevicePicker() noexcept;
     void ReleaseDevicePicker() noexcept;
     void Teardown() noexcept;
@@ -58,22 +57,16 @@ public:
     [[nodiscard]] bool IsDevicePickerPreloadInitialized() const noexcept;
     [[nodiscard]] bool IsDevicePickerVisibleOrTransitioning() const noexcept;
     [[nodiscard]] uint64_t DevicePickerOpenedGeneration() const noexcept;
+    // Background control callers only; the Opened event needs the UI dispatcher.
+    [[nodiscard]] bool WaitForDevicePickerOpened(std::uint64_t previousGeneration,
+                                                 std::stop_token stop,
+                                                 std::chrono::steady_clock::time_point deadline);
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Callbacks /////////////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
-    void SetCallbacks(ShowSettingsCallback showSettings,
-                      ShowDevicePickerCallback showDevicePicker,
-                      ExitCallback exit,
-                      DeviceActionCallback connect,
-                      DeviceActionCallback disconnect,
-                      DeviceActionCallback reconnect,
-                      ToggleDeviceCallback toggleDevice,
-                      BulkDeviceActionCallback disconnectAll = nullptr,
-                      BulkDeviceActionCallback reconnectAll = nullptr);
     void SetResourceStateChangedCallback(ResourceStateChangedCallback callback);
-    void SetHelpCallback(ShowSettingsCallback callback);
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Actions ///////////////////////////////////////////////////////////////////////////////////////////*/
@@ -81,17 +74,16 @@ public:
 
     void ShowTrayMenu();
     [[nodiscard]] bool ShowDevicePicker(bool toggleIfOpen = true) noexcept;
-    void UpdateTooltip(std::wstring_view text);
-    void UpdateTooltipFromConnections(std::vector<DeviceTrayPresentationItem> const& connected);
+    [[nodiscard]] bool RefreshVisualState(bool forceErrorWhenIdle = false);
+    void SetConnectionError(apc::app::DeviceConnectionErrorEvent::Reason reason);
+    // UI-thread only; true asks the host's coalescer to refresh after expiry or a failed frame.
+    [[nodiscard]] bool OnVisualTimer(UINT_PTR timerId) noexcept;
     [[nodiscard]] bool RefreshDevicePickerState() noexcept;
     [[nodiscard]] bool InvalidateDevicePickerInventory() noexcept;
-    void OnThemeChanged();
     void ApplyLanguage();
+    void OnSettingChange(LPARAM setting);
     void SetSystemBackdropEffectsEnabled(bool enabled) noexcept;
-    [[nodiscard]] bool AdvanceConnectingFrame() noexcept;
-    [[nodiscard]] bool ApplyPendingTrayUpdates() noexcept;
-    void Reregister();
-    void SetState(TrayIconState state);
+    void OnTaskbarCreated();
     [[nodiscard]] util::SettingsWindowPlacement GetSettingsWindowPlacement() const;
 
     void HandleTrayMessage(WPARAM wParam, LPARAM lParam) noexcept;
@@ -102,48 +94,48 @@ private:
     /*//////// Internal Helpers //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
+    [[nodiscard]] bool AdvanceConnectingFrame() noexcept;
+    [[nodiscard]] bool ApplyPendingTrayUpdates() noexcept;
     [[nodiscard]] bool EnsureDevicePickerViewCreated() noexcept;
     void TryHideDevicePicker() noexcept;
     void ShowSettingsAfterPickerClosed();
     void ReleaseDevicePickerOnUIThread() noexcept;
     void LaunchBluetoothSettings();
     winrt::Microsoft::UI::Xaml::Controls::Flyout CreatePickerFlyout();
-    [[nodiscard]] util::SettingsWindowPlacement CalculateSettingsWindowPlacement() const;
     [[nodiscard]] bool IsCursorOverTrayIcon() const;
-    void OnTrayIconDoubleClick();
     void NotifyResourceStateChanged(bool userInteraction) noexcept;
 
     /*------------------------------------------------------------------------------------------------------------*/
     /*//////// Member Variables //////////////////////////////////////////////////////////////////////////////////*/
     /*------------------------------------------------------------------------------------------------------------*/
 
+    util::LogSink m_log;
+    std::shared_ptr<StringResources const> m_strings;
     HWND m_hwnd = nullptr;
     winrt::Microsoft::UI::Xaml::Window m_mainWindow{nullptr};
-    std::shared_ptr<apc::device::DeviceService> m_deviceService;
-    std::shared_ptr<SettingsStore> m_settingsStore;
-    std::shared_ptr<ISettingsController> m_settingsController;
-    apc::app::SettingsWindowCommandExecutor::ExecuteCallback m_executeDeviceSetting;
+
+    std::weak_ptr<apc::app::AppController> m_appController;
 
     std::unique_ptr<TrayIcon> m_trayIcon;
     std::unique_ptr<TrayContextMenu> m_contextMenu;
     winrt::Microsoft::UI::Xaml::Controls::Flyout m_pickerFlyout{nullptr};
     winrt::AudioPlaybackConnector2::DevicePickerView m_devicePickerView{nullptr};
 
-    ShowSettingsCallback m_showSettingsCallback;
-    ShowSettingsCallback m_showHelpCallback;
+    ShowHelpCallback m_showHelpCallback;
     bool m_openSettingsAfterPickerClosed = false;
-    ShowDevicePickerCallback m_showDevicePickerCallback;
     ExitCallback m_exitCallback;
-    DeviceActionCallback m_connectCallback;
-    DeviceActionCallback m_disconnectCallback;
-    DeviceActionCallback m_reconnectCallback;
-    BulkDeviceActionCallback m_disconnectAllCallback;
-    BulkDeviceActionCallback m_reconnectAllCallback;
-    ToggleDeviceCallback m_toggleDeviceCallback;
     ResourceStateChangedCallback m_resourceStateChangedCallback;
 
+    // Tray presentation and timers share the window UI thread; no separate status cache.
+    static constexpr UINT_PTR c_timerAnimation = 0x41504332;
+    static constexpr UINT_PTR c_timerTransientTrayError = 0x41504333;
+    static constexpr UINT c_transientTrayErrorMs = 3000;
+    std::chrono::steady_clock::time_point m_trayErrorUntil{};
+    std::wstring m_transientTrayErrorTooltip;
+    bool m_connectingAnimationTimerActive = false;
+
     UINT m_trayCallbackMsg = WM_APP + 1;
-    std::size_t m_themeChangedToken = 0;
+    Theme m_theme = Theme::Dark;
     ULONGLONG m_lastLeftClickTick = 0;
     ULONGLONG m_lastRightClickTick = 0;
     ULONGLONG m_lastLeftDoubleClickTick = 0;
@@ -158,10 +150,12 @@ private:
     };
     std::atomic<PickerFlyoutState> m_pickerFlyoutState{PickerFlyoutState::Closed};
     std::atomic_uint64_t m_pickerOpenedGeneration{0};
+    std::mutex m_pickerOpenedMutex;
+    std::condition_variable_any m_pickerOpenedChanged;
 
     bool m_devicePickerPreloadInitialized = false;
     bool m_releaseDevicePickerPending = false;
     bool m_pickerRefreshPending = false;
-    bool m_useSystemBackdropEffects = true;
+    std::shared_ptr<std::atomic_bool> m_useSystemBackdropEffects = std::make_shared<std::atomic_bool>(true);
     std::atomic_bool m_isTearingDown = false;
 };

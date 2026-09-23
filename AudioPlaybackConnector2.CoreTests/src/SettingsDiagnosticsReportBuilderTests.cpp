@@ -1,16 +1,11 @@
+#include "TestCheck.hpp"
+
 #include <ui/SettingsDiagnosticsReport.hpp>
 
 #include <iostream>
 #include <string_view>
 
 namespace {
-int g_failures = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 apc::ui::SettingsDiagnosticsReportContext Context() {
     apc::ui::SettingsDiagnosticsReportContext context;

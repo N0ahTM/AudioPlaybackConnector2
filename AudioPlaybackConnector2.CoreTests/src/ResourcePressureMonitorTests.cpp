@@ -1,3 +1,5 @@
+#include "TestCheck.hpp"
+
 #include <app/ResourcePressureMonitor.hpp>
 #include <app/ResourcePressureState.hpp>
 
@@ -7,6 +9,7 @@
 #include <array>
 #include <chrono>
 #include <condition_variable>
+#include <exception>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -16,14 +19,6 @@
 
 namespace {
 using namespace std::chrono_literals;
-
-int g_failures = 0;
-
-void Check(bool condition, std::string_view message) {
-    if (condition) return;
-    ++g_failures;
-    std::cerr << "FAILED: " << message << '\n';
-}
 
 void TestReducerHandlesMemoryTransitionsAndPartialFailures() {
     ResourcePressureStateReducer reducer;
@@ -307,6 +302,8 @@ void TestExternalStopWaitsForSelfStoppedCallback() {
     std::condition_variable changed;
     bool callbackEntered = false;
     bool releaseCallback = false;
+    bool callbackProbeReturned = false;
+    bool probeRejected = false;
     std::atomic_bool externalStopEntered = false;
     std::atomic_bool externalStopReturned = false;
     ResourcePressureMonitor* monitorAddress = nullptr;
@@ -317,6 +314,12 @@ void TestExternalStopWaitsForSelfStoppedCallback() {
             callbackEntered = true;
             changed.notify_all();
             changed.wait(lock, [&] { return releaseCallback; });
+            lock.unlock();
+            const bool rejected = !monitorAddress->RequestProbe();
+            lock.lock();
+            probeRejected = rejected;
+            callbackProbeReturned = true;
+            changed.notify_all();
         },
         {.PollInterval = 25ms});
     monitorAddress = &monitor;
@@ -341,7 +344,11 @@ void TestExternalStopWaitsForSelfStoppedCallback() {
         releaseCallback = true;
     }
     changed.notify_all();
+    const bool probeCompleted = WaitFor(changed, mutex, 5s, [&] { return callbackProbeReturned; });
+    Check(probeCompleted, "RequestProbe from the callback must not wait behind an external Stop");
+    if (!probeCompleted) std::terminate();
     externalStop.join();
+    Check(probeRejected, "a probe from a stopped callback must be rejected");
     Check(externalStopReturned.load(), "external Stop must finish after the public callback returns");
 }
 
@@ -444,6 +451,27 @@ void TestConcurrentStartAndStopRemainSafe() {
     Check(!monitor.IsRunning(), "a final stop must win after concurrent lifecycle operations");
 }
 
+void TestLifecycleDoesNotCopyExternalCallback() {
+    struct ObservedCallback {
+        std::shared_ptr<std::atomic_int> Copies;
+
+        explicit ObservedCallback(std::shared_ptr<std::atomic_int> copies) : Copies(std::move(copies)) {}
+        ObservedCallback(ObservedCallback const& other) : Copies(other.Copies) { ++*Copies; }
+        void operator()(ResourcePressureSnapshot const&) const {}
+    };
+
+    auto copies = std::make_shared<std::atomic_int>(0);
+    ResourcePressureMonitor monitor(ResourcePressureMonitor::Callback{ObservedCallback{copies}},
+                                    {.PollInterval = 25ms});
+    const auto constructionCopies = copies->load();
+    for (int iteration = 0; iteration < 3; ++iteration) {
+        Check(monitor.Start(), "resource monitor must start with an observed callback");
+        monitor.Stop();
+    }
+    Check(copies->load() == constructionCopies,
+          "start and stop must not copy external callback captures under lifecycle locks");
+}
+
 void TestRepeatedLifecycleDoesNotLeakHandles() {
     ResourcePressureMonitor monitor([](ResourcePressureSnapshot const&) {}, {.PollInterval = 25ms});
     Check(monitor.Start(), "handle lifecycle warmup must start");
@@ -481,6 +509,7 @@ int RunResourcePressureMonitorTests() {
     TestExplicitProbeShortensLongPoll();
     TestExplicitProbeFromCallbackRemainsSafe();
     TestConcurrentStartAndStopRemainSafe();
+    TestLifecycleDoesNotCopyExternalCallback();
     TestRepeatedLifecycleDoesNotLeakHandles();
     return g_failures;
 }

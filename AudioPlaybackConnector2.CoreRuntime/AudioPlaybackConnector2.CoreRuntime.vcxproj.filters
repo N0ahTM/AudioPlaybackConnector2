@@ -1,0 +1,313 @@
+<?xml version='1.0' encoding='utf-8'?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
+  <ItemGroup>
+    <Filter Include="Dependencies">
+      <UniqueIdentifier>{a166ad56-ba90-5755-8f4a-257c3b552112}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Headers">
+      <UniqueIdentifier>{bf173965-836e-5178-b496-981b3d7eb358}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Headers\App">
+      <UniqueIdentifier>{d286f4aa-ed79-5f65-ab90-a45b8567c582}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Headers\Control">
+      <UniqueIdentifier>{9f872b4d-575d-5fdc-9bde-09d8019971ff}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Headers\Core">
+      <UniqueIdentifier>{1a9710f9-142a-5bf6-a502-2e58ea2a958a}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Headers\Services">
+      <UniqueIdentifier>{a0634920-7b8f-5f2b-bb92-4df506ef76e1}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Headers\UI">
+      <UniqueIdentifier>{d7210114-1326-560b-b819-bb918dfa32c4}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Headers\Util">
+      <UniqueIdentifier>{23f29d98-854f-5775-9ea7-cc350d7b3e8f}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source">
+      <UniqueIdentifier>{408298f4-c11f-5a8b-b06b-d0e0c3537fe8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source\App">
+      <UniqueIdentifier>{1674e041-0bb9-59fc-85ae-1876037cb191}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source\Control">
+      <UniqueIdentifier>{de2ad920-eb22-5355-b6d2-4760a6bbefe1}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source\Core">
+      <UniqueIdentifier>{fc0a0366-bd5d-5288-940a-aba7d866cbea}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source\Services">
+      <UniqueIdentifier>{fa76c0f6-3963-5add-bbda-7c8707084f53}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source\UI">
+      <UniqueIdentifier>{f37dce15-b226-5546-80ab-e86a522e6662}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source\Util">
+      <UniqueIdentifier>{c46b0737-0b52-5861-bd92-d53bac9f6430}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="packages.config">
+      <Filter>Dependencies</Filter>
+    </None>
+    <ClInclude Include="include\pch.h">
+      <Filter>Headers</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveActionRetryBackoff.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveResourcePolicy.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AdaptiveScheduleState.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppController.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppModels.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\AppPresentation.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\DeviceFactPublicationFence.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\LatestStartupTaskRequestState.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\PowerTransitionCoordinator.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\RatingPromptPolicy.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResourcePressureMonitor.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\ResourcePressureState.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\SingleInstanceGuard.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\StartupTaskCoordinator.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\StartupTaskSnapshot.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\app\UiRefreshScheduler.hpp">
+      <Filter>Headers\App</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\control\CliParser.hpp">
+      <Filter>Headers\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandClient.hpp">
+      <Filter>Headers\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandPipeIo.hpp">
+      <Filter>Headers\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandPipeSecurity.hpp">
+      <Filter>Headers\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\control\CommandProtocol.hpp">
+      <Filter>Headers\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\control\ControlCommandAdapter.hpp">
+      <Filter>Headers\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\control\ControlTargetMatcher.hpp">
+      <Filter>Headers\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\control\ControlUiActionGate.hpp">
+      <Filter>Headers\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\control\PipeSecurityAttributes.hpp">
+      <Filter>Headers\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\control\Win32CommandTransport.hpp">
+      <Filter>Headers\Control</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceId.hpp">
+      <Filter>Headers\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DevicePickerTypes.hpp">
+      <Filter>Headers\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceService.hpp">
+      <Filter>Headers\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceSession.hpp">
+      <Filter>Headers\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\DeviceWatcher.hpp">
+      <Filter>Headers\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\ReconnectPolicy.hpp">
+      <Filter>Headers\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsCodec.hpp">
+      <Filter>Headers\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsData.hpp">
+      <Filter>Headers\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsLimits.hpp">
+      <Filter>Headers\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsStore.hpp">
+      <Filter>Headers\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\SettingsStoreWakeup.hpp">
+      <Filter>Headers\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\StringResources.hpp">
+      <Filter>Headers\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\core\TrayTooltipBuilder.hpp">
+      <Filter>Headers\Core</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\services\CommandLineControlServer.hpp">
+      <Filter>Headers\Services</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\services\StartupTaskController.hpp">
+      <Filter>Headers\Services</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\services\ToastContentBuilder.hpp">
+      <Filter>Headers\Services</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\services\ToastXmlSanitizer.hpp">
+      <Filter>Headers\Services</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\ui\DevicePickerViewState.hpp">
+      <Filter>Headers\UI</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\util\Logger.hpp">
+      <Filter>Headers\Util</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\util\RuntimeApartment.hpp">
+      <Filter>Headers\Util</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\util\Text.hpp">
+      <Filter>Headers\Util</Filter>
+    </ClInclude>
+    <ClInclude Include="..\AudioPlaybackConnector2\include\util\Util.hpp">
+      <Filter>Headers\Util</Filter>
+    </ClInclude>
+    <ClCompile Include="src\pch.cpp">
+      <Filter>Source</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveActionRetryBackoff.cpp">
+      <Filter>Source\App</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveResourcePolicy.cpp">
+      <Filter>Source\App</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\AdaptiveScheduleState.cpp">
+      <Filter>Source\App</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\AppController.cpp">
+      <Filter>Source\App</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\AppControllerUseCases.cpp">
+      <Filter>Source\App</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\PowerTransitionCoordinator.cpp">
+      <Filter>Source\App</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\RatingPromptPolicy.cpp">
+      <Filter>Source\App</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\ResourcePressureMonitor.cpp">
+      <Filter>Source\App</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\ResourcePressureState.cpp">
+      <Filter>Source\App</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\SingleInstanceGuard.cpp">
+      <Filter>Source\App</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\StartupTaskCoordinator.cpp">
+      <Filter>Source\App</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\UiDispatcher.cpp">
+      <Filter>Source\App</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\app\UiRefreshScheduler.cpp">
+      <Filter>Source\App</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\control\CliParser.cpp">
+      <Filter>Source\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\control\CommandClient.cpp">
+      <Filter>Source\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\control\CommandPipeIo.cpp">
+      <Filter>Source\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\control\CommandPipeSecurity.cpp">
+      <Filter>Source\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\control\ControlCommandAdapter.cpp">
+      <Filter>Source\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\control\PipeSecurityAttributes.cpp">
+      <Filter>Source\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\control\Win32CommandTransport.cpp">
+      <Filter>Source\Control</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceService.cpp">
+      <Filter>Source\Core</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceSession.cpp">
+      <Filter>Source\Core</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\DeviceWatcher.cpp">
+      <Filter>Source\Core</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\ReconnectPolicy.cpp">
+      <Filter>Source\Core</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\SettingsCodec.cpp">
+      <Filter>Source\Core</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\SettingsStore.cpp">
+      <Filter>Source\Core</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\StringResources.cpp">
+      <Filter>Source\Core</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\core\TrayTooltipBuilder.cpp">
+      <Filter>Source\Core</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\services\CommandLineControlServer.cpp">
+      <Filter>Source\Services</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\services\StartupTaskController.cpp">
+      <Filter>Source\Services</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\services\ToastContentBuilder.cpp">
+      <Filter>Source\Services</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\ui\DevicePickerViewState.cpp">
+      <Filter>Source\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\ui\DiagnosticsLogCollector.cpp">
+      <Filter>Source\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\ui\SettingsDiagnosticsReportBuilder.cpp">
+      <Filter>Source\UI</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\util\CrashHandler.cpp">
+      <Filter>Source\Util</Filter>
+    </ClCompile>
+    <ClCompile Include="..\AudioPlaybackConnector2\src\util\Logger.cpp">
+      <Filter>Source\Util</Filter>
+    </ClCompile>
+  </ItemGroup>
+</Project>

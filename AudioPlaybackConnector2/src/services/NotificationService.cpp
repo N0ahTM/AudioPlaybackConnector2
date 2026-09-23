@@ -17,7 +17,6 @@
 #include <string_view>
 
 #include <utility>
-#include <winrt/Windows.ApplicationModel.h>
 #include <winrt/Windows.System.h>
 
 namespace AppNotifications = winrt::Microsoft::Windows::AppNotifications;
@@ -386,9 +385,8 @@ void NotificationService::HandleEvent(apc::app::AppEvent const& notification) no
 
 winrt::fire_and_forget NotificationService::OpenStoreReviewPage() {
     try {
-        const auto familyName = winrt::Windows::ApplicationModel::Package::Current().Id().FamilyName();
         co_await winrt::Windows::System::Launcher::LaunchUriAsync(
-            winrt::Windows::Foundation::Uri(L"ms-windows-store://review/?PFN=" + familyName));
+            winrt::Windows::Foundation::Uri(L"ms-windows-store://review/?ProductId=9N366PGKJZ0K"));
     } catch (...) {
         // Opening the review page is best effort; a failed launch needs no surface.
     }

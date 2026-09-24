@@ -10,23 +10,28 @@ inline std::wstring EscapeXml(std::wstring_view value) {
     std::wstring result;
     result.reserve(value.size());
 
-    for (std::size_t index = 0; index < value.size(); ++index) {
+    std::size_t index = 0;
+    while (index < value.size()) {
         const auto ch = value[index];
         if (ch >= 0xD800 && ch <= 0xDBFF) {
             if (index + 1 < value.size() && value[index + 1] >= 0xDC00 && value[index + 1] <= 0xDFFF) {
                 result += ch;
-                result += value[++index];
+                result += value[index + 1];
+                index += 2;
             } else {
                 result += c_replacementCharacter;
+                ++index;
             }
             continue;
         }
         if (ch >= 0xDC00 && ch <= 0xDFFF) {
             result += c_replacementCharacter;
+            ++index;
             continue;
         }
         if (ch != L'\t' && ch != L'\n' && ch != L'\r' && (ch < 0x20 || ch > 0xFFFD)) {
             result += c_replacementCharacter;
+            ++index;
             continue;
         }
 
@@ -38,6 +43,7 @@ inline std::wstring EscapeXml(std::wstring_view value) {
             case L'\'': result += L"&apos;"; break;
             default: result += ch; break;
         }
+        ++index;
     }
     return result;
 }

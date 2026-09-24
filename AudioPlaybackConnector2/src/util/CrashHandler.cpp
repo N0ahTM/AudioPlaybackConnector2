@@ -118,7 +118,7 @@ inline bool BuildCrashDirectoryPath(wchar_t* outDirectory, std::size_t outDirect
     if (tempLength == 0 || tempLength >= _countof(tempDirectory)) {
         return false;
     }
-    if (tempLength > 0 && tempDirectory[tempLength - 1] == L'\\') {
+    if (tempDirectory[tempLength - 1] == L'\\') {
         tempDirectory[tempLength - 1] = L'\0';
     }
 

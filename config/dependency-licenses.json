@@ -34,7 +34,7 @@
     },
     {
       "name": "vcpkg-cmake-config",
-      "version": "2024-05-23",
+      "version": "2026-07-21",
       "portVersion": 0,
       "scope": "build",
       "license": "MIT",

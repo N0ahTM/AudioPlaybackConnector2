@@ -252,7 +252,7 @@ OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ## vcpkg-cmake-config - build dependency
 
-Version 2024-05-23. MIT license. Used only during vcpkg package builds.
+Version 2026-07-21. MIT license. Used only during vcpkg package builds.
 
 Copyright (c) Microsoft Corporation
 

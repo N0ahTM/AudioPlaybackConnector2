@@ -81,6 +81,7 @@ jobs:
         patterns: |
           -**/packages/**
           -**/Generated Files/**
+          -**/Generated%20Files/**
           -**/vcpkg_installed/**
           -**/external/**
           -**/third_party/**
@@ -98,6 +99,13 @@ jobs:
         $count = ($sarif.runs | ForEach-Object { $_.results.Count } | Measure-Object -Sum).Sum
         Write-Host "First-party CodeQL results: $count"
         if ($count -lt 1) { throw 'SARIF filtering removed every result; inspect the raw SARIF artifact.' }
+        $generated = @($sarif.runs | ForEach-Object { $_.results } | Where-Object {
+          @($_.locations | Where-Object {
+            $uri = $_.physicalLocation.artifactLocation.uri
+            $uri -and ([Uri]::UnescapeDataString($uri) -match '[\\/]Generated Files[\\/]')
+          }).Count -gt 0
+        }).Count
+        if ($generated -gt 0) { throw "SARIF still contains $generated generated-code results." }
 
     - name: Preserve raw SARIF on failure
       if: failure()

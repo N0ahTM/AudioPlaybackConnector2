@@ -24,19 +24,19 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         fetch-depth: 0
 
     - name: Initialize CodeQL
-      uses: github/codeql-action/init@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
+      uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
       with:
         languages: cpp
         queries: security-and-quality
         config-file: ./.github/codeql/codeql-config.yml
 
     - name: Add MSBuild to PATH
-      uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
+      uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
 
     - name: Restore NuGet packages
       run: msbuild AudioPlaybackConnector2.slnx -t:restore -p:RestorePackagesConfig=true
@@ -56,7 +56,7 @@ jobs:
       run: .\x64\Release\tests\AudioPlaybackConnector2.CoreTests.exe
 
     - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
+      uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
       with:
         category: /language:cpp
         output: sarif-results
@@ -121,14 +121,14 @@ jobs:
 
     - name: Preserve raw SARIF on failure
       if: failure()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: codeql-raw-sarif
         path: sarif-results/cpp.sarif
         retention-days: 1
 
     - name: Upload first-party CodeQL results
-      uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
+      uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
       with:
         sarif_file: sarif-results/cpp-filtered.sarif
         category: /language:cpp

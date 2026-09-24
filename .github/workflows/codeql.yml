@@ -64,14 +64,22 @@ jobs:
         # filtered below before their results are uploaded.
         upload: failure-only
 
+    - name: Check raw CodeQL results
+      shell: pwsh
+      run: |
+        $sarif = Get-Content sarif-results/cpp.sarif -Raw | ConvertFrom-Json
+        $count = ($sarif.runs | ForEach-Object { $_.results.Count } | Measure-Object -Sum).Sum
+        Write-Host "Raw CodeQL results: $count"
+
     - name: Exclude third-party and generated results
       uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1
       with:
         input: sarif-results/cpp.sarif
-        output: sarif-results/cpp.sarif
+        output: sarif-results/cpp-filtered.sarif
         patterns: |
           -**/packages/**
           -**/Generated Files/**
+          -**/Generated%20Files/**
           -**/vcpkg_installed/**
           -**/external/**
           -**/third_party/**
@@ -82,8 +90,45 @@ jobs:
           -**/Debug/**
           -**/Release/**
 
+    - name: Check filtered CodeQL results
+      shell: pwsh
+      run: |
+        $sarif = Get-Content sarif-results/cpp-filtered.sarif -Raw | ConvertFrom-Json
+        $count = ($sarif.runs | ForEach-Object { $_.results.Count } | Measure-Object -Sum).Sum
+        Write-Host "First-party CodeQL results: $count"
+        $raw = Get-Content sarif-results/cpp.sarif -Raw | ConvertFrom-Json
+        $ignoredFolder = '^(packages|Generated Files|vcpkg_installed|external|third_party|bin|obj|x64|ARM64|Debug|Release)$'
+        $expected = 0
+        foreach ($result in $raw.runs.results) {
+          if (-not $result.locations) { $expected++; continue }
+          foreach ($location in $result.locations) {
+            $uri = $location.physicalLocation.artifactLocation.uri
+            if (-not $uri -or -not @([Uri]::UnescapeDataString($uri) -split '[\\/]' | Where-Object {
+              $_ -cmatch $ignoredFolder
+            }).Count) { $expected++; break }
+          }
+        }
+        if ($count -ne $expected) {
+          throw "SARIF filtering kept $count results; expected $expected first-party results."
+        }
+        $generated = @($sarif.runs | ForEach-Object { $_.results } | Where-Object {
+          @($_.locations | Where-Object {
+            $uri = $_.physicalLocation.artifactLocation.uri
+            $uri -and ([Uri]::UnescapeDataString($uri) -match '[\\/]Generated Files[\\/]')
+          }).Count -gt 0
+        }).Count
+        if ($generated -gt 0) { throw "SARIF still contains $generated generated-code results." }
+
+    - name: Preserve raw SARIF on failure
+      if: failure()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: codeql-raw-sarif
+        path: sarif-results/cpp.sarif
+        retention-days: 1
+
     - name: Upload first-party CodeQL results
       uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
       with:
-        sarif_file: sarif-results/cpp.sarif
+        sarif_file: sarif-results/cpp-filtered.sarif
         category: /language:cpp

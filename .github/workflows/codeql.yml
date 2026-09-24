@@ -64,11 +64,20 @@ jobs:
         # filtered below before their results are uploaded.
         upload: failure-only
 
+    - name: Check raw CodeQL results
+      shell: pwsh
+      run: |
+        $sarif = Get-Content sarif-results/cpp.sarif -Raw | ConvertFrom-Json
+        $count = ($sarif.runs | ForEach-Object { $_.results.Count } | Measure-Object -Sum).Sum
+        Write-Host "Raw CodeQL results: $count"
+        # Quality alerts are intentionally retained until the next release.
+        if ($count -lt 1) { throw 'CodeQL produced no results; inspect the raw SARIF artifact.' }
+
     - name: Exclude third-party and generated results
       uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1
       with:
         input: sarif-results/cpp.sarif
-        output: sarif-results/cpp.sarif
+        output: sarif-results/cpp-filtered.sarif
         patterns: |
           -**/packages/**
           -**/Generated Files/**
@@ -82,8 +91,24 @@ jobs:
           -**/Debug/**
           -**/Release/**
 
+    - name: Check filtered CodeQL results
+      shell: pwsh
+      run: |
+        $sarif = Get-Content sarif-results/cpp-filtered.sarif -Raw | ConvertFrom-Json
+        $count = ($sarif.runs | ForEach-Object { $_.results.Count } | Measure-Object -Sum).Sum
+        Write-Host "First-party CodeQL results: $count"
+        if ($count -lt 1) { throw 'SARIF filtering removed every result; inspect the raw SARIF artifact.' }
+
+    - name: Preserve raw SARIF on failure
+      if: failure()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: codeql-raw-sarif
+        path: sarif-results/cpp.sarif
+        retention-days: 1
+
     - name: Upload first-party CodeQL results
       uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4
       with:
-        sarif_file: sarif-results/cpp.sarif
+        sarif_file: sarif-results/cpp-filtered.sarif
         category: /language:cpp

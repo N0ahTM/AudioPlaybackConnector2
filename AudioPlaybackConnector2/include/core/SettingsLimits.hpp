@@ -28,15 +28,19 @@ static_assert(c_maxPersistedDeviceCount * c_maxSerializedDeviceBudget + c_settin
               c_maxSettingsFileBytes);
 
 [[nodiscard]] inline bool IsValidUtf16(std::wstring_view value) noexcept {
-    for (std::size_t index = 0; index < value.size(); ++index) {
+    std::size_t index = 0;
+    while (index < value.size()) {
         const auto character = static_cast<std::uint16_t>(value[index]);
         if (character >= 0xD800 && character <= 0xDBFF) {
-            if (++index >= value.size()) return false;
-            const auto low = static_cast<std::uint16_t>(value[index]);
+            if (index + 1 >= value.size()) return false;
+            const auto low = static_cast<std::uint16_t>(value[index + 1]);
             if (low < 0xDC00 || low > 0xDFFF) return false;
+            index += 2;
+            continue;
         } else if (character >= 0xDC00 && character <= 0xDFFF) {
             return false;
         }
+        ++index;
     }
     return true;
 }

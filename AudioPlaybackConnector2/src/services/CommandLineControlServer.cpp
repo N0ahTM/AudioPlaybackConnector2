@@ -1152,7 +1152,7 @@ CommandLineControlServer::ExecuteOnce(apc::control::Request const& request,
         record = std::make_shared<RequestRecord>();
         record->Request = request;
         record->Bytes = reservedBytes;
-        const auto [entry, inserted] = m_requestRecords.emplace(request.CorrelationId, record);
+        const bool inserted = m_requestRecords.emplace(request.CorrelationId, record).second;
         if (!inserted) {
             uncachedResponse = {apc::control::ExitCode::Busy, L"", request.CorrelationId};
             return {};

@@ -70,8 +70,6 @@ jobs:
         $sarif = Get-Content sarif-results/cpp.sarif -Raw | ConvertFrom-Json
         $count = ($sarif.runs | ForEach-Object { $_.results.Count } | Measure-Object -Sum).Sum
         Write-Host "Raw CodeQL results: $count"
-        # Quality alerts are intentionally retained until the next release.
-        if ($count -lt 1) { throw 'CodeQL produced no results; inspect the raw SARIF artifact.' }
 
     - name: Exclude third-party and generated results
       uses: advanced-security/filter-sarif@2da736ff05ef065cb2894ac6892e47b5eac2c3c0 # v1.1
@@ -98,7 +96,21 @@ jobs:
         $sarif = Get-Content sarif-results/cpp-filtered.sarif -Raw | ConvertFrom-Json
         $count = ($sarif.runs | ForEach-Object { $_.results.Count } | Measure-Object -Sum).Sum
         Write-Host "First-party CodeQL results: $count"
-        if ($count -lt 1) { throw 'SARIF filtering removed every result; inspect the raw SARIF artifact.' }
+        $raw = Get-Content sarif-results/cpp.sarif -Raw | ConvertFrom-Json
+        $ignoredFolder = '^(packages|Generated Files|vcpkg_installed|external|third_party|bin|obj|x64|ARM64|Debug|Release)$'
+        $expected = 0
+        foreach ($result in $raw.runs.results) {
+          if (-not $result.locations) { $expected++; continue }
+          foreach ($location in $result.locations) {
+            $uri = $location.physicalLocation.artifactLocation.uri
+            if (-not $uri -or -not @([Uri]::UnescapeDataString($uri) -split '[\\/]' | Where-Object {
+              $_ -cmatch $ignoredFolder
+            }).Count) { $expected++; break }
+          }
+        }
+        if ($count -ne $expected) {
+          throw "SARIF filtering kept $count results; expected $expected first-party results."
+        }
         $generated = @($sarif.runs | ForEach-Object { $_.results } | Where-Object {
           @($_.locations | Where-Object {
             $uri = $_.physicalLocation.artifactLocation.uri

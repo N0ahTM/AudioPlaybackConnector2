@@ -274,7 +274,8 @@ ParseResult ParseWithCli(CommandSpec const& spec, int argc, wchar_t const* const
 /*------------------------------------------------------------------------------------------------------------*/
 
 bool JsonRequested(int argc, wchar_t const* const* argv) noexcept {
-    for (int i = 1; i < argc; ++i) {
+    int i = 1;
+    while (i < argc) {
         const auto argument = ToView(argv[i]);
         if (util::EqualsIgnoreCase(argument, L"--id") || util::EqualsIgnoreCase(argument, L"--name") ||
             util::EqualsIgnoreCase(argument, L"--mac") || util::EqualsIgnoreCase(argument, L"--alias") ||
@@ -284,10 +285,12 @@ bool JsonRequested(int argc, wchar_t const* const* argv) noexcept {
             } else if (i + 1 < argc && (ToView(argv[i + 1]).empty() || ToView(argv[i + 1]).front() != L'-')) {
                 ++i;
             }
+            ++i;
             continue;
         }
         if (argument == L"--") return false;
         if (util::EqualsIgnoreCase(argument, L"--json")) return true;
+        ++i;
     }
     return false;
 }

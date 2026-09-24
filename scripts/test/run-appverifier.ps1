@@ -25,7 +25,22 @@ if ($packages.Count -ne 1 -or $packages[0].Architecture -ne 'X64') {
     throw 'Specify exactly one installed x64 test package by its full name.'
 }
 $package = $packages[0]
-if ([version]$package.Version -eq [version]'0.9.1.0') { throw 'The published 0.9.1 package is not a test target.' }
+$repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
+Import-Module (Join-Path $repoRoot 'scripts/release/ReleaseVersion.psm1') -Force
+$tags = @(git -C $repoRoot tag --list 'v*')
+if ($LASTEXITCODE -ne 0) { throw 'Cannot read release tags; fetch tags before testing a branch package.' }
+$releaseVersions = @(
+    foreach ($tag in $tags) {
+        if ($tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+$') { continue }
+        $version = Resolve-ReleaseVersion -Tag $tag
+        [version]::Parse($version.PackageVersion)
+    }
+)
+if ($releaseVersions.Count -eq 0) { throw 'No release tags found; fetch tags before testing a branch package.' }
+$latestReleaseVersion = $releaseVersions | Sort-Object -Descending | Select-Object -First 1
+if ([version]$package.Version -le $latestReleaseVersion) {
+    throw "Package version $($package.Version) is not newer than the latest tagged release $latestReleaseVersion."
+}
 $binary = Join-Path $package.InstallLocation 'AudioPlaybackConnector2.exe'
 $cli = Join-Path $package.InstallLocation 'AudioPlaybackConnector2.Control/AudioPlaybackConnector2.Control.exe'
 if (-not (Test-Path -LiteralPath $binary -PathType Leaf) -or -not (Test-Path -LiteralPath $cli -PathType Leaf)) {

@@ -53,11 +53,11 @@ jobs:
             disable_pch: true
     steps:
     - name: Checkout
-      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         fetch-depth: 0
     - name: Add MSBuild to PATH
-      uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
+      uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
     - name: Restore, build and test without the UI project
       shell: pwsh
       env:
@@ -72,7 +72,7 @@ jobs:
         ./scripts/test/run-concurrency-stress.ps1 -Iterations 5 -Seed 314159 -TotalTimeoutSeconds 180 -OutputDirectory '${{ runner.temp }}/concurrency'
     - name: Upload failed stress diagnostics
       if: ${{ failure() && matrix.platform == 'x64' && !matrix.disable_pch }}
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: concurrency-diagnostics
         path: ${{ runner.temp }}/concurrency
@@ -93,7 +93,7 @@ jobs:
     runs-on: windows-2025-vs2026
     steps:
     - name: Checkout
-      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         fetch-depth: 0
 
@@ -120,14 +120,14 @@ jobs:
         ./scripts/test-package-notices.ps1
 
     - name: Add MSBuild to PATH
-      uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
+      uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
 
     - name: Verify MSBuild version derivation
       shell: pwsh
       run: ./scripts/test-build-version.ps1
 
     - name: Cache NuGet packages
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
           packages
@@ -190,15 +190,15 @@ jobs:
         architecture: [x64, ARM64]
     steps:
     - name: Checkout
-      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         fetch-depth: 0
 
     - name: Add MSBuild to PATH
-      uses: microsoft/setup-msbuild@6fb02220983dee41ce7ae257b6f4d8f9bf5ed4ce # v2
+      uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
 
     - name: Cache NuGet packages
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: |
           packages
@@ -224,7 +224,7 @@ jobs:
 
     - name: Upload explicitly requested unsigned build failure diagnostics
       if: ${{ failure() && steps.unsigned-build.outcome == 'failure' && inputs.upload_failure_binlog }}
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: unsigned-build-failure-${{ matrix.architecture }}
         path: ${{ runner.temp }}/unsigned-build.binlog
@@ -255,7 +255,7 @@ jobs:
       run: .\x64\Release\tests\AudioPlaybackConnector2.CoreTests.exe
 
     - name: Upload build artifact
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: AudioPlaybackConnector2-${{ matrix.architecture }}-Release
         path: ${{ matrix.architecture }}/Release/AudioPlaybackConnector2/AudioPlaybackConnector2.exe

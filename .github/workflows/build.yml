@@ -72,7 +72,7 @@ jobs:
         ./scripts/test/run-concurrency-stress.ps1 -Iterations 5 -Seed 314159 -TotalTimeoutSeconds 180 -OutputDirectory '${{ runner.temp }}/concurrency'
     - name: Upload failed stress diagnostics
       if: ${{ failure() && matrix.platform == 'x64' && !matrix.disable_pch }}
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: concurrency-diagnostics
         path: ${{ runner.temp }}/concurrency
@@ -224,7 +224,7 @@ jobs:
 
     - name: Upload explicitly requested unsigned build failure diagnostics
       if: ${{ failure() && steps.unsigned-build.outcome == 'failure' && inputs.upload_failure_binlog }}
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: unsigned-build-failure-${{ matrix.architecture }}
         path: ${{ runner.temp }}/unsigned-build.binlog
@@ -255,7 +255,7 @@ jobs:
       run: .\x64\Release\tests\AudioPlaybackConnector2.CoreTests.exe
 
     - name: Upload build artifact
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: AudioPlaybackConnector2-${{ matrix.architecture }}-Release
         path: ${{ matrix.architecture }}/Release/AudioPlaybackConnector2/AudioPlaybackConnector2.exe
